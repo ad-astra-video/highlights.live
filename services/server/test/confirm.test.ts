@@ -112,6 +112,30 @@ describe("shouldRunConfirm", () => {
     expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, acceptedGoal)).toBe(false);
     expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, acceptedGoal)).toBe(false);
   });
+  it("still fires for a contract-guard-rejected goal accept (ADAAAA-8120 recall path)", () => {
+    // The decide-side contract guard rejects a goal-type scoring_play accepted
+    // on commentary text alone: isHighlight=false, outcome/eventType preserved,
+    // plus a machine-readable contradictedBy + contractGuard record. That shape
+    // is exactly the un-attested goal-shaped non-accept the Stage-2 dive is
+    // scoped to, so a genuine goal whose only support was the commentary is
+    // still re-attested by the confirm pass instead of being dropped.
+    const cfg = { confirmEnabled: true } as any;
+    const guardRejected: DecisionResult = {
+      isHighlight: false,
+      score: 55,
+      eventType: "GOAL",
+      outcome: "scoring_play",
+      reason:
+        "ASR confirms 'IT'S IN!' while frames show ball in net; rejected by contract guard: " +
+        "goal_text_without_measurement: the accept's support is commentary text only",
+    } as DecisionResult;
+    expect(isGateRejectedBareGoal(guardRejected)).toBe(true);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, guardRejected)).toBe(true);
+    // ... and it is excluded the moment a measured channel attests the goal.
+    expect(
+      shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, guardRejected)
+    ).toBe(false);
+  });
   it("does not fire on a NON-goal-shaped Stage-1 non-accept (outcome != scoring, eventType not goal-type)", () => {
     const cfg = { confirmEnabled: true } as any;
     const nonGoalNonAccept: DecisionResult = {
