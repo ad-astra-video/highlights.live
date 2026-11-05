@@ -287,6 +287,14 @@ export interface ServerConfig {
    *  produces the 5 s-hop row (~60 decides / 300 s) without touching the window
    *  span, the audio trigger or VOD. */
   liveObserveCadenceS?: number;
+  /** ADAAAA-8065 (rev 7): LIVE-only decide WINDOW SPAN in content seconds
+   *  (`LIVE_OBSERVE_WINDOW_S`). The live window is a rolling PAST window
+   *  `[now - span, now]`; unset keeps today's 10 s span (`OBSERVE_WINDOW_S`,
+   *  the value every leg before rev 7 ran). Setting it is a MEASURED change:
+   *  rev 7's cell is 7 s of frames every 5 s (R18) and the span is stamped on
+   *  every decide payload as `spanSec`, so a leg proves the value instead of
+   *  reading `printenv`. VOD keeps its own `observeWindowS` and is untouched. */
+  liveObserveWindowS?: number;
   /** ADAAAA-7777 (lever B, trim 1): hard cap on the frames ONE live decide
    * window carries. The live window is `OBSERVE_WINDOW_S` (10 s) resolved on an
    * `OBSERVE_CONTENT_FPS` (2) grid, so the natural window is <= 20 frames and the
@@ -866,6 +874,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // through the "empty means unset" guard — `Number("")` is 0, which pinned the
     // cadence to zero and fired on every consumed frame.
     liveObserveCadenceS: positiveNumberOrUndefined(env.LIVE_OBSERVE_CADENCE_S),
+    // ADAAAA-8065 (rev 7): LIVE-only decide window span. Unset keeps the 10 s
+    // trailing window every prior leg measured, so merging this change cannot
+    // move a running box. ADAAAA-7808's empty-means-unset guard applies for the
+    // same reason: compose passes `${LIVE_OBSERVE_WINDOW_S:-}`, and `Number("")`
+    // is 0 — a zero-second window would fire an empty decide every cadence.
+    liveObserveWindowS: positiveNumberOrUndefined(env.LIVE_OBSERVE_WINDOW_S),
     // ADAAAA-7777 (lever B, trim 1): the live window's frame budget.
     // ADAAAA-8074: THE single decide image budget. Default 4 (the ruled AC-3
     // cell); a value is clamped to [1, 30], and an unparseable/empty env falls

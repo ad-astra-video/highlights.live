@@ -1617,6 +1617,13 @@ def render_perceive_timeline(
         "imageGapMaxMs": ("imageGapMaxMs", int),
         "recordsPerSecond": ("recordsPerSecond", float),
         "spanS": ("spanS", float),
+        # ADAAAA-8065 (rev 7): the CONFIGURED live cell — the window span in
+        # seconds and the decide cadence in ms, stamped by the server on every
+        # payload. `spanS` above is what the frame set covered; these two are the
+        # cell that was measured, so AC-SPAN-1 grades `decide_audit` instead of
+        # trusting `printenv` (the ADAAAA-8074 lesson).
+        "spanSec": ("spanSec", float),
+        "cadenceMs": ("cadenceMs", int),
     }
     extra: dict = {}
     source = None
