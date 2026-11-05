@@ -86,6 +86,17 @@ KIT_MIN_FRAMES = 2
 # turf; publishing nothing for the side (an honest unattributed miss) is the
 # correct answer. The floor is a TIGHTENING: no existing threshold is loosened.
 KIT_MIN_CLUSTER_SHARE = 0.20
+# Run-level evidence floor (ADAAAA-8072): a cluster may name a side's kit only
+# when it is backed by at least this many CROP samples taken over at least this
+# many DISTINCT frames. The share floor above is RELATIVE, so it collapses on a
+# thin pass: with 5 usable crops the floor is `max(2, 1) = 2`, and two agreeing
+# crops named "cyan" for Portugal on e58bcef7 (served record: kitSamples 5,
+# kitClusterColors ["cyan"], confidence 0.95) while the shirt on screen is red.
+# Two crops are not run-level evidence. Below this floor the side publishes NO
+# colour (an honest miss) and the observed clusters are reported in
+# `evidenceStatus`. This is a TIGHTENING: no existing threshold is loosened.
+KIT_MIN_CLUSTER_CROPS = 4
+KIT_MIN_CLUSTER_FRAMES = 3
 # Bound the persisted recompute trail so a long job cannot grow the record.
 MAX_TRAIL = 12
 # Bounds on the AC2 per-channel diagnosis (ADAAAA-7889). A stored job must be
@@ -2327,6 +2338,31 @@ class KitCluster:
     rgb: list[float]
     frames: int
     count: int
+    # Distinct frames the cluster's crops came from, WITHOUT collapsing by
+    # trackId. `frames` above takes the max of the timestamp count and the
+    # (ts, frameSeq, frameId, trackId) key count, so several players tracked in
+    # ONE frame can look like several frames. The publish floor (ADAAAA-8072)
+    # reads this value; hand-built clusters leave it at 0 and the floor falls
+    # back to `frames`.
+    distinct_frames: int = 0
+
+
+def _cluster_publish_evidence(cluster: KitCluster) -> tuple[int, int]:
+    """``(crops, distinct frames)`` a cluster offers the publish floor."""
+    frames = cluster.distinct_frames or cluster.frames
+    return int(cluster.count), int(frames)
+
+
+def _cluster_meets_publish_floor(cluster: KitCluster) -> bool:
+    """True when a cluster carries run-level evidence for a side's kit colour.
+
+    ADAAAA-8072: BOTH an absolute crop count and an absolute distinct-frame
+    count must clear their floor. A 2-crop minority cluster cannot name a side
+    (e58bcef7 published "cyan" for Portugal from two agreeing crops); a cluster
+    backed by 4+ crops over 3+ distinct frames can.
+    """
+    crops, frames = _cluster_publish_evidence(cluster)
+    return crops >= KIT_MIN_CLUSTER_CROPS and frames >= KIT_MIN_CLUSTER_FRAMES
 
 
 def cluster_kit_colors(
@@ -2366,6 +2402,11 @@ def cluster_kit_colors(
         stamps = {s.get("ts") for s, _rgb in group if s.get("ts") is not None}
         keys = {(s.get("ts"), s.get("frameSeq"), s.get("frameId"), s.get("trackId")) for s, _rgb in group}
         frames = max(len(stamps), len(keys))
+        # Distinct frames without the trackId component: three crops of the same
+        # frame are ONE frame of evidence, not three (ADAAAA-8072).
+        distinct_frames = len(
+            {(s.get("ts"), s.get("frameSeq"), s.get("frameId")) for s, _rgb in group}
+        )
         if frames < min_frames:
             continue
         # A minority group is trim, an ad board or a strip of turf, not a kit:
@@ -2399,6 +2440,7 @@ def cluster_kit_colors(
                 rgb=list(centers[k]),
                 frames=frames,
                 count=len(group),
+                distinct_frames=distinct_frames,
             )
         )
     return clusters
@@ -2524,6 +2566,13 @@ def associate_kits(
     surface the channel in ``evidenceStatus``. It is only touched when
     ``kit_prior`` is given.
 
+    A kit colour is only PUBLISHED from a cluster that carries run-level
+    evidence (:func:`_cluster_meets_publish_floor`: >=
+    :data:`KIT_MIN_CLUSTER_CROPS` crops over >= :data:`KIT_MIN_CLUSTER_FRAMES`
+    distinct frames). Clusters below that floor are dropped here and named in
+    ``status["kitClustersBelowFloor"]`` — a side they would have been linked to
+    stays honestly unattributed instead of carrying a colour two crops agreed on.
+
     Returns ``(per_side_kit, ambiguous)`` where ``per_side_kit`` maps
     ``"home"/"away"`` -> ``[{primary, secondary}]``. ``ambiguous`` is True when
     the two clusters name the same colour and the assignment therefore cannot
@@ -2535,6 +2584,18 @@ def associate_kits(
     prior_used: list[str] = []
     prior_miss: list[str] = []
     prior_conflict: list[str] = []
+    # Run-level evidence floor (ADAAAA-8072): only a cluster backed by
+    # KIT_MIN_CLUSTER_CROPS crop samples over KIT_MIN_CLUSTER_FRAMES distinct
+    # frames may name a side's kit. The share floor inside
+    # `cluster_kit_colors` is relative, so it collapses on a thin pass (5 usable
+    # crops -> floor 2) and two agreeing crops named "cyan" for Portugal on
+    # e58bcef7. Rejected clusters are named in `kitClustersBelowFloor` so the
+    # record shows WHAT was observed and why no side got a colour; the caller
+    # keeps its own unfiltered list for `kitClustersUnattributed`.
+    below_floor = [c for c in clusters if not _cluster_meets_publish_floor(c)]
+    if below_floor and status is not None:
+        status["kitClustersBelowFloor"] = sorted({c.primary for c in below_floor})
+    clusters = [c for c in clusters if _cluster_meets_publish_floor(c)]
     if not clusters:
         if kit_prior is not None and status is not None:
             status["kitPriorUsed"] = prior_used
