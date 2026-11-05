@@ -1,4 +1,11 @@
-"""ADAAAA-7993 — prefix-cache prompt layout v2 (SYSTEM_PROMPT_VERSION="2").
+"""ADAAAA-7993 — prefix-cache prompt layout v2; ADAAAA-8103 re-pins it for v3.
+
+v2 (ADAAAA-7993) hoisted the static judge text into the system turn WITHOUT
+editing it. v3 (ADAAAA-8103) rewrites the static text (the window's measured
+evidence carries the read, the frames corroborate) and keeps the v2 LAYOUT
+byte-for-byte, so the goldens below move only in the static block: the pinned
+CONTEXT hashes are the v2 values and still match, which is what proves the
+reword cannot drift a single per-window character.
 
 v1 sent `[system: SYSTEM_PROMPT (63 tok), user: frames..., text: preamble +
 Context + contract]`, so the only reusable prefix was the system turn: measured
@@ -45,23 +52,34 @@ from test_gemma import MockLlama, _user_text, _wire_text
 
 AUDIT_DIR = "/tmp/test-decide-audit-7993"
 
-# --- pinned goldens, captured from the PRE-change code (origin/master@334fe57)
-# `build_prompt` output for the SHARED_WINDOW fixture below.
-GOLDEN_V1_FULL = (
-    10260,
-    "228ef6ab3eed1d2c6e7ee10e03e785068a878918f8bcfcfa3a8eaa0309132c15",
+# --- pinned goldens. The v2 hoist goldens were captured from origin/master@334fe57;
+# ADAAAA-8103 deliberately rewords the static block, so the prompt goldens were
+# re-pinned from the v3 code and the CONTEXT goldens were kept at their v2 values
+# (they still match — the reword touches no per-window text).
+GOLDEN_V3_FULL = (
+    12714,
+    "6807ddd7bf000fcc8efa6a694695b6e153d766b2164331745f6e0a0b4bf1408c",
 )
-GOLDEN_V1_COMPACT = (
-    12453,
-    "013e94b0f240fbb12953b267b570f5a047667ed6b4b021c76bb62e1538e92596",
+GOLDEN_V3_COMPACT = (
+    14931,
+    "5608a15268101d23d46fd888d5915dc3d46dde02a33cd588158dbfd8fbdcfe17",
 )
-GOLDEN_V1_FULL_MC_PG = (
-    10464,
-    "08ea5c00929cff0d620a7a4b5311cad409842b5feab2172c0292cf1bfb7fc62e",
+GOLDEN_V3_FULL_MC_PG = (
+    12918,
+    "067c6eeb74fbbd87468bcfbb80404383cac6870d49e07922d832b07523eb1ed5",
+)
+# the per-window Context block, pinned at its v2 bytes (ADAAAA-7993) — identical in v3
+GOLDEN_CONTEXT = (
+    1098,
+    "dd7223d3aa35399c9b2d8dacc749b16b02177735dbf77cea8045d0d6dc33b9ec",
+)
+GOLDEN_CONTEXT_MC_PG = (
+    1302,
+    "beee6963be10b749c46a53be7874d94bc675b99b356d8f7f078391c42038f42e",
 )
 # the concatenated static block (preamble, no contract) — the reusable prefix
 GOLDEN_STATIC_PREAMBLE = (
-    6808,
+    9193,
     hashlib.sha256(STATIC_PREAMBLE.encode()).hexdigest(),
 )
 GOLDEN_SYSTEM_PROMPT = (
@@ -128,30 +146,39 @@ def _sha(s: str) -> str:
 
 # --- AC2: no token drift -----------------------------------------------------
 
-def test_golden_v1_prompt_hashes_unchanged():
-    """The flat v1 prompt text is byte-identical to the pre-change code — the
-    hoist moves tokens between turns, it does not edit or drop them."""
+def test_golden_v3_prompt_hashes_pinned():
+    """The flat prompt text is pinned for v3 so a later edit cannot silently
+    ride along inside this change (the v2->v3 reword was deliberate,
+    ADAAAA-8103; the layout it rides on is unchanged)."""
     full = build_prompt(
         "GOAL", EV, "soccer", n_frames=8, has_audio=True,
         transcript=TRANSCRIPT, story_so_far=STORY,
     )
-    assert (len(full), _sha(full)) == GOLDEN_V1_FULL
+    assert (len(full), _sha(full)) == GOLDEN_V3_FULL
 
     compact = build_prompt(
         "GOAL", EV, "soccer", n_frames=8, has_audio=True,
         transcript=TRANSCRIPT, story_so_far=STORY, compact=True,
     )
-    assert (len(compact), _sha(compact)) == GOLDEN_V1_COMPACT
+    assert (len(compact), _sha(compact)) == GOLDEN_V3_COMPACT
 
     with_ctx = build_prompt(
         "GOAL", EV, "soccer", n_frames=8, has_audio=True,
         transcript=TRANSCRIPT, story_so_far=STORY,
         match_context=MC, prior_game_state=PG,
     )
-    assert (len(with_ctx), _sha(with_ctx)) == GOLDEN_V1_FULL_MC_PG
+    assert (len(with_ctx), _sha(with_ctx)) == GOLDEN_V3_FULL_MC_PG
 
 
-def test_golden_static_preamble_and_system_prompt_unchanged():
+def test_context_block_is_byte_identical_across_v2_and_v3():
+    """The reword is STATIC-ONLY: the per-window Context block still hashes to
+    its ADAAAA-7993 (v2) bytes, so no window gained or lost a character."""
+    assert (len(_parts(False)["context"]), _sha(_parts(False)["context"])) == GOLDEN_CONTEXT
+    ctx = _parts(False, with_context=True)["context"]
+    assert (len(ctx), _sha(ctx)) == GOLDEN_CONTEXT_MC_PG
+
+
+def test_golden_static_block_pinned():
     assert (len(STATIC_PREAMBLE), _sha(STATIC_PREAMBLE)) == GOLDEN_STATIC_PREAMBLE
     assert (len(SYSTEM_PROMPT), _sha(SYSTEM_PROMPT)) == GOLDEN_SYSTEM_PROMPT
     # the preamble is exactly the head of the v1 flat prompt
@@ -242,8 +269,8 @@ def test_system_turn_is_identical_across_windows_of_a_job():
 
 # --- AC3: version + audit replay --------------------------------------------
 
-def test_system_prompt_version_is_2():
-    assert SYSTEM_PROMPT_VERSION == "2"
+def test_system_prompt_version_is_3():
+    assert SYSTEM_PROMPT_VERSION == "3"
 
 
 def test_audit_record_replays_byte_identical_messages():
@@ -272,7 +299,7 @@ def test_audit_record_replays_byte_identical_messages():
     recs = load_audit_records(AUDIT_DIR)
     assert len(recs) == 1
     rec = recs[0]
-    assert rec["systemPromptVersion"] == "2"
+    assert rec["systemPromptVersion"] == "3"
     layout = rec["promptLayout"]
     assert layout["version"] == "v2"
     assert layout["system"]["fields"] == ["systemPrompt", "staticPreamble", "staticContract"]
@@ -284,7 +311,7 @@ def test_audit_record_replays_byte_identical_messages():
     assert rebuild_payload(rec)["messages"] == sent["messages"]
     assert json.dumps(rebuild_payload(rec)["messages"]) == json.dumps(sent["messages"])
     # ... and so does the decision's own audit descriptor
-    assert d["audit"]["systemPromptVersion"] == "2"
+    assert d["audit"]["systemPromptVersion"] == "3"
     _clean()
 
 
@@ -329,16 +356,17 @@ def test_compact_contract_hoisted_and_full_contract_untouched():
 
 
 def test_compact_golden_hash_pinned():
-    """The compact contract text is untouched by the hoist (pinned by length +
-    hash so a later caption edit cannot silently ride along in this change)."""
-    assert len(_OUTPUT_CONTRACT_COMPACT) == 4547
+    """The compact contract text is pinned by length + hash so a later caption
+    edit cannot silently ride along in this change (v3 added the timestamp
+    citation only: 4547 -> 4640 chars)."""
+    assert len(_OUTPUT_CONTRACT_COMPACT) == 4640
     assert _sha(_OUTPUT_CONTRACT_COMPACT) == _sha(_OUTPUT_CONTRACT_COMPACT)
-    # the compact flat prompt is the pinned v1 golden, i.e. nothing moved
+    # the compact flat prompt is the pinned v3 golden
     compact = build_prompt(
         "GOAL", EV, "soccer", n_frames=8, has_audio=True,
         transcript=TRANSCRIPT, story_so_far=STORY, compact=True,
     )
-    assert (len(compact), _sha(compact)) == GOLDEN_V1_COMPACT
+    assert (len(compact), _sha(compact)) == GOLDEN_V3_COMPACT
 
 
 def test_compact_wire_matches_v1_tokens():

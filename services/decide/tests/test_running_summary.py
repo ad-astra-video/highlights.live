@@ -312,8 +312,12 @@ def test_compact_prompt_delta_is_bounded():
     # the play from the colour clause: 10634 -> 11111 chars (+477). Prefill
     # only — the emitted line still fits the same budgets and the field set is
     # unchanged, so tokens per decide are not bought by this edit.
+    # ADAAAA-8103 (v3 emphasis) adds the dossier/hierarchy block: 11111 ->
+    # 14509 chars on this evidence dict (+3398, of which +2385 is the static
+    # preamble and +93 the compact contract). Prefill only — the field set is
+    # unchanged and the caption budgets are untouched.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 12600
+    assert len(_compact_prompt()) <= 14800
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the
@@ -334,8 +338,11 @@ VOD_GOLDEN_MATCH_CONTEXT = {
     "awayTeam": "Chelsea",
     "venue": "Emirates",
 }
-VOD_GOLDEN_LEN = 9859
-VOD_GOLDEN_SHA256 = "1da57128e739d58a3707efaf2d450b6e2294e766cf3b0f4ab87cc0146a089624"
+# ADAAAA-8103 (v3 emphasis) moves this deliberately: the full contract gained
+# the timestamp-citation ask (+69 chars) and the preamble the dossier block.
+# It stays pinned so a later caption edit cannot ride along.
+VOD_GOLDEN_LEN = 12313
+VOD_GOLDEN_SHA256 = "e9da074b7a0d62eee37d7cacf3934b561ca57dd32853ca9bd508d78940fc90ed"
 
 
 def _vod_prompt() -> str:
