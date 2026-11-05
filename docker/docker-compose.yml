@@ -206,12 +206,19 @@ services:
       # context / multimodal profiling headroom on the 16 GB card.
       - --gpu-memory-utilization
       - "${GEMMA_GPU_MEM_UTIL:-0.90}"
-      # FP8 KV-cache quantization (CEO, ADAAAA-6695): halves the KV-cache bytes
-      # vs f16 so 4 concurrent 30-frame sequences fit the 16 GB RTX 5070 Ti. On
-      # Blackwell (sm_120) vLLM supports fp8 KV via this dtype; fall back to a
-      # lower --gpu-memory-utilization / --max-num-seqs if a given card OOMs.
+      # KV-cache dtype. ADAAAA-8004 moved the decide VLM to GPU 0 = the RTX 3090
+      # Ti, which is Ampere (sm_86): this vLLM build's fp8 KV is `fp8e4nv`, and
+      # triton refuses it there ("type fp8e4nv not supported in this
+      # architecture. The supported fp8 dtypes are ('fp8e4b15', 'fp8e5')"), so
+      # `fp8` is a hard startup failure on the default placement — measured on
+      # ADAAAA-8035 (gemma exited 1 at KV-cache init, `--kv-cache-dtype fp8`).
+      # float16 is the dtype the same card ran gemma-b with for 26 h, and on
+      # 24 GB at 0.90 util it still reports 257,766 KV tokens = 7.87x the
+      # 32768-token ceiling, so the default now matches the default card. On a
+      # Blackwell card (sm_120) fp8 works: set GEMMA_KV_CACHE_DTYPE=fp8 (or
+      # fp8_e5m2, which Ampere also accepts) in docker/.env and recreate.
       - --kv-cache-dtype
-      - "${GEMMA_KV_CACHE_DTYPE:-fp8}"
+      - "${GEMMA_KV_CACHE_DTYPE:-float16}"
       # Multimodal budget per request: up to 64 images (30 frames + crops), 1
       # audio (the trigger window), no video. vLLM profiles KV for this max.
       # Fixed by the decide payload contract (up to ~30 frames + crops + one
