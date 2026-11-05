@@ -350,8 +350,18 @@ function rewriteScoreClaims(input: string, verb: string): string {
   // the net`) shipped `strikes the ball wide on the left` — a fabricated miss,
   // strictly worse than the ungrounded clause. The outcome goes; the actor, the
   // action and the place stay.
-  out = out.replace(/\b(?:into|inside)\s+(?:the\s+)?net\b/gi, "");
+  out = out.replace(/\b(?:in|into|inside)\s+(?:the\s+)?net\b/gi, "");
   out = out.replace(/\binto\s+net\b/gi, "");
+  // ADAAAA-8053 (measured on the Inc 11 level, row @188.7 s): the `in the net`
+  // form above is a PREPOSITIONAL PHRASE, so a bare `net` marker under it made
+  // `quietShape` slice the sentence inside the phrase and substitute the outcome
+  // VERB there — `The keeper stands in the net as the crowd celebrates the
+  // previous goal.` shipped as `The keeper stands in the shoots in midfield.`
+  // A claim carried by a subordinate/manner clause cannot be grounded from this
+  // window, so the clause is dropped and the actor clause is kept.
+  if (hasGoalClaim(out)) {
+    out = out.replace(/[\s,;]+(?:as|while|when|which)\b[^.;!?]*[.;!?]?$/i, "").trim();
+  }
   out = out.replace(/\b(?:the\s+)?net\s+(?:ripples|bulges|swells|shakes|billows)\b/gi, "");
   // A verb whose object WAS the net (`finds the back of the net`) keeps the
   // shot verb it already carries — a shot is grounded by the window's own read;
