@@ -709,6 +709,19 @@ export const ColourSignalSchema = z.object({
 });
 export type ColourSignalRecord = z.infer<typeof ColourSignalSchema>;
 
+export const ColourTraceSchema = z.object({
+  windowTs: z.number().finite().optional(),
+  verdict: z.string().nullable().optional(),
+  signalPresent: z.boolean(),
+  signal: ColourSignalSchema.nullable().optional(),
+  signalReason: z
+    .enum(["no-window-ts", "insufficient-taps", "low-energy", "no-frame"])
+    .optional(),
+  clause: z.enum(["beat", "quiet-cap", "wording-filter", "derivation-not-reached"]),
+  reason: z.string().optional(),
+  beat: z.string().optional(),
+});
+
 export const SummaryLogEntrySchema = z.object({
   seq: z.number().int().min(1),
   ts: z.string(),
@@ -743,6 +756,14 @@ export const SummaryLogEntrySchema = z.object({
    * audio-noise signal). A row with no `colour` carries no beat.
    */
   colour: ColourSignalSchema.optional(),
+  /**
+   * ADAAAA-8053 (contract v8 §3b.3): the per-row COLOUR DECISION — whether the
+   * write seam saw a measurable signal, which gate clause decided (beat /
+   * quiet-cap / wording-filter / derivation-not-reached) and the beat the row
+   * carries. Audit-only; no surface renders it. Additive optional: rows written
+   * before it existed carry none.
+   */
+  colourTrace: ColourTraceSchema.optional(),
 });
 export type SummaryLogEntry = z.infer<typeof SummaryLogEntrySchema>;
 

@@ -195,13 +195,19 @@ describe("§3.4 — corroboration reaches the card-title surface (AC4b)", () => 
     for (const title of cardTitles) expect(title, title).not.toMatch(/\bgoal\b/i);
   });
 
-  it("keeps the goal label when the goal IS corroborated", () => {
-    expect(card(true).cardTitles.some((t) => /^goal\b/i.test(t))).toBe(true);
+  it("serves no `goal` option for a corroborated goal either — a label is not an option (v8 §3b.1)", () => {
+    // ADAAAA-8053: `goal` / `goal: …` are taxonomy-token shapes; the card offers
+    // the gated caption alone. AC4b is unaffected: the caption cannot assert an
+    // uncorroborated goal.
+    for (const title of card(true).cardTitles) expect(title, title).not.toMatch(/^goal\b/i);
+    expect(card(true).cardTitles).toEqual([card(true).caption]);
   });
 
-  it("a corroborated label is still a label, not a sentence", () => {
-    for (const title of cardTitlesFor("Player in white shoots in midfield.", "goal")) {
-      expect(title).not.toMatch(/^goal[.!?]$/i);
+  it("a corroborated label is never a card option", () => {
+    // `cardTitlesFor` no longer takes a label at all: a token cannot be served.
+    for (const title of cardTitlesFor("Player in white shoots in midfield.")) {
+      expect(title).not.toMatch(/^goal\b/i);
+      expect(title).toBe("Player in white shoots in midfield.");
     }
   });
 });

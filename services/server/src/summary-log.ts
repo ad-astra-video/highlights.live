@@ -16,6 +16,7 @@
 import type { SummaryLogEntry } from "@highlights/events";
 import {
   captionLead,
+  colourTraceFor,
   completeCaptionLine,
   groundSummaryText,
   captionLineKey,
@@ -184,13 +185,20 @@ export function applyQuietColourCap(
     if (!isQuiet(row) || !captionColour(row.text ?? "")) continue;
     const stripped = restoreTerminalPunctuation(dropColourClause(row.text ?? ""));
     if (!stripped) continue;
+    // Contract v8 §3b.3: the stored trace must say WHY the row carries no beat.
+    // A beat the cap removed is `quiet-cap`, not a non-firing derivation.
+    const trace = (row as { colourTrace?: { clause?: string; beat?: string } }).colourTrace;
+    if (trace) {
+      trace.clause = "quiet-cap";
+      delete trace.beat;
+    }
+    delete (row as { colour?: unknown }).colour;
     // A de-beated line that another row already delivered is a duplicate: drop
     // the row instead of appending the same sentence twice.
     if (dedupeStoredLines(stripped, delivered, MAX_LINE_OCCURRENCES) !== stripped) {
       keptRows.splice(i, 1);
     } else {
       row.text = stripped;
-      delete (row as { colour?: unknown }).colour;
       delivered.push(stripped);
     }
     withBeat -= 1;
@@ -284,6 +292,10 @@ export function appendSummaryEntry(
       // ADAAAA-7962 (contract v4 §3.1): exactly one AUDIT-ONLY raw field per row,
       // set only when the gate changed what is delivered. Never a narrative.
       ...(grounding && deduped !== raw && raw.trim() ? { text_raw: raw } : {}),
+      // Contract v8 §3b.3 (ADAAAA-8053): the per-row colour decision — signal
+      // present?, which gate clause decided, and the beat the row carries. This
+      // is the trace QA reads instead of re-deriving why AC4 did or did not fire.
+      ...(grounding ? { colourTrace: colourTraceFor(grounding, deduped, windowTs) } : {}),
     });
   }
   if (keptRows.length === 0) {

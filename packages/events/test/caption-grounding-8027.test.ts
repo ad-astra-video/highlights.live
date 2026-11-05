@@ -400,18 +400,24 @@ describe("ADAAAA-8027 §2 — negative arm: the pre-fix writer still reproduces 
 });
 
 describe("ADAAAA-8027 §3 — card options derive from the accepted caption", () => {
-  it("cuts a long option at a sentence boundary, keeping a whole sentence", () => {
+  it("serves the stored string WHOLE — never a boundary cut (ADAAAA-8053 v8 §3b.1)", () => {
     const long = `${"No. 3 drives into the box and shoots in the penalty area. ".repeat(3)}`.trim();
     expect(long.length).toBeGreaterThan(CARD_TITLE_MAX_CHARS);
-    const titles = cardTitlesFor(long, "Shot");
-    expect(titles[0].length).toBeLessThanOrEqual(CARD_TITLE_MAX_CHARS);
-    expect(long.startsWith(titles[0])).toBe(true);
-    expect(titles[0].endsWith(".")).toBe(true);
+    const titles = cardTitlesFor(long);
+    // A cut at a sentence boundary is still a PREFIX of the stored string, and
+    // AC10 requires every served option to be byte-identical to a gated stored
+    // string. So the option is the whole stored caption, long or not.
+    expect(titles).toEqual([long]);
   });
 
-  it("serves the label alone when no complete sentence fits the option ceiling", () => {
+  it("never serves a bare label or a `<type>: ` prefix as an option", () => {
     const noBoundary = "x".repeat(CARD_TITLE_MAX_CHARS + 20);
-    expect(cardTitlesFor(noBoundary, "Shot")).toEqual(["Shot"]);
+    // No sentence to serve -> no option. `Shot` alone is a taxonomy token, and
+    // `Shot: …` is a variant minted at render time, not a stored string.
+    expect(cardTitlesFor(noBoundary)).toEqual([]);
+    for (const title of cardTitlesFor("No. 3 shoots in midfield.", ["Shot", "Shot: No. 3 shoots in midfield."])) {
+      expect(title).not.toMatch(/^shot\b/i);
+    }
   });
 
   it("never glues a place after a sentence period (the gate itself)", () => {

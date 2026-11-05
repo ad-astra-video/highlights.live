@@ -222,16 +222,11 @@ describe("v5 §3.5 (R22) — every rendered surface string is the stored gated v
     expect(captionForStoredLine("The ball stays out.")).toBe("The ball stays out.");
   });
 
-  it("every card option carries the stored line byte-for-byte", () => {
-    const titles = cardTitlesFor(STORED, "Shot");
-    expect(titles.length).toBeGreaterThanOrEqual(2);
-    // Option 1 IS the stored string; the label join carries it whole; the label
-    // option is the label. None is a cut derivative.
-    expect(titles[0]).toBe(STORED);
-    expect(titles).toContain(`Shot: ${STORED}`);
-    for (const t of titles) {
-      expect(STORED.includes(t.replace(/^Shot: /, "")) || "/" + t === "/Shot").toBe(true);
-    }
+  it("every card option IS the stored line, byte-for-byte (v8 §3b.1: one option is valid)", () => {
+    const titles = cardTitlesFor(STORED);
+    // ADAAAA-8053: the label join and the bare label option are gone — a token
+    // is not a stored string. The option set is the gated caption.
+    expect(titles).toEqual([STORED]);
   });
 
   it("a cut is resolved at the seam and the stored value is the cut", () => {
@@ -241,8 +236,10 @@ describe("v5 §3.5 (R22) — every rendered surface string is the stored gated v
     // No partial word at the seam: the cut ends on a whole token.
     expect(long.startsWith(cut)).toBe(true);
     expect(cut.split(/\s+/).pop()).toBe(long.split(/\s+/).filter(Boolean)[cut.split(/\s+/).length - 1]);
-    const title = cardTitlesFor(long, "Shot")[0];
-    expect(title.length).toBeLessThanOrEqual(CARD_TITLE_MAX_CHARS);
+    const title = cardTitlesFor(long)[0];
+    // v8 §3b.1: the option is the stored string WHOLE (no 140-char cut, which
+    // would be a prefix of it), so it starts with — and equals — the caption.
+    expect(title).toBe(cut);
     expect(long.startsWith(title)).toBe(true);
   });
 });
