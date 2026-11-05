@@ -29,6 +29,11 @@ const INTERNAL_FIELDS = {
   costUsd: 0.0187,
   decideCalls: 7,
   perceiveSessionS: 12.4,
+  // ADAAAA-8061: the unmeasured-settlement pair. The money half is the same
+  // spend class as costUsd; the named reason is not money and stays visible so
+  // an owner can tell "not measured" from a genuine zero.
+  partialCostUsd: 0.0008,
+  costUnavailable: "decide-count-not-persisted",
   stageAMetrics: SNAPSHOT,
   stageAMetricsStatus: "measured" as const,
   observeMetrics: {
@@ -95,6 +100,15 @@ describe("job-visibility projection", () => {
     expect(visible.framesAnalyzed).toBe(240);
     expect(visible.highlightsFound).toBe(2);
     expect(visible.status).toBe("done");
+  });
+
+  it("hides the partial cost but keeps the unavailable REASON for the owner (ADAAAA-8061)", () => {
+    const job = { id: "j2b", ...INTERNAL_FIELDS };
+    const visible = jobForRole(job, "user");
+    expect(visible).not.toHaveProperty("partialCostUsd");
+    expect(visible.costUnavailable).toBe("decide-count-not-persisted");
+    // Admin keeps the money half.
+    expect(jobForRole(job, "admin").partialCostUsd).toBe(0.0008);
   });
 
   it("never mutates the stored record", () => {
