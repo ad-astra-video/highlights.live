@@ -73,11 +73,18 @@ describe("ADAAAA-7938 prior game state — the first window is a strict no-op", 
     expect(Object.prototype.hasOwnProperty.call(opts!, "priorGameState")).toBe(false);
   });
 
-  it("never carries the block on the live rail even after a scored window", () => {
+  it("carries the block on the live rail too (ADAAAA-7988 superseded the VOD-only rule)", () => {
+    // ADAAAA-7938 originally forwarded prior game state on the VOD pass only;
+    // ADAAAA-7988 extended it to the live rail because the 13:14Z live share
+    // judged every celebration window in isolation. This test pinned the old
+    // rule and stayed red on master once 7988 shipped.
     const run = new LiveRunShared();
     run.noteWindowGameState(42.4, goalDecision(), { scoreBoardDelta: LEGIBLE_DELTA });
     const { opts } = buildObserveDecideRequest(LIVE_CFG, run, payload(48));
-    expect(opts!.priorGameState).toBeUndefined();
+    const pg = opts!.priorGameState;
+    expect(pg).toBeDefined();
+    expect(Object.prototype.hasOwnProperty.call(opts!, "priorGameState")).toBe(true);
+    expect(pg!.story).toContain("Portugal");
   });
 });
 

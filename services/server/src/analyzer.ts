@@ -1504,6 +1504,10 @@ export interface PipelineClient {
       distanceToGoal?: number;
       goalLineDelta?: number;
       audioLevels?: number[];
+      /** ADAAAA-8056 (lever B+e): the window's perceive timeline — one compact
+       * record per 3 fps seed, ordered by `ts`. Absent on the VOD rail (the
+       * enrichment is live-only) and when the window has no seeds. */
+      perceiveTimeline?: PerceiveTimelineRecord[];
     },
     opts?: {
       gameHint?: string;
@@ -1546,6 +1550,11 @@ export interface PipelineClient {
        * transition). Absent = no PRIOR GAME STATE prompt block, so the request
        * and the rendered prompt are byte-identical to today (AC-A2). */
       priorGameState?: PriorGameState;
+      /** ADAAAA-8056 (AC-E1/E2): the live window's perceive + ASR coverage
+       * ledger, forwarded so the decide service persists it in decide_audit.
+       * Absent on the VOD rail (the enrichment is live-only). */
+      perceiveWindow?: PerceiveWindowLedger;
+      audioPresence?: DecideAudioPresence;
     }
   ): Promise<DecisionResult>;
   /**
@@ -4363,6 +4372,84 @@ export const DECIDE_MAX_TRACK_COUNT = 8;
 export const DECIDE_MAX_DETECTIONS = 16;
 export const DECIDE_MAX_DETECTION_BBOX = 4;
 
+// ---------------------------------------------------------------------------
+// ADAAAA-8056 (lever B+e): the per-window PERCEIVE TIMELINE.
+//
+// Perceive already emits per-frame structure at 3 fps (`ObservationResult` ->
+// `PerFrameSeed`: tracks, objects, OCR scoreboard anchors, and the additive
+// `signal` block with goalCrossed / ballOutcome / ballVelocity / possession).
+// The decide builder used to FOLD those 27-29 seeds into a handful of window
+// scalars (trackCount max, ocrHits sum, <=16 detections), which drops *when* in
+// the window anything was true. That temporal information is what the ratified
+// B+e contract buys back on the CHEAP channel: a text record costs milliseconds
+// of prefill while a frame costs ~0.5-1.5 s of decide wall time.
+//
+// The record is deliberately COMPACT (scalars only, no bbox geometry — that
+// stays in `evidence.detections`) because the whole block must fit a token
+// budget. One record per seed, ordered by `ts`.
+// ---------------------------------------------------------------------------
+
+/** Hard cap on the number of timeline records forwarded per decide (a live
+ * window is 27-29 seeds at 3 fps; 32 leaves headroom for a longer span without
+ * letting a pathological payload grow the prompt). Mirrors the decide service's
+ * `Evidence.perceiveTimeline max_length`. */
+export const DECIDE_MAX_PERCEIVE_RECORDS = 32;
+
+/** ADAAAA-8056 (AC-E1): the per-window perceive coverage ledger the server sends
+ * with every live decide so the decide service can persist it in its audit
+ * `timings`. `seeds` = frames aligned into the window, `records` = timeline
+ * records actually forwarded, `withFindings` = seeds perceive genuinely observed
+ * (a bare `{ts}` seed is a frame perceive never looked at). */
+export interface PerceiveWindowLedger {
+  seeds: number;
+  records: number;
+  withFindings: number;
+}
+
+/** ADAAAA-8056 (AC-E2): where this window's audio actually came from. `clipBytes`
+ * 0 means the decide call ran text-only; `spanFrom`/`spanTo`/`pos` separate a
+ * silent/absent stream from a retention gap (tap span far ahead of `pos`). */
+export interface DecideAudioPresence {
+  tapChunks: number;
+  clipBytes: number;
+  levels: number;
+  spanFrom: number | null;
+  spanTo: number | null;
+  pos: number | null;
+  series: number;
+}
+
+/** ADAAAA-8056: one compact per-seed record in a decide window's perceive timeline.
+ * `ts` is the frame's content timestamp (seconds); every other field is the
+ * already-computed perceive finding for that frame — nothing here is inferred
+ * or fabricated (an absent field means perceive reported nothing). */
+export interface PerceiveTimelineRecord {
+  ts: number;
+  /** Tracked objects on this frame (perceive `tracks`). */
+  tracks: number;
+  /** Fastest track/ball velocity estimate for the frame (normalized units/s
+   * when the homography is off). 0 when perceive reported none. */
+  maxVelocity: number;
+  /** Object labels seen on the frame (deduped, bounded). */
+  objects: string[];
+  /** Perceive track ids present on the frame, when it reported them. */
+  trackIds?: string[];
+  /** Legible OCR / scoreboard text anchors read on the frame (bounded). */
+  ocr?: string[];
+  /** Goal-line outcome string ("goal" | "cross" | "off_target" | ...). */
+  ballOutcome?: string;
+  /** Possessing player/entity id, when perceive assigned one. */
+  possession?: string;
+  /** Goal-line plane classifier: the ball crossed the line on this frame. */
+  goalCrossed?: boolean;
+  /** Geometry-agnostic ball-in-net attestation for this frame. */
+  ballInNet?: boolean;
+  /** Scoreboard score delta observed across this frame's candidate window. */
+  scoreBoardChanged?: boolean;
+  /** A confident motion burst was detected on this frame. */
+  motionBurst?: boolean;
+}
+
 /** Fold the goal-attestation signals (goalCrossed / ballOutcome /
  * scoreBoardChanged) carried by a set of in-window bias hints into a single
  * window-level attestation. Any hint carrying a true attestation attests the
@@ -4389,6 +4476,149 @@ export function foldWindowAttestation(
   return out;
 }
 
+/** ADAAAA-8056: whether a seed carries any perceive finding at all. `alignSeeds`
+ * returns a bare `{ ts }` seed for a frame perceive never observed, so this is
+ * the number that separates "perceive delivered observations for this span" from
+ * "the timeline is empty because there was nothing to say". Used only for the
+ * coverage ledger (AC-E1), never to gate the timeline itself. */
+export function seedCarriesFindings(s: PerFrameSeed | undefined): boolean {
+  if (!s) return false;
+  return (
+    (s.tracks?.length ?? 0) > 0 ||
+    (s.objects?.length ?? 0) > 0 ||
+    (s.ocr?.length ?? 0) > 0 ||
+    (typeof s.summary === "string" && s.summary.trim().length > 0) ||
+    (s.signal !== undefined && Object.keys(s.signal).length > 0)
+  );
+}
+
+/** ADAAAA-8056: build one window's perceive timeline from its aligned seeds.
+ *
+ * One record per seed (a seed IS a 3 fps perceive frame), ordered by `ts`, so a
+ * ~10 s / 27-29-seed window yields ~3 records per second — far past AC-E1's
+ * "at least one record per ~1 s of window span". A seed with no findings still
+ * gets a record (tracks 0, no objects): the window genuinely shows "perceive saw
+ * this frame and reported nothing", which is what keeps an empty timeline
+ * distinguishable from a missing one.
+ *
+ * Bounded: at most `maxRecords`, keeping the records nearest the window anchor
+ * (the trigger instant when there is one, else the window center) so a goal
+ * inside the tail of the window is never the thing that gets dropped. The
+ * retained records are re-sorted by `ts`, so the timeline always reads
+ * chronologically. Pure + deterministic (unit-testable).
+ */
+export function buildPerceiveTimeline(
+  seeds: ReadonlyArray<PerFrameSeed>,
+  opts: { centerTs?: number; anchorTs?: number; maxRecords?: number } = {}
+): PerceiveTimelineRecord[] {
+  if (!seeds || seeds.length === 0) return [];
+  const maxRecords = Math.max(1, Math.floor(opts.maxRecords ?? DECIDE_MAX_PERCEIVE_RECORDS));
+  const anchor = Number.isFinite(opts.anchorTs as number)
+    ? (opts.anchorTs as number)
+    : Number.isFinite(opts.centerTs as number)
+      ? (opts.centerTs as number)
+      : 0;
+
+  const records: PerceiveTimelineRecord[] = seeds
+    .filter((s) => s && Number.isFinite(s.ts))
+    .map((s) => {
+      const sig = s.signal;
+      const objects: string[] = [];
+      for (const o of s.objects ?? []) {
+        const label = typeof o?.label === "string" ? o.label.trim() : "";
+        if (label && !objects.includes(label)) objects.push(label);
+      }
+      const trackIds = (s.tracks ?? [])
+        .map((t) => (typeof t?.trackId === "string" ? t.trackId.trim() : ""))
+        .filter((t) => t.length > 0);
+      const ocr = (s.ocr ?? [])
+        .map((t) => (typeof t === "string" ? t.trim().slice(0, 24) : ""))
+        .filter((t) => t.length > 0)
+        .slice(0, 2);
+      const speed = sig?.ballVelocity?.speedMps;
+      const rec: PerceiveTimelineRecord = {
+        ts: Number(s.ts.toFixed(2)),
+        tracks: Math.min(s.tracks?.length ?? 0, DECIDE_MAX_TRACK_COUNT),
+        maxVelocity: Number.isFinite(speed as number)
+          ? Number((speed as number).toFixed(2))
+          : 0,
+        objects: objects.slice(0, 4),
+      };
+      if (trackIds.length) rec.trackIds = trackIds.slice(0, DECIDE_MAX_TRACK_COUNT);
+      if (ocr.length) rec.ocr = ocr;
+      if (typeof sig?.ballOutcome === "string" && sig.ballOutcome.trim()) {
+        rec.ballOutcome = sig.ballOutcome.trim().slice(0, 24);
+      }
+      const possession = sig?.ballPossession?.possessingPlayerId;
+      if (typeof possession === "string" && possession.trim()) {
+        rec.possession = possession.trim().slice(0, 24);
+      }
+      if (sig?.goalCrossed === true) rec.goalCrossed = true;
+      if (sig?.ballInNet === true) rec.ballInNet = true;
+      if (sig?.scoreBoardChanged === true) rec.scoreBoardChanged = true;
+      if (sig?.motionBurst === true) rec.motionBurst = true;
+      return rec;
+    })
+    .sort((a, b) => a.ts - b.ts);
+
+  if (records.length <= maxRecords) return records;
+  // Keep the records nearest the anchor (trigger instant / window center), then
+  // restore chronological order: the goal moment sits at the end of a
+  // celebration window, so the tail is the part worth keeping.
+  const kept = records
+    .map((r, i) => ({ r, i, d: Math.abs(r.ts - anchor) }))
+    .sort((a, b) => a.d - b.d || b.i - a.i)
+    .slice(0, maxRecords)
+    .map((x) => x.r)
+    .sort((a, b) => a.ts - b.ts);
+  return kept;
+}
+
+/** ADAAAA-8056: select the `max` detections that matter for this window.
+ *
+ * The pre-fix builder kept `detections.slice(0, DECIDE_MAX_DETECTIONS)` — the
+ * FIRST N detections, i.e. the OLDEST frames. On a 27-29-seed window with
+ * several objects per frame that cut the whole tail where the goal actually
+ * happens, so the model was shown geometry from before the play. Select
+ * trigger-nearest instead (nearest to the window's trigger instant, falling back
+ * to its center), then re-sort the kept detections chronologically so the prompt
+ * still reads oldest -> newest. The schema clamps (`bbox` <= 4 numbers,
+ * confidence in [0,1], at most `max` detections) are inherited from the caller
+ * unchanged (ADAAAA-7022). Pure + deterministic (unit-testable).
+ */
+export function selectDecideDetections(
+  seeds: ReadonlyArray<PerFrameSeed>,
+  anchorTs: number,
+  max: number = DECIDE_MAX_DETECTIONS
+): DetectionEvidence[] {
+  const cap = Math.max(0, Math.floor(max));
+  if (cap === 0 || !seeds || seeds.length === 0) return [];
+  const anchor = Number.isFinite(anchorTs) ? anchorTs : 0;
+  const ordered = seeds
+    .map((s, i) => ({ s, i, d: Number.isFinite(s?.ts) ? Math.abs(s.ts - anchor) : Number.POSITIVE_INFINITY }))
+    // Nearest first; on a tie prefer the LATER seed (most recent), because a
+    // window's action resolves toward its end.
+    .sort((a, b) => a.d - b.d || b.i - a.i);
+  const picked: { ts: number; det: DetectionEvidence }[] = [];
+  for (const { s } of ordered) {
+    if (!s) continue;
+    for (const o of s.objects ?? []) {
+      if (picked.length >= cap) break;
+      picked.push({
+        ts: Number.isFinite(s.ts) ? s.ts : 0,
+        det: {
+          label: o.label,
+          confidence: o.confidence ?? 0,
+          bbox: (o.bbox ?? []).slice(0, DECIDE_MAX_DETECTION_BBOX),
+          trackId: "",
+        },
+      });
+    }
+    if (picked.length >= cap) break;
+  }
+  return picked.sort((a, b) => a.ts - b.ts).map((p) => p.det);
+}
+
 /** Build the decide() evidence + opts for an observe window. The temporal
  * window frames + the perceive-seeded per-frame context are the primary
  * evidence; candidate triggers inside the window are folded as bias hints
@@ -4402,6 +4632,11 @@ export function buildObserveDecideRequest(
   const bias = payload.biasHints[0] as ObserveBiasHint | undefined;
   const eventType = bias?.eventType ?? observeDefaultEventType(payload);
   const center = payload.centerTs;
+  // ADAAAA-8056 (lever B+e): the enrichment is a LIVE-RAIL change. `decideWindowN`
+  // is set only by the VOD detail-first pass, so gating on its absence keeps the
+  // VOD request byte-identical (AC-E5) while every live observer window carries
+  // the timeline + the ASR coverage instrumentation.
+  const enrichment = cfg.decideWindowN === undefined;
   // Fold the window's perceive-derived context into the scalar evidence the
   // decide contract expects (track count / OCR / reaction) from the seeds.
   const seeds = payload.seeds;
@@ -4414,18 +4649,17 @@ export function buildObserveDecideRequest(
   // ADAAAA-7022: clamp to the decide Evidence schema caps so a multi-object
   // window never builds a payload decide rejects (trackCount le=8).
   const trackCount = Math.min(maxTrackCount, DECIDE_MAX_TRACK_COUNT);
-  const detections: DetectionEvidence[] = [];
-  for (const s of seeds) {
-    for (const o of s.objects ?? []) {
-      detections.push({
-        label: o.label,
-        confidence: o.confidence ?? 0,
-        // ADAAAA-7022: Detection.bbox is max_length=4 and confidence ge=0 le=1.
-        bbox: (o.bbox ?? []).slice(0, DECIDE_MAX_DETECTION_BBOX),
-        trackId: "",
-      });
-    }
-  }
+  // ADAAAA-8056 (lever B+e): the per-window perceive timeline + trigger-nearest
+  // detection selection. The anchor is the trigger instant when the window was
+  // scheduled by a fired audio trigger, else the window center — the same
+  // instant decide judges, so both the timeline cap and the detection pick keep
+  // the seconds around the play.
+  const triggerTs = payload.trigger?.onsetTs;
+  const anchorTs = Number.isFinite(triggerTs as number) ? (triggerTs as number) : center;
+  const perceiveTimeline = buildPerceiveTimeline(seeds, { centerTs: center, anchorTs });
+  const timelineSeeds = seeds.length;
+  const timelineWithFindings = seeds.filter((s) => seedCarriesFindings(s)).length;
+  const detections = selectDecideDetections(seeds, anchorTs, DECIDE_MAX_DETECTIONS);
   // ADAAAA-7021 fix: fold the perceive candidate's goal-attestation signals that
   // rode the in-window bias hints (goalCrossed / ballOutcome / scoreBoardChanged).
   // Any hint in the window carrying a true attestation attests the whole window;
@@ -4477,9 +4711,16 @@ export function buildObserveDecideRequest(
     // `audioLevels`; the primary evidence did not).
     audioLevels: windowAudioLevels,
     // Perceive-derived per-detection geometry + audio level curve (I4).
-    // ADAAAA-7022: keep the FIRST DECIDE_MAX_DETECTIONS (oldest frames) so the
-    // payload never breaches Evidence.detections max_length=16.
+    // ADAAAA-8056: trigger-nearest selection (the pre-fix code kept the OLDEST
+    // 16 detections, cutting the goal moment off a 27-29-seed window). The
+    // Evidence.detections max_length=16 clamp still holds.
     detections: detections.slice(0, DECIDE_MAX_DETECTIONS),
+    // ADAAAA-8056 (lever B+e): the window's perceive timeline — one compact
+    // record per 3 fps seed, ordered by ts. This is the temporal density the
+    // scalar fold above throws away, delivered on the text channel so the model
+    // keeps "when" without paying a frame per instant. Live rail only, and
+    // omitted when there are no seeds, so the VOD payload stays byte-identical.
+    ...(enrichment && perceiveTimeline.length ? { perceiveTimeline } : {}),
     // ADAAAA-7021 fix: forward the perceive candidate's goal-attestation signals
     // (folded into the in-window bias hints) FIRST-CLASS so the decide
     // goal-attestation gate can independently attest a `scoring_play`. Previously
@@ -4502,13 +4743,26 @@ export function buildObserveDecideRequest(
       `[vod-audio:${cfg.jobId}] decide @${center}s tapChunks=${run.audioChunkCount()} audioB64Len=${windowAudioB64.length} levels=${windowAudioLevels.length}`
     );
   }
+  // ADAAAA-8056: the enrichment is live-rail only — see the gate at the top of
+  // this builder; the VOD request stays byte-identical (AC-E5). The audio tap
+  // span is read ONCE here and reused by the live-audio log below and by the
+  // AC-E2 `audioPresence` instrumentation in `opts`. Guarded because a partial
+  // run stub (unit tests, a pass with no audio tap) need not implement it —
+  // absent audio is reported as "no span", never as an exception.
+  const audioSpan =
+    typeof run.audioSpan === "function" ? run.audioSpan() : { from: null, to: null, pos: null };
+  // Same guard for the two tap counters the AC-E2 ledger quotes: a run without an
+  // audio tap reports 0, never an exception.
+  const audioTapChunks = typeof run.audioChunkCount === "function" ? run.audioChunkCount() : 0;
+  const audioSeries =
+    typeof run.seriesWindow === "function" ? run.seriesWindow(center, preS, postS).length : 0;
   // ADAAAA-7671 (instrumentation): the SAME reach for the LIVE observe pass.
   // The live audio tap runs on real time while the decide loop lags it, so the
   // tap span vs the pipeline position is the number that says whether this
   // window's audio survived retention (`audioB64Len: 0` with a tap span far
   // ahead of `pos` = retention, not a silent stream).
   if (cfg.liveObserveLoop && cfg.jobId) {
-    const span = run.audioSpan();
+    const span = audioSpan;
     console.error(
       `[live-audio:${cfg.jobId}] decide @${center.toFixed(2)}s tapChunks=${run.audioChunkCount()} ` +
         `tap=[${span.from === null ? "-" : span.from.toFixed(2)}..${span.to === null ? "-" : span.to.toFixed(2)}] ` +
@@ -4524,7 +4778,10 @@ export function buildObserveDecideRequest(
   // (150 + 90 chars) keep the per-window cost delta inside the ADAAAA-7799
   // ceiling, and an empty state renders nothing, so the first window's request
   // stays byte-identical (AC-A2).
-  const priorGameState = run.priorGameStateFor(center);
+  // ADAAAA-8056: guarded so a partial run stub (unit tests / a pass with no
+  // prior state) reports "nothing measured" instead of throwing.
+  const priorGameState =
+    typeof run.priorGameStateFor === "function" ? run.priorGameStateFor(center) : undefined;
   const opts: Parameters<PipelineClient["decide"]>[1] = {
     gameHint: cfg.gameHint,
     reasoningEffort: "none",
@@ -4551,6 +4808,36 @@ export function buildObserveDecideRequest(
     // ADAAAA-7799 ceiling, and an unknown state omits the key so the first
     // window's request stays byte-identical.
     ...(priorGameState ? { priorGameState } : {}),
+    // ADAAAA-8056 (AC-E1): the per-window perceive coverage ledger. The decide
+    // service writes it into its audit `timings` block, so a fresh live leg can
+    // prove "100 % of decide calls carried a timeline" off `decide_audit` rows
+    // instead of inferring it. `seeds` counts the frames the window aligned,
+    // `records` what actually reached the prompt, `withFindings` how many seeds
+    // perceive genuinely observed — the number that separates an empty timeline
+    // from a span perceive never delivered for.
+    //
+    // ADAAAA-8056 (AC-E2): `audioPresence` is the window's audio reach. `clipBytes`
+    // 0 with a tap span far ahead of `pos` is retention, not a silent stream, and
+    // a window that carried no audio is COUNTED (named reason) rather than being
+    // indistinguishable from a transcribed one.
+    ...(enrichment
+      ? {
+          perceiveWindow: {
+            seeds: timelineSeeds,
+            records: perceiveTimeline.length,
+            withFindings: timelineWithFindings,
+          },
+          audioPresence: {
+            tapChunks: audioTapChunks,
+            clipBytes: windowAudioB64.length,
+            levels: windowAudioLevels.length,
+            spanFrom: audioSpan.from,
+            spanTo: audioSpan.to,
+            pos: audioSpan.pos,
+            series: audioSeries,
+          },
+        }
+      : {}),
     // ADAAAA-7856 (Stage 6): the job's inferred teams + kit colours, read from
     // persistence (one resolver pass per job — zero extra GPU per window). An
     // absent/unusable context omits the key entirely, so the request and the
