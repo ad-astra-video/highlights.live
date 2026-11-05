@@ -542,7 +542,25 @@ describe("media rail published-frame clock (ADAAAA-8069)", () => {
     expect(p.observations?.filter((o: any) => (o.tracks?.length ?? 0) > 0).length).toBe(1);
     expect(rail.stats().frames).toBe(2);
   });
+
+  it("honors the configured live frame budget on the media rail", async () => {
+    const calls: any[] = [];
+    // ADAAAA-8069: `LIVE_OBSERVE_MAX_FRAMES` is the documented live frame budget
+    // ("trim 1") but only the analyzer's live pass read it, so the media rail ran
+    // at the 30-frame default even in a 4-image cell.
+    const rail = new MediaRailObserver({ jobId: "j-cap", maxFrames: 4, onDecide: async (p) => (calls.push(p), false) });
+    // 3 fps publish clock over ~10 s AND every frame delivered (a runner that
+    // keeps up): the image cap is the only thing that can separate the sets.
+    for (let i = 0; i < 30; i++) rail.onFrameTick(T0 + i / 3);
+    for (let i = 0; i < 30; i++) rail.onObservation({ seq: i, timestamp: T0 + i / 3, tracks: [] }, jpeg(i));
+    await waitFor(() => calls.length >= 3);
+    const p = calls[calls.length - 1];
+    expect(p.frames.length).toBeLessThanOrEqual(4);
+    // ...while the perceive timeline still carries the whole span.
+    expect(p.observations?.length).toBeGreaterThan(p.frames.length);
+  });
 });
+
 describe("POST /jobs/:id/media/frames feeds the window observation set (ADAAAA-8069)", () => {
   async function register(app: any, email: string): Promise<string> {
     const r = await app.inject({ method: "POST", url: "/auth/register", payload: { email, password: "password123" } });
