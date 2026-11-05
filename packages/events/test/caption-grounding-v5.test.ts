@@ -18,6 +18,7 @@
 import { describe, it, expect } from "vitest";
 import {
   captionColour,
+  captionLead,
   captionForStoredLine,
   cardTitlesFor,
   colourBeatFromSignal,
@@ -181,15 +182,15 @@ describe("v5 §3.1 (R18) — the two contradicted beats can no longer ship", () 
     });
     expect(loud).not.toContain("crowd erupts");
     expect(captionColour(loud)).toBe("noise lifts, then settles");
-    // ...and a quiet window with the same firing signal carries NO colour and
-    // stays inside the 8-word bar (the defect measured on five fresh jobs).
+    // ...and a quiet window with the same firing signal carries the DERIVED beat
+    // (v7 §3.1 supersedes the v6 ban), while its LEAD stays inside the 8-word bar.
     const quiet = groundCaption("No. 3 drives into the box and shoots — crowd erupts", {
       ...QUIET(),
       colourSignal: SIGNAL,
     });
     expect(quiet).not.toContain("crowd erupts");
-    expect(captionColour(quiet)).toBe("");
-    expect(wordCount(quiet)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    expect(captionColour(quiet)).toBe("noise lifts, then settles");
+    expect(wordCount(captionLead(quiet))).toBeLessThanOrEqual(QUIET_MAX_WORDS);
   });
 
   it("`players celebrate in penalty area` at T+309 is dropped outright", () => {

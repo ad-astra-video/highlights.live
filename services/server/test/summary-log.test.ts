@@ -197,7 +197,7 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
   it("replaces a name the window's prompt_text cannot corroborate", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
-    await appendSummaryEntry(s, job.id, "Real Madrid press high through Manuel Ordoñez.", {
+    await appendSummaryEntry(s, job.id, "Real Madrid press high in midfield through Manuel Ordoñez.", {
       windowTs: 70,
       grounding: { verdict: "big_play", promptText: PROMPT },
     });
@@ -209,12 +209,12 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
   it("strips internal tokens from the entry (incl. the seeded-caption shape)", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4" });
-    await appendSummaryEntry(s, job.id, "[near_miss] Audio Burst", {
+    await appendSummaryEntry(s, job.id, "[near_miss] No. 9 dribbles in the box", {
       windowTs: 71,
       grounding: { verdict: "near_miss", promptText: PROMPT },
     });
     const text = s.getJob(job.id)!.summaryLog![0].text;
-    expect(text).toBe("Audio Burst");
+    expect(text).toBe("No. 9 dribbles in the box.");
   });
 
   it("passes a REAL goal verdict's lead through byte-identical", async () => {
@@ -228,7 +228,9 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
     // ADAAAA-7965 (contract v5 §3.1, R18): the LEAD passes byte-identical; the
     // model's appended clause does not, because a forwarded clause is what QA v4
     // measured as contradicted by its own frames.
-    expect(s.getJob(job.id)!.summaryLog![0].text).toBe("No. 9 scores at the near post");
+    // ADAAAA-8043 (contract v7 §3.5): the write seam closes the sentence, so the
+    // stored row carries its terminal period and the page never adds one.
+    expect(s.getJob(job.id)!.summaryLog![0].text).toBe("No. 9 scores at the near post.");
   });
 
   it("leaves the VOD path BYTE-IDENTICAL (no grounding context supplied)", async () => {
@@ -242,7 +244,7 @@ describe("appendSummaryEntry caption grounding (ADAAAA-7948)", () => {
   it("grounds only the persisted log text — the rolling runningSummary stays model input", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4" });
-    const line = "[near_miss] Marta scores a goal.";
+    const line = "[near_miss] Marta scores a goal in the box.";
     await appendSummaryEntry(s, job.id, line, {
       windowTs: 73,
       grounding: { verdict: "near_miss", promptText: PROMPT },
@@ -319,14 +321,14 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
   it("appends one row per new line of a multi-line pass and skips only the repeats", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
-    await appendSummaryEntry(s, job.id, "Kickoff at center circle.\nPlayer in blue dribbles.", {
+    await appendSummaryEntry(s, job.id, "Kickoff taken at center circle.\nPlayer in blue dribbles in the box.", {
       windowTs: 0,
       grounding: GROUNDING,
     });
     await appendSummaryEntry(
       s,
       job.id,
-      "Kickoff at center circle.\nPlayer in blue dribbles.\nKeeper clears at the near post.",
+      "Kickoff taken at center circle.\nPlayer in blue dribbles in the box.\nKeeper clears at the near post.",
       { windowTs: 3, grounding: GROUNDING }
     );
     const log = s.getJob(job.id)!.summaryLog!;
@@ -334,8 +336,8 @@ describe("appendSummaryEntry duplicate lines (ADAAAA-7956 rule 2)", () => {
     // separate rows (v1-v5 joined them into one entry, so the page showed two
     // sentences inside a single 15 s row), and only the repeat is skipped.
     expect(log.map((e) => e.text)).toEqual([
-      "Kickoff at center circle.",
-      "Player in blue dribbles.",
+      "Kickoff taken at center circle.",
+      "Player in blue dribbles in the box.",
       "Keeper clears at the near post.",
     ]);
     expect(log.map((e) => e.seq)).toEqual([1, 2, 3]);
@@ -400,7 +402,7 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
     await appendSummaryEntry(s, job.id, "No. 10 strikes the ball into the net — goal", {
       windowTs: 117,
-      grounding: { verdict: "scoring_play", promptText: PROMPT, corroborated: false },
+      grounding: { verdict: "scoring_play", promptText: PROMPT, corroborated: false, place: "from the box" },
     });
     const text = s.getJob(job.id)!.summaryLog![0].text;
     expect(text.toLowerCase()).not.toContain("net");
@@ -413,10 +415,12 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     const line = "No. 10 strikes the ball into the net — goal";
     await appendSummaryEntry(s, job.id, line, {
       windowTs: 117,
-      grounding: { verdict: "scoring_play", promptText: PROMPT, corroborated: true },
+      grounding: { verdict: "scoring_play", promptText: PROMPT, corroborated: true, place: "from the box" },
     });
     // R18: the claim survives byte-identical; an appended tag is not a beat.
-    expect(s.getJob(job.id)!.summaryLog![0].text).toBe("No. 10 strikes the ball into the net");
+    // ADAAAA-8043 (v7 §3.5): the write seam closes the sentence, so the stored
+    // row is a whole sentence and the page adds no punctuation.
+    expect(s.getJob(job.id)!.summaryLog![0].text).toBe("No. 10 strikes the ball into the net from the box.");
   });
 
   it("records the model's ungated line in exactly one audit-only field", async () => {
@@ -425,7 +429,7 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     const raw = "Saez strikes the ball into the net — crowd erupts. GOAL 22:15";
     await appendSummaryEntry(s, job.id, raw, {
       windowTs: 177,
-      grounding: { verdict: "not_highlight", promptText: "saez" },
+      grounding: { verdict: "not_highlight", promptText: "saez", place: "in the box" },
     });
     const entry = s.getJob(job.id)!.summaryLog![0];
     expect(entry.text_raw).toBe(raw);
@@ -446,7 +450,7 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     expect(entry.text).toBe("Player in blue dribbles in midfield.");
   });
 
-  it("never stores a colour beat on a quiet row (ADAAAA-7995 AC4)", async () => {
+  it("allows a quiet-row beat up to 40% of the delivered quiet set (ADAAAA-8043 v7 §3.1)", async () => {
     const s = new Store();
     const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
     // ADAAAA-7965 (contract v5 §3.1, R18): the beat is DERIVED from the measured
@@ -467,10 +471,20 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     const log = s.getJob(job.id)!.summaryLog!;
     const withColour = log.filter((e) => (e.text ?? "").includes("noise lifts, then settles"));
     expect(log).toHaveLength(8);
-    // A quiet window carries NO colour: the v5 40% share shipped `— noise spikes
-    // over the play` on 3 rows per job and pushed them to 12-13 words (bar <= 8).
-    expect(withColour).toHaveLength(0);
-    for (const e of log) expect(e.colour).toBeUndefined();
+    // ADAAAA-8043 (contract v7 §3.1) supersedes the v6 blanket ban: a quiet row
+    // MAY carry the derived beat, on at most 40% of the delivered quiet set
+    // (floor(0.4 * 8) = 3). The v6 rule measured 0 beats against 13 eligible
+    // windows, so coverage was 0% by construction.
+    expect(withColour).toHaveLength(3);
+    expect(withColour.length / log.length).toBeLessThanOrEqual(0.4);
+    for (const e of withColour) {
+      // The lead is still inside the 8-word budget: AC5 measures before the dash.
+      expect((e.text.split(/\s+[—–]\s+/)[0] ?? "").split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(8);
+    }
+    for (const e of log) {
+      if (!withColour.includes(e)) expect(e.colour).toBeUndefined();
+    }
+    for (const e of withColour) expect(e.colour?.signal).toBe("audio_noise");
     // The measured-beat STORAGE path is unchanged on a LOUD row.
     await appendSummaryEntry(s, job.id, "No. 4 strikes the ball wide", {
       windowTs: 24,

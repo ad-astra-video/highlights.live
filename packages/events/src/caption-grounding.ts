@@ -335,16 +335,23 @@ function rewriteScoreClaims(input: string, verb: string): string {
     /\b(?:and\s+)?(?:the\s+)?ball\s+(?:enters?|is\s+in|goes?\s+into|is\s+into|is\s+in)\s+the\s+net\b/gi,
     ""
   );
-  out = out.replace(/\b(?:into|inside)\s+(?:the\s+)?net\b/gi, (m) => matchCase("wide", m));
-  out = out.replace(/\binto\s+net\b/gi, (m) => matchCase("wide", m));
-  out = out.replace(/\b(?:the\s+)?net\s+(?:ripples|bulges|swells|shakes|billows)\b/gi, (m) =>
-    matchCase("goes wide", m)
-  );
+  // ADAAAA-8043 (contract v7 §3.3, AC9): a net-crossing outcome the window never
+  // grounded is DELETED, never inverted. v6 replaced `into the net` with `wide`,
+  // so row 22 on `3544e617` (verdict `scoring_play`, raw `strikes the ball into
+  // the net`) shipped `strikes the ball wide on the left` — a fabricated miss,
+  // strictly worse than the ungrounded clause. The outcome goes; the actor, the
+  // action and the place stay.
+  out = out.replace(/\b(?:into|inside)\s+(?:the\s+)?net\b/gi, "");
+  out = out.replace(/\binto\s+net\b/gi, "");
+  out = out.replace(/\b(?:the\s+)?net\s+(?:ripples|bulges|swells|shakes|billows)\b/gi, "");
+  // A verb whose object WAS the net (`finds the back of the net`) keeps the
+  // shot verb it already carries — a shot is grounded by the window's own read;
+  // the goal is not. Never `wide`.
   out = out.replace(/\b(?:finds?|found|hits?|hit)\s+(?:the\s+)?(?:back\s+of\s+the\s+)?net\b/gi, (m) =>
-    matchCase(`${verb} wide`, m)
+    matchCase(verb, m)
   );
   out = out.replace(/\b(?:cross(?:es|ed)?|over|past)\s+the\s+(?:goal\s+)?line\b/gi, (m) =>
-    matchCase(`${verb} wide`, m)
+    matchCase(verb, m)
   );
   // Putting it in with a foot/head.
   out = out.replace(
@@ -352,7 +359,9 @@ function rewriteScoreClaims(input: string, verb: string): string {
     (m) => matchCase(verb, m)
   );
   out = out.replace(/\bconver(?:ts|ted)\b/gi, (m) => matchCase(verb, m));
-  out = out.replace(/\b(?:levels?|levelled)\s+it\b/gi, (m) => matchCase("goes wide", m));
+  // ADAAAA-8043 (v7 §3.3): `levels it` is an equaliser claim; its outcome cannot
+  // be grounded, so it degrades to the shot verb — never to `goes wide`.
+  out = out.replace(/\b(?:levels?|levelled)\s+it\b/gi, (m) => matchCase(verb, m));
   // "<shot verb> and scores" -> keep the shot; otherwise "and <verb>".
   out = out.replace(
     /(\s*(?:,\s*)?(?:(?:and|then)\s+){1,2})(?:scores?|scored)\b/gi,
@@ -955,12 +964,14 @@ export function gateOcrColour(text: string): string {
  * A loud window keeps the derived beat; a legacy row with no stored verdict is
  * untouched apart from an OCR clause or a forwarded model clause.
  *
- * ADAAAA-7995 (AC4): a QUIET window carries no colour at all. The v5 40% share
- * let an audio-noise beat ride a `not_highlight` row, and the served page then
- * shipped `Player in blue kit dribbles in box — noise spikes over the play`
- * (12-13 words, colour on a quiet row) on three rows per job. The v3/v4 bars —
- * 0 colour on `not_highlight` and <= 8 words — are the governing ACs on that
- * surface, so the quiet branch drops the clause and never appends the beat.
+ * ADAAAA-8043 (contract v7 §3.1) SUPERSEDES the ADAAAA-7995 "no colour on a
+ * quiet row" rule. QA v6 measured that the drop rule made AC4 coverage 0% by
+ * construction: all 13 eligible windows on job `3544e617` were `not_highlight`,
+ * so no row could ever carry the beat the signal derives. AC4 clause 3 caps
+ * quiet-row beats at 40%; it never banned them. The quiet branch therefore
+ * appends the derived beat — the LEAD is still trimmed to the 8-word budget
+ * first (AC5 measures the lead before the separator) and the write seam still
+ * enforces the 40% share (`MAX_QUIET_COLOUR_SHARE`).
  */
 export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): string {
   let out = gateOcrColour(text);
@@ -979,9 +990,11 @@ export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): st
     return out === text ? text : tidy(out);
   }
   const lead = trimQuietLine(captionLead(out), ctx?.place);
-  // ADAAAA-7995 (AC4): no colour on a quiet row — the derived beat is dropped
-  // with any dash that survived the trim.
-  out = lead.replace(/\s*[—–]\s*/g, ", ");
+  out = tidy(lead.replace(/\s*[—–]\s*/g, ", "));
+  // ADAAAA-8043 (contract v7 §3.1): the derivation fires on a quiet row within
+  // the 40% share the write seam enforces. The lead is already at the 8-word
+  // budget, so the beat rides after the separator and AC5 measures the lead.
+  if (out && beat) out = withBeat(out);
   return out === text ? text : tidy(out);
 }
 
@@ -1723,6 +1736,147 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
 }
 
 /* ------------------------------------------------------------------------- *
+ * ADAAAA-8043 (contract v7 §3.2) — the COMPLETENESS gate.
+ *
+ * "Being under the word bar is not the same as being to the point." QA v6
+ * measured 4 of 25 delivered rows that were shorter than the 8-word budget by
+ * being INCOMPLETE (job `3544e617`):
+ *
+ *   `The ball remains of the pitch.`        the score-strip took `in the center`
+ *                                           and left `of the pitch` behind
+ *   `A player in a blue dribbles the ball.` actor + action, no place
+ *   `A player from the box.`                actor + place, no action
+ *   `A player in a white attempts a shot.`  actor + action, no place
+ *
+ * A delivered line carries actor + action + place, or it is suppressed. The
+ * repair is extractive and happens at the WRITE seam: the line the gate
+ * accepted, then the stored zone injected where only the place is missing, then
+ * the model's own stored sentence reduced by deletion only. Nothing is
+ * invented, and the most specific grounded actor token survives because the
+ * repair never replaces words — it only removes them.
+ * ------------------------------------------------------------------------- */
+
+/** The three parts a delivered line must carry (§3.2). */
+export type CompletenessGap = "actor" | "action" | "place" | "fragment";
+
+/**
+ * Actor openers a line may start with: a player noun, a jersey, the ball, or the
+ * EVENT itself (`Kickoff taken at center circle.` — the play is the subject).
+ */
+const ACTOR_HEAD =
+  /^(?:(?:a|an|the)\s+)?(?:players?|strikers?|wingers?|keepers?|goalkeepers?|defenders?|midfielders?|referees?|officials?|sides?|teams?|balls?|boys?|girls?|child|children|coach|coaches|attackers?|forwards?|substitutes?|kick-?off|corner|free\s+kick|throw-?in|penalty|goal\s+kick|clearance|whistle|No\.?\s*\d+|number\s+\d+|both\s+teams)\b/i;
+
+/**
+ * §3.2 actor test: the line's OWN subject, the most specific grounded token. A
+ * corroborated proper name (`Saez strikes the ball in the box.`) IS the actor —
+ * the name gate only anonymises names the prompt cannot corroborate.
+ */
+function hasActorHead(line: string): boolean {
+  if (ACTOR_HEAD.test(line)) return true;
+  // A determiner + noun is a subject (`The scoreboard updates to reflect a shot`):
+  // the §3.2 test asks whether the line HAS an actor, not which noun it named.
+  if (/^(?:a|an|the)\s+[\p{L}][\p{L}'’-]*/iu.test(line)) return true;
+  const first = line.match(/^[\p{Lu}][\p{L}'’-]*/u)?.[0] ?? "";
+  if (!first) return false;
+  return !NAME_STOPWORDS.has(stripDiacritics(first)) && !CODE_TOKENS.has(first.toLowerCase());
+}
+
+/** The action verbs a complete beat carries (VERBISH plus state/stative play).
+ * Stems, so every inflection (`press` / `presses` / `pressed`) is one entry. */
+const COMPLETENESS_VERB =
+  /\b(?:react|mov|driv|control|contest|dribbl|stand|pass|play|tak(?:e|es|en|ing|ed)?|took|hold|watch|wait|run|shoot|shot|strik|struck|head|clear|tackl|block|sav|beat(?:en|s)?|jump|turn|attack|press|chas|follow|keep|set|score|carri|win|send|sent|put|make|made|find|found|get|got|come|came|go|went|rise|rose|fall|fell|lift|loft|roll|bounc|cross|fire|volley|try|tried|see|saw|look|appear|erupt|celebrat|updat|becom|read|show|interact|attempt|remain|stay|sit|rest|touch|kick|throw|lose|lost|defend|mark|trap|chest|nod|poke|bundle)(?:s|es|ed|ing)?\b/i;
+
+/** A place remnant that lost its head (`remains of the pitch`). */
+const ORPHAN_PLACE_REMNANT = /\b(?:of|in|at|on|from)\s+(?:the\s+)?(?:pitch|field|ground)\b/i;
+/** A place noun left holding `of the pitch` (`remains in center of the pitch`). */
+const SPLIT_PLACE = /\b(?:cent(?:er|re)|box|area|midfield|circle)\s+of\s+the\s+(?:pitch|field|ground)\b/i;
+const PLACE_HEAD_PRESENT =
+  /\b(?:in|at|on|from|near|inside|outside|around|into)\s+(?:the\s+)?(?:cent(?:er|re)|box|midfield|third|half|halves|wing|area|circle|touchline|post|range|left|right)\b/i;
+
+/** Why `text` is not a complete line (empty when it is). */
+export function completenessGaps(text: string): CompletenessGap[] {
+  const line = captionLead((text ?? "").trim());
+  if (!line) return ["actor", "action", "place"];
+  const gaps: CompletenessGap[] = [];
+  if (!hasActorHead(line)) gaps.push("actor");
+  if (!COMPLETENESS_VERB.test(line)) gaps.push("action");
+  if (!hasPlacePhrase(line)) gaps.push("place");
+  // The grammar class measured on `3544e617`: a reduction deleted the place's
+  // head phrase and left the preposition that modified it (`remains of the
+  // pitch`). It reads as a place but names none, so it fails as a fragment.
+  if (SPLIT_PLACE.test(line)) gaps.push("fragment");
+  if (ORPHAN_PLACE_REMNANT.test(line) && !PLACE_HEAD_PRESENT.test(line)) gaps.push("fragment");
+  return gaps;
+}
+
+export interface CompleteCaptionInput {
+  /** The line the gates accepted (a colour beat, if any, is stripped by the caller). */
+  candidate: string;
+  /** The model's stored pre-gate sentence (`text_raw`), the repair source. */
+  raw?: string | null;
+  /** Quiet row: the 8-word budget applies to the lead (AC5). */
+  quiet?: boolean;
+  /** The window's stored zone, injected when only the place is missing. */
+  place?: string | null;
+  /** Re-gate a fallback sentence on the same terms (claim / absence / name). */
+  regate?: (sentence: string) => string;
+}
+
+/**
+ * Make `candidate` a complete delivered line, or `""` to suppress it (§3.2).
+ * The order is fixed and extractive: the accepted line, the stored zone where
+ * only the place is missing, then the model's own stored sentence reduced by
+ * deletion only. A candidate that already carries all three parts is returned
+ * with its terminal punctuation and is otherwise byte-identical.
+ */
+export function completeCaptionLine(input: CompleteCaptionInput): string {
+  const quiet = input.quiet === true;
+  const budget = quiet ? QUIET_MAX_WORDS : Infinity;
+  // §3.2 asks for actor + action + place. On a LOUD row the place is optional:
+  // the row is a whole sentence about a moment (`The scoreboard updates to 2-1,
+  // followed by player celebrations.`), and a zone it never named cannot be
+  // invented. The measured defects (all four) were quiet rows, and the quiet
+  // branch keeps the full three-part bar.
+  const ok = (text: string): boolean => {
+    const t = restoreTerminalPunctuation((text ?? "").trim());
+    if (!t) return false;
+    if (wordCount(captionLead(t)) > budget) return false;
+    const gaps = completenessGaps(t);
+    return quiet ? gaps.length === 0 : gaps.filter((g) => g !== "place").length === 0;
+  };
+  const candidate = restoreTerminalPunctuation(captionLead(input.candidate ?? ""));
+  if (ok(candidate)) return candidate;
+  const gaps = completenessGaps(candidate);
+  const zone = (input.place ?? "").trim();
+  // 1. Only the place is missing: keep the accepted actor + action verbatim and
+  //    attach the window's own stored zone inside the sentence.
+  if (
+    candidate &&
+    zone &&
+    !gaps.includes("actor") &&
+    !gaps.includes("action") &&
+    !gaps.includes("fragment")
+  ) {
+    const terminal = candidate.match(/[.!?…]+$/)?.[0] ?? "";
+    const body = tidy((terminal ? candidate.slice(0, -terminal.length) : candidate).trim());
+    const injected = body ? tidy(`${body} ${zone}${terminal}`) : "";
+    if (ok(injected)) return restoreTerminalPunctuation(injected);
+  }
+  // 2. The model's own sentence, re-gated on the same terms, reduced by
+  //    deletion only (the variant order is longest-first, so the most specific
+  //    actor token that still fits the budget wins).
+  const rawSentence = wholeFirstSentence(input.raw ?? "");
+  if (rawSentence && rawSentence !== candidate) {
+    const reclaimed = input.regate ? input.regate(rawSentence) : rawSentence;
+    for (const variant of servedReductions(reclaimed)) {
+      if (ok(variant)) return restoreTerminalPunctuation(tidy(variant));
+    }
+  }
+  // 3. Nothing groundable -> no line. A malformed row is worse than no row.
+  return "";
+}
+
+/* ------------------------------------------------------------------------- *
  * ADAAAA-8027 (§2, card clause) — the STORE-TIME post-condition.
  *
  * `servedShape` above guards the LADDER. A caption card never crossed it: the
@@ -1754,6 +1908,15 @@ export interface StoredCardSurfaceInput {
   label?: string;
   /** Quiet row: the 8-word budget applies to the card (the verdict's own rule). */
   quiet?: boolean;
+  /**
+   * ADAAAA-8043 (contract v7 §3.4): the window's corroboration verdict. An
+   * uncorroborated goal may not render `goal:` / bare `goal` in a card option —
+   * corroboration must reach the card-title surface, not only the caption.
+   * `undefined` keeps the verdict rule alone (VOD, legacy rows -> AC8).
+   */
+  corroborated?: boolean | null;
+  /** The window's stored verdict, so the LABEL is gated on the same terms. */
+  verdict?: string | null;
   /** Re-gate a fallback sentence on the same terms (goal claim / absence). */
   regate?: (sentence: string) => string;
 }
@@ -1790,11 +1953,28 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
   const clean = (text: string): boolean =>
     fits(text) &&
     (!quiet || !QUIET_COLOUR_PHRASE.test(text)) &&
+    // ADAAAA-8043 (v7 §3.2): a card caption is a delivered line, so it carries
+    // actor + action + place exactly like a ladder row. A card whose only
+    // honest string is incomplete is not stored (it was the source of the
+    // read-time rewrite AC10 measured).
+    (quiet
+      ? completenessGaps(text).length === 0
+      : completenessGaps(text).filter((g) => g !== "place").length === 0) &&
     servedShapeViolations(text, sources).length === 0;
+  // ADAAAA-8043 (v7 §3.4): the label is corroboration-gated BEFORE it becomes an
+  // option, so an uncorroborated goal never renders `goal:` or bare `goal`.
+  // A label is a word, not a sentence: the claim gate's terminal punctuation is
+  // not part of it.
+  const label = gateGoalClaims((input.label ?? "").trim(), {
+    verdict: input.verdict ?? null,
+    corroborated: input.corroborated,
+  })
+    .replace(/[.!?…]+$/, "")
+    .trim();
   const candidate = captionForStoredLine(gated);
   const violations = servedShapeViolations(candidate, sources);
   if (clean(candidate)) {
-    return { caption: candidate, cardTitles: cardTitlesFor(candidate, input.label), violations: [] };
+    return { caption: candidate, cardTitles: cardTitlesFor(candidate, label), violations: [] };
   }
   // Fallback (a): the WHOLE first sentence of the stored raw, re-gated on the same
   // terms, then reduced ONLY extractively (the ladder's `servedReductions`) so a
@@ -1804,7 +1984,7 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
   for (const variant of servedReductions(reclaimed)) {
     const whole = captionForWholeSentence(variant);
     if (clean(whole)) {
-      return { caption: whole, cardTitles: cardTitlesFor(whole, input.label), violations: [] };
+      return { caption: whole, cardTitles: cardTitlesFor(whole, label), violations: [] };
     }
   }
   // Fallback (b): no honest string -> no card. Never store a violating string.
@@ -2158,9 +2338,9 @@ export function gateUncorroboratedGoal(text: string, corroborated: boolean): str
   // Fail closed on the corroboration path specifically: a net-crossing shape the
   // claim lexicon has not learned yet ("No. 8 headers ball into net" — no "the")
   // still asserts a goal, and this surface has already been told the goal was
-  // never corroborated. Degrading to the shared quiet shape (§3.3) keeps the
-  // rewrite honest without introducing a second claim vocabulary.
-  const netFree = gated.replace(new RegExp(NET_FORM.source, "gi"), "wide");
+  // never corroborated. ADAAAA-8043 (v7 §3.3): the outcome clause is REMOVED —
+  // the v6 rewrite substituted `wide`, which asserted a miss nobody measured.
+  const netFree = gated.replace(new RegExp(NET_FORM.source, "gi"), "");
   if (netFree !== gated) return quietShape(netFree);
   return gated;
 }

@@ -15,6 +15,8 @@
 // unit-tested without driving the full VOD/live pipeline.
 import type { SummaryLogEntry } from "@highlights/events";
 import {
+  captionLead,
+  completeCaptionLine,
   groundSummaryText,
   captionLineKey,
   captionColour,
@@ -22,6 +24,8 @@ import {
   dropColourClause,
   isQuietVerdict,
   MAX_LINE_OCCURRENCES,
+  regateServedSentence,
+  restoreTerminalPunctuation,
   type CaptionGroundingContext,
 } from "@highlights/events";
 import type { Store } from "./store";
@@ -150,6 +154,49 @@ export function normalizeWindowTs(windowTs: number | undefined | null): number |
  * dropped, or reordered). Returns the updated log, or `undefined` when the job
  * is missing. Pure given the store; callers keep it best-effort.
  */
+/**
+ * ADAAAA-8043 (contract v7 §3.1) — the 40 % quiet-row colour cap, applied to the
+ * WHOLE delivered set after the rows are built.
+ *
+ * The v4/v5 seam decided the cap incrementally, from the rows already SEEN. That
+ * refuses a beat because of the row's POSITION in the stream (`floor(0.4 * 1) = 0`
+ * blocks the very first quiet row), and QA v6 measured the consequence: 0 of 25
+ * delivered lines carried a beat while 13 windows were eligible. The budget is a
+ * property of the DELIVERED SET, so it is computed there: quiet rows on the stored
+ * log plus this pass, at most `floor(0.4 * n)` of them may carry a beat. The LAST
+ * rows lose their beat first (story order keeps the earliest), and a row whose
+ * de-beated line collides with one already delivered is dropped rather than
+ * stored twice.
+ */
+export function applyQuietColourCap(
+  log: SummaryLogEntry[],
+  keptRows: SummaryLogEntry[],
+  storedTexts: string[]
+): void {
+  const isQuiet = (e: SummaryLogEntry) => isQuietVerdict((e as { verdict?: string | null }).verdict);
+  const all = [...log, ...keptRows].filter(isQuiet);
+  const allowed = Math.floor(MAX_QUIET_COLOUR_SHARE * all.length);
+  let withBeat = all.filter((e) => captionColour(e.text ?? "")).length;
+  if (withBeat <= allowed) return;
+  const delivered = [...storedTexts];
+  for (let i = keptRows.length - 1; i >= 0 && withBeat > allowed; i -= 1) {
+    const row = keptRows[i];
+    if (!isQuiet(row) || !captionColour(row.text ?? "")) continue;
+    const stripped = restoreTerminalPunctuation(dropColourClause(row.text ?? ""));
+    if (!stripped) continue;
+    // A de-beated line that another row already delivered is a duplicate: drop
+    // the row instead of appending the same sentence twice.
+    if (dedupeStoredLines(stripped, delivered, MAX_LINE_OCCURRENCES) !== stripped) {
+      keptRows.splice(i, 1);
+    } else {
+      row.text = stripped;
+      delete (row as { colour?: unknown }).colour;
+      delivered.push(stripped);
+    }
+    withBeat -= 1;
+  }
+}
+
 export function appendSummaryEntry(
   store: Pick<Store, "getJob" | "patchJob">,
   jobId: string,
@@ -180,9 +227,6 @@ export function appendSummaryEntry(
   const rawRows = grounding ? rawText.split("\n").map((l) => l.trim()).filter(Boolean) : [];
   const rows = rawRows.length > 0 ? rawRows : [rawText];
   const storedTexts = log.map((e) => e.text);
-  const quietRows = log.filter((e) => isQuietVerdict((e as { verdict?: string | null }).verdict));
-  let quietSeen = quietRows.length;
-  let quietColourSeen = quietRows.filter((e) => captionColour(e.text ?? "")).length;
   const keptRows: SummaryLogEntry[] = [];
   for (const raw of rows) {
     // ADAAAA-7948 (Inc 3): the grounding gate. Every FAST caption is filtered
@@ -191,6 +235,30 @@ export function appendSummaryEntry(
     // no internal token. The rolling `runningSummary` is deliberately NOT gated —
     // it is model input for the next window, not customer copy.
     const grounded = grounding ? groundSummaryText(raw, grounding) : raw;
+    // ADAAAA-8043 (contract v7 §3.1/§3.2): the derived colour beat rides at the
+    // end; the COMPLETENESS gate grades and repairs the LEAD (actor + action +
+    // place), and the beat is re-attached to the repaired lead. A lead that
+    // cannot be made complete is suppressed rather than stored malformed.
+    const quiet = !!grounding && isQuietVerdict(verdict);
+    const beat = captionColour(grounded);
+    const repaired = grounding
+      ? completeCaptionLine({
+          candidate: captionLead(grounded),
+          raw,
+          quiet,
+          place: grounding.place ?? null,
+          regate: (sentence) => regateServedSentence(sentence, grounding),
+        })
+      : grounded;
+    if (!repaired) continue;
+    // ADAAAA-8043 (§3.5): terminal punctuation is normalised at WRITE on the
+    // FAST rail, so the page can render a stored row byte-identically (AC10 has
+    // nothing to repair). VOD passes no grounding and stays byte-identical (AC8).
+    const deliveredLine = grounding
+      ? restoreTerminalPunctuation(
+          beat ? `${repaired.replace(/[.!?…]+$/, "").trim()} — ${beat}` : repaired
+        )
+      : grounded;
     // ADAAAA-7956 (contract v3 rule 2) + ADAAAA-7962 (v4 §3.7): a line the job
     // has already emitted is not appended again, capped at the contract's max (2
     // identical delivered lines per job) — not "drop every repeat". De-dup reads
@@ -198,24 +266,9 @@ export function appendSummaryEntry(
     // duplicate itself.
     const priorKept = keptRows.map((r) => r.text);
     const deduped = grounding
-      ? dedupeStoredLines(grounded, [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES)
-      : grounded;
+      ? dedupeStoredLines(deliveredLine, [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES)
+      : deliveredLine;
     if (!deduped) continue;
-    // ADAAAA-7962 (contract v4 §3.5): quiet rows may carry colour on at most 40%
-    // of quiet rows. The budget is computed from the STORED log, so it holds for
-    // the delivered set without a second build at read time.
-    let delivered = deduped;
-    const quiet = grounding && isQuietVerdict(verdict);
-    if (quiet && captionColour(delivered)) {
-      if (quietColourSeen + 1 > Math.ceil(MAX_QUIET_COLOUR_SHARE * (quietSeen + 1))) {
-        delivered =
-          dedupeStoredLines(dropColourClause(delivered), [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES) || deduped;
-      }
-    }
-    if (quiet) {
-      quietSeen += 1;
-      if (captionColour(delivered)) quietColourSeen += 1;
-    }
     keptRows.push({
       seq: seq + keptRows.length,
       ts: new Date().toISOString(),
@@ -223,19 +276,20 @@ export function appendSummaryEntry(
       ...(verdict ? { verdict } : {}),
       // The per-window content the model added this pass; fall back to the whole
       // bounded summary so a pass is never silently dropped from the log.
-      text: delivered,
+      text: deduped,
       // ADAAAA-7965 (contract v5 §3.1, R18): when the delivered row carries a
       // colour beat, store the measurement it was derived from and the frame that
       // confirms it. A row without `colour` carries no beat.
-      ...(grounding?.colourSignal && captionColour(delivered) ? { colour: grounding.colourSignal } : {}),
+      ...(grounding?.colourSignal && captionColour(deduped) ? { colour: grounding.colourSignal } : {}),
       // ADAAAA-7962 (contract v4 §3.1): exactly one AUDIT-ONLY raw field per row,
       // set only when the gate changed what is delivered. Never a narrative.
-      ...(grounding && delivered !== raw && raw.trim() ? { text_raw: raw } : {}),
+      ...(grounding && deduped !== raw && raw.trim() ? { text_raw: raw } : {}),
     });
   }
   if (keptRows.length === 0) {
     return store.patchJob(jobId, { runningSummary: summary }).then(() => log);
   }
+  applyQuietColourCap(log, keptRows, storedTexts);
   const nextLog = [...log, ...keptRows];
   return store.patchJob(jobId, { runningSummary: summary, summaryLog: nextLog }).then(() => nextLog);
 }
