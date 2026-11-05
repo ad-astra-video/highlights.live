@@ -15,6 +15,7 @@ import {
   colourGateDecision,
   colourTraceFor,
   collapseRepeatedVerbPhrase,
+  completenessGaps,
   completeCaptionLine,
   groundCaption,
   groundSummaryText,
@@ -171,6 +172,38 @@ describe("§3b.2 — claim removal rejoins instead of duplicating a verb (AC-I2)
     expect(servedShapeViolations("The striker shoots and shoots")).toContain("verb-repeat");
     // A legitimately coordinated pair of DIFFERENT verbs is not a repeat.
     expect(servedShapeViolations("The striker shoots and scores in the box.")).not.toContain("verb-repeat");
+  });
+});
+
+describe("§3b.2b — a claim under a prepositional phrase is removed with its phrase (AC-I2/AC3)", () => {
+  // Measured on the Inc 11 level (attempt 2, row @188.7 s, build 71cd403):
+  // stored raw `The keeper stands in the net as the crowd celebrates the previous
+  // goal.` shipped `The keeper stands in the shoots in midfield.` — the claim
+  // rewrite deleted the `into|inside the net` form only, so the bare `net` under
+  // `in the net` became the outcome verb INSIDE the phrase.
+  const RAW = "The keeper stands in the net as the crowd celebrates the previous goal.";
+
+  it("never substitutes the outcome verb inside the phrase", () => {
+    const gated = groundCaption(RAW, {
+      verdict: "not_highlight",
+      promptText: "",
+      place: "in midfield",
+    } as never);
+    expect(gated).not.toMatch(/\bin the shoots\b/i);
+    expect(gated).not.toMatch(/\bnet\b/i);
+    // A claim carried by a subordinate clause is dropped with the clause.
+    expect(gated).not.toMatch(/celebrates/i);
+  });
+
+  it("repairs to a complete actor + action + place line", () => {
+    const gated = groundCaption(RAW, {
+      verdict: "not_highlight",
+      promptText: "",
+      place: "in midfield",
+    } as never);
+    const line = completeCaptionLine({ candidate: gated, raw: RAW, quiet: true, place: "in midfield" });
+    expect(line).toBe("The keeper stands in midfield.");
+    expect(completenessGaps(line)).toEqual([]);
   });
 });
 
