@@ -19,7 +19,7 @@ import os
 import threading
 
 from . import sam3_backend
-from .florence import get_detector
+from .florence import dual_florence_enabled, get_detector, get_ocr_detector
 
 log = logging.getLogger("highlights.perceive.preload")
 
@@ -47,6 +47,29 @@ def _preload_florence() -> bool:
         return False
 
 
+def _preload_florence_ocr() -> bool:
+    """ADAAAA-8004: build + load the SECOND Florence-2 copy (the OCR lane) when
+    `PERCEIVE_DUAL_FLORENCE` is on. Off by default, and a stub runner never
+    touches a GPU. Preloading off-loop keeps the first observation from paying
+    the model build, and makes the copy's residency visible in /health's
+    `models` block instead of only in `nvidia-smi`. Never raises."""
+    if not dual_florence_enabled():
+        return False
+    if os.environ.get("PERCEIVE_MODE", "stub") != "florence":
+        log.info("preload: florence-2 OCR lane disabled (stub) — skipping")
+        return False
+    try:
+        d = get_ocr_detector()
+        if d is None:
+            return False
+        d.load()
+        log.info("preload: florence-2 OCR lane ready @ %s", d.device_label)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.warning("preload: florence-2 OCR lane load failed: %s", e)
+        return False
+
+
 def _preload_sam3() -> bool:
     """Build the shared SAM 3.1 GPU predictor once, off-loop, so the first VOD
     pass never does the expensive build mid-call. Gated so we don't waste GPU
@@ -64,10 +87,13 @@ def _preload_sam3() -> bool:
 
 
 def preload_models() -> dict:
-    """Run both preloads. Called from the background thread. Returns a status
+    """Run the preloads. Called from the background thread. Returns a status
     dict the /health endpoint reflects."""
     return {
         "florence2": _preload_florence(),
+        # ADAAAA-8004: only attempted when the dual-OCR lane is opted in; false
+        # otherwise, which is the honest "one copy is loaded" answer.
+        "florence2_ocr": _preload_florence_ocr(),
         "sam3": _preload_sam3(),
     }
 

@@ -43,6 +43,57 @@ def test_ocr_fields_default_when_there_is_no_detector_or_frame():
     assert _scoreboard_ocr_fields(object(), None, "", 1, 0.0, None, None) == {"ocr": []}
 
 
+def test_preload_reports_the_ocr_copy_only_when_opted_in(monkeypatch):
+    """ADAAAA-8004: /health's `models` block is the residency proof for the
+    second Florence copy, so the preload must attempt it IFF the lane is on."""
+    from app import preload
+
+    class FakeDet:
+        device_label = "cpu"
+
+        def __init__(self):
+            self.loads = 0
+
+        def load(self):
+            self.loads += 1
+            return self
+
+    primary, ocr = FakeDet(), FakeDet()
+    seen = {"ocr_builds": 0}
+
+    def fake_get_ocr_detector():
+        seen["ocr_builds"] += 1
+        return ocr
+
+    monkeypatch.setenv("PERCEIVE_MODE", "florence")
+    monkeypatch.delenv("PERCEIVE_DUAL_FLORENCE", raising=False)
+    monkeypatch.setattr(preload, "get_detector", lambda lora_ref=None: primary)
+    monkeypatch.setattr(preload, "get_ocr_detector", fake_get_ocr_detector)
+    monkeypatch.setattr(preload, "_preload_sam3", lambda: False)
+
+    out = preload.preload_models()
+    assert out["florence2"] is True
+    assert out["florence2_ocr"] is False, "the second copy stays cold unless opted in"
+    assert ocr.loads == 0 and seen["ocr_builds"] == 0
+
+    monkeypatch.setenv("PERCEIVE_DUAL_FLORENCE", "1")
+    out = preload.preload_models()
+    assert out["florence2_ocr"] is True, "opted-in preload must load the OCR copy"
+    assert ocr.loads == 1, "the second copy is loaded exactly once, at boot"
+    assert primary.loads == 2  # once per preload run, unchanged behaviour
+
+
+def test_preload_skips_the_ocr_copy_in_stub_mode(monkeypatch):
+    from app import preload
+
+    monkeypatch.setenv("PERCEIVE_MODE", "stub")
+    monkeypatch.setenv("PERCEIVE_DUAL_FLORENCE", "1")
+    monkeypatch.setattr(
+        preload, "get_ocr_detector", lambda: pytest.fail("stub mode must not build a copy")
+    )
+    assert preload._preload_florence_ocr() is False
+
+
 def test_dual_lane_result_lands_in_the_observation(monkeypatch):
     """With the lane on, the frame still carries the OCR the second copy read."""
     import base64
