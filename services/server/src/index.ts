@@ -10,7 +10,7 @@ import { buildApp } from "./api";
 import { makeAdapter } from "./livepeer-adapter";
 import { makeMailer } from "./mailer";
 import { liveDecideAdmission } from "./live-decide-admission";
-import { LIVE_DECIDE_IMAGE_BUDGET, LIVE_DECIDE_IMAGE_CEILING, LIVE_OBSERVE_WINDOW_S, OBSERVE_CADENCE_S } from "./observe-loop";
+import { LIVE_DECIDE_IMAGE_BUDGET, LIVE_DECIDE_IMAGE_CEILING, LIVE_OBSERVE_WINDOW_S, OBSERVE_CADENCE_S, OBSERVE_CONTENT_FPS } from "./observe-loop";
 import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
@@ -250,6 +250,16 @@ async function main() {
       `${Math.round((cfg.liveObserveCadenceS ?? OBSERVE_CADENCE_S) * 1000)} ms cadence ` +
       `(LIVE_OBSERVE_WINDOW_S default ${LIVE_OBSERVE_WINDOW_S}, LIVE_OBSERVE_CADENCE_S default ` +
       `${OBSERVE_CADENCE_S} s, trailing window)`
+  );
+  // ADAAAA-8102: name the live CONTENT consume rate the same way. `printenv` is
+  // not evidence that either rail ran at the configured rate — every decide row
+  // now carries `contentFps` and the media rail publishes its `perceive` stride
+  // block — but this line states the value THIS process resolved, so a leg
+  // compares the boot readout against the job record instead of the environment.
+  console.log(
+    `[boot] live content consume: ${cfg.liveObserveContentFps ?? OBSERVE_CONTENT_FPS} fps ` +
+      `(LIVE_OBSERVE_CONTENT_FPS, default ${OBSERVE_CONTENT_FPS}, both live rails; ` +
+      `ingest sampleFps still governs persistence + clip cut)`
   );
 }
 

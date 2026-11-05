@@ -52,6 +52,7 @@ import {
 } from "./observe-loop";
 import {
   LiveRunShared,
+  LIVE_STRIDE_CREDIT_CAP,
   buildLiveObserveMetrics,
   seedSignalFromEvidence,
   scoreboardDeltaLegible,
@@ -102,7 +103,27 @@ export interface MediaRailObserverOptions {
   cadenceS?: number;
   windowS?: number;
   maxFrames?: number;
+  /** The rail's INGEST/sample clock (the cadence the media node samples at and
+   *  the clock this rail persists + cuts clips on). ADAAAA-8102: this is NOT the
+   *  analysis rate any more — use {@link contentFps} for that. */
   fps?: number;
+  /** ADAAAA-8102: the CONTENT consume rate this rail ANALYSES at, in frames per
+   *  content second, wired from `LIVE_OBSERVE_CONTENT_FPS`.
+   *
+   *  Before this the only rate the rail knew was the ingest clock, so it consumed
+   *  (recorded + decide-seeded + persisted) every relayed frame: a measured
+   *  funded share analysed 833 frames / 300 s (2.78 fps) while
+   *  `LIVE_OBSERVE_CONTENT_FPS=4` was boot-verified, and every one of those
+   *  frames is blocking GPU work on a rail that cannot decide faster than the
+   *  cadence. The rail now consumes on the CONTENT clock — one frame per
+   *  `1/contentFps` content seconds, the same Bresenham credit the analyzer live
+   *  pass uses (ADAAAA-7774/7795) — while `fps`/`sampleFps` stays the ingest
+   *  clock that still governs persistence and the clip cut.
+   *
+   *  Undefined (the shipped default) or `<= 0` keeps the pre-8102 behaviour
+   *  exactly: every relayed frame is consumed, no stride block is published, so
+   *  merging this change moves nothing on a running box. */
+  contentFps?: number;
   signalGate?: boolean;
   signalGateOpts?: SignalGateOptions;
   /** ADAAAA-7799 (lever C): decide-rate cap for this rail — keep only a
@@ -275,6 +296,21 @@ export class MediaRailObserver {
   /** ADAAAA-8069: published-frame ticks the media node reported (the rail's
    *  own decode clock, with or without an observation/image). */
   private frameTicks = 0;
+  /** ADAAAA-8102: the CONTENT consume rate (frames per content second) this rail
+   *  analyses at. 0 = no stride (every relayed frame is consumed), which is the
+   *  shipped behaviour until `LIVE_OBSERVE_CONTENT_FPS` is configured. */
+  private readonly contentFps: number;
+  /** ADAAAA-8102: Bresenham stride credit in frames — accrued at `contentFps` per
+   *  content second, one consumed frame debits 1.0. Same accumulator the analyzer
+   *  live pass uses (ADAAAA-7774/7795), so both rails converge on the SAME rate:
+   *  a hard floor on frame spacing cannot (2.78 fps ingest + a 1 s floor reads as
+   *  0.93 fps, outside AC-8101-2's 280-320 / 300 s). */
+  private strideCredit = 1;
+  private strideCreditTs: number | null = null;
+  /** ADAAAA-8102: stride evidence — frames the ingest offered vs frames the
+   *  content clock skipped. Published as `observeMetrics.perceive`. */
+  private framesSeen = 0;
+  private framesStrided = 0;
   private frames = 0;
   private audioChunks = 0;
   private triggers = 0;
@@ -293,6 +329,17 @@ export class MediaRailObserver {
     this.jobId = opts.jobId;
     this.onFrame = opts.onFrame;
     this.lagBudgetMs = Math.max(0, (opts.lagBudgetS ?? LIVE_OBSERVE_LAG_BUDGET_S) * 1000);
+    // ADAAAA-8102: the CONTENT consume rate, separate from the ingest clock
+    // (`opts.fps` = `sampleFps`, still the persistence/clip-cut clock). A
+    // configured value feeds BOTH the consume stride below and the window's
+    // image grid, so the rail analyses ~`contentFps` frames per content second.
+    // Undefined/`<= 0` leaves the rail exactly as shipped: no stride, and the
+    // window grid keeps the caller's ingest `fps`.
+    const configuredContentFps = Number(opts.contentFps);
+    this.contentFps =
+      opts.contentFps !== undefined && Number.isFinite(configuredContentFps) && configuredContentFps > 0
+        ? configuredContentFps
+        : 0;
     // ADAAAA-8005 (gate 3): the run carries the per-row trigger -> delivered
     // collector, so the rail's persisted rows report the AC's number and the
     // media-rail job record carries it under `observeMetrics.deliveredLatency`.
@@ -316,7 +363,12 @@ export class MediaRailObserver {
       cadenceS: opts.cadenceS ?? OBSERVE_CADENCE_S,
       windowS: opts.windowS ?? LIVE_OBSERVE_WINDOW_S,
       maxFrames: opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES,
-      fps: opts.fps ?? OBSERVE_CONTENT_FPS,
+      // ADAAAA-8102: the window's image grid resolves onto the CONTENT consume
+      // rate when one is configured, so a 7 s window carries ~7 grid points (and
+      // ~7 timeline records) instead of ~21 ingest-clock points thinned into 4
+      // images. Unset keeps the caller's ingest `fps` — byte-identical to the
+      // shipped rail — and `<= 0` (documented stride opt-out) keeps it too.
+      fps: this.contentFps > 0 ? this.contentFps : opts.fps ?? OBSERVE_CONTENT_FPS,
       signalGate: opts.signalGate ?? false,
       signalGateOpts: opts.signalGateOpts,
       decideKeepRatio: opts.decideKeepRatio,
@@ -437,6 +489,20 @@ export class MediaRailObserver {
       return;
     }
     const ts = this.contentTs(rawTs);
+    // ADAAAA-8102: consume at the CONTENT rate, not the ingest rate. The media
+    // node relays every frame it sampled (~2.8 fps on the funded share); the rail
+    // used to record, seed and persist all of them — 833 frames / 300 s on job
+    // `8024a341` — which is blocking GPU work the decide cadence can never use
+    // and the "cannot keep up with realtime" the board saw. A frame the content
+    // clock refuses is skipped entirely (not recorded, not seeded, not persisted,
+    // matching the analyzer live pass's stride), so the CONSUMED count converges
+    // on `contentFps` at any ingest rate. The ingest clock still governs the
+    // clip cut (`noteBrowserContentTs` on the tick path) and the cadence.
+    this.framesSeen++;
+    if (this.contentFps > 0 && !this.takeContentCredit(ts)) {
+      this.framesStrided++;
+      return;
+    }
     // ADAAAA-7734: the rail allocates a DENSE global position for every accepted
     // frame (0,1,2,...) instead of trusting the media node's own seq. The frame
     // file name, the observation row and the decide note's `analysis.frames[]`
@@ -600,10 +666,57 @@ export class MediaRailObserver {
       .catch((e: any) => console.error(`[media-rail:${this.jobId}] decide failed:`, String(e?.message || e)));
   }
 
+  /**
+   * ADAAAA-8102: the content-clock consume gate (Bresenham credit, the analyzer
+   * live pass's accumulator from ADAAAA-7774/7795). Credit accrues at
+   * `contentFps` per content second and one consumed frame debits 1.0, so the
+   * consumed count converges on the configured rate at ANY ingest rate — the
+   * first frame of the share is always consumed (nothing to bank yet) and a
+   * refused frame is skipped entirely.
+   */
+  private takeContentCredit(ts: number): boolean {
+    if (this.strideCreditTs === null) {
+      this.strideCreditTs = ts;
+      this.strideCredit = 1;
+    } else {
+      const dt = ts - this.strideCreditTs;
+      if (dt > 0) {
+        this.strideCredit = Math.min(LIVE_STRIDE_CREDIT_CAP, this.strideCredit + dt * this.contentFps);
+        this.strideCreditTs = ts;
+      }
+    }
+    if (this.strideCredit < 1 - 1e-9) return false;
+    this.strideCredit -= 1;
+    return true;
+  }
+
   /** The job-visible observe snapshot (decideCalls / latency / anchored vs
    *  cadence fires), read at share end. */
   observeMetrics(): LiveObserveMetricsSnapshot {
-    return buildLiveObserveMetrics(this.live);
+    const metrics = buildLiveObserveMetrics(this.live);
+    // ADAAAA-8102: prove the consume rate from the JOB RECORD, not from
+    // `printenv`. Before this the media rail published no `perceive` block at all
+    // (it was documented as "absent when the pass ran no stride — e.g. the
+    // media-rail share"), so a funded leg could not tell a rail consuming at the
+    // ingest rate from one consuming at the configured content rate. Published
+    // only when a stride actually ran, so the unset default stays byte-identical
+    // to the shipped record. `perceiveCalls` = `framesSeen` because perceive for
+    // this rail runs in the MEDIA NODE (one call per relayed frame) — stated
+    // explicitly by `perceiveSource`.
+    if (this.contentFps <= 0) return metrics;
+    return {
+      ...metrics,
+      perceive: {
+        framesSeen: this.framesSeen,
+        framesAnalyzed: this.frames,
+        framesStrided: this.framesStrided,
+        perceiveCalls: this.framesSeen,
+        perceiveSkipped: 0,
+        perceiveHotCalls: 0,
+        analysisFps: this.contentFps,
+        perceiveSource: "media_node",
+      },
+    };
   }
 
   stats(): MediaRailStats {

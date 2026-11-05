@@ -1357,7 +1357,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const rail = new MediaRailObserver(
       {
         jobId: job.id,
+        // The INGEST/sample clock: the media node samples at `sampleFps`, and this
+        // rail persists frames + cuts clips on that clock.
         fps: railFps,
+        // ADAAAA-8102: the CONTENT consume rate, passed SEPARATELY from the
+        // ingest clock. Before this the rail only knew `railFps`, so it analysed
+        // every relayed frame (job `8024a341`: 833 frames / 300 s = 2.78 fps
+        // while `LIVE_OBSERVE_CONTENT_FPS` was boot-verified on the analyzer
+        // pass) — the "cannot keep up with realtime" the board saw. Undefined
+        // keeps today's every-frame consume, so merging moves nothing on a
+        // running box until the box is recreated with the knob set.
+        contentFps: cfg.liveObserveContentFps,
         // ADAAAA-8069: honor the documented live frame budget on THIS rail too.
         // `LIVE_OBSERVE_MAX_FRAMES` ("trim 1": the live window's frame budget) fed
         // only the analyzer's live pass, so the media rail silently ran at the
