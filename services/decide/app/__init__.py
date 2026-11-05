@@ -79,6 +79,36 @@ class Detection(BaseModel):
     trackId: str = Field(default="")
 
 
+class PerceiveTimelineRecord(BaseModel):
+    """ADAAAA-8056 (lever B+e): ONE compact per-seed record in a decide window's
+    perceive timeline.
+
+    Perceive already emits this at 3 fps (tracks / objects / OCR scoreboard
+    anchors / the additive goal-ball signal); the server folds 27-29 seeds into a
+    handful of window scalars and used to drop *when* each was true. The server
+    now forwards one compact record per seed instead, on the cheap text channel.
+
+    Every field is clamped so a pathological payload can never 422 the live loop
+    (ADAAAA-7022): `tracks` mirrors `Evidence.trackCount` (le=8), and the list
+    fields are bounded. Scalars only — the bbox geometry stays in
+    `Evidence.detections`.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+    ts: float = 0.0
+    tracks: int = Field(default=0, ge=0, le=8)
+    maxVelocity: float = Field(default=0.0, ge=0.0)
+    objects: list[str] = Field(default_factory=list, max_length=8)
+    trackIds: list[str] = Field(default_factory=list, max_length=8)
+    ocr: list[str] = Field(default_factory=list, max_length=4)
+    ballOutcome: Optional[str] = None
+    possession: Optional[str] = None
+    goalCrossed: Optional[bool] = None
+    ballInNet: Optional[bool] = None
+    scoreBoardChanged: Optional[bool] = None
+    motionBurst: Optional[bool] = None
+
+
 class Evidence(BaseModel):
     # ADAAAA-4736/5231: previously le=2. Real multi-player tracking observes >2
     # objects; a larger count is legitimate evidence and must not 422 the whole
@@ -111,6 +141,13 @@ class Evidence(BaseModel):
     distanceToGoal: float = Field(default=0.0, ge=0.0, le=5.0)
     goalLineDelta: float = Field(default=0.0)  # signed normalized: <0 before the line, >=0 crossed
     audioLevels: list[float] = Field(default_factory=list, max_length=64)  # short RMS energy curve
+    # --- ADAAAA-8056 (lever B+e): the window's PERCEIVE TIMELINE ------------
+    # One compact record per 3 fps perceive seed, ordered by ts. This is the
+    # temporal density the scalar fold above (trackCount max / ocrHits sum /
+    # <=16 detections) throws away — the model keeps "when" without the live
+    # rail paying a frame per instant. Empty/absent == no timeline (VOD rail,
+    # or a window with no seeds), so the prompt renders exactly as before.
+    perceiveTimeline: list[PerceiveTimelineRecord] = Field(default_factory=list, max_length=32)
 
 
 class ImageRef(BaseModel):
@@ -270,6 +307,14 @@ class HighlightRequest(BaseModel):
     # (0.33 decides/s per stream) is set by output tokens per call. Absent/false
     # keeps the full contract byte-for-byte (VOD default).
     compact: bool = False
+    # ADAAAA-8056 (AC-E1/E2): the LIVE window's coverage ledger. `perceiveWindow`
+    # is {seeds, records, withFindings, centerTs} — what perceive aligned into the
+    # window vs what the timeline actually carried — and `audioPresence` is where
+    # the window's audio came from ({tapChunks, clipBytes, levels, spanFrom,
+    # spanTo, pos, series}). `Any` on purpose: a shaped-but-wrong payload must
+    # degrade to "no ledger", never to a 422 that drops the window.
+    perceiveWindow: Any = None
+    audioPresence: Any = None
 
 
 # --- Response contract ------------------------------------------------------
@@ -312,6 +357,12 @@ class AudioContext(BaseModel):
     transcribed: bool = False
     asrRan: bool = False
     asrLatencyS: float = 0.0
+    # ADAAAA-8056 (AC-E2): whether this window carried ANY audio at all, and the
+    # named reason when it did not. Without these a no-audio window is
+    # indistinguishable from a transcribed one, which is exactly the inference
+    # the ASR coverage AC forbids.
+    windowAudioPresent: bool = False
+    noAudioReason: str = ""  # "" | "no_audio_clip" | "retention_gap" | "asr_unavailable" | "audio_context_off"
 
 
 class HighlightDecision(BaseModel):
@@ -672,6 +723,10 @@ def create_app() -> FastAPI:
                 match_context=req.matchContext,
                 # ADAAAA-7938 (Spec A): prior game state (absent == no block).
                 prior_game_state=req.priorGameState,
+                # ADAAAA-8056 (AC-E1/E2): the live window's perceive + ASR
+                # coverage inputs. Absent on the VOD rail == unchanged payload.
+                perceive_window=req.perceiveWindow,
+                audio_presence=req.audioPresence,
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces

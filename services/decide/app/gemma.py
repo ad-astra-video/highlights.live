@@ -198,6 +198,7 @@ def _audit_record(
     started_at: float,
     asr_latency_s: float = 0.0,
     prompt_layout: dict | None = None,
+    timings_extra: dict | None = None,
 ) -> dict:
     """Assemble the audit record for one gemma decide call. Content images are
     represented by content refs (sha256 + data url) so the record stays compact
@@ -236,6 +237,10 @@ def _audit_record(
         "timings": {
             "elapsedMs": round((time.time() - started_at) * 1000.0, 3),
             "asrLatencyS": asr_latency_s,
+            # ADAAAA-8056 (AC-E1): the per-window perceive coverage ledger. Lives
+            # on `timings` (an existing JSON column on decide_audit) so it needs
+            # no schema migration and is queryable per decide row.
+            **({"perceiveTimeline": timings_extra["perceiveTimeline"]} if timings_extra and "perceiveTimeline" in timings_extra else {}),
         },
         "createdAt": round(time.time(), 3),
     }
@@ -1478,6 +1483,166 @@ def render_prior_game_state_block(prior: object) -> str:
     return ""
 
 
+
+# ---------------------------------------------------------------------------
+# ADAAAA-8056 (lever B+e): the PER-WINDOW PERCEIVE TIMELINE block.
+#
+# The server folds a 27-29-seed observe window into a handful of scalars
+# (trackCount max / ocrHits sum / <=16 detections / one folded goal
+# attestation). *When* in the window each of those was true never reaches the
+# model. Perceive already produces that density at 3 fps, so the server now
+# forwards one compact record per seed (`Evidence.perceiveTimeline`) and this
+# block renders it: a text record costs milliseconds of prefill where a frame
+# costs 0.5-1.5 s of decide wall time.
+#
+# AC-E3 budget: the whole block is capped at PERCEIVE_TIMELINE_MAX_CHARS. When
+# the budget binds the record is COMPACTED (object labels / OCR anchors dropped,
+# keep the decisive scalars), and only then THINNED (fewest records, keeping the
+# ones nearest the window center) — it is never silently dropped.
+# ---------------------------------------------------------------------------
+PERCEIVE_TIMELINE_MAX_CHARS = 1000
+PERCEIVE_TIMELINE_MAX_RECORDS = 32
+PERCEIVE_TIMELINE_HEADER = (
+    "perceive timeline (perceive's 3 fps view of this window, one record per "
+    "frame, ordered; t = seconds from the window center):"
+)
+
+
+def _timeline_center(perceive_window: object) -> float | None:
+    """The window center the server stated, when it said one (the `t=` column is
+    relative to it). Absent/unusable == absolute timestamps, never a guess."""
+    if not isinstance(perceive_window, dict):
+        return None
+    try:
+        c = float(perceive_window.get("centerTs"))
+    except (TypeError, ValueError):
+        return None
+    return c if c == c else None  # NaN guard
+
+
+def _timeline_line(rec: dict, center_ts: float | None, *, scalars_only: bool) -> str:
+    """One timeline record, rendered for the prompt. `scalars_only` drops the
+    label/anchor fields and keeps the decisive scalars (the AC-E3 compaction)."""
+    try:
+        ts = float(rec.get("ts") or 0.0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    t = f"{ts - center_ts:+.1f}s" if center_ts is not None else f"{ts:.1f}s"
+    try:
+        tracks = int(rec.get("tracks") or 0)
+    except (TypeError, ValueError):
+        tracks = 0
+    parts = [f"{t} tracks={max(0, tracks)}"]
+    vel = rec.get("maxVelocity")
+    if isinstance(vel, (int, float)) and not isinstance(vel, bool) and float(vel) > 0:
+        parts.append(f"vel={float(vel):.2f}")
+    if not scalars_only:
+        objs = [o for o in (rec.get("objects") or []) if isinstance(o, str) and o]
+        if objs:
+            parts.append("objects=" + ",".join(objs[:4]))
+        ocr = [o for o in (rec.get("ocr") or []) if isinstance(o, str) and o]
+        if ocr:
+            parts.append('ocr="' + "|".join(ocr[:2]) + '"')
+        tids = [t2 for t2 in (rec.get("trackIds") or []) if isinstance(t2, str) and t2]
+        if tids:
+            parts.append("track_ids=" + ",".join(tids[:8]))
+    bo = rec.get("ballOutcome")
+    if isinstance(bo, str) and bo.strip():
+        parts.append(f"ball={bo.strip()}")
+    poss = rec.get("possession")
+    if isinstance(poss, str) and poss.strip():
+        parts.append(f"poss={poss.strip()}")
+    flags = []
+    if rec.get("goalCrossed") is True:
+        flags.append("goal_line")
+    if rec.get("ballInNet") is True:
+        flags.append("in_net")
+    if rec.get("scoreBoardChanged") is True:
+        flags.append("score_delta")
+    if rec.get("motionBurst") is True:
+        flags.append("motion")
+    if flags:
+        parts.append("flag=" + "+".join(flags))
+    return "  " + " ".join(parts)
+
+
+def render_perceive_timeline(
+    evidence: dict, perceive_window: object = None
+) -> tuple[str, dict]:
+    """Render the window's perceive timeline and its coverage ledger.
+
+    Returns ``(block, ledger)``. `block` is "" when the window carries no
+    timeline (VOD rail / no seeds), so the prompt stays byte-identical to the
+    pre-enrichment text. `ledger` is what AC-E1 reads back off decide_audit:
+    ``{records, chars, compacted, seeds, withFindings}`` where `compacted` is one
+    of "none" | "scalars" | "thinned".
+
+    Deterministic + side-effect free (unit-testable).
+    """
+    raw = evidence.get("perceiveTimeline") if isinstance(evidence, dict) else None
+    recs = [r for r in (raw or []) if isinstance(r, dict)][:PERCEIVE_TIMELINE_MAX_RECORDS]
+    seeds = 0
+    with_findings = 0
+    if isinstance(perceive_window, dict):
+        for key, dst in (("seeds", "seeds"), ("withFindings", "withFindings")):
+            try:
+                v = int(perceive_window.get(key) or 0)
+            except (TypeError, ValueError):
+                v = 0
+            if dst == "seeds":
+                seeds = max(0, v)
+            else:
+                with_findings = max(0, v)
+    ledger = {
+        "records": 0,
+        "chars": 0,
+        "compacted": "none",
+        "seeds": seeds,
+        "withFindings": with_findings,
+    }
+    if not recs:
+        return "", ledger
+
+    recs.sort(key=lambda r: float(r.get("ts") or 0.0) if isinstance(r.get("ts"), (int, float)) else 0.0)
+    center = _timeline_center(perceive_window)
+
+    def build(items: list, scalars_only: bool) -> str:
+        lines = [PERCEIVE_TIMELINE_HEADER]
+        lines.extend(_timeline_line(r, center, scalars_only=scalars_only) for r in items)
+        return "\n".join(lines)
+
+    block = build(recs, scalars_only=False)
+    if len(block) <= PERCEIVE_TIMELINE_MAX_CHARS:
+        ledger.update({"records": len(recs), "chars": len(block)})
+        return block, ledger
+
+    # Compaction 1: scalars only (drop object labels / OCR anchors / track ids).
+    block = build(recs, scalars_only=True)
+    mode = "scalars"
+    if len(block) <= PERCEIVE_TIMELINE_MAX_CHARS:
+        ledger.update({"records": len(recs), "chars": len(block), "compacted": mode})
+        return block, ledger
+
+    # Compaction 2: thin the records, keeping those nearest the window center.
+    anchor = center if center is not None else 0.0
+    ordered = sorted(
+        recs,
+        key=lambda r: abs(float(r.get("ts") or 0.0) - anchor) if isinstance(r.get("ts"), (int, float)) else 0.0,
+    )
+    kept: list = []
+    for rec in ordered:
+        trial = kept + [rec]
+        trial.sort(key=lambda r: float(r.get("ts") or 0.0) if isinstance(r.get("ts"), (int, float)) else 0.0)
+        if len(build(trial, scalars_only=True)) > PERCEIVE_TIMELINE_MAX_CHARS:
+            continue
+        kept = trial
+    if not kept:  # even one record overflows: keep the single nearest one.
+        kept = [ordered[0]]
+    block = build(kept, scalars_only=True)
+    ledger.update({"records": len(kept), "chars": len(block), "compacted": "thinned"})
+    return block, ledger
+
+
 def build_prompt_parts(
     event_type: str,
     evidence: dict,
@@ -1489,6 +1654,7 @@ def build_prompt_parts(
     compact: bool = False,
     match_context: object = None,
     prior_game_state: object = None,
+    perceive_window: object = None,
 ) -> dict:
     """The three prompt pieces (ADAAAA-7993 prefix-cache layout v2):
 
@@ -1549,6 +1715,12 @@ def build_prompt_parts(
     if detection_lines:
         meta.append("detection geometry:")
         meta.extend("  " + ln for ln in detection_lines)
+    # ADAAAA-8056 (lever B+e): the window's perceive timeline, ordered by ts.
+    # Rendered only when the server forwarded records, so a non-observe / VOD
+    # window keeps the byte-identical pre-enrichment prompt.
+    timeline_block, _timeline_ledger = render_perceive_timeline(evidence, perceive_window)
+    if timeline_block:
+        meta.append(timeline_block)
     audio_level_line = _audio_level_line(evidence)
     if audio_level_line:
         meta.append(audio_level_line)
@@ -1613,6 +1785,7 @@ def build_prompt(
     compact: bool = False,
     match_context: object = None,
     prior_game_state: object = None,
+    perceive_window: object = None,
 ) -> str:
     """The v1 flat prompt text: preamble + Context block + contract, in that
     order. Byte-identical to the pre-ADAAAA-7993 output and kept for the audit
@@ -1629,6 +1802,7 @@ def build_prompt(
         compact=compact,
         match_context=match_context,
         prior_game_state=prior_game_state,
+        perceive_window=perceive_window,
     )["prompt"]
 
 
@@ -1667,6 +1841,7 @@ def _build_data_items(
     story_so_far: str = "",
     match_context: object = None,
     prior_game_state: object = None,
+    perceive_window: object = None,
 ) -> list:
     """Ordered, structured view of the context items fed to the model for a
     single-candidate window. Mirrors `build_prompt`'s rendered lines so the UI
@@ -1702,6 +1877,16 @@ def _build_data_items(
     det_lines = _detection_lines(evidence)
     for ln in det_lines:
         add("detections", "Detection geometry", ln)
+    # ADAAAA-8056 (lever B+e): the SAME perceive timeline the prompt carries, as
+    # its own inspectable item, so a decided window shows exactly what temporal
+    # evidence the model was given (AC-E1's inspector).
+    tl_block, tl_ledger = render_perceive_timeline(evidence, perceive_window)
+    if tl_block:
+        add(
+            "perceive_timeline",
+            "Perceive timeline (3 fps window record, ordered by ts)",
+            tl_block,
+        )
     al = _audio_level_line(evidence)
     if al:
         add("audio_level", "Audio-energy level curve", al)
@@ -1801,6 +1986,7 @@ def _window_analysis(
     response: dict | None = None,
     match_context: object = None,
     prior_game_state: object = None,
+    perceive_window: object = None,
 ) -> dict:
     """Assemble the opaque `analysis` block for a decided window."""
     evidence = evidence or {}
@@ -1808,7 +1994,7 @@ def _window_analysis(
         data_items = _build_data_items(
             event_type, evidence, game_hint, n_frames, n_images,
             send_audio or bool(transcript), transcript, story_so_far,
-            match_context, prior_game_state,
+            match_context, prior_game_state, perceive_window,
         )
     return {
         "prompt": prompt,
@@ -1821,6 +2007,9 @@ def _window_analysis(
             "path": "input_audio" if send_audio else ("asr_text" if transcript else "none"),
         },
         "asr": {"transcript": transcript or "", "url": _asr_url()},
+        # ADAAAA-8056 (AC-E1): the perceive-timeline coverage ledger for THIS
+        # window (records rendered, chars, compaction mode, seeds aligned).
+        "perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1],
         "response": response if response is not None else {},
     }
 
@@ -1842,6 +2031,7 @@ def ask(
     compact: bool = False,
     match_context: object = None,
     prior_game_state: object = None,
+    perceive_window: object = None,
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -1903,6 +2093,7 @@ def ask(
         compact=compact,
         match_context=match_context,
         prior_game_state=prior_game_state,
+        perceive_window=perceive_window,
     )
     prompt = parts["prompt"]
     content.append({"type": "text", "text": parts["context"]})
@@ -1978,6 +2169,9 @@ def ask(
         fallback=False,
         started_at=started_at,
         prompt_layout=_prompt_layout(parts),
+        # ADAAAA-8056 (AC-E1): the perceive coverage ledger for this window, so
+        # the server's decide_audit row proves the enrichment actually landed.
+        timings_extra={"perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1]},
     )
     _emit_audit(_record)
     # Emit the compact audit descriptor on the decision (ADAAAA-7028 Inc 2) so
@@ -2004,6 +2198,7 @@ def ask(
             response=_response_block(result),
             match_context=match_context,
             prior_game_state=prior_game_state,
+            perceive_window=perceive_window,
         )
     return result
 
@@ -2024,6 +2219,8 @@ def decide_with_gemma(
     compact: bool = False,
     match_context: object = None,
     prior_game_state: object = None,
+    perceive_window: object = None,
+    audio_presence: object = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -2066,6 +2263,7 @@ def decide_with_gemma(
         compact=compact,
         match_context=match_context,
         prior_game_state=prior_game_state,
+        perceive_window=perceive_window,
     )
     if g is not None:
         result = g
@@ -2106,12 +2304,52 @@ def decide_with_gemma(
     # send is on (GEMMA_SEND_AUDIO=1, ADAAAA-6350), else the ASR->text
     # transcript (Path 2), else "none" when no audio context entered the call.
     send_audio_active = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
+    # ADAAAA-8056 (AC-E2): ASR coverage. `windowAudioPresent` says whether this
+    # window carried ANY audio (the server reports the tap span + clip bytes), and
+    # `noAudioReason` NAMES why nothing was transcribed — otherwise a no-audio
+    # window is indistinguishable from a transcribed one in the record.
+    presence = audio_presence if isinstance(audio_presence, dict) else {}
+    try:
+        presence_clip_bytes = int(presence.get("clipBytes") or 0)
+    except (TypeError, ValueError):
+        presence_clip_bytes = 0
+    try:
+        presence_tap_chunks = int(presence.get("tapChunks") or 0)
+    except (TypeError, ValueError):
+        presence_tap_chunks = 0
+    window_audio_present = bool(audio_b64)
+    no_audio_reason = ""
+    if not window_audio_present:
+        # `clipBytes` 0 with chunks banked == the window fell outside the tap's
+        # retained span (retention gap), not a silent stream.
+        no_audio_reason = "retention_gap" if presence_tap_chunks > 0 else "no_audio_clip"
+    elif not asr_ran and not send_audio_active:
+        no_audio_reason = "asr_unavailable" if not _asr_url() else "audio_context_off"
     result["audioContext"] = {
         "path": "input_audio" if send_audio_active else ("asr_text" if asr_ran else "none"),
         "transcribed": bool(transcript),
         "asrRan": asr_ran,
         "asrLatencyS": asr_latency_s,
+        "windowAudioPresent": window_audio_present,
+        "noAudioReason": no_audio_reason,
     }
+    # ADAAAA-8056 (AC-E2): stamp the same coverage onto the audit descriptor's
+    # `timings` (an existing JSON column) so the server's decide_audit row carries
+    # path/asrRan/asrLatencyS/window-audio for every decide — no schema change,
+    # and no inference from log lines.
+    _audit_timings = (result.get("audit") or {}).get("timings") if isinstance(result.get("audit"), dict) else None
+    if isinstance(_audit_timings, dict):
+        _audit_timings.update(
+            {
+                "audioPath": result["audioContext"]["path"],
+                "asrRan": asr_ran,
+                "asrLatencyS": round(asr_latency_s, 3),
+                "windowAudioPresent": window_audio_present,
+                "noAudioReason": no_audio_reason,
+                "audioTapChunks": presence_tap_chunks,
+                "audioClipBytes": presence_clip_bytes,
+            }
+        )
     # ADAAAA-7155 Incr A: finalize the per-window analysis block. On the gemma
     # path the prompt/dataItems were captured inside `ask`; here we sync the full
     # response (incl. the just-computed audioContext + runningSummary) and the
