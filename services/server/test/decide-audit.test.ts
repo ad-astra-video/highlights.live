@@ -52,6 +52,75 @@ describe("decide_audit ingestion (decide-audit.ts)", () => {
     expect(rec.fallback).toBe(false);
   });
 
+  it("carries the contract guard record into the stored timings (ADAAAA-8120 AC-G5)", () => {
+    // The decide service stamps `timings.contractGuard` on the audit descriptor
+    // (decision + refuting evidence for a text-only scoring_play accept). The
+    // ingestion must keep it verbatim on the row's timings JSON, so a stored job
+    // can be re-graded without replaying the decide call.
+    const withGuard = {
+      ...descriptor,
+      timings: {
+        elapsedMs: 8.1,
+        contractGuard: {
+          version: "1",
+          outcome: "rejected",
+          contradictedBy: "goal_text_without_measurement",
+          claim: { transcript_goal_shout: true, reason_cites_commentary: true, score_line_claim: true },
+          attestation: { attested: false, signals: [], missing: ["ballOutcome", "scoreBoardChanged"] },
+          refutingEvidence: ["the accept's support is commentary text only"],
+          detail: "goal_text_without_measurement: commentary text only",
+        },
+      },
+    };
+    const rec = decideAuditRecordFromDescriptor(withGuard)!;
+    const timings = rec.timings as any;
+    expect(timings.contractGuard.outcome).toBe("rejected");
+    expect(timings.contractGuard.contradictedBy).toBe("goal_text_without_measurement");
+    expect(timings.contractGuard.attestation.missing).toContain("ballOutcome");
+    expect(timings.contractGuard.refutingEvidence.length).toBeGreaterThan(0);
+    // the guard is additive: the coverage ledgers beside it survive untouched
+    expect((rec.timings as any).elapsedMs).toBe(8.1);
+  });
+
+  it("stores the contract guard on the decide_audit row, readable without a replay (AC-G5)", async () => {
+    const db = new SqliteDb(":memory:");
+    const guard = {
+      version: "1",
+      outcome: "rejected",
+      contradictedBy: "goal_text_without_measurement",
+      claim: { transcript_goal_shout: true, reason_cites_commentary: true, score_line_claim: true },
+      attestation: {
+        attested: false,
+        signals: [],
+        missing: ["ballOutcome", "goalCrossed", "scoreBoardChanged", "perceiveTimeline"],
+        audioPeak: 0.97,
+      },
+      refutingEvidence: ["the accept's support is commentary text only (transcript_goal_shout)"],
+      detail: "goal_text_without_measurement: commentary text only",
+    };
+    await recordDecideAudit(
+      db,
+      {
+        ...descriptor,
+        jobId: "job-guard",
+        sessionId: "job-guard",
+        groupKey: "soc-warm-01",
+        timings: { elapsedMs: 4102.5, contractGuard: guard },
+      },
+      1
+    );
+    const rows = await db.listDecideAudits();
+    const row = rows.find((r) => r.jobId === "job-guard")!;
+    expect(row).toBeTruthy();
+    const timings = row.timings as any;
+    expect(timings.contractGuard.outcome).toBe("rejected");
+    expect(timings.contractGuard.contradictedBy).toBe("goal_text_without_measurement");
+    expect(timings.contractGuard.attestation.missing).toContain("perceiveTimeline");
+    expect(timings.contractGuard.refutingEvidence[0]).toMatch(/commentary text only/);
+    // The row alone is enough to re-grade the guard outcome — no decide replay.
+    expect(timings.contractGuard.claim.transcript_goal_shout).toBe(true);
+  });
+
   it("returns null for a missing / identity-less descriptor (no-op ingestion)", () => {
     expect(decideAuditRecordFromDescriptor(null)).toBeNull();
     expect(decideAuditRecordFromDescriptor({ promptText: "x" })).toBeNull();
