@@ -13,7 +13,11 @@ import {
   regateServedSentence,
   placePhraseOf,
   quietShape,
+  restoreTerminalPunctuation,
+  servedShapeViolations,
   storedCardSurface,
+  stripInternalTokens,
+  wholeStoredSentence,
   windowCorroborated,
 } from "@highlights/events";
 import { StageAMetrics, StageAOutcomeLedger } from "./stage-a-metrics";
@@ -3953,11 +3957,18 @@ export function storedSurfaceFor(
   // source, and card options from the ACCEPTED caption string. Refused -> the
   // whole re-gated first sentence of `decision.reason`; still refused -> the row
   // stores NO card, so a violating string cannot reach the customer.
+  // ADAAAA-8040 (Defect 2): the pipeline's own evidence tags (`; scoreboard
+  // score change confirmed`, `| live scoring lane: …`) are AUDIT text, not part
+  // of the stored sentence. Leaving them in the §2 source made a corroborated
+  // goal line look like a prefix cut of its own raw (`The scoreboard updates
+  // from 1-1 to 2-1 as the ball enters the net.` followed by the tag), which
+  // refused the card AND the reason on a real goal.
+  const rawSurface = stripInternalTokens(decision.reason ?? "");
   const card =
     grounding && (gatedReason ?? "").trim()
       ? storedCardSurface({
           gated: gatedReason as string,
-          raw: decision.reason ?? "",
+          raw: rawSurface,
           label: eventLabel,
           // The card's budget is the verdict's own rule, the same one the quiet
           // gate applied to the line it stores.
@@ -3973,7 +3984,14 @@ export function storedSurfaceFor(
   // shape yields no accepted caption. When nothing could be accepted, `reason` is
   // omitted instead of falling back to a violating string: "no reason" on the
   // route is the honest state, exactly as a missing card is.
-  const storedReason = grounding ? card.caption : gatedReason;
+  // When the card was refused but the gated line is itself shape-clean against
+  // the stripped stored sentence, the line is still honest copy — serve it
+  // closed rather than leaving a goal row with no text at all.
+  const shapedReason = restoreTerminalPunctuation((gatedReason ?? "").trim());
+  const reasonClean =
+    !!shapedReason &&
+    servedShapeViolations(shapedReason, [wholeStoredSentence(rawSurface)].filter(Boolean)).length === 0;
+  const storedReason = grounding ? card.caption || (reasonClean ? shapedReason : "") : gatedReason;
   return {
     ...(storedReason ? { reason: storedReason } : {}),
     ...(grounding?.colourSignal && captionColour(storedReason) ? { colour: grounding.colourSignal } : {}),
