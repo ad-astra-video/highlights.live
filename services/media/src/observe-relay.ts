@@ -64,6 +64,16 @@ export interface ObservationRelayOptions {
   readHead?: () => Promise<any | null>;
   /** Deliver one observation with the frame it belongs to. */
   emit: (obs: any, frame: ObservationFrame) => void;
+  /**
+   * ADAAAA-8069: called for EVERY frame admitted to the delivery queue — i.e.
+   * every frame the node actually published to video-in — whether or not an
+   * observation is ever paired with it. The control plane's decide window needs
+   * the rail's own publish clock: the perceive runner fast-forwards, so most
+   * published frames get no observation and the window's observation set
+   * otherwise collapses back onto the delivered image set. Must be cheap and
+   * must never throw (it runs on the publish path).
+   */
+  onPublished?: (frame: ObservationFrame) => void;
   /** How long (ms) a published frame may take to produce its observation before
    *  it is abandoned. Mirrors the control plane's `LIVE_OBSERVE_LAG_BUDGET_S`. */
   deadlineMs?: number;
@@ -199,6 +209,16 @@ export class ObservationRelay {
     if (this.reserved > 0) this.reserved--;
     if (this.closed) return;
     this.counters.published++;
+    // ADAAAA-8069: the publish clock goes out on every frame, before any
+    // observation pairing — a frame the runner fast-forwards past still happened
+    // on the rail and still belongs in the decide window's observation set.
+    if (this.opts.onPublished) {
+      try {
+        this.opts.onPublished(frame);
+      } catch {
+        /* the publish path must never fail on a reporting callback */
+      }
+    }
     this.queue.push({ frame, publishedAt: this.now() });
     // Bound the queue by abandoning the OLDEST undelivered frames — never by
     // skipping a publish (that is what wedges the runner). The head currently

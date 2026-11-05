@@ -227,6 +227,23 @@ export const LIVE_OBSERVE_WINDOW_S = 10;
 export const LIVE_OBSERVE_MAX_FRAMES = 30;
 
 /**
+ * ADAAAA-8069: dedupe + order a window's observation clocks. A published frame
+ * that ALSO produced an observation arrives on both paths (the delivered image
+ * and the rail's frame tick), so the union must not double-count it.
+ */
+function uniqueSortedTs(ts: number[]): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const t of [...ts].sort((a, b) => a - b)) {
+    const key = Math.round(t * 1000);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
  * Assemble ONE rolling PAST decide window for a live stream.
  *
  * Unlike {@link assembleObserveWindow} (a symmetric window around a center), a
@@ -243,7 +260,7 @@ export const LIVE_OBSERVE_MAX_FRAMES = 30;
 export function assembleLiveWindow(
   frames: { ts: number; imageB64: string; seq?: number }[],
   nowTs: number,
-  opts: { windowS?: number; maxFrames?: number; fps?: number } = {}
+  opts: { windowS?: number; maxFrames?: number; fps?: number; observedTs?: number[] } = {}
 ): ObserveWindow {
   const windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
   const maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
@@ -252,7 +269,22 @@ export function assembleLiveWindow(
   const inWindow = frames
     .filter((f) => f.imageB64 && f.ts >= lo && f.ts <= nowTs + 1e-9)
     .sort((a, b) => a.ts - b.ts);
-  if (inWindow.length === 0) return { centerTs: nowTs, frames: [], capped: false, droppedCount: 0, observedFrames: [] };
+  // ADAAAA-8069: frames the rail merely PUBLISHED (the media node's own decode
+  // clock) join the window's observation set even when no image — and therefore
+  // no decide frame — ever existed for them. The RTC arm's runner fast-forwards,
+  // so most published frames never reach a decide frame; on that arm the image
+  // set is a ~10x subsample of the rail, not the observation set.
+  const observationTs = opts.observedTs ?? [];
+  const ticksInWindow = observationTs.filter((t) => Number.isFinite(t) && t >= lo && t <= nowTs + 1e-9);
+  if (inWindow.length === 0) {
+    return {
+      centerTs: nowTs,
+      frames: [],
+      capped: false,
+      droppedCount: 0,
+      observedFrames: uniqueSortedTs(ticksInWindow).map((ts) => ({ ts })),
+    };
+  }
 
   // Resolve to the fps grid across [start, now] (nearest frame per step).
   const step = fps > 0 ? 1 / fps : Infinity;
@@ -289,7 +321,12 @@ export function assembleLiveWindow(
   // images stay in `frames`, so this costs no bytes on the payload). This is
   // the window's observation set: the perceive timeline is a projection of THIS,
   // so 4 shipped images still yield one text record per perceived frame.
-  const observedFrames = inWindow.map((f) => ({ ts: f.ts }));
+  //
+  // ADAAAA-8069: union the rail's published-frame ticks in as well. On the RTC
+  // arm the runner fast-forwards, so the delivered frames are a ~10x subsample
+  // of what the media node published — sourcing the observation set from them
+  // alone collapsed `timelineRecords` back onto `imageCount`.
+  const observedFrames = uniqueSortedTs([...inWindow.map((f) => f.ts), ...ticksInWindow]).map((ts) => ({ ts }));
   return { centerTs: nowTs, frames: items, capped, droppedCount, observedFrames };
 }
 
@@ -427,6 +464,13 @@ export class LiveObserver {
   /** Perceive candidate triggers folded into each window as bias hints
    * (provenance metadata) — never the on/off switch. */
   private readonly biasHints: ObserveBiasHint[] = [];
+  /** ADAAAA-8069: the rail's PUBLISHED-frame clock. Every frame the media node
+   *  published to video-in lands here, whether or not perceive ever produced an
+   *  observation — and therefore whether or not it ever became a decide frame.
+   *  The window's observation set is the union of this clock and the delivered
+   *  frames, so the perceive timeline's density follows the rail, not the image
+   *  budget. Ordered + deduped by content time. */
+  private readonly observationTs: number[] = [];
   private accepts = 0;
   /** Cadence ticks suppressed by the Tier-2 signal gate (ADAAAA-7145). */
   private gatedSkips = 0;
@@ -621,6 +665,34 @@ export class LiveObserver {
     this.findings.set(ts, seed);
     const cutoff = ts - Math.max(this.windowS, OBSERVE_WINDOW_S);
     while (this.frames.length && this.frames[0].ts < cutoff) this.frames.shift();
+    this.pruneObservationTs(cutoff);
+  }
+
+  /**
+   * ADAAAA-8069: record one PUBLISHED frame clock into the window's observation
+   * set. Nothing is inferred: the media node knows exactly which frames it put
+   * on the rail, and this is that clock. It carries NO image and NO seed, so it
+   * can never become a decide frame (no pixels, no decide), add a bias hint or
+   * spend a budget token — it only makes the perceive timeline's span honest on
+   * a rail where the perceive runner fast-forwards past most frames.
+   *
+   * The content clock is monotonic per rail, so an out-of-order or duplicate
+   * tick is ignored rather than re-sorted.
+   */
+  recordObservation(ts: number, seed?: PerFrameSeed): void {
+    if (!Number.isFinite(ts)) return;
+    // An observation that genuinely carries findings keeps them: the timeline
+    // record for this clock is then real evidence, not a zero record.
+    if (seed) this.findings.set(ts, seed);
+    const cutoff = ts - Math.max(this.windowS, OBSERVE_WINDOW_S);
+    this.pruneObservationTs(cutoff);
+    const last = this.observationTs[this.observationTs.length - 1];
+    if (last !== undefined && ts <= last) return;
+    this.observationTs.push(ts);
+  }
+
+  private pruneObservationTs(cutoff: number): void {
+    while (this.observationTs.length && this.observationTs[0] < cutoff) this.observationTs.shift();
   }
 
   /** Fold a perceive candidate trigger into the window as a bias hint
@@ -1006,7 +1078,13 @@ export class LiveObserver {
     // decide, so it must leave the trigger pending for the next affordable tick
     // — the previous order consumed first and `return`ed on an empty window,
     // counting the trigger `fired` while issuing no decide at all.
-    const win = assembleLiveWindow(this.frames, nowTs, { windowS: this.windowS, maxFrames: this.maxFrames, fps: this.fps });
+    const win = assembleLiveWindow(this.frames, nowTs, {
+      windowS: this.windowS,
+      maxFrames: this.maxFrames,
+      fps: this.fps,
+      // ADAAAA-8069: the RTC arm's published-frame clock joins the observation set.
+      observedTs: this.observationTs,
+    });
     if (win.frames.length === 0) return;
     const lo = nowTs - this.windowS;
     const inWindow = this.biasHints.filter((h) => h.ts >= lo && h.ts <= nowTs + 1e-9);

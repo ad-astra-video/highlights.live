@@ -78,6 +78,50 @@ regression (AC-C1). `imageGapMaxMs` is the honest imaging statement: ~3 s at a
 4-image cap means the images are genuinely spread over the span, not that the
 call has visual coverage every second.
 
+### 1b. The RTC arm's observation set is the rail's publish clock (ADAAAA-8069)
+
+The 8064 fix was correct on the **file-sim** rail and inert on the **media/RTC**
+rail, which is the one that ships. Measured on job `8024a341` (media rail,
+`kids300_7935.mp4`, `LIVE_OBSERVE_MAX_FRAMES=4`, 06:46-06:51Z): all 39
+`decide_audit` rows read `timelineRecords == observationsInSpan == imageCount`
+(4-ish), `recordsPerSecond` 0.22-1.30, `timelineSource=observations`.
+
+Cause, with the accounting from that leg's media-node close line
+(`[rtc] observe session=66072e42 seconds=302.8 published=848 delivered=93
+expired=47 skipped=697 refused=0`):
+
+- The media node's `ObservationRelay` follows the runner's `events-out` live
+  edge and pairs a queued frame with the observation carrying its `seq`
+  (`services/media/src/observe-relay.ts` `loopPush`). Every queued frame below
+  the observed `seq` is abandoned as `skipped` — the runner fast-forwards on
+  go-livepeer's live edge (`highlights-perceive` log:
+  `fast-forward session=66072e42 ... skipped_total=607`), so those observations
+  never exist.
+- `MediaRailObserver.onObservation` (`services/server/src/media-rail.ts`)
+  records a frame only for a **delivered** observation that carries an anchor
+  JPEG, so `LiveObserver.frames` — and therefore 8064's `observedFrames` — was
+  the delivered set. The "full observation set" was the image set again, and the
+  timeline's density followed the image budget on the only rail that ships.
+
+Fix (plumbing/construction only — image budget, ratio, span, cadence, keep ratio
+and spend ceiling unchanged):
+
+- `ObservationRelay` reports the clock of **every** frame it publishes
+  (`onPublished`, before any observation pairing); the media node batches those
+  to the new `POST /jobs/:id/media/frames` (~1 s batches).
+- `MediaRailObserver.onFrameTick` feeds them to
+  `LiveObserver.recordObservation`, and `assembleLiveWindow` unions that clock
+  with the delivered frames into `observedFrames`. A tick carries no image, so it
+  can never become a decide frame, fire the cadence or spend a decide token.
+- An observation relayed **without** anchor pixels now also joins the
+  observation set (with its findings) instead of being dropped outright.
+- A frame perceive never observed is still a zero record (§1), which is how the
+  timeline stays distinguishable from a missing one.
+
+Expected shape at a 4-image cap: `timelineRecords > imageCount`,
+`timelineRecords == observationsInSpan`, `recordsPerSecond` ≈ the rail's publish
+rate (~2.8/s at 3 fps).
+
 ### Prompt budget (AC-E3)
 
 `render_perceive_timeline` (`services/decide/app/gemma.py`) renders the block into
