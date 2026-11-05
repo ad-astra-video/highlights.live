@@ -1357,6 +1357,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       {
         jobId: job.id,
         fps: railFps,
+        // ADAAAA-8069: honor the documented live frame budget on THIS rail too.
+        // `LIVE_OBSERVE_MAX_FRAMES` ("trim 1": the live window's frame budget) fed
+        // only the analyzer's live pass, so the media rail silently ran at the
+        // 30-frame default while every 4-image cell measurement assumed it was 4
+        // (job 8024a341 rows read imageCount 4-9 = whichever frames happened to
+        // be delivered, not the configured cap). The observation set no longer
+        // depends on this knob (it is the rail's publish clock), so applying it
+        // trims images without thinning the perceive timeline.
+        maxFrames: cfg.liveObserveMaxFrames,
         stageA: shared.stageAOutcomes,
         signalGate: cfg.observeSignalGate,
         signalGateOpts: buildObserveSignalGateOpts(cfg),

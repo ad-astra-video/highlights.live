@@ -7,6 +7,7 @@ existing ``parse_ocr_score`` behaviour is unchanged on the same lines (AC7).
 """
 from __future__ import annotations
 
+import json
 import random
 
 from app.match_context import (
@@ -54,8 +55,14 @@ def _red(n=30, ts=None):
     return {"rgb": [190.0, 30.0, 32.0], "ts": ts}
 
 
-def kit_samples(colors, frames=3):
-    """Build samples: ``colors`` list of RGB triples, ``frames`` per colour."""
+def kit_samples(colors, frames=5):
+    """Build samples: ``colors`` list of RGB triples, ``frames`` crops per colour.
+
+    ADAAAA-8072: the default is 5 crops over 5 distinct frames because a kit
+    colour is only PUBLISHED from a cluster carrying run-level evidence
+    (>= 4 crops over >= 3 distinct frames). Tests that deliberately model a thin
+    pass must set ``frames`` explicitly.
+    """
     out = []
     for i, rgb in enumerate(colors):
         for f in range(frames):
@@ -380,7 +387,7 @@ def test_name_color_human_vocabulary():
 
 
 def test_cluster_kit_colors_two_distinct_kits_need_two_frames():
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     assert {c.primary for c in clusters} == {"red", "white"}
     assert all(c.frames >= 2 for c in clusters)
 
@@ -390,7 +397,7 @@ def test_cluster_kit_colors_single_frame_is_not_a_kit():
 
 
 def test_cluster_kit_colors_filters_pitch_green():
-    samples = kit_samples([RED, GREEN_PITCH], frames=3)
+    samples = kit_samples([RED, GREEN_PITCH])
     clusters = cluster_kit_colors(samples)
     assert {c.primary for c in clusters} == {"red"}
 
@@ -413,6 +420,129 @@ def test_cluster_kit_colors_minority_junk_cluster_is_not_a_kit():
     assert [c.primary for c in clusters] == ["red"]
 
 
+CYAN_TEAL = [28.0, 91.0, 106.0]
+
+
+def _sample(rgb, ts, seq, track):
+    return {"rgb": list(rgb), "ts": ts, "trackId": track, "frameSeq": seq}
+
+
+def test_publish_floor_rejects_a_two_crop_cluster_on_a_thin_pass():
+    # ADAAAA-8072 / e58bcef7: the served record published home "cyan" at
+    # confidence 0.95 from a 5-crop pass whose cyan group held TWO agreeing
+    # crops (the clip's Portugal shirt is red). The relative share floor
+    # collapses on a thin pass — max(2, int(0.20 * 5)) = 2 — so the absolute
+    # run-level floor is what stops two crops from naming a side. Below the
+    # floor the pass publishes NO colour and names the observed clusters.
+    samples = [_sample(RED, 10.0 + i, i, "red%d" % i) for i in range(3)] + [
+        _sample(CYAN_TEAL, 20.0 + i, 10 + i, "teal%d" % i) for i in range(2)
+    ]
+    clusters = cluster_kit_colors(samples)
+    # Both clusters are OBSERVED (inspectable) but neither carries run-level
+    # evidence: 3 crops and 2 crops against a floor of 4.
+    assert {c.primary for c in clusters} == {"red", "cyan"}
+    assert all(c.count < 4 for c in clusters)
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=samples,
+        # The worst case: the scorebug swatch itself NAMES cyan, so the swatch
+        # channel would happily link the 2-crop cluster to Portugal (this is the
+        # served e58bcef7 shape). The floor must refuse it anyway.
+        scorebug_swatches=[{"side": "home", "rgb": list(CYAN_TEAL), "color": "cyan"}] * 3,
+    )
+    ctx, status = out["matchContext"], out["evidenceStatus"]
+    by_side = {t["side"]: t for t in ctx["teams"]}
+    assert by_side["home"]["kitColors"] == []
+    assert by_side["away"]["kitColors"] == []
+    published = [k.get("primary") for t in ctx["teams"] for k in (t.get("kitColors") or [])]
+    assert "cyan" not in published and "red" not in published
+    assert status["kitColorsUnattributed"] == ["home", "away"]
+    assert set(status["kitClustersBelowFloor"]) == {"cyan", "red"}
+    assert set(status["kitClustersUnattributed"]) == {"cyan", "red"}
+
+
+def test_publish_floor_publishes_a_run_backed_red_cluster():
+    # The same job replayed over its stored frames at the runner cadence
+    # (every 3rd frame, max_tracks=4) yields 24 usable crops that cluster to ONE
+    # red cluster (21 crops); the minority junk reads cyan/orange/gold in ones
+    # and twos. A 21-crop red cluster clears the absolute floor and names the
+    # side — the floor is a tightening, not a blanket refusal.
+    samples = [_sample(RED, 10.0 + i, i, "red%d" % i) for i in range(21)] + [
+        _sample(CYAN_TEAL, 40.0, 400, "junk0"),
+        _sample([210.0, 140.0, 60.0], 41.0, 401, "junk1"),
+        _sample([230.0, 220.0, 40.0], 42.0, 402, "junk2"),
+    ]
+    clusters = cluster_kit_colors(samples)
+    assert [c.primary for c in clusters] == ["red"]
+    assert clusters[0].count >= 4 and clusters[0].distinct_frames >= 3
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=samples,
+        scorebug_swatches=[{"side": "home", "rgb": list(RED), "color": "red"}] * 3,
+    )
+    ctx, status = out["matchContext"], out["evidenceStatus"]
+    by_side = {t["side"]: t for t in ctx["teams"]}
+    assert by_side["home"]["kitColors"] == [{"primary": "red"}]
+    assert by_side["away"]["kitColors"] == []
+    assert status["kitColorsUnattributed"] == ["away"]
+    assert "kitClustersBelowFloor" not in status
+    assert "cyan" not in json.dumps(ctx)
+
+
+def test_publish_floor_counts_frames_not_tracks():
+    # Six crops of one colour taken in the SAME frame from six tracked players
+    # are ONE frame of evidence. `KitCluster.frames` counts
+    # (ts, frameSeq, frameId, trackId) keys and reads 6, which is how a
+    # single-frame pass could clear a frame floor; the publish floor reads
+    # distinct frames and refuses it.
+    samples = [_sample(RED, 10.0, 7, "p%d" % i) for i in range(6)]
+    clusters = cluster_kit_colors(samples)
+    assert clusters and clusters[0].frames == 6 and clusters[0].distinct_frames == 1
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=samples,
+        scorebug_swatches=[{"side": "home", "rgb": list(RED), "color": "red"}] * 3,
+    )
+    by_side = {t["side"]: t for t in out["matchContext"]["teams"]}
+    assert by_side["home"]["kitColors"] == []
+    assert out["evidenceStatus"]["kitClustersBelowFloor"] == ["red"]
+
+
+def test_publish_floor_needs_three_distinct_frames_and_four_crops():
+    # 4 crops over 2 distinct frames must NOT publish (a burst inside one
+    # second is not a run-level observation); the same 4 crops over 3 distinct
+    # frames do publish.
+    thin = [_sample(RED, 10.0 + (i % 2), i % 2, "p%d" % i) for i in range(4)]
+    clusters = cluster_kit_colors(thin)
+    assert clusters and clusters[0].count == 4 and clusters[0].distinct_frames == 2
+    out_thin = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=thin,
+        scorebug_swatches=[{"side": "home", "rgb": list(RED), "color": "red"}] * 3,
+    )
+    assert {t["side"]: t for t in out_thin["matchContext"]["teams"]}["home"]["kitColors"] == []
+
+    backed = [_sample(RED, 10.0 + i, i, "p%d" % i) for i in range(4)]
+    out_backed = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
+        hints={"title": "Portugal vs Spain"},
+        kit_samples=backed,
+        scorebug_swatches=[{"side": "home", "rgb": list(RED), "color": "red"}] * 3,
+    )
+    assert {t["side"]: t for t in out_backed["matchContext"]["teams"]}["home"]["kitColors"] == [
+        {"primary": "red"}
+    ]
+
+
 def test_cluster_kit_colors_names_the_centroid_not_the_noisiest_crop():
     # Measured on the cited job: distant crops inside one kit cluster read
     # "orange" (skin/warm shading) 94 times against "red" 46, so a majority vote
@@ -428,7 +558,7 @@ def test_cluster_kit_colors_names_the_centroid_not_the_noisiest_crop():
 
 
 def test_cluster_kit_colors_reports_secondary_trim():
-    samples = kit_samples([RED, WHITE], frames=3)
+    samples = kit_samples([RED, WHITE])
     clusters = cluster_kit_colors(samples)
     red = next(c for c in clusters if c.primary == "red")
     # The white cluster is a separate kit, not red's secondary; a lone colour
@@ -500,7 +630,7 @@ def test_sample_track_colors_skips_the_band_and_keeps_the_player():
 
 
 def test_associate_kits_prefers_scorebug_swatch_then_commentary():
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     teams = [{"name": "Portugal", "side": "home"}, {"name": "Spain", "side": "away"}]
     kits, ambiguous = associate_kits(
         teams,
@@ -517,7 +647,7 @@ def test_associate_kits_prefers_scorebug_swatch_then_commentary():
 
 
 def test_associate_kits_same_colour_away_kits_are_ambiguous():
-    clusters = cluster_kit_colors(kit_samples([RED, [200.0, 40.0, 44.0]], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, [200.0, 40.0, 44.0]]))
     teams = [{"name": "Portugal", "side": "home"}, {"name": "Spain", "side": "away"}]
     kits, ambiguous = associate_kits(
         teams,
@@ -534,7 +664,7 @@ def test_associate_kits_drops_an_unstable_swatch_instead_of_a_wrong_colour():
     # half splits 2x red / 2x white (50 % modal share) while the away half stably
     # reads white: the unstable home side must yield NOTHING, and the stable away
     # side must still link, instead of the home side stealing the white kit.
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     teams = [{"name": "Portugal", "side": "home"}, {"name": "Spain", "side": "away"}]
     swatches = [
         {"side": "home", "rgb": RED, "color": "red"},
@@ -572,7 +702,7 @@ def test_associate_kits_never_assigns_one_cluster_to_both_sides():
     # Both scorebug swatches land nearest the SAME cluster (measured on the cited
     # job where both halves carried the same red flag): the second side must stay
     # unattributed instead of getting the other team's kit.
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     teams = [{"name": "Portugal", "side": "home"}, {"name": "Spain", "side": "away"}]
     kits, _ = associate_kits(
         teams,
@@ -590,7 +720,7 @@ def test_associate_kits_never_assigns_one_cluster_to_both_sides():
 def test_associate_kits_ignores_shared_graphics_from_identical_swatch_colours():
     # A score bug over grass resolves both halves to the same "orange"/"green"
     # pixel average; that is a shared graphic, never a pair of kit colours.
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     teams = [{"name": "Portugal", "side": "home"}, {"name": "Spain", "side": "away"}]
     kits, _ = associate_kits(
         teams,
@@ -604,7 +734,7 @@ def test_associate_kits_ignores_shared_graphics_from_identical_swatch_colours():
 
 
 def test_associate_kits_no_evidence_leaves_kit_empty_never_a_guess():
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     teams = [{"name": "Portugal", "side": "home"}]
     kits, ambiguous = associate_kits(teams, clusters, scorebug_swatches=None, commentary=[])
     assert kits == {}
@@ -761,7 +891,7 @@ def test_resolve_match_context_portugal_spain_with_kit_colours():
         ocr_frames=[{"ts": 12.0, "lines": ["POR 1 - 0 ESP"]}],
         transcript="Spain in the white shirts are pressing; Portugal break quickly.",
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([RED, WHITE], frames=3),
+        kit_samples=kit_samples([RED, WHITE]),
         scorebug_swatches=[{"side": "home", "rgb": RED}, {"side": "away", "rgb": WHITE}],
         progress_pct=0.0,
     )
@@ -802,7 +932,7 @@ def test_resolve_match_context_reports_unattributed_kit_colours():
         game_hint="soccer",
         ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([RED], frames=3),
+        kit_samples=kit_samples([RED]),
         scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
     )
     assert out["matchContext"]["teams"][0]["kitColors"][0]["primary"] == "red"
@@ -823,11 +953,11 @@ def test_resolve_match_context_reports_observed_clusters_without_a_side_channel(
         game_hint="soccer",
         ocr_frames=[{"ts": 5.0, "lines": ["FRA 1 - 0 ITA"]}],
         hints={"title": "France vs Italy"},
-        kit_samples=kit_samples([RED, WHITE], frames=3),
+        kit_samples=kit_samples([RED, WHITE]),
     )
     status = out["evidenceStatus"]
     assert set(status["kitClusterColors"]) == {"red", "white"}
-    assert status["kitSampleFrames"] == 3
+    assert status["kitSampleFrames"] == 5
     assert status["kitSampleTracks"] == 2
     assert status["kitColorsUnattributed"] == ["home", "away"]
     assert status["kitPriorMiss"] == ["home", "away"]
@@ -855,7 +985,7 @@ def test_resolve_match_context_recheck_does_not_flip_a_confident_team():
         game_hint="soccer",
         ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([RED, WHITE], frames=3),
+        kit_samples=kit_samples([RED, WHITE]),
         scorebug_swatches=[{"side": "home", "rgb": RED}, {"side": "away", "rgb": WHITE}],
     )["matchContext"]
     assert first["teams"][0]["confidence"] >= USABLE_CONFIDENCE
@@ -969,7 +1099,7 @@ def test_resolve_match_context_prior_fills_the_unattributed_side():
         ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
         transcript="Portugal and Spain trade chances in a tense first half.",
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([RED, WHITE], frames=3),
+        kit_samples=kit_samples([RED, WHITE]),
         scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
     )
     ctx = out["matchContext"]
@@ -1063,7 +1193,7 @@ def test_kit_prior_only_adds_never_overrides_a_measured_channel():
 def test_kit_prior_does_not_redecide_a_swatch_attributed_side():
     # AC-P4, ordering case 1: stable scorebug swatch wins, the prior only plants
     # the side the swatch did not decide.
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     status: dict = {}
     kits, _ambiguous = associate_kits(
         _PRIOR_TEAMS,
@@ -1079,7 +1209,7 @@ def test_kit_prior_does_not_redecide_a_swatch_attributed_side():
 
 def test_kit_prior_does_not_redecide_a_commentary_attributed_side():
     # AC-P4, ordering case 2: the commentary phrase wins; the prior fills home.
-    clusters = cluster_kit_colors(kit_samples([RED, WHITE], frames=3))
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
     mentions = scan_commentary("Spain are wearing white today.", "soccer")
     status: dict = {}
     kits, _ambiguous = associate_kits(
@@ -1131,7 +1261,7 @@ def test_kit_prior_miss_leaves_kitColorsUnattributed_untouched():
         game_hint="soccer",
         ocr_frames=[{"ts": 5.0, "lines": ["POR 1 - 0 ESP"]}],
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([[24.0, 24.0, 26.0]], frames=3),
+        kit_samples=kit_samples([[24.0, 24.0, 26.0]]),
     )
     status = out["evidenceStatus"]
     assert out["matchContext"]["ambiguous"] is False
@@ -1304,7 +1434,7 @@ def test_kit_clusters_reported_when_no_team_resolved():
         game_hint="soccer",
         ocr_frames=[{"ts": 0.0, "lines": ["ETIHAD"]}],
         hints={"title": "Clinical finish and celebration"},
-        kit_samples=kit_samples([RED, WHITE], frames=3),
+        kit_samples=kit_samples([RED, WHITE]),
     )
     status = out["evidenceStatus"]
     assert {t["name"] for t in out["matchContext"]["teams"]} == {"unknown"}
@@ -1318,7 +1448,7 @@ def test_kit_clusters_omitted_when_every_cluster_is_attributed():
         ocr_frames=[{"ts": 12.0, "lines": ["POR 1 - 0 ESP"]}],
         transcript="Spain in the white shirts are pressing; Portugal break quickly.",
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([RED, WHITE], frames=3),
+        kit_samples=kit_samples([RED, WHITE]),
         scorebug_swatches=[{"side": "home", "rgb": RED}, {"side": "away", "rgb": WHITE}],
     )
     assert out["matchContext"]["ambiguous"] is False
@@ -1752,7 +1882,7 @@ def test_resolve_reports_the_unattributed_side_and_the_observed_clusters():
         game_hint="soccer",
         ocr_frames=[{"ts": 40.0, "lines": ["POR 0 - 0 ESP"]}],
         hints={"title": "Portugal vs Spain"},
-        kit_samples=kit_samples([RED, ORANGE_JUNK], frames=3),
+        kit_samples=kit_samples([RED, ORANGE_JUNK]),
         scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
     )
     ctx, status = out["matchContext"], out["evidenceStatus"]
