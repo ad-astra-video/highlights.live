@@ -1,0 +1,325 @@
+"""ADAAAA-8056 (lever B+e) — the per-window perceive timeline + ASR coverage.
+
+Pins three things the enrichment has to guarantee before the ladder in
+ADAAAA-8049 is measured on it:
+
+* AC-E1: one compact record per 3 fps perceive seed reaches the prompt, ordered
+  by ts, and the same block is inspectable in the `analysis` dataItems with a
+  per-window coverage ledger on `decide_audit.timings`.
+* AC-E3: the block respects a token budget and is COMPACTED (scalars only) or
+  THINNED rather than dropped when the budget binds.
+* AC-E2: every decide reports `path` / `asrRan` / `asrLatencyS` plus whether the
+  window carried audio at all, and a no-audio window is NAMED.
+"""
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import pytest
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+import app.gemma as G
+from app import app as decide_app
+from app import Evidence, PerceiveTimelineRecord
+from app.gemma import (
+    PERCEIVE_TIMELINE_MAX_CHARS,
+    _build_data_items,
+    build_prompt,
+    decide_with_gemma,
+    render_perceive_timeline,
+)
+
+client = TestClient(decide_app)
+
+REPLY = json.dumps(
+    {
+        "isHighlight": True,
+        "score": 82,
+        "eventType": "GOAL",
+        "reason": "ball in net, crowd erupts",
+        "outcome": "scoring_play",
+    }
+)
+
+
+class _MockLlama:
+    def __init__(self, reply: str = REPLY):
+        self.reply = reply
+        self.requests: list = []
+        self._srv = HTTPServer(("127.0.0.1", 0), self._handler())
+        self.port = self._srv.server_address[1]
+        self._t = threading.Thread(target=self._srv.serve_forever, daemon=True)
+        self._t.start()
+
+    def _handler(self):
+        owner = self
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                n = int(self.headers.get("content-length", 0))
+                owner.requests.append(json.loads(self.rfile.read(n)))
+                body = json.dumps({"choices": [{"message": {"content": owner.reply}}]}).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):  # noqa: D102
+                pass
+
+        return H
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def stop(self) -> None:
+        self._srv.shutdown()
+
+
+def timeline(n: int = 29, center: float = 10.0) -> list:
+    """A realistic ~10 s / 3 fps window: 29 seeds, one every ~0.34 s."""
+    recs = []
+    for i in range(n):
+        ts = round(center - n / 2 / 3 + i / 3, 2)
+        rec = {
+            "ts": ts,
+            "tracks": 3,
+            "maxVelocity": round(0.1 + i / 100, 2),
+            "objects": ["player", "ball"],
+            "trackIds": ["t0", "ball"],
+        }
+        if i == 14:
+            rec.update(
+                {
+                    "ocr": ["1-0"],
+                    "ballOutcome": "goal",
+                    "goalCrossed": True,
+                    "ballInNet": True,
+                    "scoreBoardChanged": True,
+                    "possession": "p12",
+                }
+            )
+        recs.append(rec)
+    return recs
+
+
+def test_evidence_accepts_a_full_live_window_and_clamps_its_fields():
+    ev = Evidence(
+        trackCount=8,
+        perceiveTimeline=timeline(29),
+        # adversarial: a track count over the schema cap is rejected, and an
+        # oversized record list is rejected — the server clamps, so decide never
+        # builds one (AC-E4).
+    )
+    assert len(ev.perceiveTimeline) == 29
+    assert ev.perceiveTimeline[14].ballOutcome == "goal"
+    assert ev.perceiveTimeline[14].goalCrossed is True
+    with pytest.raises(ValidationError):
+        PerceiveTimelineRecord(ts=1.0, tracks=9)
+    with pytest.raises(ValidationError):
+        PerceiveTimelineRecord(ts=1.0, maxVelocity=-1.0)
+    with pytest.raises(ValidationError):
+        Evidence(perceiveTimeline=timeline(33))
+    # Unknown upstream fields degrade to ignore, never a 422.
+    assert PerceiveTimelineRecord(**{"ts": 1.0, "tracks": 2, "futureField": 1}).tracks == 2
+
+
+def test_render_is_ordered_and_dense_with_a_ledger():
+    block, ledger = render_perceive_timeline(
+        {"perceiveTimeline": timeline(29)}, {"seeds": 29, "withFindings": 29, "centerTs": 10.0}
+    )
+    assert block.startswith("perceive timeline")
+    # one line per record: the AC-E1 density claim, at 3 fps
+    assert len([ln for ln in block.splitlines() if ln.startswith("  ")]) == 29
+    span = timeline(29)[-1]["ts"] - timeline(29)[0]["ts"]
+    assert ledger["records"] >= int(span) + 1
+    # 29 records fit only in SCALARS form under the block budget, so the ladder
+    # compacts rather than drops: every record survives, the labels do not.
+    assert ledger == {
+        "records": 29,
+        "chars": len(block),
+        "compacted": "scalars",
+        "seeds": 29,
+        "withFindings": 29,
+    }
+    assert ledger["chars"] <= PERCEIVE_TIMELINE_MAX_CHARS
+    # Ordered oldest -> newest, with t relative to the stated window center.
+    ts_lines = [ln.split()[0] for ln in block.splitlines() if ln.startswith("  ")]
+    assert ts_lines == sorted(ts_lines, key=lambda t: float(t.rstrip("s")))
+    # The decisive scalars survive compaction: the goal record still names itself.
+    assert "ball=goal" in block
+    assert "flag=goal_line+in_net+score_delta" in block
+    assert "poss=p12" in block
+
+
+def test_a_short_window_keeps_the_full_record_including_labels_and_ocr():
+    block, ledger = render_perceive_timeline(
+        {"perceiveTimeline": timeline(5)}, {"seeds": 5, "withFindings": 5, "centerTs": 10.0}
+    )
+    assert ledger["compacted"] == "none"
+    assert ledger["records"] == 5
+    assert "objects=player,ball" in block
+    assert "track_ids=t0,ball" in block
+
+
+def test_no_timeline_keeps_the_prompt_byte_identical():
+    with_none = build_prompt("GOAL", {"trackCount": 2}, game_hint="soccer")
+    with_empty = build_prompt(
+        "GOAL", {"trackCount": 2, "perceiveTimeline": []}, game_hint="soccer"
+    )
+    assert with_none == with_empty
+    assert "perceive timeline" not in with_none
+    assert "perceive timeline" in build_prompt(
+        "GOAL", {"trackCount": 2, "perceiveTimeline": timeline(5)}, game_hint="soccer"
+    )
+
+
+def test_budget_binds_by_compacting_then_thinning_never_dropping():
+    fat = []
+    for i in range(60):
+        fat.append(
+            {
+                "ts": float(i) / 3,
+                "tracks": 8,
+                "maxVelocity": 1.23,
+                "objects": ["goalkeeper", "defender", "striker", "ball"],
+                "trackIds": [f"player-{i}-{j}" for j in range(8)],
+                "ocr": ["1-0 HOME 14:32:07", "0-0 AWAY 14:31:02"],
+                "ballOutcome": "off_target",
+                "possession": f"player-{i}",
+            }
+        )
+    block, ledger = render_perceive_timeline(
+        {"perceiveTimeline": fat}, {"seeds": 60, "withFindings": 60, "centerTs": 10.0}
+    )
+    assert ledger["compacted"] in ("scalars", "thinned")
+    assert len(block) <= PERCEIVE_TIMELINE_MAX_CHARS
+    assert ledger["records"] >= 1
+    assert block.startswith("perceive timeline")
+    # Scalars survive compaction: the decisive fields are never the ones dropped.
+    assert "tracks=8" in block
+
+
+def test_data_items_expose_the_timeline_for_inspection():
+    items = _build_data_items(
+        "GOAL",
+        {"trackCount": 3, "perceiveTimeline": timeline(5)},
+        "soccer",
+        5,
+        0,
+        False,
+        "",
+        "",
+        None,
+        None,
+        {"seeds": 5, "withFindings": 5, "centerTs": 10.0},
+    )
+    tl = [i for i in items if i["type"] == "perceive_timeline"]
+    assert len(tl) == 1
+    assert tl[0]["value"].startswith("perceive timeline")
+
+
+@pytest.fixture()
+def llama():
+    srv = _MockLlama()
+    yield srv
+    srv.stop()
+
+
+def test_decide_carries_timeline_ledger_and_asr_coverage(llama, monkeypatch):
+    """End-to-end: the audit descriptor (which becomes the decide_audit row)
+    carries the timeline ledger and the ASR coverage for the window."""
+    monkeypatch.setenv("ASR_URL", "http://asr.test:8082")
+    monkeypatch.setenv("AUDIO_CONTEXT", "1")
+    monkeypatch.setenv("GEMMA_SEND_AUDIO", "0")
+    monkeypatch.setattr(
+        G, "transcribe_audio", lambda url, audio, sr=16000, **kw: ("and it's in the net", 0.7)
+    )
+    res = decide_with_gemma(
+        "GOAL",
+        Evidence(trackCount=3, perceiveTimeline=timeline(29)).model_dump(),
+        game_hint="soccer",
+        frames=[],
+        audio_b64="QUJD",
+        url=llama.url,
+        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "g1", "frameCount": 29},
+        perceive_window={"seeds": 29, "withFindings": 29, "centerTs": 10.0},
+        audio_presence={"tapChunks": 4, "clipBytes": 6, "levels": 12, "series": 12},
+    )
+    tl = res["audit"]["timings"]["perceiveTimeline"]
+    assert tl["records"] == 29
+    assert tl["compacted"] in ("scalars", "thinned")
+    assert tl["seeds"] == 29 and tl["withFindings"] == 29
+    assert res["audit"]["timings"]["audioPath"] == "asr_text"
+    assert res["audit"]["timings"]["asrRan"] is True
+    assert res["audit"]["timings"]["asrLatencyS"] == 0.7
+    assert res["audit"]["timings"]["windowAudioPresent"] is True
+    assert res["audioContext"]["path"] == "asr_text"
+    assert res["audioContext"]["windowAudioPresent"] is True
+    assert res["audioContext"]["noAudioReason"] == ""
+    types = [i["type"] for i in res["analysis"]["dataItems"]]
+    assert "perceive_timeline" in types
+    assert res["analysis"]["perceiveTimeline"]["records"] == 29
+    # The prompt actually given to the model carried the records.
+    sent = llama.requests[0]["messages"][-1]["content"]
+    text = sent if isinstance(sent, str) else " ".join(p.get("text", "") for p in sent)
+    assert "perceive timeline" in text
+
+
+def test_no_audio_window_is_named_not_silently_transcribed(llama, monkeypatch):
+    monkeypatch.setenv("ASR_URL", "http://asr.test:8082")
+    monkeypatch.delenv("GEMMA_SEND_AUDIO", raising=False)
+    res = decide_with_gemma(
+        "GOAL",
+        Evidence(trackCount=1).model_dump(),
+        game_hint="soccer",
+        frames=[],
+        audio_b64="",
+        url=llama.url,
+        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "g1", "frameCount": 1},
+        audio_presence={"tapChunks": 0, "clipBytes": 0, "levels": 0, "series": 0},
+    )
+    assert res["audioContext"]["path"] == "none"
+    assert res["audioContext"]["asrRan"] is False
+    assert res["audioContext"]["windowAudioPresent"] is False
+    assert res["audioContext"]["noAudioReason"] == "no_audio_clip"
+    assert res["audit"]["timings"]["noAudioReason"] == "no_audio_clip"
+
+    # A window the tap had banked chunks for but whose clip fell outside the
+    # retained span is a RETENTION gap, not a silent stream.
+    res2 = decide_with_gemma(
+        "GOAL",
+        Evidence(trackCount=1).model_dump(),
+        game_hint="soccer",
+        frames=[],
+        audio_b64="",
+        url=llama.url,
+        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "g2", "frameCount": 1},
+        audio_presence={"tapChunks": 9, "clipBytes": 0, "levels": 0, "series": 0},
+    )
+    assert res2["audioContext"]["noAudioReason"] == "retention_gap"
+
+
+def test_enriched_request_never_422s_the_live_loop():
+    """AC-E4: a 29-seed window with the timeline rides the real /highlight route
+    (whose response is validated), and an oversized timeline is a clean 422 the
+    server can never produce because it clamps first."""
+    body = {
+        "sessionId": "s1",
+        "eventType": "GOAL",
+        "timestamp": 0,
+        "gameHint": "soccer",
+        "evidence": {"trackCount": 8, "perceiveTimeline": timeline(29)},
+        "frames": [],
+        "jobId": "j1",
+        "groupKey": "g1",
+        "perceiveWindow": {"seeds": 29, "records": 29, "withFindings": 29, "centerTs": 10.0},
+        "audioPresence": {"tapChunks": 4, "clipBytes": 6, "levels": 12, "series": 12},
+    }
+    r = client.post("/highlight", json=body)
+    assert r.status_code == 200, r.text
+    over = {**body, "evidence": {"trackCount": 8, "perceiveTimeline": timeline(33)}}
+    assert client.post("/highlight", json=over).status_code == 422
