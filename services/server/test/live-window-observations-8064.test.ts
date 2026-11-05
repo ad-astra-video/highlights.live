@@ -14,7 +14,7 @@
 // image cap dropped still reaches the timeline. The VOD symmetric window keeps
 // no observation set, so the VOD payload stays byte-identical.
 import { describe, it, expect } from "vitest";
-import { assembleLiveWindow, assembleObserveWindow, buildObservePayload } from "../src/observe-loop";
+import { assembleLiveWindow, assembleObserveWindow, buildObservePayload, LiveObserver } from "../src/observe-loop";
 import type { PerFrameSeed } from "../src/observe-loop";
 
 /** A dense live rail: ~2.8 perceived frames/s over 10 s (28 frames). */
@@ -81,5 +81,67 @@ describe("live window observation set (ADAAAA-8064)", () => {
     expect(win.observedFrames).toBeUndefined();
     const payload = buildObservePayload(win, new Map());
     expect("observations" in payload).toBe(false);
+  });
+});
+
+// ADAAAA-8069: on the media/RTC arm the perceive runner FAST-FORWARDS, so the
+// frames that reached a decide are a ~10x subsample of what the media node put
+// on the rail (measured job 8024a341: 848 published, 93 observations delivered,
+// 697 skipped). Sourcing the window's observation set from the delivered frames
+// therefore collapsed `timelineRecords` back onto `imageCount` on the one rail
+// that ships. The rail's own publish clock is the honest observation set.
+describe("live window observation set from the rail's publish clock (ADAAAA-8069)", () => {
+  /** 28 published clocks over 10 s (2.8/s), only 4 of which were delivered. */
+  function rtcArm() {
+    const publishedTs = denseFrames(28).map((f) => f.ts);
+    const deliveredIdx = [0, 9, 18, 27];
+    const delivered = deliveredIdx.map((i) => ({ ts: publishedTs[i], imageB64: `img${i}` }));
+    return { publishedTs, delivered };
+  }
+
+  it("unions published clocks into observedFrames without duplicating delivered frames", () => {
+    const { publishedTs, delivered } = rtcArm();
+    const win = assembleLiveWindow(delivered, 10, { windowS: 10, maxFrames: 4, fps: 2, observedTs: publishedTs });
+    // Images stay capped at the budget...
+    expect(win.frames.length).toBe(4);
+    // ...while the observation set is the whole published span, deduped: the 4
+    // delivered frames are ALSO in the publish clock and must appear once.
+    expect(win.observedFrames?.length).toBe(28);
+    const ts = (win.observedFrames ?? []).map((f) => f.ts);
+    expect(ts).toEqual([...ts].sort((a, b) => a - b));
+    expect(new Set(ts.map((t) => Math.round(t * 1000))).size).toBe(28);
+    for (const f of win.frames) expect(ts).toContain(f.ts);
+  });
+
+  it("carries the published clock as payload observations, zero records where perceive never looked", () => {
+    const { publishedTs, delivered } = rtcArm();
+    const findings = findingsFor(delivered); // only the delivered frames have findings
+    const win = assembleLiveWindow(delivered, 10, { windowS: 10, maxFrames: 4, fps: 2, observedTs: publishedTs });
+    const payload = buildObservePayload(win, findings);
+    expect(payload.seeds.length).toBe(4);
+    expect(payload.observations?.length).toBe(28);
+    expect(payload.observations?.filter((o) => (o.tracks?.length ?? 0) > 0).length).toBe(4);
+    // A never-perceived tick is an explicit zero record — never a fabricated one.
+    expect(payload.observations?.filter((o) => (o.tracks?.length ?? 0) === 0).length).toBe(24);
+  });
+
+  it("fires a LiveObserver window whose observation set follows the rail, not the image budget", async () => {
+    const payloads: any[] = [];
+    const obs = new LiveObserver({
+      cadenceS: 3,
+      windowS: 10,
+      maxFrames: 4,
+      fps: 2,
+      onDecide: async (p) => (payloads.push(p), false),
+    });
+    // 10 frames published at 3 fps; exactly ONE got a perceive observation.
+    for (let i = 0; i <= 9; i++) obs.recordObservation(i / 3);
+    obs.record(9 / 3, "img", { ts: 9 / 3, tracks: [{ trackId: "t1", label: "player" }] });
+    await obs.maybeFire(9 / 3);
+    expect(payloads).toHaveLength(1);
+    const p = payloads[0];
+    expect(p.frames.length).toBeLessThanOrEqual(4);
+    expect(p.observations?.length).toBe(10);
+    expect(p.observations?.filter((o: PerFrameSeed) => (o.tracks?.length ?? 0) > 0).length).toBe(1);
   });
 });

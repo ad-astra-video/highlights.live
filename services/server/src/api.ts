@@ -286,6 +286,11 @@ class VodCancelledError extends Error {
 // Extension-based fallback for sources that ship a generic MIME (mpegts is
 // frequently served as application/octet-stream; some MP4s as audio/mp4).
 const VIDEO_UPLOAD_EXT = /\\.(mp4|m4v|mov|webm|mkv|mpeg|mpg|ts|m2ts|mts)$/i;
+
+/** ADAAAA-8069: hard bound on one media-node published-frame tick batch. The
+ *  node batches ~1 s of frames (~3 at the funded cadence); the cap only exists
+ *  so a malformed/hostile callback cannot grow the rail's clock unboundedly. */
+const MEDIA_FRAME_TICK_MAX_PER_BATCH = 512;
 /** Accept a browser upload when its declared type is a common video type
  * (mp4, mov, webm, matroska/mkv, mpegts). Clearly non-video uploads are
  * rejected with a readable message so they never reach GPU compute. */
@@ -5256,13 +5261,56 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Media (RTC) rail decide wiring: schedule a cadence/anchored decide on
       // the frame the media node just handed us. Returns immediately — decides
       // run on the rail's serial chain so this callback never blocks frames.
-      if (typeof frameB64 === "string" && frameB64) {
+      //
+      // ADAAAA-8069: hand the rail an observation WITHOUT an anchor image too.
+      // It cannot become a decide frame (no pixels, no decide), but it is a real
+      // perceive observation inside the window span and belongs in the window's
+      // observation set — dropping it here is half of why `timelineRecords`
+      // collapsed onto `imageCount` on the RTC arm.
+      {
         const rail = await ensureMediaRail(job, bj).catch(() => null);
-        rail?.onObservation(obs as any, frameB64);
+        rail?.onObservation(obs as any, typeof frameB64 === "string" && frameB64 ? frameB64 : undefined);
       }
       return { ok: true };
     }
   );
+
+  // ADAAAA-8069: the media node's PUBLISHED-frame clock. The RTC arm's perceive
+  // runner fast-forwards (a measured 5-min share published 848 frames but
+  // produced 93 observations), so most frames on the rail have neither an image
+  // nor an observation. Reporting their clocks is what lets the decide window's
+  // perceive timeline describe the RAIL (~2.8 records/s) instead of the image
+  // budget (~4 images / ~10 s = 0.4 records/s). Batched by the node (~1 s), and
+  // best-effort: a lost batch only loses timeline ticks, never a decide.
+  app.post<{ Params: { id: string } }>("/jobs/:id/media/frames", { bodyLimit: 256 * 1024 }, async (req: any, reply) => {
+    // Same optional bearer gate as the sibling media callbacks (MEDIA_HEALTH_TOKEN).
+    if (cfg.mediaHealthToken) {
+      const presented = String(req.headers?.authorization ?? "").replace(/^Bearer /, "");
+      if (presented !== cfg.mediaHealthToken) return reply.code(401).send({ error: "unauthorized" });
+    }
+    const job = store.getJob(req.params.id);
+    const bj = browserJobs.get(req.params.id);
+    // Not a browser job / unknown / already finalized: 200 with `ignored` so the
+    // media node's fire-and-forget call never retries a dead job.
+    if (!job || job.source !== "browser" || !bj) return reply.send({ ok: true, ignored: "not a browser capture job" });
+    const frames = Array.isArray(req.body?.frames) ? (req.body.frames as any[]) : [];
+    if (!frames.length) return reply.send({ ok: true, recorded: 0 });
+    const rail = await ensureMediaRail(job, bj).catch(() => null);
+    if (!rail) return reply.send({ ok: true, recorded: 0, ignored: "no live observe rail" });
+    let recorded = 0;
+    let newestTs = 0;
+    for (const f of frames.slice(0, MEDIA_FRAME_TICK_MAX_PER_BATCH)) {
+      const t = Number(f?.timestamp);
+      if (!Number.isFinite(t) || t <= 0) continue;
+      if (t > newestTs) newestTs = t;
+      rail.onFrameTick(t);
+      recorded++;
+    }
+    // The rail's frame clock is also the share's content clock (ADAAAA-8032), so
+    // keep the live clip cut advancing even across an observation gap.
+    if (newestTs > 0) noteBrowserContentTs(job.id, newestTs);
+    return { ok: true, recorded };
+  });
 
   // Media-edge audio relay callback (ADAAAA-7658). The media node decodes the
   // browser's opus RTP with the ffmpeg already in its image and POSTs ~100 ms
