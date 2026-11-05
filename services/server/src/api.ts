@@ -6262,6 +6262,12 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // stays wired through `audioContext`; only the raw clip + its ASR transcript
     // are gated here.
     decideAudioClip: cfg.liveDecideAudioClip,
+    // ADAAAA-8081: the ASR side lane's endpoint + posture on the live rail. The
+    // lane takes the transcription out of the decide call (and out of the decide
+    // slot); `LIVE_DECIDE_ASR_PREFETCH=0` restores the inline-ASR request.
+    asrUrl: cfg.asrUrl,
+    decideAsrPrefetch: cfg.liveDecideAsrPrefetch,
+    decideAsrPrefetchTimeoutMs: cfg.liveDecideAsrPrefetchTimeoutMs,
     // ADAAAA-7781: the COMPACT verdict contract on the live rail only. The live
     // pass is decode-bound, so the per-call output-token count IS its throughput
     // ceiling; VOD keeps the full long-form contract.

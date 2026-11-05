@@ -608,6 +608,10 @@ export class OrchestratorAdapter implements PipelineClient {
        * ledger, persisted by the decide service into decide_audit.timings. */
       perceiveWindow?: PerceiveWindowLedger;
       audioPresence?: DecideAudioPresence;
+      /** ADAAAA-8081: the server's fire-time ASR side lane already transcribed
+       * this window's clip. Forwarded so the decide service consumes it instead
+       * of transcribing again ahead of gemma. Absent => inline ASR as before. */
+      asr?: { transcript: string; latencyS: number; ran: boolean };
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -648,6 +652,16 @@ export class OrchestratorAdapter implements PipelineClient {
       // live window. Spreads so the VOD payload (absent) stays byte-identical.
       ...(opts?.perceiveWindow ? { perceiveWindow: opts.perceiveWindow } : {}),
       ...(opts?.audioPresence ? { audioPresence: opts.audioPresence } : {}),
+      // ADAAAA-8081: the pre-computed transcript of this window's clip (server
+      // side lane). Spread only when ASR actually ran, so a failed prefetch
+      // leaves the request byte-identical to the pre-8081 inline-ASR shape.
+      ...(opts?.asr && opts.asr.ran
+        ? {
+            asrPrefetched: true,
+            asrTranscript: opts.asr.transcript,
+            asrLatencyS: opts.asr.latencyS,
+          }
+        : {}),
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
@@ -1102,6 +1116,10 @@ export class DirectAdapter implements PipelineClient {
        * ledger, persisted by the decide service into decide_audit.timings. */
       perceiveWindow?: PerceiveWindowLedger;
       audioPresence?: DecideAudioPresence;
+      /** ADAAAA-8081: the server's fire-time ASR side lane already transcribed
+       * this window's clip. Forwarded so the decide service consumes it instead
+       * of transcribing again ahead of gemma. Absent => inline ASR as before. */
+      asr?: { transcript: string; latencyS: number; ran: boolean };
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -1126,6 +1144,16 @@ export class DirectAdapter implements PipelineClient {
         // ADAAAA-8056 (AC-E1/E2): perceive + ASR coverage ledger (live only).
         ...(opts?.perceiveWindow ? { perceiveWindow: opts.perceiveWindow } : {}),
         ...(opts?.audioPresence ? { audioPresence: opts.audioPresence } : {}),
+        // ADAAAA-8081: the pre-computed transcript (server side lane). Spread
+        // only when ASR ran, so a failed prefetch keeps the request identical to
+        // the pre-8081 inline-ASR shape.
+        ...(opts?.asr && opts.asr.ran
+          ? {
+              asrPrefetched: true,
+              asrTranscript: opts.asr.transcript,
+              asrLatencyS: opts.asr.latencyS,
+            }
+          : {}),
         // ADAAAA-7781: compact verdict contract (live rail). false/absent sends
         // the byte-identical full-contract request.
         compact: opts?.compact === true,

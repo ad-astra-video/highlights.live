@@ -57,6 +57,10 @@ import {
 import { liveDecideAdmission } from "./live-decide-admission";
 import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
 import type { TriggerFamilyLatency } from "./observe-loop";
+// ADAAAA-8081: the live ASR side lane (fire-time prefetch) + the observer's
+// non-enumerable payload key that carries its promise to the decide builder.
+import { AsrPrefetcher, type AsrPrefetchResult } from "./asr-prefetch";
+import { ASR_PREFETCH } from "./observe-loop";
 import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
@@ -1890,6 +1894,11 @@ export interface PipelineClient {
        * Absent on the VOD rail (the enrichment is live-only). */
       perceiveWindow?: PerceiveWindowLedger;
       audioPresence?: DecideAudioPresence;
+      /** ADAAAA-8081: a pre-computed transcription of this window's audio clip
+       * (the server's fire-time side lane). When present the decide service
+       * consumes it instead of running ASR inside the call, so the transcription
+       * no longer serialises ahead of gemma. Absent = inline ASR as before. */
+      asr?: { transcript: string; latencyS: number; ran: boolean };
     }
   ): Promise<DecisionResult>;
   /**
@@ -2019,6 +2028,19 @@ export interface AnalyzerConfig {
    * from it) is gated here. Unset = include, the pre-trim behaviour.
    */
   decideAudioClip?: boolean;
+  /** ADAAAA-8081: route the live window's ASR through the server's fire-time
+   * side lane (`asr-prefetch.ts`) instead of letting the decide call transcribe
+   * serially ahead of gemma. Default ON; `LIVE_DECIDE_ASR_PREFETCH=0` restores
+   * the exact pre-8081 request (no `asr` key => decide transcribes inline).
+   * A prefetch that fails/times out still falls back to inline ASR, so the
+   * per-window `asrRan` / `asrLatencyS` coverage never falls. */
+  decideAsrPrefetch?: boolean;
+  /** ADAAAA-8081: per-call timeout for one side-lane transcription (ms).
+   * `LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS`, default 6 000. */
+  decideAsrPrefetchTimeoutMs?: number;
+  /** ADAAAA-8081: ASR base URL (`ASR_URL`) for the side lane. Unset => the lane
+   *  cannot run and the decide service transcribes inline as before. */
+  asrUrl?: string;
   /** ADAAAA-7781: ask the decide service for the COMPACT verdict contract on the
    * live observe rail (short prose fields, no `evidenceAttested` list, 400-token
    * completion cap). Live decide throughput is decode-bound — decisions/s =
@@ -5050,6 +5072,29 @@ export function selectDecideDetections(
   return picked.sort((a, b) => a.ts - b.ts).map((p) => p.det);
 }
 
+/**
+ * ADAAAA-8081: the window-aligned audio slice for one decide payload.
+ *
+ * Single source for (a) the clip that rides `opts.audioB64` and (b) the clip the
+ * fire-time ASR prefetch lane transcribes, so the transcript can never be of a
+ * different audio span than the payload. Pure apart from the run's audio ring
+ * read.
+ */
+export function windowAudioSlice(
+  cfg: AnalyzerConfig,
+  run: LiveRunShared,
+  payload: ObserveDecidePayload
+): { audioB64: string; levels: number[]; preS: number; postS: number } {
+  const center = payload.centerTs;
+  const frameTs = payload.frames.map((f) => f.ts).filter((t) => Number.isFinite(t));
+  const preS = frameTs.length ? Math.max(center - Math.min(...frameTs), 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
+  const postS = frameTs.length ? Math.max(Math.max(...frameTs) - center, 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
+  const audioB64 =
+    cfg.audioContext && cfg.decideAudioClip !== false ? run.audioWindowB64(center, preS, postS) : "";
+  const levels = cfg.audioContext ? run.audioWindowLevels(center, preS, postS) : [];
+  return { audioB64, levels, preS, postS };
+}
+
 /** Build the decide() evidence + opts for an observe window. The temporal
  * window frames + the perceive-seeded per-frame context are the primary
  * evidence; candidate triggers inside the window are folded as bias hints
@@ -5058,7 +5103,10 @@ export function selectDecideDetections(
 export function buildObserveDecideRequest(
   cfg: AnalyzerConfig,
   run: LiveRunShared,
-  payload: ObserveDecidePayload
+  payload: ObserveDecidePayload,
+  /** ADAAAA-8081: the side lane's transcription of this window's clip. Absent
+   *  (`null`) => the decide service transcribes inline exactly as before. */
+  prefetchedAsr?: AsrPrefetchResult | null
 ): { evidence: Parameters<PipelineClient["decide"]>[0]; opts: Parameters<PipelineClient["decide"]>[1] } {
   const bias = payload.biasHints[0] as ObserveBiasHint | undefined;
   const eventType = bias?.eventType ?? observeDefaultEventType(payload);
@@ -5138,11 +5186,13 @@ export function buildObserveDecideRequest(
   // window. `toDecideMatchContext` is pure and reads the value the injector
   // already loaded, so it never triggers a resolver/GPU pass per window.
   const matchCtx = toDecideMatchContext(cfg.getMatchContext?.());
-  const frameTs = payload.frames.map((f) => f.ts).filter((t) => Number.isFinite(t));
-  const preS = frameTs.length ? Math.max(center - Math.min(...frameTs), 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
-  const postS = frameTs.length ? Math.max(Math.max(...frameTs) - center, 0) + AUDIO_WINDOW_MARGIN_S : AUDIO_DEFAULT_WINDOW_S;
-  const windowAudioB64 = cfg.audioContext && cfg.decideAudioClip !== false ? run.audioWindowB64(center, preS, postS) : "";
-  const windowAudioLevels = cfg.audioContext ? run.audioWindowLevels(center, preS, postS) : [];
+  // ADAAAA-8081: ONE window-audio slice shared by the fire-time prefetch lane and
+  // this builder, so the clip the side lane transcribes is byte-identical to the
+  // clip the payload carries.
+  const slice = windowAudioSlice(cfg, run, payload);
+  const { preS, postS } = slice;
+  const windowAudioB64 = slice.audioB64;
+  const windowAudioLevels = slice.levels;
   const audioPeak = windowAudioLevels.length ? Math.max(...windowAudioLevels) : 0;
   const evidence: Parameters<PipelineClient["decide"]>[0] = {
     eventType,
@@ -5251,6 +5301,20 @@ export function buildObserveDecideRequest(
       ...(Number.isFinite(f.seq) ? { seq: Math.floor(f.seq as number) } : {}),
     })),
     ...(windowAudioB64 ? { audioB64: windowAudioB64 } : {}),
+    // ADAAAA-8081: the side lane already transcribed this window's clip — hand
+    // the transcript over so the decide service does NOT re-run ASR inside the
+    // call. Only forwarded when ASR actually ran (`ran`); a failed/timed-out
+    // prefetch leaves the key absent, which keeps the decide service's inline
+    // ASR (and therefore the asrRan/asrLatencyS coverage) exactly as today.
+    ...(prefetchedAsr && prefetchedAsr.ran
+      ? {
+          asr: {
+            transcript: prefetchedAsr.transcript,
+            latencyS: prefetchedAsr.latencyS,
+            ran: true,
+          },
+        }
+      : {}),
     // ADAAAA-7028 Inc 2: audit identity — forward the job + frame-group
     // partition key so the decide service's `_audit` descriptor keys the
     // durable decide_audit index by (sessionId, groupKey). One row per frame
@@ -5452,7 +5516,21 @@ export async function observeDecideOnly(
   sessionId: string,
   payload: ObserveDecidePayload
 ): Promise<DecisionResult | null> {
-  let { evidence, opts } = buildObserveDecideRequest(cfg, run, payload);
+  // ADAAAA-8081: the fire-time side lane already started this window's ASR. Wait
+  // for it HERE, outside the decide call, so the transcript rides the payload and
+  // the decide slot is held by gemma alone (the transcription overlapped the
+  // decide that was already in flight). A rejected/absent prefetch leaves
+  // `prefetched` null => the decide service transcribes inline, as before.
+  const prefetch = payload[ASR_PREFETCH];
+  const prefetched: AsrPrefetchResult | null = prefetch ? await prefetch.catch(() => null) : null;
+  if (cfg.liveObserveLoop && cfg.jobId) {
+    const lane = cfg.decideAsrPrefetch !== false && prefetched
+      ? `lane=${prefetched.ran ? "prefetched" : "miss"} prefetchMs=${Math.round(prefetched.latencyS * 1000)}` +
+        ` chars=${prefetched.transcript.length}`
+      : "lane=inline";
+    console.error(`[live-asr:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s ${lane}`);
+  }
+  let { evidence, opts } = buildObserveDecideRequest(cfg, run, payload, prefetched);
   let decision: DecisionResult;
   try {
     decision = await client.decide(evidence, opts);
@@ -5474,7 +5552,7 @@ export async function observeDecideOnly(
       client.recallPerceive!(sessionId, { centerTs, windowS })
     );
     if (refreshed !== payload) {
-      const rebuilt = buildObserveDecideRequest(cfg, run, refreshed);
+      const rebuilt = buildObserveDecideRequest(cfg, run, refreshed, prefetched);
       evidence = rebuilt.evidence;
       opts = rebuilt.opts;
       decision = await client.decide(evidence, opts);
@@ -6680,6 +6758,17 @@ export async function analyzeJob(
   // `liveObserveInFlight`.
   const liveDecideAdmissionBudget = Math.max(1, Math.floor(cfg.liveDecideAdmission ?? 2));
   if (liveInFlight > 1) liveDecideAdmission.registerLiveJob(cfg.jobId);
+  // ADAAAA-8081: the ASR side lane for this run. Content-addressed + single
+  // flight, so a re-decide of the same window (recall / confirm) reuses one
+  // transcription. Undefined => no side lane and the decide service keeps its
+  // inline ASR (byte-identical pre-8081 request).
+  const asrPrefetcher =
+    cfg.decideAsrPrefetch === false
+      ? null
+      : new AsrPrefetcher({
+          asrUrl: cfg.asrUrl,
+          timeoutMs: cfg.decideAsrPrefetchTimeoutMs,
+        });
   const liveObserver =
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
       ? new LiveObserver({
@@ -6689,6 +6778,16 @@ export async function analyzeJob(
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
           signalGate: cfg.observeSignalGate,
           signalGateOpts: cfg.observeSignalGateOpts,
+          // ADAAAA-8081: start this window's transcription at fire time, in the
+          // side lane, so it overlaps the decide already in flight instead of
+          // serialising ahead of gemma inside the call. The clip is the SAME
+          // slice the payload carries (`windowAudioSlice`).
+          ...(asrPrefetcher
+            ? {
+                prefetchAsr: (payload: ObserveDecidePayload) =>
+                  asrPrefetcher.start(windowAudioSlice(cfg, run, payload).audioB64),
+              }
+            : {}),
           stageA: run.stageAOutcomes,
           // ADAAAA-7707: the whistle family gets its own verdict ledger, so a
           // judged whistle window never lands in the Stage-A FP-rate.

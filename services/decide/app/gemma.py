@@ -2081,6 +2081,7 @@ def _audio_coverage(
     transcript: str,
     asr_latency_s: float,
     audio_presence: object,
+    asr_source: str = "inline",
 ) -> tuple[dict, dict]:
     """ADAAAA-8056 (AC-E2): the per-window audio-coverage record.
 
@@ -2130,6 +2131,11 @@ def _audio_coverage(
         "transcribed": bool(transcript),
         "asrRan": asr_ran,
         "asrLatencyS": asr_latency_s,
+        # ADAAAA-8081: WHERE the transcript came from — `prefetch` (the server's
+        # fire-time side lane, i.e. transcribed outside this decide call) or
+        # `inline` (this call ran ASR itself, the pre-8081 path). A leg grades the
+        # migration from this key, not by inferring it from latency.
+        "asrSource": asr_source,
         "windowAudioPresent": window_audio_present,
         "noAudioReason": no_audio_reason,
     }
@@ -2137,6 +2143,7 @@ def _audio_coverage(
         "audioPath": audio_context["path"],
         "asrRan": asr_ran,
         "asrLatencyS": round(asr_latency_s, 3),
+        "asrSource": asr_source,
         "windowAudioPresent": window_audio_present,
         "noAudioReason": no_audio_reason,
         "audioTapChunks": presence_tap_chunks,
@@ -2357,6 +2364,15 @@ def decide_with_gemma(
     prior_game_state: object = None,
     perceive_window: object = None,
     audio_presence: object = None,
+    # ADAAAA-8081: the server's fire-time ASR side lane already transcribed this
+    # window's clip. `asr_prefetched=True` means "do NOT run ASR here" — consume
+    # the transcript instead, so the decide call is gemma only and the
+    # transcription overlaps the decide that was already in flight. False (the
+    # default, and the fallback whenever the prefetch failed/timed out) keeps the
+    # inline ASR path byte-identical to the pre-8081 build.
+    asr_prefetched: bool = False,
+    asr_transcript: str = "",
+    asr_latency_s: float = 0.0,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -2374,7 +2390,19 @@ def decide_with_gemma(
     transcript = ""
     asr_latency_s = 0.0
     asr_ran = False
-    if (
+    # ADAAAA-8081: prefer the server's side-lane transcription. It is the SAME
+    # clip (server `windowAudioSlice` -> payload `audioB64`), produced before the
+    # decide call, so consuming it here takes the 0.7-5.5 s ASR off this call's
+    # critical path without changing the prompt one byte: `transcript` feeds
+    # exactly the same `audio commentary transcript (ASR)` line. `asr_ran` stays
+    # true (the window WAS transcribed) so the AC-E2 coverage block is intact.
+    asr_source = "none"
+    if asr_prefetched:
+        transcript = usable_transcript(asr_transcript or "")
+        asr_latency_s = float(asr_latency_s or 0.0)
+        asr_ran = True
+        asr_source = "prefetch"
+    elif (
         audio_b64
         and not (os.environ.get("GEMMA_SEND_AUDIO", "0") == "1")
         and os.environ.get("AUDIO_CONTEXT", "1") == "1"
@@ -2383,6 +2411,7 @@ def decide_with_gemma(
         if asr_url:
             transcript, asr_latency_s = transcribe_audio(asr_url, audio_b64, audio_sample_rate)
             asr_ran = True
+            asr_source = "inline"
     # ADAAAA-8056 (AC-E2): compute the coverage block BEFORE the gemma call so
     # the audit record emitted inside `ask` carries it (the previous placement
     # stamped only the response descriptor, so the on-disk audit trail had no
@@ -2393,6 +2422,7 @@ def decide_with_gemma(
         transcript=transcript,
         asr_latency_s=asr_latency_s,
         audio_presence=audio_presence,
+        asr_source=asr_source,
     )
     g = ask(
         u,

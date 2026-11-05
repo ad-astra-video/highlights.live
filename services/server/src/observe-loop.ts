@@ -32,6 +32,13 @@ import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot, type WindowDeli
 // ADAAAA-7844: provenance type for the measured scoreboard delta carried on a
 // window bias hint (defined next to the confirm/attestation types in analyzer).
 import type { ScoreboardDeltaEvidence } from "./analyzer";
+// ADAAAA-8081: the side-lane ASR prefetch (see the module docstring). The
+// observer only carries the promise + hands it to the decide fork; the decide
+// request builder is what consumes it.
+import type { AsrPrefetchResult } from "./asr-prefetch";
+
+/** ADAAAA-8081: non-enumerable payload key carrying this window's prefetch. */
+export const ASR_PREFETCH = Symbol("asrPrefetch");
 
 /** ADAAAA-7723: nearest-rank percentile over an already-sorted sample list.
  *  Shared by the observer's per-family latency stats and the media rail's
@@ -717,6 +724,10 @@ export class LiveObserver {
    *  persist path (`noteHighlightDelivered`), so the AC's number is emitted from
    *  the metric layer instead of joined out of two log families. */
   private readonly delivery: LiveDeliveryTracker | null;
+  /** ADAAAA-8081: the live ASR side lane (null = disabled; decide transcribes). */
+  private readonly prefetchAsr:
+    | ((payload: ObserveDecidePayload) => Promise<AsrPrefetchResult | null> | null)
+    | null;
 
   constructor(opts: {
     cadenceS?: number;
@@ -761,6 +772,12 @@ export class LiveObserver {
      *  Absent (VOD / tests) leaves the observer byte-identical and emits no
      *  delivery rows. */
     delivery?: LiveDeliveryTracker;
+    /** ADAAAA-8081: start the window's ASR in a SIDE LANE at fire time, so the
+     *  transcription overlaps the decide that is already in flight instead of
+     *  serialising ahead of gemma inside the same call. Returns null when the
+     *  lane is unavailable (no ASR endpoint / empty clip) — the decide pass then
+     *  transcribes inline, exactly as before. Live rail only. */
+    prefetchAsr?: (payload: ObserveDecidePayload) => Promise<AsrPrefetchResult | null> | null;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
@@ -782,6 +799,9 @@ export class LiveObserver {
     this.stageB = opts.stageB ?? null;
     // ADAAAA-8005 (gate 3): absent = the VOD/test shape (no delivery rows).
     this.delivery = opts.delivery ?? null;
+    // ADAAAA-8081: absent on the VOD path and in tests => no side lane, decide
+    // keeps its inline ASR (byte-identical pre-8081 behaviour).
+    this.prefetchAsr = opts.prefetchAsr ?? null;
     // ADAAAA-7723: the stale horizon is the FRAME RETENTION horizon, not the
     // bare 8 s default. A trigger whose onset is still inside the retained
     // window can be judged by that window (`coverThrough`), so expiring it
@@ -1312,6 +1332,19 @@ export class LiveObserver {
     this.triggers.coverThrough(lo, nowTs);
     const lag = lagMs ?? 0;
     this.lastFired = { centerTs: nowTs, lagMs: lag };
+    // ADAAAA-8081: kick the window's ASR the moment the window is committed (all
+    // budget/gate/admission refusals above already returned), so the
+    // transcription runs in the side lane WHILE the previous window's decide is
+    // still in flight — instead of serially inside this window's decide call.
+    // Non-enumerable symbol key: the payload itself stays JSON-clean.
+    if (this.prefetchAsr) {
+      try {
+        const p = this.prefetchAsr(payload);
+        if (p) Object.defineProperty(payload, ASR_PREFETCH, { value: p, enumerable: false });
+      } catch {
+        /* a prefetch that throws must never block the decide (inline ASR covers it) */
+      }
+    }
     if (this.onDecideStaged) {
       // ADAAAA-7771: issue the decide and return immediately. The expensive
       // half runs K-wide; the verdict is applied in content order by the drain
@@ -1721,6 +1754,12 @@ export interface ObserveDecidePayload {
    *  decide was scheduled by a fired audio-noise trigger rather than the blind
    *  cadence. Absent on a cadence tick (the pre-trigger behaviour). */
   trigger?: AudioTriggerRecord;
+  /** ADAAAA-8081: the SIDE-LANE transcription started at fire time for this
+   *  window's audio clip (see `asr-prefetch.ts`). A symbol key on purpose: the
+   *  payload is the decide request's own object, and a Promise must never be
+   *  enumerable on it (a JSON round-trip of the payload would serialise `{}`).
+   *  Absent => the decide pass transcribes inline exactly as before. */
+  [ASR_PREFETCH]?: Promise<AsrPrefetchResult | null> | null;
 }
 
 /**
