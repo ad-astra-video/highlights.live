@@ -1308,6 +1308,11 @@ def printed_plate_sides(text: str) -> Optional[tuple[str, str]]:
     """
     if not text:
         return None
+    # ADAAAA-7982: a scorebug marks the side in possession with an asterisk
+    # glued to the plate ("BELMONT WESTFORD* 6 1st 0:21"), which is not a club
+    # character and used to kill the plate run on the frame. Treat the possession
+    # marker as the separator it is; nothing else changes for a line without one.
+    text = str(text).replace("*", " ").replace("•", " ")
     boundaries = [(m.start(), m.end()) for m in _PLATE_DIGIT_BOUNDARY_RE.finditer(text)]
     boundaries += [(m.start(), m.end()) for m in _PLATE_LONE_DIGIT_BOUNDARY_RE.finditer(text)]
     for start, end in sorted(set(boundaries)):
