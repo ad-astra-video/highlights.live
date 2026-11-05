@@ -4545,8 +4545,13 @@ export function buildObserveDecideRequest(
     // ADAAAA-7111 (Increment D): carry the job's running video summary
     // (story-so-far) so the decide brain EXTENDS it (monotonic growth).
     storySoFar: cfg.getRunningSummary?.() ?? "",
-    // ADAAAA-7938 (Spec A): the compact prior-game-state block for the VOD
-    // detail pass. VOD-ONLY (the live rail never receives it).
+    // ADAAAA-7938 (Spec A) / ADAAAA-7988: the compact prior-game-state block
+    // (story-so-far tail, previous window's ASR tail, structured scoreboard
+    // transition). Forwarded on BOTH rails — this builder is the LIVE one, and
+    // the live share needs it so a celebration window is not judged in
+    // isolation. Bounded tails keep the per-window cost delta inside the
+    // ADAAAA-7799 ceiling, and an unknown state omits the key so the first
+    // window's request stays byte-identical.
     ...(priorGameState ? { priorGameState } : {}),
     // ADAAAA-7856 (Stage 6): the job's inferred teams + kit colours, read from
     // persistence (one resolver pass per job — zero extra GPU per window). An
