@@ -324,13 +324,22 @@ def test_unverifiable_absent_evidence_is_inert_not_a_rejection(monkeypatch):
     assert d["verdict"]["criteria"]["ballInNet"] is None
 
 
-def test_confirm_enabled_defers_instead_of_rejecting(monkeypatch):
+def test_confirm_enabled_still_rejects_but_stays_stage2_eligible(monkeypatch):
+    # The served posture has DECIDE_CONFIRM_ENABLED=1. The guard must still
+    # reject at Stage-A (AC-G1) — and the rejection keeps the decision
+    # goal-shaped + un-attested, which is the server's Stage-2 confirm
+    # population (isGateRejectedBareGoal), so a genuine goal whose only support
+    # was commentary is still rescued by the confirm deep-frame dive
+    # (ADAAAA-6973 recall path).
     monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
     d = _parsed(WARM_COMPACT_REPLY)
     d, rec = apply_contract_guard(d, _g1_evidence(WARM_LEVELS), "GOAL", transcript=GOAL_SHOUT)
-    assert rec["outcome"] == "deferred_confirm"
-    assert d["isHighlight"] is True
-    assert d["score"] == 95
+    assert rec["outcome"] == "rejected"
+    assert rec["stage2ConfirmEligible"] is True
+    assert d["isHighlight"] is False
+    # ... the shape the confirm trigger matches stays intact
+    assert d["outcome"] == "scoring_play"
+    assert d["eventType"] == "GOAL"
 
 
 # --- measured refutations beyond the text-only case ------------------------

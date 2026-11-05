@@ -856,9 +856,11 @@ def apply_goal_attestation_gate(
 #   - an accept that no measured channel attests AND that carries no goal-text
 #     claim is left to the existing anti-fabrication gate (ADAAAA-6610), which
 #     owns that class; the guard records `outcome="inert"` and does nothing;
-#   - when the Stage-2 confirm pass is enabled (ADAAAA-6973) the accept is
-#     deferred to the confirm deep-frame dive instead of rejected here, exactly
-#     as the attestation gate defers.
+#   - when the Stage-2 confirm pass is enabled (ADAAAA-6973) a rejection still
+#     leaves the decision goal-shaped + un-attested, so the server's confirm
+#     deep-frame dive runs for it (`isGateRejectedBareGoal`) and can re-attest a
+#     genuine goal — the guard records `stage2ConfirmEligible` rather than
+#     silently passing the accept.
 #
 # Everything the guard decides is recorded on the decision (`contractGuard`) and
 # merged into the decide audit row's `timings.contractGuard`, so a stored job can
@@ -1054,12 +1056,15 @@ def apply_contract_guard(
 
     claim = goal_text_claim(decision, transcript)
     record["claim"] = claim
+    # Recall path (ADAAAA-6973): a guard rejection leaves the decision
+    # goal-shaped and un-attested (outcome scoring_play / GOAL label,
+    # isHighlight=false), which is exactly the server's Stage-2 confirm
+    # population (`isGateRejectedBareGoal` in analyzer.ts). The confirm deep-frame
+    # dive still runs and can re-attest a genuine goal, so rejecting here does
+    # NOT drop the confirm rescue — unlike a silent Stage-A pass, it records the
+    # contradiction the dive has to overturn.
     if _confirm_pass_enabled():
-        # ADAAAA-6973: the Stage-2 confirm dive is the attestation; never
-        # hard-reject at Stage-A in that posture (recall).
-        record["outcome"] = "deferred_confirm"
-        decision["contractGuard"] = record
-        return decision, record
+        record["stage2ConfirmEligible"] = True
 
     code: str | None = None
     refuting: list[str] = []
