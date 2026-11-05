@@ -903,6 +903,56 @@ export function mergedGroupsByWindow(groups: MergedMomentGroup[]): Map<number, M
 }
 
 /**
+ * Everything the detail page can show under "Highlights" (ADAAAA-8034).
+ *
+ * The postable gallery is only ONE of those surfaces: ADAAAA-7621 put two
+ * secondary lanes beside it (merged-away clips + notable non-scoring plays) and
+ * ADAAAA-7466 added the stored per-pass summary log. A job whose only accepted
+ * highlight has not been precision-passed yet has zero postable cards while its
+ * notable lane and summary log are populated — so "no postable cards" is NOT the
+ * same question as "nothing to show".
+ */
+export interface HighlightContentCounts {
+  /** Postable cards: `detail.highlights` minus any rejected row. */
+  postable: number;
+  /** Rows in the "Notable — not a goal" lane. */
+  notable: number;
+  /** Rows in the "Merged into a highlight" lane. */
+  merged: number;
+  /** Entries in the stored per-pass summary log (the Video Summary badge). */
+  summaries: number;
+}
+
+/**
+ * ADAAAA-8034: true when the page holds ANY highlight content — a postable
+ * card, a notable-lane row, a merged-lane row, or a summary-log entry. The
+ * "No accepted highlights for this job." empty state renders only when this is
+ * false, so it can never sit beside a populated notable lane.
+ */
+export function hasHighlightContent(c: HighlightContentCounts): boolean {
+  return c.postable > 0 || c.notable > 0 || c.merged > 0 || c.summaries > 0;
+}
+
+/**
+ * ADAAAA-8034: derive the counts above from one composite detail payload. The
+ * postable count is recomputed from `highlights` (rejected rows filtered) so the
+ * predicate stays correct even if a caller passes a raw list that still carries
+ * a rejected row; `summaryLog` is optional on legacy jobs.
+ */
+export function highlightContentCounts(
+  detail: Pick<JobDetail, "highlights" | "notableHighlights" | "duplicateHighlights"> & {
+    job: { summaryLog?: SummaryLogEntry[] };
+  }
+): HighlightContentCounts {
+  return {
+    postable: detail.highlights.filter((h) => h.status !== "rejected").length,
+    notable: (detail.notableHighlights ?? []).length,
+    merged: (detail.duplicateHighlights ?? []).length,
+    summaries: (detail.job.summaryLog ?? []).length,
+  };
+}
+
+/**
  * Decide-call count for a job header/tile (ADAAAA-7664).
  *
  * The two paths record the count in different places: the VOD pass writes the

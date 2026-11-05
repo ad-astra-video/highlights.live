@@ -22,6 +22,9 @@ import {
   mergeSections,
   deltaRequestAfter,
   SECTION_WINDOW_S,
+  hasHighlightContent,
+  highlightContentCounts,
+  type JobDetailHighlight,
 } from "./jobDetail";
 
 function frame(seq: number, timestamp: number) {
@@ -356,5 +359,85 @@ describe("deltaRequestAfter (ADAAAA-7997 live page with no bucket baseline)", ()
     expect(deltaRequestAfter(40, 12)).toBe(12);
     expect(deltaRequestAfter(40, 39)).toBe(39);
     expect(deltaRequestAfter(40, 99)).toBe(39);
+  });
+});
+
+// ADAAAA-8034: the "No accepted highlights for this job." empty state must
+// answer "does the page have ANY highlight content?", not "are there postable
+// cards?". The reported job (`5a320b2d`) has 0 postable cards because its only
+// accepted highlight is a non-scoring BIG_PLAY the precision gate keeps out of
+// the gallery — yet its notable lane (1 row) and summary log (3 entries) are
+// populated, so the empty state sat beside a visible lane row.
+describe("hasHighlightContent (ADAAAA-8034 empty-state gating)", () => {
+  function hl(over: Partial<JobDetailHighlight> = {}): JobDetailHighlight {
+    return {
+      id: "h1",
+      jobId: "j1",
+      clipUri: "/jobs/j1/clips/h1.mp4",
+      start: 0,
+      end: 6,
+      score: 70,
+      status: "accepted",
+      createdAt: "2026-11-04T23:22:35.333Z",
+      ...over,
+    };
+  }
+
+  it("does NOT show the empty state for 0 postable cards + 1 notable row (the 5a320b2d shape)", () => {
+    // The live payload replay: highlights = [], notableHighlights = 1 BIG_PLAY,
+    // summaryLog = 3 entries. Before this fix the gallery's own emptiness drove
+    // the message, so it rendered beside the lane row.
+    const detail = {
+      highlights: [] as JobDetailHighlight[],
+      notableHighlights: [hl({ id: "n1", eventType: "BIG_PLAY", outcome: "big_play", score: 60 })],
+      duplicateHighlights: [] as JobDetailHighlight[],
+      job: {
+        summaryLog: [
+          { seq: 1, ts: "2026-11-04T23:22:35.333Z", windowTs: 0, text: "dribble" },
+          { seq: 2, ts: "2026-11-04T23:22:56.549Z", windowTs: 21, text: "tackle" },
+          { seq: 3, ts: "2026-11-04T23:23:10.001Z", windowTs: 33, text: "shot" },
+        ],
+      },
+    };
+    const counts = highlightContentCounts(detail);
+    expect(counts).toEqual({ postable: 0, notable: 1, merged: 0, summaries: 3 });
+    expect(hasHighlightContent(counts)).toBe(true);
+  });
+
+  it("does NOT show the empty state for a postable-free job whose only content is a merged lane row", () => {
+    const counts = highlightContentCounts({
+      highlights: [],
+      notableHighlights: [],
+      duplicateHighlights: [hl({ id: "d1", duplicateOf: "h9" })],
+      job: { summaryLog: [] },
+    });
+    expect(counts).toEqual({ postable: 0, notable: 0, merged: 1, summaries: 0 });
+    expect(hasHighlightContent(counts)).toBe(true);
+  });
+
+  it("still shows the empty state for a job with no highlight content at all", () => {
+    const counts = highlightContentCounts({
+      highlights: [],
+      job: {},
+    });
+    expect(counts).toEqual({ postable: 0, notable: 0, merged: 0, summaries: 0 });
+    expect(hasHighlightContent(counts)).toBe(false);
+  });
+
+  it("shows no empty state whenever a postable card exists", () => {
+    const counts = highlightContentCounts({ highlights: [hl()], job: {} });
+    expect(counts.postable).toBe(1);
+    expect(hasHighlightContent(counts)).toBe(true);
+  });
+
+  it("does not count a rejected row as postable content (it lives in the hidden strip)", () => {
+    const counts = highlightContentCounts({
+      highlights: [hl({ status: "rejected" })],
+      notableHighlights: [],
+      duplicateHighlights: [],
+      job: { summaryLog: [] },
+    });
+    expect(counts.postable).toBe(0);
+    expect(hasHighlightContent(counts)).toBe(false);
   });
 });
