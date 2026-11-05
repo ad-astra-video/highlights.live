@@ -245,13 +245,18 @@ def test_a_short_window_keeps_the_full_record_including_labels_and_ocr():
 
 
 def test_no_timeline_keeps_the_prompt_byte_identical():
+    # ADAAAA-8103: the STATIC preamble now names the perceive timeline as the
+    # primary temporal read, so the block's own header is the absence marker
+    # (the v3 preamble mentions the channel by name on every window).
+    from app.gemma import PERCEIVE_TIMELINE_HEADER
+
     with_none = build_prompt("GOAL", {"trackCount": 2}, game_hint="soccer")
     with_empty = build_prompt(
         "GOAL", {"trackCount": 2, "perceiveTimeline": []}, game_hint="soccer"
     )
     assert with_none == with_empty
-    assert "perceive timeline" not in with_none
-    assert "perceive timeline" in build_prompt(
+    assert PERCEIVE_TIMELINE_HEADER not in with_none
+    assert PERCEIVE_TIMELINE_HEADER in build_prompt(
         "GOAL", {"trackCount": 2, "perceiveTimeline": timeline(5)}, game_hint="soccer"
     )
 
