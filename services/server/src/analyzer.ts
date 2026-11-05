@@ -12,6 +12,7 @@ import {
   regateServedSentence,
   placePhraseOf,
   quietShape,
+  quietStoredCopy,
   restoreTerminalPunctuation,
   servedShapeViolations,
   storedCardSurface,
@@ -4576,7 +4577,17 @@ export function storedSurfaceFor(
   const reasonClean =
     !!shapedReason &&
     servedShapeViolations(shapedReason, [wholeStoredSentence(rawSurface)].filter(Boolean)).length === 0;
-  const storedReason = grounding ? card.caption || (reasonClean ? shapedReason : "") : gatedReason;
+  // ADAAAA-8125 (ADAAAA-8124 product ruling, clause 1): a refused card on a
+  // NON-EMPTY but shape-unclean gated line used to store NO copy at all (22 of 61
+  // accepted rows on the post-deploy sweep). Copy is owed by the row, so the quiet
+  // shape is derived from THIS row's own window (`decision.reason`, the same
+  // string the card gate refused), closed and gated; it is stored only when it
+  // passes the same served-shape post-condition `reasonClean` applies. When no
+  // honest sentence exists the row keeps today's behaviour: no `reason`, and the
+  // row is still accepted and counted (clause 3). The card stays refused — a claim
+  // card is earned only by corroboration (§3.4), never by copy (clause 2).
+  const quietCopy = grounding && !card.caption && !reasonClean ? quietStoredCopy(rawSurface, grounding) : "";
+  const storedReason = grounding ? card.caption || (reasonClean ? shapedReason : quietCopy) : gatedReason;
   return {
     ...(storedReason ? { reason: storedReason } : {}),
     ...(grounding?.colourSignal && captionColour(storedReason) ? { colour: grounding.colourSignal } : {}),
