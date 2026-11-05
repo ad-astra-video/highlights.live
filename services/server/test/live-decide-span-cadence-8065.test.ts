@@ -21,6 +21,7 @@ import { assembleLiveWindow, buildObservePayload } from "../src/observe-loop";
 import { LiveRunShared, buildObserveDecideRequest } from "../src/analyzer";
 import { buildLiveAnalyzerConfig } from "../src/api";
 import { loadConfig } from "../src/config";
+import { liveDecideBootLines } from "../src/live-decide-posture";
 
 const T0 = 1_000;
 
@@ -113,5 +114,36 @@ describe("the live decide span/cadence knobs (ADAAAA-8065 AC-SPAN-1)", () => {
     // Fewer observations in the span is the density change the cell trades for.
     const ten = assembleLiveWindow(frames, T0, { windowS: 10, maxFrames: 4, fps: 2.8 });
     expect((seven.observedFrames?.length ?? 0)).toBeLessThan(ten.observedFrames?.length ?? 0);
+  });
+});
+
+describe("the boot posture readout names all four cell values (ADAAAA-8065 Step 3)", () => {
+  it("names the default cell: 4 images, 4 in flight, 10 s span, 3000 ms cadence", () => {
+    const lines = liveDecideBootLines(liveCfg({}));
+    const text = lines.join("\n");
+    expect(lines).toHaveLength(3); // one line per axis, so a grade greps the axis it measured
+    expect(text).toContain("4 image(s)/decide");
+    expect(text).toContain("4 decide(s) in flight");
+    expect(text).toContain("10 s span / 3000 ms cadence");
+  });
+
+  it("names the shipped 7 s / 5 s cell with the 4-image, 2-in-flight budget", () => {
+    // Step 3 of the ticket: the recreate must name images, in-flight, span AND
+    // cadence. `printenv` alone is not evidence.
+    const cfg = liveCfg({
+      LIVE_OBSERVE_WINDOW_S: "7",
+      LIVE_OBSERVE_CADENCE_S: "5",
+      LIVE_OBSERVE_MAX_FRAMES: "4",
+      LIVE_OBSERVE_IN_FLIGHT: "2",
+    });
+    const text = liveDecideBootLines(cfg).join("\n");
+    expect(text).toContain("4 image(s)/decide");
+    expect(text).toContain("2 decide(s) in flight");
+    expect(text).toContain("7 s span / 5000 ms cadence");
+  });
+
+  it("an empty env cannot print a 0 s span or a 0 ms cadence", () => {
+    const text = liveDecideBootLines(liveCfg({ LIVE_OBSERVE_WINDOW_S: "", LIVE_OBSERVE_CADENCE_S: "" })).join("\n");
+    expect(text).toContain("10 s span / 3000 ms cadence");
   });
 });
