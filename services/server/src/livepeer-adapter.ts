@@ -52,7 +52,13 @@ import type {
 } from "./analyzer";
 import type { PerFrameSeed } from "./observe-loop";
 import { describeInterruption } from "./job-failure";
-import { SessionLostError, type PriorGameState } from "./analyzer";
+import {
+  SessionLostError,
+  type PriorGameState,
+  type PerceiveTimelineRecord,
+  type PerceiveWindowLedger,
+  type DecideAudioPresence,
+} from "./analyzer";
 
 export function buildAnalyzeFrames(frameDir: string, sampleFps = 1) {
   // Frames are extracted by extractFrames() at `sampleFps`. This iterates them
@@ -566,6 +572,9 @@ export class OrchestratorAdapter implements PipelineClient {
       distanceToGoal?: number;
       goalLineDelta?: number;
       audioLevels?: number[];
+      /** ADAAAA-8056 (lever B+e): the window's perceive timeline — one
+       * compact record per 3 fps seed, ordered by `ts`. Live rail only. */
+      perceiveTimeline?: PerceiveTimelineRecord[];
     },
     opts?: {
       gameHint?: string;
@@ -595,6 +604,10 @@ export class OrchestratorAdapter implements PipelineClient {
       /** ADAAAA-7938 (Spec A): the VOD pass's compact prior-game-state block.
        * Absent adds no key (byte-identical payload). */
       priorGameState?: PriorGameState;
+      /** ADAAAA-8056 (AC-E1/E2): the live window's perceive + ASR coverage
+       * ledger, persisted by the decide service into decide_audit.timings. */
+      perceiveWindow?: PerceiveWindowLedger;
+      audioPresence?: DecideAudioPresence;
     }
   ): Promise<DecisionResult> {
     const payerAddress = this.payerAddress;
@@ -631,6 +644,10 @@ export class OrchestratorAdapter implements PipelineClient {
       // state. Both spread so an absent/empty value adds NO key.
       ...(opts?.storySoFar ? { storySoFar: opts.storySoFar } : {}),
       ...(opts?.priorGameState ? { priorGameState: opts.priorGameState } : {}),
+      // ADAAAA-8056 (AC-E1/E2): the perceive + ASR coverage ledger for this
+      // live window. Spreads so the VOD payload (absent) stays byte-identical.
+      ...(opts?.perceiveWindow ? { perceiveWindow: opts.perceiveWindow } : {}),
+      ...(opts?.audioPresence ? { audioPresence: opts.audioPresence } : {}),
     };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
@@ -1056,6 +1073,9 @@ export class DirectAdapter implements PipelineClient {
       distanceToGoal?: number;
       goalLineDelta?: number;
       audioLevels?: number[];
+      /** ADAAAA-8056 (lever B+e): the window's perceive timeline — one
+       * compact record per 3 fps seed, ordered by `ts`. Live rail only. */
+      perceiveTimeline?: PerceiveTimelineRecord[];
     },
     opts?: {
       gameHint?: string;
@@ -1078,6 +1098,10 @@ export class DirectAdapter implements PipelineClient {
        * (story-so-far / prior ASR / scoreboard transition). Absent = the request
        * is byte-identical to today, and the prompt carries no block. */
       priorGameState?: PriorGameState;
+      /** ADAAAA-8056 (AC-E1/E2): the live window's perceive + ASR coverage
+       * ledger, persisted by the decide service into decide_audit.timings. */
+      perceiveWindow?: PerceiveWindowLedger;
+      audioPresence?: DecideAudioPresence;
     }
   ): Promise<DecisionResult> {
     const r = await fetch(`${this.cfg.decideUrl}/app/highlight`, {
@@ -1099,6 +1123,9 @@ export class DirectAdapter implements PipelineClient {
         // ADAAAA-7938 (Spec A): prior game state (absent adds NO key, so the
         // request stays byte-identical when the pass has nothing measured).
         ...(opts?.priorGameState ? { priorGameState: opts.priorGameState } : {}),
+        // ADAAAA-8056 (AC-E1/E2): perceive + ASR coverage ledger (live only).
+        ...(opts?.perceiveWindow ? { perceiveWindow: opts.perceiveWindow } : {}),
+        ...(opts?.audioPresence ? { audioPresence: opts.audioPresence } : {}),
         // ADAAAA-7781: compact verdict contract (live rail). false/absent sends
         // the byte-identical full-contract request.
         compact: opts?.compact === true,

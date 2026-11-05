@@ -41,9 +41,12 @@ describe("buildObserveDecideRequest clamps evidence to the decide schema caps (A
     expect(evidence.trackCount).toBe(DECIDE_MAX_TRACK_COUNT); // clamped from 10
     expect(detections.length).toBeLessThanOrEqual(DECIDE_MAX_DETECTIONS);
     expect(detections.length).toBe(DECIDE_MAX_DETECTIONS); // clamped from 40
-    // The FIRST 16 (oldest frames / earliest seeds) are kept, in order.
-    expect(detections[0].label).toBe("obj-0-0");
-    expect(detections[8].label).toBe("obj-1-0"); // 8th object of the 2nd seed
+    // ADAAAA-8056: the selection is TRIGGER-NEAREST now (the pre-fix slice kept
+    // the 16 oldest detections, cutting the goal moment off a long window). The
+    // window center is 10 and the seeds are ts 0..4, so the two most recent
+    // seeds (ts 3 and ts 4) fill the 16 slots, emitted chronologically.
+    expect(detections[0].label).toBe("obj-3-0");
+    expect(detections[8].label).toBe("obj-4-0");
     expect(detections.every((d) => d.bbox.length <= DECIDE_MAX_DETECTION_BBOX)).toBe(true);
   });
 
