@@ -4710,6 +4710,17 @@ export interface PerceiveWindowLedger {
   observationsInSpan?: number;
   /** ADAAAA-8064 (AC-C3): images the decide call actually carries. */
   imageCount?: number;
+  /** ADAAAA-8074 (AC-CAP-1): images the payload actually carried (same number as
+   * `imageCount`, re-stated under the AC's own name so a leg grades the payload
+   * rather than `printenv`). */
+  imagesPerDecide?: number;
+  /** ADAAAA-8074 (AC-CAP-1): the live decide image budget consulted at the
+   * payload's selection step (default 4, ceiling 30). */
+  imageBudget?: number;
+  /** ADAAAA-8074 (AC-CAP-1): true when the payload's image set was selected
+   * through the budget. A payload from a path that never consulted one reports
+   * false — the clause that catches the defect this AC closes. */
+  imageBudgetApplied?: boolean;
   /** ADAAAA-8064 (AC-C3): largest gap between consecutive shipped images (ms).
    * ~3 s at a 4-image cap over a 10 s window is honest; sub-second at 4 images
    * would mean the frames are not actually spread over the span. */
@@ -5186,6 +5197,14 @@ export function buildObserveDecideRequest(
             timelineRecords: perceiveTimeline.length,
             observationsInSpan: observations.length,
             imageCount: payload.frames.length,
+            // ADAAAA-8074: what the payload ACTUALLY carried and the budget that
+            // selected it. `imageBudgetApplied` is the clause that would have
+            // caught the 27.4-images/decide defect on pass 1: a payload built by
+            // a path that never consulted a budget reports false instead of
+            // letting the reader infer the cap from `printenv`.
+            imagesPerDecide: payload.frames.length,
+            imageBudget: payload.imageBudget,
+            imageBudgetApplied: payload.imageBudgetApplied === true,
             imageGapMaxMs,
             // A degenerate window (< 2 observed frames, e.g. the first tick of a
             // leg) has no span to divide by, so it publishes NO rate rather than

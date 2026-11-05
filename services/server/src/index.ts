@@ -10,6 +10,7 @@ import { buildApp } from "./api";
 import { makeAdapter } from "./livepeer-adapter";
 import { makeMailer } from "./mailer";
 import { liveDecideAdmission } from "./live-decide-admission";
+import { LIVE_DECIDE_IMAGE_BUDGET, LIVE_DECIDE_IMAGE_CEILING } from "./observe-loop";
 import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
@@ -230,6 +231,16 @@ async function main() {
   // eslint-disable-next-line no-console
   console.log(`highlights server on :${cfg.port} (orchestrator=${cfg.orchestratorUrl})`);
   console.log(`dev admin: ${cfg.adminEmail}`);
+  // ADAAAA-8074: the boot posture readout names the decide image budget
+  // explicitly. `printenv` is NOT the proof that a leg applied a cap — the
+  // decide_audit rows now carry `imagesPerDecide` / `imageBudgetApplied` — but
+  // the boot line states which budget this process actually resolved (clamped to
+  // the 30-image ceiling), so a grade can compare the two.
+  console.log(
+    `[boot] live decide image budget: ${cfg.liveObserveMaxFrames} image(s)/decide ` +
+      `(LIVE_OBSERVE_MAX_FRAMES, default ${LIVE_DECIDE_IMAGE_BUDGET}, ceiling ${LIVE_DECIDE_IMAGE_CEILING}, ` +
+      `trigger-anchored selection)`
+  );
 }
 
 main().catch((e) => {

@@ -682,16 +682,18 @@ services:
       - LIVE_PERCEIVE_UTILIZATION=${LIVE_PERCEIVE_UTILIZATION:-0.6}
       # ADAAAA-7777 (lever B): the three live decide per-call TRIM knobs, each
       # defaulting to the pre-trim behaviour so an unset .env is byte-identical.
-      #   trim 1 LIVE_OBSERVE_MAX_FRAMES: the live window's frame budget (30 = the
-      #     historic shared cap). A live decide call is decode-bound, so this trims
-      #     the smaller per-frame multimodal prefill term. VOD keeps its own cap.
+      #   trim 1 LIVE_OBSERVE_MAX_FRAMES: THE live decide image budget (4 = the
+      #     ruled AC-3 cell; ADAAAA-8074 made it the default and wired it into the
+      #     payload's selection step on BOTH live rails). A live decide call is
+      #     decode-bound, so this trims the per-frame multimodal prefill term;
+      #     the 30-image ceiling still bounds it. VOD keeps its own cap.
       #   trim 2 LIVE_DECIDE_AUDIO_CLIP: 1 = the window audio clip rides the live
       #     decide payload (so decide ASRs it). 0 drops the clip + transcript but
       #     KEEPS the audio-energy level curve, which is the noise-change trigger
       #     contract (LIVE_AUDIO_CONTEXT still gates that curve).
       #   trim 3 LIVE_DECIDE_CONFIRM: 0 skips the Stage-2 /confirm dive on the live
       #     rail only; DECIDE_CONFIRM_ENABLED stays the master gate for both rails.
-      - LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-30}
+      - LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-4}
       - LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
       # ADAAAA-7781: COMPACT verdict contract on the live decide rail. The live

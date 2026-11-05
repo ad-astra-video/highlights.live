@@ -1610,6 +1610,10 @@ def render_perceive_timeline(
         "timelineRecords": ("timelineRecords", int),
         "observationsInSpan": ("observationsInSpan", int),
         "imageCount": ("imageCount", int),
+        # ADAAAA-8074 (AC-CAP-1): what the payload carried and which image budget
+        # selected it, so a leg grades the decide_audit row instead of `printenv`.
+        "imagesPerDecide": ("imagesPerDecide", int),
+        "imageBudget": ("imageBudget", int),
         "imageGapMaxMs": ("imageGapMaxMs", int),
         "recordsPerSecond": ("recordsPerSecond", float),
         "spanS": ("spanS", float),
@@ -1637,6 +1641,15 @@ def render_perceive_timeline(
         src = perceive_window.get("timelineSource")
         if src in ("observations", "seeds"):
             source = src
+        # ADAAAA-8074 (AC-CAP-1): a tri-state, not a string — `bool("false")` is
+        # True, so it is parsed explicitly. Absent (a payload from a path that has
+        # no image budget) leaves the key off the row rather than claiming true.
+        applied = perceive_window.get("imageBudgetApplied")
+        if applied is not None:
+            if isinstance(applied, bool):
+                extra["imageBudgetApplied"] = applied
+            elif isinstance(applied, (int, float)):
+                extra["imageBudgetApplied"] = bool(applied)
     ledger = {
         "records": 0,
         "chars": 0,
