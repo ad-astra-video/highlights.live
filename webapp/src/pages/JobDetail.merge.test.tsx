@@ -106,8 +106,10 @@ describe("dedupe/precision lanes are rendered (ADAAAA-7621)", () => {
     expect(html).toContain('data-detail-lane="notable"');
     expect(html).toContain("outcome near_miss");
     expect(html).toContain("ball does not enter the net");
-    // The lane is text-only: no second playable highlight card for the same
-    // (non-scoring) footage.
+    // ADAAAA-8135: the row carries footage, so the lane mounts the clip player
+    // (`data-detail-lane-clip`) — but never as a SECOND postable highlight card
+    // (`data-detail-highlight`), which is what ADAAAA-7621 forbade.
+    expect(html).toContain('data-detail-lane-clip="notable"');
     expect(html).not.toContain("data-detail-highlight");
   });
 
