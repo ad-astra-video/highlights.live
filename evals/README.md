@@ -58,7 +58,7 @@ python3 evals/tests/test_metrics_runner_depth.py  # or pytest evals/tests/test_m
 ## kids_soccer near-miss eval set + goal-acceptance precision (ADAAAA-7590)
 
 `kids_soccer_near_miss/` is the frame-labelled eval set for the post-bounce
-near-miss class on `kids_soccer.mp4`: 36 labelled windows (14 goal, 22 no-goal,
+near-miss class on `kids_soccer.mp4`: 37 labelled windows (15 goal, 22 no-goal,
 9 of them shot-class) with window bounds, `ground_truth`, `evidence` and the
 frame timestamps that carry the proof. `kids_soccer_near_miss/score_goal_precision.py`
 scores a job detail against it and prints precision, recall, the false-positive
@@ -209,3 +209,48 @@ docker exec highlights-perceive python3 /tmp/qa_whistle_live.py http://127.0.0.1
 
 It feeds crowd ambient (must not fire the whistle path) then a 2.8 kHz tone over
 that ambient (must fire once, `measureOnly: true`), and prints the evidence.
+
+## ADAAAA-8122 — the decide drive follows the post-7108 perceive contract
+
+`perceive` never emits a candidate any more (ADAAAA-7108 removed the GOAL and
+motion-burst triggers; `process_frame` returns `(obs, None)`), and decide is
+driven by the observer on a fixed cadence. The old `drive_decide_cycle.py`
+gated every decide on `resp["candidate"]` and therefore emitted **0 events on
+every build after 7108** — that was a harness/contract seam, not a model
+result.
+
+`drive_decide_cycle.py` now mirrors the deployed observer:
+
+- one `POST /analyze` per extracted frame (observation only, as shipped);
+- one decide per `--cadence` step (default 5 s = `LIVE_OBSERVE_CADENCE_S`) over
+  a `--window` second span (default 7 s = `LIVE_OBSERVE_WINDOW_S`), carrying a
+  deterministic `<oldest, newest>` subsample of at most `--max-frames` images
+  (default 4 = the live decide image budget);
+- the window's FOLDED observation evidence: track count / detections / ocr /
+  ball velocity / goal-line signal / scoreboard corroboration, capped to the
+  decide contract (`trackCount <= 8`, `detections <= 16`);
+- ground truth is never read while driving: decide centres are a pure cadence
+  grid anchored on the unit's start, so the localisation score cannot pick its
+  own centre from the label;
+- every trace carries a `drive` provenance block (manifest sha256, commit,
+  host, perceive/decide URLs, cadence/window/frame budget).
+
+Both manifest shapes are scored: `{"clips":[...]}` (INC-5) and
+`{"windows":[...]}` (the frame-verified per-type manifests such as
+`kids_soccer_near_miss/label-manifest.json`). `metrics_runner.py` prints two
+extra measured rows for every run — **goal FP** (accepted non-goal units) and
+**goal localisation** (median |dt| between the nearest accepted decision and
+the labelled instant, the share inside the tolerance, and missed goals) —
+alongside the existing recall/precision gates.
+
+```bash
+python3 evals/drive_decide_cycle.py \
+    --manifest evals/kids_soccer_near_miss/label-manifest.json \
+    --perceive http://<perceive>:8080 --decide http://<decide>:8081 \
+    --clip-root <clips> --fps 1 --cadence 5 --window 7 --max-frames 4 \
+    --out /tmp/trace.json
+python3 evals/metrics_runner.py \
+    evals/kids_soccer_near_miss/label-manifest.json /tmp/trace.json
+python3 -m pytest evals/tests/test_drive_decide_cycle.py \
+    evals/tests/test_metrics_runner_localisation.py
+```
