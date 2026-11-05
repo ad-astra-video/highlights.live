@@ -154,7 +154,20 @@ const ROWS: {
   },
   {
     label: "quoted OCR label on the stadium screen",
+    // ADAAAA-8130: reclassified out of clause 3. The quoted clause is still
+    // refused (a quote is an OCR label, never copy), but the row's OWN leading
+    // clause — actor + verb, no claim — is an honest beat, so the row owes copy.
     raw: `Players celebrate in the box while the crowd and stadium displays 'GOAL' on the screens. ${TAIL_V8}`,
+    verdict: "big_play",
+    eventType: "BIG_PLAY",
+    corroborated: false,
+    reason: "Players celebrate in the box.",
+  },
+  // Clause 3: the window has no honest sentence — the seam must store NOTHING
+  // (never a placeholder, never a mangled substitution).
+  {
+    label: "quote-only line (the only clause carries the OCR label)",
+    raw: `The stadium displays 'GOAL' on the screens. ${TAIL_V8}`,
     verdict: "big_play",
     eventType: "BIG_PLAY",
     corroborated: false,
@@ -162,11 +175,15 @@ const ROWS: {
   },
   {
     label: "crowd erupts around a scoreboard frame",
+    // ADAAAA-8130 (ADAAAA-8126 Q1 = 1): reclassified out of clause 3. The
+    // row's OWN leading clause carries its own verb (`erupts`) and no claim, so
+    // the honest beat exists and the row owes copy — this is the measured row
+    // that stored nothing on the ADAAAA-8125 build.
     raw: `Crowd erupts in celebration as the scoreboard shows a goal for FCB. ${TAIL_V8}`,
     verdict: "big_play",
     eventType: "BIG_PLAY",
     corroborated: false,
-    reason: null,
+    reason: "Crowd erupts in celebration.",
   },
 ];
 
