@@ -134,6 +134,42 @@ MIN_KIT_PITCH_ANCHOR_SHARE = 0.20
 # pixel sample, so it runs per candidate). Real broadcasts surface < 12 boxes.
 MAX_KIT_TRACK_SCAN = 12
 
+# --- merged-box split (kit sampling, ADAAAA-8076) ---------------------------
+# A tracked box can be a MERGE of two or three players standing side by side:
+# the tracking pass then reports one box whose width exceeds its height, which
+# the single-player contract above rejects outright, so a real shirt inside it
+# is never sampled. Such a box is split into per-player columns instead of being
+# dropped. Only boxes that are wide but otherwise player-sized are split (a
+# full-frame SAM3 band is not a merge — it is junk and stays rejected): the
+# columns are re-checked against the same single-player contract, so the split
+# can never admit a box the contract would have refused.
+MERGED_BOX_MIN_ASPECT = 1.4   # width / height — a standing player is < 1.0
+MERGED_BOX_MIN_HEIGHT = 0.10  # two standing players span a real slice of the frame
+MERGED_BOX_MAX_COLUMNS = 4
+
+# --- white-shirt region sampling (kit sampling, ADAAAA-8076) ----------------
+# Measured on e58bcef7 (the cited Portugal vs Spain 90 s): the tracking pass
+# emits 1-3 boxes per frame and 91 of 150 player-labelled boxes are degenerate
+# (a 0.997-wide / full-frame SAM3 seed). Spain's white shirt therefore reaches
+# no crop at all: of 62 000 white shirt-shaped pixels over 90 sampled frames,
+# 3 % sit inside a crop the sampler uses, 36 % inside a rejected box and 61 %
+# inside NO tracked box. White is the one kit colour with no saturation, so it
+# cannot be separated from pitch lines / the goal net by colour alone; it is
+# recovered as its own sample channel by SHAPE (a tall, narrow, bright component
+# standing on grass), and every crop it produces goes through the same
+# plausibility, pitch-anchor and publish-floor tests as a tracked crop.
+WHITE_SHIRT_MAX_S = 0.22          # desaturated: white, not a coloured kit
+WHITE_SHIRT_MIN_V = 0.55
+WHITE_SHIRT_MIN_BRIGHTNESS = 0.70  # bright: a white shirt, not the grey net/metal
+WHITE_SHIRT_MIN_AREA = 120
+WHITE_SHIRT_MIN_HEIGHT = 0.05      # share of frame height (a distant player)
+WHITE_SHIRT_MAX_HEIGHT = 0.30      # share of frame height (not a net/post/board)
+WHITE_SHIRT_MIN_ASPECT = 1.5       # height / width: a shirt stands up
+WHITE_SHIRT_MAX_ASPECT = 6.0       # ... but a goalpost (thin, very tall) is not one
+WHITE_SHIRT_BODY_EXTEND = 2.2      # extend the box down so the torso band lands on it
+WHITE_SHIRT_MAX_REGIONS = 4        # same per-frame crop budget as track sampling
+WHITE_SHIRT_TOP_IGNORE = 0.25      # crowd / LED / scoreboard band
+
 # --- scorebug swatch stability ---------------------------------------------
 # A swatch is a per-side colour reading off the scoreboard ROI. On a broadcast
 # where the ROI sits over advertising boards, the side half behind the graphic
@@ -2019,6 +2055,44 @@ def _pitch_anchor_share(frame_rgb: Any, box: Sequence[float]) -> float:
     return green / max(1, total)
 
 
+def _split_merged_box(box: Sequence[float]) -> list[tuple[float, float, float, float]]:
+    """Split a wide (merged two-or-three-player) box into per-player columns.
+
+    A merge is the only way the tracking pass reports a box WIDER than tall that
+    is still player-sized: two players standing shoulder to shoulder. The box as
+    a whole is refused by :func:`is_plausible_player_box` (``h > w``), so its
+    shirts used to be dropped. Splitting it into equal columns and re-checking
+    each column against the same single-player contract recovers one crop per
+    player without relaxing the contract.
+
+    Returns the columns that are themselves plausible single-player boxes. An
+    empty list means the box is not a merge (too wide / too large / too tall) —
+    a full-frame SAM3 band is junk and stays rejected.
+    """
+    try:
+        x0, y0, x1, y1 = (float(v) for v in box)
+    except (TypeError, ValueError):
+        return []
+    w, h = x1 - x0, y1 - y0
+    if w <= 0 or h <= 0:
+        return []
+    if (w / h) < MERGED_BOX_MIN_ASPECT:
+        return []
+    if h < MERGED_BOX_MIN_HEIGHT:
+        return []
+    if w > MAX_KIT_BOX_SIDE or h > MAX_KIT_BOX_SIDE or (w * h) > MAX_KIT_BOX_AREA:
+        return []
+    # A single standing player's box is roughly 0.45 * height wide.
+    n = int(round(w / max(1e-6, 0.45 * h)))
+    n = max(2, min(MERGED_BOX_MAX_COLUMNS, n))
+    out: list[tuple[float, float, float, float]] = []
+    for i in range(n):
+        col = (x0 + w * i / n, y0, x0 + w * (i + 1) / n, y1)
+        if is_plausible_player_box(col):
+            out.append(col)
+    return out
+
+
 def _qualifying_kit_tracks(
     frame_rgb: Any,
     tracks: Iterable[Mapping[str, Any]],
@@ -2044,6 +2118,7 @@ def _qualifying_kit_tracks(
     if h_px < 8 or w_px < 8:
         return []
     out: list[tuple[Mapping[str, Any], tuple[float, float, float, float]]] = []
+    pending_splits: list[tuple[Mapping[str, Any], tuple[float, float, float, float]]] = []
     scanned = 0
     for track in tracks or []:
         if scanned >= MAX_KIT_TRACK_SCAN or len(out) >= max(1, max_tracks):
@@ -2068,12 +2143,31 @@ def _qualifying_kit_tracks(
         if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
             continue
         if not is_plausible_player_box((x0, y0, x1, y1)):
+            # ADAAAA-8076: a merged two-or-three-player box is WIDER than tall and
+            # therefore refused as a single-player crop. Collect its per-player
+            # columns (each re-tested against the same contract) for a second
+            # pass, so a split can never starve a plain qualifying crop of the
+            # per-frame budget.
+            for i, col in enumerate(_split_merged_box((x0, y0, x1, y1))):
+                if _pitch_anchor_share(frame_rgb, col) < MIN_KIT_PITCH_ANCHOR_SHARE:
+                    continue
+                parent = track.get("trackId") or track.get("id")
+                split = dict(track)
+                if parent is not None:
+                    split["trackId"] = "%s-c%d" % (parent, i)
+                pending_splits.append((split, col))
             continue
         if _pitch_anchor_share(frame_rgb, (x0, y0, x1, y1)) < MIN_KIT_PITCH_ANCHOR_SHARE:
             # Crowd / ad-board / bench crop: a kit colour sampled here is
             # background, which is how "orange" reached both sides on fe0e3efc.
             continue
         out.append((track, (x0, y0, x1, y1)))
+    # Second pass: per-player columns recovered from merged boxes, only into the
+    # budget the plain crops left over (ADAAAA-8076).
+    for track, col in pending_splits:
+        if len(out) >= max(1, max_tracks):
+            break
+        out.append((track, col))
     return out
 
 
@@ -2159,6 +2253,157 @@ def sample_track_colors(
                 "frames": 1,
             }
         )
+    return out
+
+
+def _component_boxes(mask: Any) -> list[tuple[int, int, int, int, int]]:
+    """Bounding boxes of 8-connected True components: ``(y0, y1, x0, x1, area)``.
+
+    Pure-python flood fill over the True coordinates of a 2-D boolean array, so
+    the resolver module keeps working without scipy/cv2 (it only needs numpy for
+    the mask itself). Each pixel is visited once per component.
+    """
+    try:
+        import numpy as np  # local import: the pure resolver paths never need it
+    except Exception:  # pragma: no cover - numpy is a perceive runtime dependency
+        return []
+    arr = np.asarray(mask, dtype=bool)
+    if arr.ndim != 2 or not arr.any():
+        return []
+    h_px, w_px = arr.shape
+    seen = np.zeros_like(arr)
+    out: list[tuple[int, int, int, int, int]] = []
+    ys, xs = np.nonzero(arr)
+    for sy, sx in zip(ys.tolist(), xs.tolist()):
+        if seen[sy, sx]:
+            continue
+        stack = [(sy, sx)]
+        seen[sy, sx] = True
+        min_y = max_y = sy
+        min_x = max_x = sx
+        area = 0
+        while stack:
+            y, x = stack.pop()
+            area += 1
+            if y < min_y:
+                min_y = y
+            elif y > max_y:
+                max_y = y
+            if x < min_x:
+                min_x = x
+            elif x > max_x:
+                max_x = x
+            for dy in (-1, 0, 1):
+                ny = y + dy
+                if ny < 0 or ny >= h_px:
+                    continue
+                for dx in (-1, 0, 1):
+                    nx = x + dx
+                    if nx < 0 or nx >= w_px or seen[ny, nx] or not arr[ny, nx]:
+                        continue
+                    seen[ny, nx] = True
+                    stack.append((ny, nx))
+        out.append((min_y, max_y + 1, min_x, max_x + 1, area))
+    return out
+
+
+def _white_shirt_boxes(frame_rgb: Any, max_regions: int = WHITE_SHIRT_MAX_REGIONS):
+    """Normalized boxes of white SHIRT-shaped regions standing on the pitch.
+
+    White shirts are invisible to the tracked-box sampler on the cited job
+    because the tracking pass emits one degenerate box per frame (see the
+    constants above): the shirt is either inside a rejected band or inside no
+    box at all. White has no saturation, so colour alone cannot tell it from the
+    goal net, a pitch line or an LED board — SHAPE and the ground plane can: a
+    shirt is a tall, narrow, bright component (aspect 1.5-6.0, 5-30 % of frame
+    height) with grass under it. The component's box is extended downward by
+    ``WHITE_SHIRT_BODY_EXTEND`` so the sampler's torso band lands on the shirt,
+    and the crop still has to pass the single-player contract and the pitch
+    anchor. Returns the boxes the sampler may crop; never a colour.
+    """
+    try:
+        import numpy as np
+    except Exception:  # pragma: no cover - numpy is a perceive runtime dependency
+        return []
+    if frame_rgb is None:
+        return []
+    try:
+        arr = np.asarray(frame_rgb)
+    except Exception:
+        return []
+    if arr.ndim != 3 or arr.shape[0] < 8 or arr.shape[1] < 8:
+        return []
+    h_px, w_px = arr.shape[0], arr.shape[1]
+    a = arr.astype(np.float32) / 255.0
+    mx = a.max(axis=2)
+    mn = a.min(axis=2)
+    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-6), 0.0)
+    mask = (sat <= WHITE_SHIRT_MAX_S) & (mx >= WHITE_SHIRT_MIN_V)
+    mask[: int(WHITE_SHIRT_TOP_IGNORE * h_px), :] = False
+    if not mask.any():
+        return []
+    boxes: list[tuple[float, float, float, float]] = []
+    for y0, y1, x0, x1, area in _component_boxes(mask):
+        if len(boxes) >= max(1, max_regions):
+            break
+        if area < WHITE_SHIRT_MIN_AREA:
+            continue
+        bh, bw = y1 - y0, x1 - x0
+        if bw <= 0 or bh <= 0:
+            continue
+        if not (WHITE_SHIRT_MIN_HEIGHT * h_px <= bh <= WHITE_SHIRT_MAX_HEIGHT * h_px):
+            continue
+        aspect = bh / bw
+        if not (WHITE_SHIRT_MIN_ASPECT <= aspect <= WHITE_SHIRT_MAX_ASPECT):
+            continue
+        # Bright white only: the goal net / metal work / shadowed fabric read grey.
+        if float(a[y0:y1, x0:x1][mask[y0:y1, x0:x1]].max(axis=1).mean()) < WHITE_SHIRT_MIN_BRIGHTNESS:
+            continue
+        box = (x0 / w_px, y0 / h_px, x1 / w_px, y1 / h_px)
+        if _pitch_anchor_share(arr, box) < MIN_KIT_PITCH_ANCHOR_SHARE:
+            continue
+        extended = (box[0], box[1], box[2],
+                    min(1.0, box[1] + WHITE_SHIRT_BODY_EXTEND * (box[3] - box[1])))
+        if not is_plausible_player_box(extended):
+            continue
+        boxes.append(extended)
+    return boxes
+
+
+def sample_white_shirt_regions(
+    frame_rgb: Any,
+    ts: Optional[float] = None,
+    frame_seq: Optional[int] = None,
+    max_regions: int = WHITE_SHIRT_MAX_REGIONS,
+) -> list[dict[str, Any]]:
+    """Sample white-shirt crops found by shape, not by tracked box (ADAAAA-8076).
+
+    Same sample shape as :func:`sample_track_colors` (``{trackId, label, ts,
+    side, color, rgb}``) so the cluster + association stages need no special
+    case. Only WHITE crops are returned: the tracker already reports coloured
+    shirts well enough, and letting every saturated component through this
+    channel would put LED boards and hi-vis vests on the cluster set (measured:
+    a general region scan published ``black`` for the home side on the cited
+    job). The crop still goes through the tracked crop's tests (plausibility,
+    pitch anchor, modal-colour share) and the publish floor is unchanged.
+    """
+    boxes = _white_shirt_boxes(frame_rgb, max_regions=max_regions)
+    if not boxes:
+        return []
+    tracks = [
+        {"trackId": "white-%s-%d" % (frame_seq if frame_seq is not None else "t", i),
+         "label": "player", "box": list(box), "ts": ts}
+        for i, box in enumerate(boxes)
+    ]
+    out: list[dict[str, Any]] = []
+    for sample in sample_track_colors(frame_rgb, tracks, max_tracks=max_regions):
+        if str(sample.get("color") or "") != "white":
+            continue
+        if ts is not None:
+            sample["ts"] = ts
+        if frame_seq is not None:
+            sample["frameSeq"] = frame_seq
+        out.append(sample)
     return out
 
 

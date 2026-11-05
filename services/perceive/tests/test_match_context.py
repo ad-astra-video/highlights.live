@@ -41,6 +41,8 @@ from app.match_context import (
     resolve_match_context,
     resolve_token,
     sample_track_colors,
+    sample_white_shirt_regions,
+    _split_merged_box,
     scan_commentary,
     scorebug_lines_have_team_text,
     scorebug_lines_sides,
@@ -1905,3 +1907,80 @@ def test_resolve_reports_the_unattributed_side_and_the_observed_clusters():
     assert status["kitColorsUnattributed"] == ["away"]
     assert status["kitClustersUnattributed"] == ["orange"]
     assert ctx["ambiguous"] is False
+
+
+# --- ADAAAA-8076: merged boxes split, white shirts sampled by shape -------
+
+# bright green kit: v > 0.62 keeps it out of the pitch-green bucket
+GREEN_KIT = [40.0, 200.0, 90.0]
+
+
+def _paint(frame, box, torso):
+    h = len(frame)
+    w = len(frame[0])
+    x0, y0, x1, y1 = box
+    for y in range(int(y0 * h), int(y1 * h)):
+        for x in range(int(x0 * w), int(x1 * w)):
+            frame[y][x] = torso[:]
+    return frame
+
+
+def test_split_merged_box_recovers_one_crop_per_player():
+    """A merged two-player box is wide, so the old sampler dropped both shirts.
+
+    Pinned as the ADAAAA-8076 regression: the merged box alone yields no crop
+    (the red shirt is lost with the green one), and after the split the SAME
+    track yields one red crop and one green crop.
+    """
+    frame = [[GREEN_PITCH[:] for _ in range(200)] for _ in range(200)]
+    _paint(frame, (0.30, 0.35, 0.42, 0.70), RED)     # left player
+    _paint(frame, (0.58, 0.35, 0.70, 0.70), GREEN_KIT)  # right player
+    merged = [0.25, 0.35, 0.75, 0.70]                # one box over both
+    assert is_plausible_player_box(merged) is False  # wider than tall
+    cols = _split_merged_box(merged)
+    assert [tuple(round(v, 3) for v in c) for c in cols] == [
+        (0.25, 0.35, 0.417, 0.7),
+        (0.417, 0.35, 0.583, 0.7),
+        (0.583, 0.35, 0.75, 0.7),
+    ]
+    samples = sample_track_colors(frame, [{"trackId": "merged", "label": "player", "box": merged}])
+    assert sorted(s["color"] for s in samples) == ["green", "red"]
+    assert sorted(s["trackId"] for s in samples) == ["merged-c0", "merged-c2"]
+
+
+def test_split_merged_box_refuses_a_full_frame_band():
+    # A SAM3 band over the whole frame is not a merge; it stays rejected, so the
+    # split cannot smuggle junk crops into the cluster set.
+    assert _split_merged_box([0.0, 0.0, 0.997, 0.997]) == []
+    assert _split_merged_box([0.0, 0.0, 0.997, 0.24]) == []
+
+
+def test_white_shirt_is_sampled_by_shape_when_no_track_boxes_it():
+    """Measured on e58bcef7: Spain's white shirt reaches no crop at all.
+
+    61 % of the clip's white shirt pixels sit in NO tracked box and 36 % inside a
+    rejected degenerate band, so a tracked-box-only sampler can never see them.
+    The shape channel finds the shirt, and only when it stands on grass.
+    """
+    frame = [[GREEN_PITCH[:] for _ in range(200)] for _ in range(200)]
+    _paint(frame, (0.40, 0.30, 0.46, 0.50), WHITE)     # white shirt, 3.3:1
+    assert sample_track_colors(frame, []) == []        # no track -> old path is blind
+    samples = sample_white_shirt_regions(frame, ts=12.5, frame_seq=9)
+    assert len(samples) == 1
+    assert samples[0]["color"] == "white"
+    assert samples[0]["ts"] == 12.5 and samples[0]["frameSeq"] == 9
+    assert samples[0]["side"] == "left"
+
+
+def test_white_shirt_region_ignores_grey_bright_boards_and_the_crowd():
+    grey = [[GREEN_PITCH[:] for _ in range(200)] for _ in range(200)]
+    _paint(grey, (0.40, 0.30, 0.46, 0.50), [150.0, 150.0, 150.0])  # net / metal
+    assert sample_white_shirt_regions(grey) == []
+
+    band = [[GREEN_PITCH[:] for _ in range(200)] for _ in range(200)]
+    _paint(band, (0.10, 0.35, 0.90, 0.42), WHITE)  # LED board: wide, not a shirt
+    assert sample_white_shirt_regions(band) == []
+
+    crowd = [[GREEN_PITCH[:] for _ in range(200)] for _ in range(200)]
+    _paint(crowd, (0.40, 0.05, 0.46, 0.20), WHITE)  # crowd band, no grass under it
+    assert sample_white_shirt_regions(crowd) == []
