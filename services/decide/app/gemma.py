@@ -876,6 +876,17 @@ _GOAL_SHOUT_RE = re.compile(
     r"|winner|back of the net)\b",
     re.IGNORECASE,
 )
+# A goal-SPECIFIC claim: ball-in-net / goal-line language. This is narrower than
+# the shout family above, which also matches "scores"/"scored" that a non-goal
+# scoring play (a DUNK) legitimately uses. Only this narrower claim puts an
+# accept whose candidate label is NOT goal-type (the live AUDIO_BURST trigger)
+# into the guard's scope — a warm-up window whose reason says "ball in net" is a
+# goal claim whatever trigger produced the window.
+_GOAL_NET_CLAIM_RE = re.compile(
+    r"\b(?:in the net|into the net|back of the net|goal ?line|cross(?:ed|es)? the line"
+    r"|it'?s in|is in the net)\b",
+    re.IGNORECASE,
+)
 # A score line in the text ("2-1 to the away side"). A claim about the scoreboard
 # is a claim only a measured score read can attest.
 _SCORE_LINE_RE = re.compile(r"\b\d{1,2}\s*[-–:]\s*\d{1,2}\b")
@@ -1003,10 +1014,15 @@ def goal_text_claim(decision: dict, transcript: str = "") -> dict:
     if reason and cites and _GOAL_SHOUT_RE.search(reason + " " + attested_text):
         text_bits.append("reason_cites_commentary")
     score_line = bool(_SCORE_LINE_RE.search(t)) or bool(_SCORE_LINE_RE.search(reason))
+    goal_specific = bool(
+        _GOAL_NET_CLAIM_RE.search(reason + " " + attested_text)
+        or _GOAL_NET_CLAIM_RE.search(t)
+    )
     return {
         "transcript_goal_shout": "transcript_goal_shout" in text_bits,
         "reason_cites_commentary": "reason_cites_commentary" in text_bits,
         "score_line_claim": score_line,
+        "goal_specific_claim": goal_specific,
         "text_bits": text_bits,
         "transcript": t[:160] or None,
     }
@@ -1042,7 +1058,15 @@ def apply_contract_guard(
         # rejection (audited contract; ADAAAA-8120 binding constraint).
         record["outcome"] = "not_an_accept"
         return decision, record
-    if not is_goal_accept(decision, event_type):
+    claim = goal_text_claim(decision, transcript)
+    # Scope: a goal-type accept (decision/candidate label), OR a scoring_play
+    # accept whose own reason/transcript makes a goal-SPECIFIC claim — the live
+    # rail's candidate label is a trigger (AUDIO_BURST / SPORTING_EVENT / MOTION),
+    # so the goal class lives on the accept's claim, not on the trigger label.
+    if not is_goal_accept(decision, event_type) and not (
+        str(decision.get("outcome") or "").strip().lower() == "scoring_play"
+        and claim["goal_specific_claim"]
+    ):
         record["outcome"] = "not_a_goal_accept"
         return decision, record
 
@@ -1054,7 +1078,6 @@ def apply_contract_guard(
         decision["contractGuard"] = record
         return decision, record
 
-    claim = goal_text_claim(decision, transcript)
     record["claim"] = claim
     # Recall path (ADAAAA-6973): a guard rejection leaves the decision
     # goal-shaped and un-attested (outcome scoring_play / GOAL label,

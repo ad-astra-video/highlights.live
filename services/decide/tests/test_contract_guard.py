@@ -272,6 +272,39 @@ def test_non_goal_accept_is_out_of_scope():
     assert d["score"] == before["score"]
 
 
+def test_goal_claim_on_a_non_goal_trigger_label_is_in_scope():
+    # ADAAAA-8120 served run: the live rail's candidate label is a trigger
+    # (AUDIO_BURST), so the model copies it into `eventType`. A scoring_play
+    # accept whose own reason claims the ball is in the net is a goal claim
+    # whatever the trigger label was, and must be guarded too.
+    d = _parsed(
+        json.dumps(
+            {
+                "isHighlight": True,
+                "score": 95,
+                "eventType": "AUDIO_BURST",
+                "outcome": "scoring_play",
+                "reason": "ASR confirms 'IT'S IN!' at peak audio (0.97) while frames show ball in net.",
+                "verdict": {
+                    "hypothesis": "AUDIO_BURST",
+                    "independentlyObserved": "ASR goal shout, audio peak",
+                    "criteria": {
+                        "ballCrossedLineBetweenPosts": True,
+                        "ballInNet": True,
+                        "scoreboardChanged": False,
+                        "crowdErupted": True,
+                    },
+                },
+            }
+        )
+    )
+    d, rec = apply_contract_guard(d, _g1_evidence(WARM_LEVELS), "AUDIO_BURST", transcript=GOAL_SHOUT)
+    assert rec["outcome"] == "rejected"
+    assert rec["contradictedBy"] == "goal_text_without_measurement"
+    assert d["isHighlight"] is False
+    assert rec["claim"]["goal_specific_claim"] is True
+
+
 # --- null preserved / absent-but-plausible is inert ------------------------
 
 def test_reject_reads_are_never_touched():
