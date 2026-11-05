@@ -1,0 +1,31 @@
+{
+  "$comment": "ADAAAA-8122 AC1 fixture: the kids300 two-goal media-rail replay (ADAAAA-7991) expressed in the frame-verified windows manifest shape, so evals/drive_decide_cycle.py can drive it and evals/metrics_runner.py can score it. Ground truth is the pixel-read score timeline in docker/data/clips/kids300-2goal-fixture-7991.json on livepeer-ai-x99: exactly two score transitions, 1-1 -> 2-1 between 100 s and 101 s and 2-1 -> 2-2 between 158 s and 159 s, unchanged through 280 s. Instants are the first frame of the new score (+/-1 s).",
+  "video": {
+    "id": "kids300",
+    "path": "/data/clips/kids300_7935.mp4",
+    "duration_s": 300.05,
+    "source_fixture": "kids300-2goal-fixture-7991.json",
+    "frame_source": "score bug read from the clip's own overlay"
+  },
+  "sport": "soccer",
+  "windows": [
+    {
+      "id": "kids300-goal-0100",
+      "t_start": 95,
+      "t_end": 105,
+      "instant": 100,
+      "ground_truth": "goal",
+      "evidence": "score bug 1-1 -> 2-1 between 100 s and 101 s",
+      "confidence": "high"
+    },
+    {
+      "id": "kids300-goal-0159",
+      "t_start": 154,
+      "t_end": 164,
+      "instant": 159,
+      "ground_truth": "goal",
+      "evidence": "score bug 2-1 -> 2-2 between 158 s and 159 s",
+      "confidence": "high"
+    }
+  ]
+}
