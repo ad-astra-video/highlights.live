@@ -700,8 +700,17 @@ export function liveGoalHasMeasuredEvidence(input: {
   ballOutcome?: string | null;
   corroborated?: boolean;
   goalConfirmed?: string | null;
+  /** ADAAAA-8140: the measured delta behind the claim. An equal / backward pair
+   * is refused even when the claim is true. */
+  scoreBoardDelta?: ScoreboardDeltaEvidence | null;
+  /** ADAAAA-8140: the read counts + states of the span the claim was checked
+   * against, so a score-steady span cannot attest a no-op. */
+  scoreReads?: ScoreReadDiagnostics | null;
 }): boolean {
-  if (input.scoreBoardChanged === true) return true;
+  // ADAAAA-8140: the score channel is a MEASUREMENT, so it must agree with the
+  // measured span. A `1-1 -> 1-1` no-op or a `2-2 -> 1-1` backward read carries
+  // no goal and never attests. The other channels stay independent.
+  if (input.scoreBoardChanged === true && scoreChangeAttests(input.scoreBoardDelta, input.scoreReads)) return true;
   if (input.goalCrossed === true) return true;
   if (typeof input.ballOutcome === "string" && /^goal$/i.test(input.ballOutcome.trim())) return true;
   if (input.corroborated === true) return true;
@@ -846,6 +855,69 @@ export function scoreboardDeltaSingleGoalStep(delta: ScoreboardDeltaEvidence | u
   const dh = delta.post[0] - delta.pre[0];
   const da = delta.post[1] - delta.pre[1];
   return (dh === 1 && da === 0) || (dh === 0 && da === 1);
+}
+
+/**
+ * ADAAAA-8140: does the measured read span CONTRADICT a "the scoreboard
+ * changed" claim?
+ *
+ * A GOAL accept whose only attestation is `scoreBoardChanged` used to be taken
+ * at face value even when the span's own OCR readings never moved (live job
+ * `bca08173`: the accepted GOAL at 160.5 s certified a `1-1 -> 1-1` no-op while
+ * the real transition, `1-1 -> 2-1`, only landed at 172 s). The measurement is
+ * already paid for, so the claim has to agree with it:
+ *
+ *  - a span that reads ONE steady score carries no transition at all -> the
+ *    claim is a no-op and cannot attest;
+ *  - a span whose newest boundary moves BACKWARDS (`2-2 -> 1-1`) or rewrites a
+ *    side is not a goal -> cannot attest;
+ *  - fewer than two readings is absent evidence, never a contradiction (an
+ *    unreadable scorebug must not silently demote every goal).
+ *
+ * Pure; the gate, the note and the record all read the same verdict.
+ */
+export function scoreReadsContradictChange(diag: ScoreReadDiagnostics | null | undefined): boolean {
+  if (!diag || !(diag.scoreReads >= 2)) return false;
+  const boundary = diag.newestTransition;
+  if (typeof boundary === "string") {
+    const m = /^(\d+)-(\d+)>(\d+)-(\d+)$/.exec(boundary);
+    if (!m) return false;
+    const delta: ScoreboardDeltaEvidence = {
+      pre: [Number(m[1]), Number(m[2])],
+      post: [Number(m[3]), Number(m[4])],
+      preTs: 0,
+      postTs: 0,
+      deltaTs: 0,
+      preSamples: 2,
+      postSamples: 2,
+    };
+    return !scoreboardDeltaSingleGoalStep(delta);
+  }
+  // No boundary in the span: the scorebug read one steady score throughout.
+  return (diag.scoreStates ?? 0) <= 1;
+}
+
+/**
+ * ADAAAA-8140: may a `scoreBoardChanged` claim attest a GOAL?
+ *
+ * Fail-closed order:
+ *  1. a measured delta is present -> it must be a FORWARD single-goal step. An
+ *     equal pair (`1-1 -> 1-1`) or a backward pair (`2-2 -> 1-1`) is refused;
+ *  2. no delta -> the claim stands only when the read span does not contradict
+ *     it (a perceive hint on a score-steady span is a no-op, see
+ *     {@link scoreReadsContradictChange}).
+ */
+export function scoreChangeAttests(
+  delta: ScoreboardDeltaEvidence | null | undefined,
+  reads?: ScoreReadDiagnostics | null
+): boolean {
+  if (delta) {
+    if (!scoreboardDeltaSingleGoalStep(delta)) return false;
+    // A forward step that is not yet legible (one supporting read) is still a
+    // measurement the old hint path accepted; keep it unless the span disagrees.
+    return scoreboardDeltaLegible(delta) || !scoreReadsContradictChange(reads);
+  }
+  return !scoreReadsContradictChange(reads);
 }
 
 /** ADAAAA-8006: can a scoreboard delta read by a LATER window re-attest this
@@ -1192,6 +1264,14 @@ export interface ScoreReadDiagnostics {
   preSamples: number;
   postSamples: number;
   need: number;
+  /** ADAAAA-8140: distinct score states the read span actually carried. `1`
+   * means the scorebug never changed anywhere in the span — a no-op. Absent on
+   * legacy callers that only asked for the counts. */
+  scoreStates?: number;
+  /** ADAAAA-8140: the newest boundary in the span as `"pre>post"`
+   * (`"2-2>1-1"`), or `null` when the span reads one steady score. Lets the
+   * gate fail closed on a backward transition instead of trusting a claim. */
+  newestTransition?: string | null;
 }
 
 /**
@@ -1299,6 +1379,10 @@ export function scoreReadDiagnostics(
   const inSpan = (readings ?? []).filter((r) => Number.isFinite(r?.ts) && r.ts >= lo - 1e-9 && r.ts <= hi + 1e-9)
     .sort((a, b) => a.ts - b.ts);
   const out: ScoreReadDiagnostics = { scoreReads: inSpan.length, preSamples: 0, postSamples: 0, need };
+  const states = new Set<string>();
+  for (const r of inSpan) states.add(`${r.score[0]}-${r.score[1]}`);
+  out.scoreStates = states.size;
+  out.newestTransition = null;
   if (inSpan.length < 2) return out;
   let idx = -1;
   for (let i = inSpan.length - 1; i > 0; i--) {
@@ -1310,6 +1394,7 @@ export function scoreReadDiagnostics(
   if (idx < 0) return { ...out, preSamples: inSpan.length };
   const pre = inSpan[idx - 1].score;
   const post = inSpan[idx].score;
+  out.newestTransition = `${pre[0]}-${pre[1]}>${post[0]}-${post[1]}`;
   let postSamples = 0;
   for (let j = inSpan.length - 1; j >= idx; j--) {
     if (inSpan[j].score[0] !== post[0] || inSpan[j].score[1] !== post[1]) break;
@@ -1320,7 +1405,7 @@ export function scoreReadDiagnostics(
     if (inSpan[j].score[0] !== pre[0] || inSpan[j].score[1] !== pre[1]) break;
     preSamples++;
   }
-  return { scoreReads: inSpan.length, preSamples, postSamples, need };
+  return { ...out, scoreReads: inSpan.length, preSamples, postSamples };
 }
 
 /**
@@ -1450,6 +1535,11 @@ export interface LiveGoalAttestationUsed {
   postSamples?: number;
   /** ADAAAA-8134: the legibility bar each side had to meet. */
   need?: number;
+  /** ADAAAA-8140: the score transition the accept credited as `"pre>post"`
+   * (`"1-1>2-1"`), or null when the accept was carried by another channel.
+   * Disclosed on ACCEPTED goal rows too, so "a GOAL row appeared" can be told
+   * apart from a blind accept. */
+  transitionKey?: string | null;
 }
 
 /**
@@ -1466,6 +1556,9 @@ export function liveGoalAttestationUsed(input: {
   corroborated?: boolean;
   goalConfirmed?: string | null;
   scoreReads?: ScoreReadDiagnostics;
+  /** ADAAAA-8140: the credited transition (`"pre>post"`) when a measured delta
+   * carried the accept, so an accepted GOAL row names what certified it. */
+  transitionKey?: string | null;
 }): LiveGoalAttestationUsed {
   return {
     scoreBoardChanged: input.attribution.scoreBoardChanged === true,
@@ -1473,6 +1566,9 @@ export function liveGoalAttestationUsed(input: {
     ballOutcome: input.attribution.ballOutcome ?? null,
     corroborated: input.corroborated === true,
     goalConfirmed: input.goalConfirmed ?? null,
+    // Only spread when a transition was actually credited: a row that carries no
+    // measured delta keeps the legacy payload shape byte-identical.
+    ...(input.transitionKey ? { transitionKey: input.transitionKey } : {}),
     ...(input.scoreReads
       ? {
           scoreReads: input.scoreReads.scoreReads,
@@ -1533,8 +1629,18 @@ export interface AcceptedGoalEvent {
   anchorTs: number;
   /** Delivered clip window start (seconds from stream start). */
   start: number;
-  /** Delivered clip window end. */
+  /** Delivered clip window end (seconds from stream start). */
   end: number;
+  /** ADAAAA-8140: the decide-window instant that produced the accept — the same
+   * clock the goal-burst dedupe compares candidates on. */
+  candidateTs?: number;
+  /** ADAAAA-8140: the score transition the delivered GOAL credited
+   * (`"1-1>2-1"`), or null when another channel carried it. Lets the burst lane
+   * distinguish a same-transition re-read from a DISTINCT scoring event. */
+  transitionKey?: string | null;
+  /** ADAAAA-8140: the delivered row's idempotency key, named on the suppression
+   * reason so the dedupe target is auditable from the row alone. */
+  idempotencyKey?: string;
 }
 
 /** ADAAAA-7938 (Spec A): the compact prior-game-state the VOD decide pass
@@ -3291,6 +3397,59 @@ export const WINDOW_FACTS_MAX_CHARS = 2400;
  * highlight is accepted per this window in a run, so a start-of-clip burst of
  * confabulated goals cannot flood the accepted list. */
 export const DEFAULT_GOAL_BURST_SUPPRESS_S = 30;
+
+/**
+ * ADAAAA-8140: the evidence behind one goal-burst suppression. The pre-accept
+ * burst lane (`ADAAAA-6610`) dropped goal-shaped candidates with NO recorded
+ * reason: 26 of 26 suppressed rows over six hours were `eventType=GOAL,
+ * outcome=scoring_play`, all naming only the model's own read. Two of them on
+ * one graded leg had been dropped against a row that never shipped as a GOAL
+ * (a demoted celebration at 23.9 s claiming the 26 s-later goal at 49.9 s), and
+ * one against a `1-1 -> 1-1` no-op accept. A suppression must therefore NAME
+ * what it deduped against, and a candidate carrying its OWN forward transition
+ * is never suppressed at all.
+ */
+export interface GoalBurstSuppression {
+  /** Only same-transition / same-moment dedupe is allowed to drop a
+   * goal-shaped candidate. */
+  kind: "goal_burst_same_transition";
+  /** What the dedupe target actually shipped as: a postable GOAL, or a
+   * goal-shaped accept the attestation gate demoted to a celebration. */
+  dedupeAgainstKind: "scoring_goal" | "goal_shaped_celebration";
+  /** The window that was applied (30 s for a delivered GOAL, 8 s for a demoted
+   * celebration, or the 8 s same-kick dedup for a corroborated goal). */
+  windowS: number;
+  /** Candidate ts minus the delivered row's decide ts (seconds). */
+  gapS: number;
+  /** Suppressed goal-shaped candidates since the last delivered row. */
+  burstSize: number;
+  /** The DELIVERED row this candidate re-reads. */
+  dedupeAgainstHighlightId: string;
+  dedupeAgainstTs: number;
+  dedupeAgainstIdempotencyKey?: string;
+  /** The transition both rows share (`"1-1>2-1"`), or null when neither
+   * carries a measured delta. */
+  transitionKey: string | null;
+}
+
+/** ADAAAA-8140: the machine-readable reason written on a suppressed candidate
+ * row (and echoed in the gate/decide log line). One line, stable keys, every
+ * field the decision used — so a grader never has to replay the run:
+ *
+ *   goal_burst_same_transition:dedupeAgainst=<highlightId>@<ts>s(<kind>);
+ *   idempotencyKey=<key|none>;gap=<gap>s;window=<w>s;
+ *   transition=<pre>post|none;burst=<n>
+ */
+export function formatGoalBurstSuppressionReason(s: GoalBurstSuppression): string {
+  return (
+    `goal_burst_same_transition:dedupeAgainst=${s.dedupeAgainstHighlightId}@${s.dedupeAgainstTs.toFixed(3)}s` +
+    `(${s.dedupeAgainstKind});` +
+    `idempotencyKey=${s.dedupeAgainstIdempotencyKey ?? "none"};` +
+    `gap=${s.gapS.toFixed(3)}s;window=${s.windowS}s;` +
+    `transition=${s.transitionKey ?? "none"};burst=${s.burstSize}`
+  );
+}
+
 /** ADAAAA-7402 (shootout-aware follow-up to the AC2 recall fix): the TIGHT
  * same-kick dedup window (seconds) applied to a GOAL whose acceptance is
  * independently corroborated by a scoreboard change (`corroborationSource ===
@@ -3591,15 +3750,20 @@ export class LiveRunShared {
    * window), so it never grows on a long stream. Used to render the
    * energy-vs-baseline graph on the request-inspection view. */
   private audioSeries: { t: number; energy: number; baseline: number }[] = [];
-  /** Timestamp of the last ACCEPTED GOAL highlight in this run (ADAAAA-6610
-   * burst suppression). Used to drop a GOAL accepted within `goalBurstWindowS`
-   * of a prior one. */
-  private lastGoalHighlightTs: number | null = null;
+  /** ADAAAA-8140: goal-shaped candidates suppressed since the last DELIVERED
+   * scoring GOAL (the burst size disclosed on the suppression reason). Reset by
+   * {@link noteAcceptedGoalEvent}. */
+  private burstSuppressedSinceGoal = 0;
   /** ADAAAA-7865: ACCEPTED scoring GOAL events in this run, in accept order
    * (anchor + delivered clip). A later GOAL accept whose anchor falls inside one
    * of these clips is the same goal re-read and is delivered as a celebration,
    * not as a second scoring event. Bounded — a run cannot grow it unboundedly. */
   private acceptedGoalEvents: AcceptedGoalEvent[] = [];
+  /** ADAAAA-8140: DELIVERED goal-shaped accepts (both the postable GOAL and the
+   * rows the attestation gate demoted to a celebration), used as the tight
+   * same-moment re-read reference. Separate from `acceptedGoalEvents` so the
+   * ADAAAA-7865 repeat-goal rule never treats a celebration as a goal. Bounded. */
+  private deliveredGoalShapedEvents: AcceptedGoalEvent[] = [];
   /** ADAAAA-8087: delivered celebration (BIG_PLAY) rows in this run, in accept
    * order (anchor + clip + normalised reason). A later celebration whose clip
    * overlaps an accepted GOAL's clip, or whose reason text repeats one delivered
@@ -3713,10 +3877,27 @@ export class LiveRunShared {
    * accepted per `goalBurstWindowS` (default 30 s). The observed false-positive
    * run accepted 26 GOAL highlights, all templated, all within the first ~30 s
    * of a VOD (start-of-clip burst). Call ONLY for an already model-accepted
-   * highlight (after `decision.isHighlight`): returns true when this GOAL is a
-   * burst duplicate within the window and should be DROPPED (it does NOT
-   * advance the last-accepted reference, so a burst cannot extend itself). A
-   * non-GOAL event is never suppressed.
+   * highlight (after `decision.isHighlight`).
+   *
+   * ADAAAA-8140 (the pre-accept loss path): the window is compared against the
+   * run's ledger of **delivered scoring GOALs** — never against a timestamp
+   * stamped by a row that later got demoted. The measured defect: on live job
+   * `bca08173` a GOAL-shaped window at 23.9 s was demoted to a celebration (no
+   * measured attestation) but still stamped the burst reference, so the real
+   * goal 26 s later at 49.9 s was dropped as a "burst duplicate" of a row that
+   * never shipped as a GOAL; the accepted `1-1 -> 1-1` no-op at 160.5 s then
+   * suppressed the real `1-1 -> 2-1` goal at 176.3 s. Both losses were silent.
+   *
+   * The rule is therefore "same-transition dedupe only":
+   *
+   *  - a candidate whose OWN measured delta is a legible forward single-goal
+   *    step that DIFFERS from the delivered goal's transition is a distinct
+   *    scoring event -> never suppressed (it escalates to the accept/
+   *    attestation lane, which then ships it as a GOAL or demotes it with
+   *    `attestationUsed`),
+   *  - a candidate that carries no independent transition and sits inside the
+   *    window of a DELIVERED GOAL is a re-read of that goal -> suppressed, and
+   *    the returned evidence names the row it deduped against.
    *
    * ADAAAA-7402 (shootout-aware): when `corroborated` is true — the confirm
    * pass independently corroborated THIS goal's acceptance (a PENALTIS-tally
@@ -3737,15 +3918,79 @@ export class LiveRunShared {
    * `null` for a converted penalty. Keying on the scoreboard source would miss
    * exactly the conversions we need to stop suppressing and re-break AC2.
    */
-  suppressIfGoalBurst(ts: number, eventType?: string, opts: { corroborated?: boolean } = {}): boolean {
-    const ev = (eventType || "").toUpperCase().trim();
-    if (ev !== "GOAL" && ev !== "GOL") return false;
-    const windowS = opts.corroborated ? SHOOTOUT_KICK_DEDUP_S : this.goalBurstWindowS;
-    if (this.lastGoalHighlightTs != null && ts - this.lastGoalHighlightTs < windowS) {
-      return true;
+  goalBurstSuppression(input: {
+    /** The candidate's decide-window instant (the same clock the ledger stores). */
+    ts: number;
+    eventType?: string;
+    corroborated?: boolean;
+    /** The candidate's OWN measured transition, when it has a legible one. */
+    transitionKey?: string | null;
+  }): GoalBurstSuppression | undefined {
+    const ev = (input.eventType || "").toUpperCase().trim();
+    if (ev !== "GOAL" && ev !== "GOL") return undefined;
+    const key = input.transitionKey ?? null;
+    // Two references, two bounded windows:
+    //  - a DELIVERED scoring GOAL keeps the ADAAAA-6610 window (30 s, or the 8 s
+    //    same-kick dedup when corroborated);
+    //  - a goal-shaped accept the attestation gate DEMOTED to a celebration is
+    //    only a same-MOMENT reference (the tight 8 s re-read horizon), because a
+    //    demotion carries no transition: 3.2 s later is a re-read, 26 s later is
+    //    a different moment that must ship as its own row (ADAAAA-8140's
+    //    measured 23.9 s / 49.9 s pair).
+    const scoringWindow = input.corroborated ? SHOOTOUT_KICK_DEDUP_S : this.goalBurstWindowS;
+    // Never wider than the configured burst window: the knob means "at most one
+    // GOAL highlight per N seconds", so a test/operator that narrows it (e.g. 1 s
+    // to isolate the derive path) must not get an 8 s dedupe back.
+    const shapedWindow = Math.min(SHOOTOUT_KICK_DEDUP_S, this.goalBurstWindowS);
+    let target: (AcceptedGoalEvent & { kind: GoalBurstSuppression["dedupeAgainstKind"] }) | undefined;
+    let targetWindow = scoringWindow;
+    let gap = Infinity;
+    for (const e of this.acceptedGoalEvents) {
+      const at = Number.isFinite(e.candidateTs) ? (e.candidateTs as number) : e.anchorTs;
+      const d = input.ts - at;
+      if (d < 0 || d >= scoringWindow || d >= gap) continue;
+      gap = d;
+      target = { ...e, kind: "scoring_goal" };
+      targetWindow = scoringWindow;
     }
-    this.lastGoalHighlightTs = ts;
-    return false;
+    for (const e of this.deliveredGoalShapedEvents) {
+      const at = Number.isFinite(e.candidateTs) ? (e.candidateTs as number) : e.anchorTs;
+      const d = input.ts - at;
+      if (d < 0 || d >= shapedWindow || d >= gap) continue;
+      gap = d;
+      target = { ...e, kind: "goal_shaped_celebration" };
+      targetWindow = shapedWindow;
+    }
+    if (!target) return undefined;
+    // Same-transition / same-moment dedupe ONLY. A candidate that measured its
+    // own, different forward transition opens a new event -> escalate to the
+    // accept lane, where the attestation gate either accepts it as a GOAL or
+    // demotes it with `attestationUsed`.
+    const prevKey = target.transitionKey ?? null;
+    if (key && key !== prevKey) return undefined;
+    if (key && !prevKey) return undefined;
+    this.burstSuppressedSinceGoal++;
+    return {
+      kind: "goal_burst_same_transition",
+      dedupeAgainstKind: target.kind,
+      windowS: targetWindow,
+      gapS: gap,
+      burstSize: this.burstSuppressedSinceGoal,
+      dedupeAgainstHighlightId: target.highlightId,
+      dedupeAgainstTs: Number.isFinite(target.candidateTs) ? (target.candidateTs as number) : target.anchorTs,
+      dedupeAgainstIdempotencyKey: target.idempotencyKey,
+      transitionKey: key ?? prevKey,
+    };
+  }
+  /** ADAAAA-8140: remember a DELIVERED goal-shaped accept (a postable GOAL or a
+   * goal-shaped row the attestation gate demoted to a celebration) so a window
+   * that re-reads the same moment within the tight window is recognised instead
+   * of shipping a second card. Bounded. */
+  noteDeliveredGoalShapedEvent(ev: AcceptedGoalEvent): void {
+    if (!Number.isFinite(ev.anchorTs)) return;
+    this.deliveredGoalShapedEvents.push(ev);
+    if (this.deliveredGoalShapedEvents.length > 128) this.deliveredGoalShapedEvents.shift();
+    this.burstSuppressedSinceGoal = 0;
   }
   /** ADAAAA-7865: does this GOAL accept re-read an already-accepted GOAL event?
    * Returns the covered event (so the caller can name it on the downgraded
@@ -3765,11 +4010,18 @@ export class LiveRunShared {
   }
   /** ADAAAA-7865: remember a delivered scoring GOAL's event coverage so a later
    * window that re-reads the same goal is recognised. Bounded to the most recent
-   * events (a celebration re-read never follows its goal by hours). */
+   * events (a celebration re-read never follows its goal by hours).
+   *
+   * ADAAAA-8140: this ledger is ALSO the goal-burst dedupe reference — only a
+   * row that actually shipped as a scoring GOAL may suppress a later
+   * goal-shaped candidate — so the accept path must pass its decide instant,
+   * credited transition and idempotency key. */
   noteAcceptedGoalEvent(ev: AcceptedGoalEvent): void {
     if (!Number.isFinite(ev.anchorTs)) return;
     this.acceptedGoalEvents.push(ev);
     if (this.acceptedGoalEvents.length > 128) this.acceptedGoalEvents.shift();
+    // A delivered goal closes the burst: the next suppressed row starts at 1.
+    this.burstSuppressedSinceGoal = 0;
   }
   /** ADAAAA-8087: which already-delivered row does this celebration accept
    * duplicate? Returns the GOAL it re-shows or the celebration it re-reads, or
@@ -4718,6 +4970,24 @@ function salvageConfirmRecord(confirm: ConfirmRecord): ConfirmRecord {
   return { ...confirm, request: { ...request, dataItems } } as ConfirmRecord;
 }
 
+/** ADAAAA-8140: the structured evidence persisted alongside
+ * `suppressionReason` on a suppressed decide note. Every field is what the
+ * decision actually used; absent keys are simply unknown for that kind. */
+export interface CandidateSuppressionEvidence {
+  kind: string;
+  dedupeAgainstHighlightId?: string;
+  dedupeAgainstTs?: number;
+  dedupeAgainstIdempotencyKey?: string;
+  gapS?: number;
+  windowS?: number;
+  burstSize?: number;
+  transitionKey?: string | null;
+  detail?: string;
+  candidateTs?: number;
+  /** A new suppression kind may add its own audit fields; passthrough. */
+  [k: string]: unknown;
+}
+
 /** Build + emit a persisted decide note for one evaluation (ADAAAA-6851 Inc 2).
  * `status` captures why the trigger did/didn't become a highlight record
  * (accepted / suppressed / rejected). Called at the SAME decision point that
@@ -4735,7 +5005,13 @@ export function buildCandidateNote(
   // captured at the decide boundary, persisted onto the JobCandidate so the
   // job-detail API can expose them. Observability only; absent on legacy rows.
   analysis?: WindowAnalysis,
-  confirm?: ConfirmRecord
+  confirm?: ConfirmRecord,
+  // ADAAAA-8140: WHY a `suppressed` row was dropped, plus the evidence the
+  // decision used. A suppressed row without a reason is the pre-accept loss
+  // path this ticket closes, so the field is mandatory in practice and the
+  // guardrail below records `suppressed:unattributed` (and logs) rather than
+  // writing a silent row.
+  suppression?: { reason: string; evidence?: CandidateSuppressionEvidence }
 ): void {
   if (!cfg.onDecision) return;
   // ADAAAA-7156 Increment B: only attach analysis/confirm blocks that conform to
@@ -4773,6 +5049,25 @@ export function buildCandidateNote(
     }
   }
   try {
+    // ADAAAA-8140: a suppressed row must always name why. AC1 is structural:
+    // every `status=suppressed` record carries a machine-readable
+    // `suppressionReason`, and a caller that forgets one is logged instead of
+    // writing a silent drop.
+    let suppressionReason: string | undefined;
+    let suppressionEvidence: CandidateSuppressionEvidence | undefined;
+    if (status === "suppressed") {
+      const why = (suppression?.reason ?? "").trim();
+      if (why) {
+        suppressionReason = why;
+        suppressionEvidence = suppression?.evidence;
+      } else {
+        suppressionReason = "suppressed:unattributed";
+        console.error(
+          `[decide-note:${cfg.jobId}] suppressed candidate @${candidate.timestamp}s (${highlightEventType(decision, candidate.eventType)}) ` +
+            "was built with no suppression reason — recording suppressed:unattributed"
+        );
+      }
+    }
     cfg.onDecision({
       id: candidateId,
       jobId: cfg.jobId,
@@ -4788,6 +5083,8 @@ export function buildCandidateNote(
       trigger,
       analysis: okAnalysis,
       confirm: okConfirm,
+      ...(suppressionReason ? { suppressionReason } : {}),
+      ...(suppressionEvidence ? { suppressionEvidence } : {}),
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
@@ -5019,14 +5316,41 @@ export async function acceptVideoDecision(
   // keys on the outcome-derived GOAL) and shipped as a celebration card. The
   // control leg's analog read kept the raw label GOAL and was suppressed here
   // instead. One key, one lane: a goal-shaped read is a goal-shaped read.
-  if (run.suppressIfGoalBurst(candidate.timestamp, highlightEventType(decision, candidate.eventType), { corroborated })) {
-    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis);
+  //
+  // ADAAAA-8140: the candidate's OWN measured transition rides the check, so a
+  // DISTINCT scoring event inside the window escalates to the accept lane
+  // instead of being dropped, and every suppression that does happen names the
+  // delivered GOAL it deduped against (`suppressionReason`, AC2).
+  const candidateTransitionKey =
+    scoreboardDeltaLegible(candidate.scoreBoardDelta) && scoreboardDeltaSingleGoalStep(candidate.scoreBoardDelta)
+      ? scoreTransitionKey(candidate.scoreBoardDelta as ScoreboardDeltaEvidence)
+      : null;
+  // ADAAAA-8140: the PRE-gate goal-shaped label. The demotion below rewrites
+  // `decision.eventType` to BIG_PLAY, so the delivered-shaped ledger must key on
+  // the label the window was judged as.
+  const goalShapedEventType = highlightEventType(decision, candidate.eventType);
+  const goalBurst = run.goalBurstSuppression({
+    ts: candidate.timestamp,
+    eventType: goalShapedEventType,
+    corroborated,
+    transitionKey: candidateTransitionKey,
+  });
+  if (goalBurst) {
+    const suppressionReason = formatGoalBurstSuppressionReason(goalBurst);
+    console.error(
+      `[goal-burst-suppress:${cfg.jobId}] @${candidate.timestamp}s ${goalShapedEventType} ` +
+        `suppressionReason=${suppressionReason} (candidate carried transition=${candidateTransitionKey ?? "none"})`
+    );
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
+      reason: suppressionReason,
+      evidence: { ...goalBurst, candidateTs: candidate.timestamp },
+    });
     onEvent?.({
       seq: emit.seq,
       timestamp: emit.timestamp,
       type: "candidateBlocked",
-      candidate: { eventType: highlightEventType(decision, candidate.eventType), timestamp: candidate.timestamp },
-      reason: "goal highlight suppressed (burst: within goal burst window of an accepted goal)",
+      candidate: { eventType: goalShapedEventType, timestamp: candidate.timestamp },
+      reason: suppressionReason,
     });
     if (sink) sink.final = decision;
     return;
@@ -5086,15 +5410,29 @@ export async function acceptVideoDecision(
     },
     corroborated: confirm?.corroborated === true,
     goalConfirmed: confirm?.goalConfirmed ?? null,
-    // ADAAAA-8134: the read counts the pooled re-read measured when it could not
-    // attest this window (AC-R4).
+    // ADAAAA-8134: the read counts the pooled re-read measured (AC-R4).
+    // ADAAAA-8140: disclosed on ACCEPTED goal rows too, so a reviewer can name
+    // what certified the row instead of guessing from a bare `GOAL`.
     scoreReads: candidate.scoreReads,
+    transitionKey: candidateTransitionKey,
   });
   if (
     isGoalAccept &&
     cfg.liveObserveLoop &&
     cfg.decideWindowN === undefined &&
-    !liveGoalHasMeasuredEvidence(attestationUsed)
+    !liveGoalHasMeasuredEvidence({
+      // ADAAAA-8140: the flat counts on the record are NOT the diagnostics the
+      // gate reads, so the gate input is built explicitly.
+      scoreBoardChanged: attestationUsed.scoreBoardChanged,
+      goalCrossed: attestationUsed.goalCrossed,
+      ballOutcome: attestationUsed.ballOutcome,
+      corroborated: attestationUsed.corroborated,
+      goalConfirmed: attestationUsed.goalConfirmed,
+      // ADAAAA-8140: the score channel must agree with the measured span — a
+      // `1-1 -> 1-1` no-op or a `2-2 -> 1-1` backward read attests nothing.
+      scoreBoardDelta: candidate.scoreBoardDelta,
+      scoreReads: candidate.scoreReads,
+    })
   ) {
     console.error(
       `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
@@ -5155,7 +5493,17 @@ export async function acceptVideoDecision(
           `(anchor ${celebrationDup.celebration.anchorTs.toFixed(1)}s): same reason within ` +
           `${CELEBRATION_DUPLICATE_GAP_S}s`;
     console.error(`[celebration-row-dedupe:${cfg.jobId}] ${dupeWhy} — dropped accept @${loc.ts.toFixed(3)}s`);
-    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis);
+    buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
+      reason: `celebration_duplicate:${celebrationDup.kind};${dupeWhy}`,
+      evidence: {
+        kind: "celebration_duplicate",
+        duplicateKind: celebrationDup.kind,
+        dedupeAgainstHighlightId:
+          celebrationDup.kind === "goal_clip" ? celebrationDup.goal.highlightId : celebrationDup.celebration.highlightId,
+        candidateTs: candidate.timestamp,
+        detail: dupeWhy,
+      },
+    });
     onEvent?.({
       seq: emit.seq,
       timestamp: emit.timestamp,
@@ -5223,7 +5571,12 @@ export async function acceptVideoDecision(
     // outcome / corroborated confirm). Stored so the demotion names which
     // attestation was missing and why the audio/motion reaction could not carry
     // the goal, instead of reading as a silent "celebration".
-    attestationUsed: liveAttestationUsed,
+    // ADAAAA-8140: an ACCEPTED goal row discloses the same attestation payload
+    // (`scoreReads/preSamples/postSamples/need` + the five flags + the credited
+    // transition), so "a GOAL row appeared" can be told apart from a blind or
+    // self-contradictory accept. The demoted-row payload still wins when the
+    // gate demoted this window.
+    attestationUsed: liveAttestationUsed ?? (isGoalAccept ? attestationUsed : undefined),
     // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
     // produced this clip plus the delivered window length so the delivered clip
     // window is auditable (Acc-3). Values come from the resolved (webui > env)
@@ -5306,8 +5659,33 @@ export async function acceptVideoDecision(
   // ADAAAA-7865: record the delivered SCORING goal's event coverage. Only a
   // scoring accept becomes an event — a downgraded celebration must never make a
   // following celebration look like a first re-read of a real goal.
+  // ADAAAA-8140: this ledger is the goal-burst dedupe reference too, so the
+  // decide instant + credited transition + idempotency key ride the entry.
   if (rec.outcome === "scoring_play") {
-    run.noteAcceptedGoalEvent({ highlightId: rec.id, anchorTs: loc.ts, start: win.start, end: win.end });
+    run.noteAcceptedGoalEvent({
+      highlightId: rec.id,
+      anchorTs: loc.ts,
+      start: win.start,
+      end: win.end,
+      candidateTs: candidate.timestamp,
+      transitionKey: candidateTransitionKey,
+      idempotencyKey: rec.idempotencyKey,
+    });
+  }
+  // ADAAAA-8140: remember EVERY delivered goal-shaped row (a postable GOAL or
+  // the celebration the attestation gate demoted it to), so a window that
+  // re-reads the same moment inside the tight window is deduped with a reason
+  // instead of shipping a second card.
+  if (/^(GOAL|GOL)$/i.test(goalShapedEventType)) {
+    run.noteDeliveredGoalShapedEvent({
+      highlightId: rec.id,
+      anchorTs: loc.ts,
+      start: win.start,
+      end: win.end,
+      candidateTs: candidate.timestamp,
+      transitionKey: candidateTransitionKey,
+      idempotencyKey: rec.idempotencyKey,
+    });
   }
   // ADAAAA-8087: remember a delivered celebration row so the next accept of the
   // same moment (overlapping celebration clip / same reason a moment later)
@@ -6580,8 +6958,8 @@ export async function observeAcceptOnly(
   // legibility bar, zero added decide/GPU/perceive work. Goal-shaped windows only:
   // a non-goal window must not consume a transition it can never accept.
   let pooledScoreReads: ScoreReadDiagnostics | undefined;
-  if (liveRail && liveWindow) {
-    if (!scoreboardDeltaLegible(windowAttestation.scoreBoardDelta) && isGoalShaped(stage1)) {
+  if (liveRail && liveWindow && isGoalShaped(stage1)) {
+    if (!scoreboardDeltaLegible(windowAttestation.scoreBoardDelta)) {
       const pooled = scoreboardDeltaFromPooledReadings({
         readings: run.scoreReadBuffer(),
         window: liveWindow,
@@ -6596,12 +6974,14 @@ export async function observeAcceptOnly(
             `pre=${pooled.preSamples} post=${pooled.postSamples} of span [${(liveWindow.lo - SCORE_READ_SUPPORT_LEAD_S).toFixed(1)}, ` +
             `${(liveWindow.hi + SCORE_READ_SUPPORT_TRAIL_S).toFixed(1)}], ${newScoreReads} new reads this window)`
         );
-      } else {
-        // ADAAAA-8134 (AC-R4): disclose the counts that made this window
-        // unattestable, on the row, so it is gradable without a replay.
-        pooledScoreReads = scoreReadDiagnostics(run.scoreReadBuffer(), liveWindow);
       }
     }
+    // ADAAAA-8134 (AC-R4) / ADAAAA-8140: EVERY goal-shaped live window discloses
+    // the read counts of the span it was judged against — not only the windows
+    // that failed to attest. The accepted row then names what certified it
+    // (`scoreReads/preSamples/postSamples/need`) and the gate can fail closed on
+    // a no-op / backward span instead of trusting a bare `scoreBoardChanged`.
+    pooledScoreReads = scoreReadDiagnostics(run.scoreReadBuffer(), liveWindow);
   }
   const candidate: CandidateSignal = {
     eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
