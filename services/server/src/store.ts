@@ -195,8 +195,11 @@ export class Store {
      * ADAAAA-7700 attribution: what to record for a stranded job. Without it the
      * sweep writes a bare `failed` (0 frames, no reason) — the exact row that
      * made the 22:16Z media-node restart look like "the pipeline never ran".
+     * ADAAAA-8061: the callback returns a full patch (not just the reason), so
+     * the boot sweep settles the cost the stranded pass actually accumulated
+     * (`endedAt` / `decideCalls` / `costUsd` or `costUnavailable`+partial).
      */
-    attributeFor?: (job: Job) => { failureReason?: Job["failureReason"]; error?: string }
+    attributeFor?: (job: Job) => Partial<Omit<Job, "id">>
   ): Promise<number> {
     let reaped = 0;
     for (const j of [...this.jobs.values()]) {
@@ -204,8 +207,7 @@ export class Store {
         const attr = attributeFor?.(j);
         await this.patchJob(j.id, {
           status: "failed",
-          ...(attr?.failureReason ? { failureReason: attr.failureReason } : {}),
-          ...(attr?.error ? { error: attr.error } : {}),
+          ...(attr ?? {}),
         });
         reaped++;
       }

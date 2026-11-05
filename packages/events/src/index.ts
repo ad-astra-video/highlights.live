@@ -1294,6 +1294,23 @@ export const JobSchema = z.object({
   costUsd: z.number().min(0).optional(),
   scheduledAt: z.string().optional(),
   completedAt: z.string().optional(),
+  // ADAAAA-8061: when the job stopped accruing (any terminal transition: done,
+  // failed, cancelled — including a boot-swept stranded job). The sweep and the
+  // stop/failure paths set this so a job that ended without a clean completion
+  // is never indistinguishable from a job that never ran. Additive optional.
+  endedAt: z.string().optional(),
+  // ADAAAA-8061: named reason the spend could not be fully measured (e.g.
+  // `decide-count-not-persisted`, `perceive-session-lost`). Written together
+  // with `partialCostUsd` so a reader can tell "not measured" from a genuine
+  // zero; a measured record never carries it. Additive optional.
+  costUnavailable: z.string().optional(),
+  // ADAAAA-8061: best-effort partial cost (the perceive-session leg only) when
+  // the decide count could not be measured. Never written in place of a real
+  // `costUsd`. Additive optional.
+  partialCostUsd: z.number().min(0).optional(),
+  // ADAAAA-8061: set by POST /jobs/:id/stop so the pass unwinds gracefully
+  // (settling `cancelled` + cost) instead of losing its decide runner.
+  stopRequestedAt: z.string().optional(),
   // Async-VOD job progress (ADAAAA-6760): additive optional 0-100 progress +
   // human label, updated by runVodJob at stage boundaries. No contract version
   // bump — both are purely additive and absent on older records / live jobs.

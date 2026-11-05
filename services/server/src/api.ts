@@ -81,6 +81,12 @@ import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
 import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, failureReasonFor, type JobFailureReason, type JobOutcome } from "./job-failure";
 import {
+  accruedSecondsSince,
+  buildTerminalAccountingPatch,
+  computeCostUsd,
+  PERCEIVE_PER_HOUR_USD,
+} from "./job-settlement";
+import {
   accumulateAttemptTotals,
   closeOpenAttempt,
   extractionReusable,
@@ -262,11 +268,9 @@ export function resolveControlSessionId(args: {
   );
 }
 
-/** Perceive persistent-session list price per hour (docker/runners.json
- * perceives `$0.01/hr`). Used for the recorded per-video `costUsd` list cost on
- * VOD jobs (ADAAAA-4954 spec §4.1). Flat hour unit, so session billing is
- * proportional to perceiveSessionS. */
-const PERCEIVE_PER_HOUR_USD = 0.01;
+// ADAAAA-8061: `PERCEIVE_PER_HOUR_USD` now lives in ./job-settlement, so every
+// settlement path (success, stop, failure, boot sweep) prices the perceive leg
+// from ONE constant instead of a local copy that could drift.
 
 /** ADAAAA-6625: thrown inside a VOD pass once `POST /jobs/:id/stop` has
  * cancelled it, so the run unwinds at the next safe boundary instead of
@@ -636,6 +640,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // live job can be stopped explicitly; ends the frame iterator -> analyzeJob
   // returns -> the job is marked done.
   const liveSessions = new Map<string, LiveIngest>();
+  /** ADAAAA-8061: the in-flight `runLiveJob` promise per job, so the stop path
+   * can WAIT for the pass to settle (bounded by `cfg.jobStopDrainMs`) instead of
+   * releasing the perceive runner underneath it. Cleared when the pass exits. */
+  const liveRuns = new Map<string, Promise<void>>();
   // Browser-capture (client-side screen share / element capture) jobs: the
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
@@ -692,6 +700,28 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const vodAttemptStats = new Map<string, VodAttemptStats>();
   function isVodStopped(jobId: string): boolean {
     return vodStops.has(jobId);
+  }
+
+  /** ADAAAA-8061: await a run promise for at most `ms`. Resolves `true` when the
+   * run settled (either outcome), `false` on timeout. Used by the live stop path
+   * so a stop either drains the pass's own settlement or falls through to the
+   * manual settle+release instead of hanging on a wedged decide. */
+  function waitForRun(run: Promise<unknown> | undefined, ms: number): Promise<boolean> {
+    if (!run) return Promise.resolve(true);
+    if (ms <= 0) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      const done = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve(ok);
+      };
+      timer = setTimeout(() => done(false), ms);
+      timer.unref?.();
+      run.then(() => done(true), () => done(true));
+    });
   }
 
   // --- Resumable VOD upload sessions (ADAAAA-5714) ---
@@ -1676,6 +1706,41 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const perceiveSessionS = (Date.now() - t0) / 1000;
       const liveDecideCalls = outcome.observeMetrics?.decideCalls ?? 0;
       const liveCostUsd = cfg.decideFee * liveDecideCalls + (perceiveSessionS / 3600) * PERCEIVE_PER_HOUR_USD;
+      // ADAAAA-8061: a pass stopped mid-stream settles as `cancelled` with the
+      // spend it actually incurred. The stop path flips `slot.stopped` (and
+      // stamps `stopRequestedAt`) so the frame loop unwinds HERE — the pass used
+      // to be killed under an in-flight decide and landed `failed` with no
+      // `endedAt`/`decideCalls`/`costUsd`, making a stopped job look like one
+      // that never ran. Decide calls come from the observe pass; when the pass
+      // never produced a metrics snapshot the durable per-decide rows are the
+      // measured fallback.
+      const stoppedMidPass = slot.stopped || Boolean(store.getJob(job.id)?.stopRequestedAt);
+      if (stoppedMidPass) {
+        const stoppedDecideCalls = outcome.observeMetrics?.decideCalls ?? store.candidatesForJob(job.id).length;
+        await store.patchJob(
+          job.id,
+          buildTerminalAccountingPatch({
+            status: "cancelled",
+            decideFee: cfg.decideFee,
+            decideCalls: stoppedDecideCalls,
+            perceiveSessionS,
+            observeMetrics: outcome.observeMetrics,
+            error: "stopped (cancelled via API)",
+            extra: {
+              stage: "cancelled",
+              progressLabel: "stopped",
+              perceiveSessionId: outcome.sessionId,
+              liveWatchMinutes: Number((perceiveSessionS / 60).toFixed(3)),
+              ...completedLiveCounterFields(stageA, outcome.observeMetrics, store.highlightsForJob(job.id).length),
+            },
+          })
+        );
+        const stoppedCostUsd = computeCostUsd(stoppedDecideCalls, perceiveSessionS, cfg.decideFee);
+        console.log(
+          `[live:${job.id}] stopped mid-pass: decideCalls=${stoppedDecideCalls} perceiveSessionS=${perceiveSessionS.toFixed(1)} costUsd=${stoppedCostUsd}`
+        );
+        return;
+      }
       await store.patchJob(job.id, {
         status: "done",
         perceiveSessionId: outcome.sessionId,
@@ -1685,6 +1750,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // read as a measurement instead of a continuous-attachment assumption.
         liveWatchMinutes: Number((perceiveSessionS / 60).toFixed(3)),
         costUsd: Number(liveCostUsd.toFixed(4)),
+        // ADAAAA-8061: every terminal transition stamps the end of accrual, so
+        // a completed row is never distinguishable from a never-ran row either.
+        endedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
         // ADAAAA-7624/7667: Stage-A status + the live candidate counters.
         ...completedLiveCounterFields(stageA, outcome.observeMetrics, store.highlightsForJob(job.id).length),
         // ADAAAA-7011: cadence + decide gemma E2E latency snapshot from the live
@@ -1718,8 +1787,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const whistleLine = whistleEvidenceLine("live", job.id, outcome.observeMetrics);
       if (whistleLine) console.log(whistleLine);
     } catch (e) {
-      await markJobFailed(job.id, e);
-      console.error(`[live:${job.id}]`, e);
+      // ADAAAA-8061: a stop that races an error still settles as `cancelled`
+      // with accounting — a stop must never end up as an unattributed `failed`
+      // just because the decide runner objected while the pass unwound.
+      if (store.getJob(job.id)?.stopRequestedAt) {
+        await markJobCancelled(job.id, "stopped (cancelled via API)");
+        console.log(`[live:${job.id}] stopped during unwind:`, String((e as any)?.message ?? e));
+      } else {
+        await markJobFailed(job.id, e);
+        console.error(`[live:${job.id}]`, e);
+      }
     } finally {
       await ingest.stop();
       liveSessions.delete(job.id);
@@ -1907,13 +1984,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         return;
       }
       const resume = mergeResumeCheckpoint(cur?.resume, attemptPatch);
+      // ADAAAA-8061: a terminal failure settles the spend it actually incurred.
+      // `stats.decideCalls` is this attempt's applied-window count on the VOD
+      // worker; a live/browser pass has no attempt stats, so the durable
+      // per-decide rows are the measured fallback. When neither exists the row
+      // settles `costUnavailable` + `partialCostUsd` instead of a bare `failed`
+      // with no accounting (a job that spent GPU must never read like one that
+      // never ran).
+      const measuredDecideCalls =
+        stats !== undefined
+          ? totals.decideCalls
+          : store.candidatesForJob(jobId).length > 0
+            ? store.candidatesForJob(jobId).length
+            : null;
+      const perceiveS =
+        failedPerceiveS > 0
+          ? failedPerceiveS
+          : accruedSecondsSince(cur?.startedAt ?? cur?.scheduledAt ?? cur?.createdAt, Date.now());
       await store.patchJob(jobId, {
-        status: "failed",
+        ...buildTerminalAccountingPatch({
+          status: "failed",
+          decideFee: cfg.decideFee,
+          decideCalls: measuredDecideCalls,
+          perceiveSessionS: perceiveS,
+          nowMs: Date.parse(now),
+          error: message,
+          costUnavailableReason: "decide-count-not-persisted",
+        }),
         stage: "failed",
         progressLabel: "failed",
         failureReason: reason,
-        error: message,
-        finishedAt: now,
         resume,
       });
       await recordJobLifecycle(
@@ -1958,11 +2058,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!cur) return;
     if (cur.status === "done" || cur.status === "failed") return;
     try {
+      // ADAAAA-8061: a stop settles the spend the pass actually incurred instead
+      // of leaving `cancelled` with no accounting. Decide calls are MEASURED
+      // from the durable per-decide rows (the in-memory attempt stats are gone
+      // once the run unwinds); the perceive leg is the wall clock since the pass
+      // began. A stop that produced no decide rows settles `costUnavailable` +
+      // `partialCostUsd` rather than a false `costUsd: 0`.
+      const decideRows = store.candidatesForJob(jobId).length;
+      const perceiveS = accruedSecondsSince(cur.startedAt ?? cur.scheduledAt ?? cur.createdAt, Date.now());
       await store.patchJob(jobId, {
-        status: "cancelled",
-        stage: "cancelled",
-        progressLabel,
-        finishedAt: cur.finishedAt ?? new Date().toISOString(),
+        ...buildTerminalAccountingPatch({
+          status: "cancelled",
+          decideFee: cfg.decideFee,
+          decideCalls: decideRows > 0 ? decideRows : null,
+          perceiveSessionS: perceiveS,
+          error: cur.error ?? "stopped (cancelled via API)",
+          costUnavailableReason: "decide-count-not-persisted",
+          extra: { stage: "cancelled", progressLabel },
+        }),
         // ADAAAA-7906: an operator stop WINS over an armed resume retry — clear
         // the schedule so the drain filter never reclaims a cancelled row.
         resume: cur.resume ? mergeResumeCheckpoint(cur.resume, { nextAttemptAt: null }) : undefined,
@@ -2898,6 +3011,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // -67% cost measure) are readable per job from the completed record.
       ...(outcome.vodObserveMetrics ? { vodObserveMetrics: outcome.vodObserveMetrics } : {}),
       scheduledAt,
+      // ADAAAA-8061: `endedAt` is the accrual-end stamp every terminal path
+      // writes (done / failed / cancelled / boot-swept), so a reader has ONE
+      // field that is non-null on any job that actually ran.
+      endedAt: new Date().toISOString(),
       finishedAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
       progress: 100,
@@ -3965,7 +4082,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         }).catch((e: any) =>
           console.error(`[live:${job.id}] media-node attribution failed:`, String(e?.message || e))
         );
-        runLiveJob(ingest, job, user, sub).catch(() => {});
+        const liveRun = runLiveJob(ingest, job, user, sub).catch(() => {});
+        // ADAAAA-8061: keep a handle so a stop can drain the pass (bounded)
+        // before deciding whether it has to settle/release the runner itself.
+        liveRuns.set(
+          job.id,
+          liveRun.finally(() => liveRuns.delete(job.id))
+        );
         return { job: jobForRole(store.getJob(job.id), user.role), status: "ingesting", framesAnalyzed: 0 };
       }
       // Durable non-blocking submit (ADAAAA-6873): enqueue the file/URL VOD job
@@ -4738,19 +4861,34 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       return reply.code(403).send({ error: "forbidden" });
     const ing = liveSessions.get(job.id);
     if (ing) {
+      // ADAAAA-8061: drain the pass instead of amputating it. Before this, the
+      // stop released the perceive session UNDER the in-flight decide, so the
+      // decide runner 404'd five times, runLiveJob threw
+      // `decide runner unavailable after 5 attempts`, and the job settled
+      // `failed` with no endedAt/decideCalls/costUsd — the GPU had been spent
+      // but the record read like a job that never ran.
+      //
+      // Now: flip the stop flag (analyzeJob breaks between frames), stamp the
+      // request so runLiveJob settles `cancelled` + accounting, end the ingest,
+      // and wait a bounded grace for the pass to settle itself. Only if it
+      // cannot settle inside that window do we release the runner and settle
+      // from the durable per-decide rows ourselves.
+      const slot = livePerceiveSlots.get(job.id);
+      if (slot) slot.stopped = true;
+      await store
+        .patchJob(job.id, { stopRequestedAt: new Date().toISOString() })
+        .catch((e: any) => console.error(`[live:${job.id}] stopRequestedAt persist failed:`, String(e?.message || e)));
       ing.stop();
       liveSessions.delete(job.id);
-      // ADAAAA-6561: release the perceive slot NOW (synchronously from the
-      // stop path) instead of waiting for analyzeJob's `finally`, which only
-      // runs after the in-flight GPU /analyze completes (~1.4s). A live job
-      // started right after this stop can then re-reserve the capacity-1 slot
-      // without a 503. Idempotent — analyzeJob's `finally` re-leases as a no-op,
-      // and the slotRef.isStopped flag prevents it re-reserving a fresh session.
-      const slot = livePerceiveSlots.get(job.id);
-      livePerceiveSlots.delete(job.id);
-      if (slot) {
-        slot.stopped = true;
-        if (slot.current) await adapter.stopPerceive(slot.current.sessionId).catch(() => {});
+      const drained = await waitForRun(liveRuns.get(job.id), cfg.jobStopDrainMs);
+      if (!drained) {
+        // Hard fallback: the pass is wedged (a stuck decide). Release the
+        // capacity-1 slot and settle the row so accounting is never lost.
+        console.warn(`[live:${job.id}] stop drain timed out after ${cfg.jobStopDrainMs}ms — releasing + settling manually`);
+        const held = livePerceiveSlots.get(job.id);
+        livePerceiveSlots.delete(job.id);
+        if (held?.current) await adapter.stopPerceive(held.current.sessionId).catch(() => {});
+        await markJobCancelled(job.id, "stopped (drain timeout)");
       }
       return reply.send({ ok: true, job: jobForRole(store.getJob(job.id), req.user.role) });
     }

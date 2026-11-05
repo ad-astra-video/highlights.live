@@ -14,6 +14,7 @@ import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
 import { outcomeForStrandedJob } from "./job-failure";
+import { accruedSecondsSince, buildTerminalAccountingPatch } from "./job-settlement";
 import { reconcileStaleMediaSessions } from "./media-session-reconcile";
 import Stripe from "stripe";
 
@@ -98,18 +99,47 @@ async function main() {
     const mediaRows = new Set((await db.listMediaSessions()).map((m) => m.jobId));
     const reaped = await store.sweepStrandedJobs((job) => {
       const o = outcomeForStrandedJob(job.source, mediaRows.has(job.id));
-      return { failureReason: o.status === "failed" ? o.failureReason : undefined, error: o.status === "failed" ? o.error : undefined };
+      // ADAAAA-8061: settle the cost this pass actually accumulated instead of
+      // writing a bare `failed`. The decide count is MEASURED from the durable
+      // per-decide rows already persisted for this job (the in-memory process is
+      // gone, so nothing else survives); the perceive leg is the wall clock from
+      // the pass start. Zero rows means "no decide was recorded", which is
+      // `not measured`, not a proven zero — that settles as
+      // `costUnavailable` + `partialCostUsd` so spend is never silently lost.
+      const decideRows = store.candidatesForJob(job.id).length;
+      const perceiveS =
+        accruedSecondsSince(job.startedAt ?? job.scheduledAt ?? job.createdAt, Date.now()) ?? undefined;
+      return {
+        ...(o.status === "failed" ? { failureReason: o.failureReason, error: o.error } : {}),
+        ...buildTerminalAccountingPatch({
+          status: "failed",
+          decideFee: cfg.decideFee,
+          decideCalls: decideRows > 0 ? decideRows : null,
+          perceiveSessionS: perceiveS ?? null,
+          costUnavailableReason: "decide-count-not-persisted",
+        }),
+      };
     });
     if (reaped > 0) {
       const lost = stranded.filter((j) => mediaRows.has(j.id)).length;
       console.log(`[boot] swept ${reaped} stranded active job(s) -> failed (media-session-lost=${lost})`);
       for (const job of stranded) {
         const o = outcomeForStrandedJob(job.source, mediaRows.has(job.id));
+        // Read the settled row back: the sweep's whole point (ADAAAA-8061) is
+        // that a swept job carries a real spend record, so log what landed.
+        const settled = store.getJob(job.id);
+        const spend =
+          settled?.costUsd !== undefined
+            ? `decideCalls=${settled.decideCalls} costUsd=${settled.costUsd}`
+            : `costUnavailable=${settled?.costUnavailable ?? "?"} partialCostUsd=${settled?.partialCostUsd ?? "?"}`;
+        console.log(
+          `[boot]   swept job ${job.id} source=${job.source} endedAt=${settled?.endedAt ?? "?"} ${spend}`
+        );
         await db
           .appendJobLifecycleEvent({
             jobId: job.id,
             kind: "boot-swept",
-            detail: `failureReason=${o.status === "failed" ? o.failureReason : "unknown"} source=${job.source} mediaSession=${mediaRows.has(job.id)}`,
+            detail: `failureReason=${o.status === "failed" ? o.failureReason : "unknown"} source=${job.source} mediaSession=${mediaRows.has(job.id)} ${spend} endedAt=${settled?.endedAt ?? "?"}`,
           })
           .catch(() => {});
       }
