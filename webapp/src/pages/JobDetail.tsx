@@ -28,6 +28,8 @@ import {
   assertFramePartition,
   mergedGroupsByWindow,
   mergedMomentGroups,
+  highlightContentCounts,
+  hasHighlightContent,
   triggerLabel,
   authFetchFrame,
   sectionKinds,
@@ -2068,6 +2070,16 @@ export function JobDetail() {
     () => (detail ? detail.highlights.filter((h) => h.status !== "rejected") : []),
     [detail]
   );
+  // ADAAAA-8034: the empty state answers "does this page have any highlight
+  // content at all?", not "are there postable cards?" — the notable/merged lanes
+  // and the summary log are highlight content too. A live job whose only accepted
+  // highlight has not been precision-passed yet has 0 postable cards with a
+  // populated notable lane (`5a320b2d`), and the empty state used to render
+  // beside that row.
+  const noHighlightContent = useMemo(
+    () => (detail ? !hasHighlightContent(highlightContentCounts(detail)) : true),
+    [detail]
+  );
   // ADAAAA-7915 (increment 3): the clips the viewer rejected. `detail.highlights`
   // can never hold one (the postable projection drops them), so the strip reads
   // the raw audit rows and excludes anything the accepted feed already shows.
@@ -2504,7 +2516,7 @@ export function JobDetail() {
             </div>
           )}
           <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {detail.highlights.filter((h) => h.status !== "rejected").length === 0 && (
+            {noHighlightContent && (
               <div className="text-mut" data-detail-no-highlights>No accepted highlights for this job.</div>
             )}
             {detail.highlights
