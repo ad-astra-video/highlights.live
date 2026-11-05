@@ -203,6 +203,10 @@ export const MIN_EPOCH_SECONDS = 1_000_000;
 export interface MediaRailStats {
   /** Observations relayed by the media node (frames with pixels). */
   observations: number;
+  /** ADAAAA-8069: published-frame clocks the media node reported — every frame
+   *  it put on the video-in rail, with or without a perceive observation. This
+   *  is the window's observation-set source on the RTC arm. */
+  frameTicks: number;
   /** Frames recorded into the decide window (== observations today). */
   frames: number;
   /** Audio PCM chunks fed into the retained window audio (ASR context). */
@@ -268,6 +272,9 @@ export class MediaRailObserver {
   private originTs: number | null = null;
   private readonly startedAt = Date.now();
   private observations = 0;
+  /** ADAAAA-8069: published-frame ticks the media node reported (the rail's
+   *  own decode clock, with or without an observation/image). */
+  private frameTicks = 0;
   private frames = 0;
   private audioChunks = 0;
   private triggers = 0;
@@ -402,10 +409,6 @@ export class MediaRailObserver {
    */
   onObservation(obs: MediaRailObservation, frameB64: string | undefined): void {
     if (this.closed) return;
-    // NO pixels, NO decide. The media node always has the decoded JPEG at
-    // publish time; without it this observation is evidence only (deciding
-    // blind or re-fetching frames is forbidden by the design constraint).
-    if (!frameB64 || typeof frameB64 !== "string") return;
     const rawTs = Number(obs?.timestamp);
     if (!Number.isFinite(rawTs)) return;
     // The rail's content clock is wall-clock epoch seconds and every window,
@@ -417,6 +420,20 @@ export class MediaRailObserver {
     // rather than silently poisoning the whole share.
     if (rawTs < MIN_EPOCH_SECONDS) {
       this.rejectClock(rawTs);
+      return;
+    }
+    // NO pixels, NO decide. The media node always has the decoded JPEG at
+    // publish time; without it this observation is evidence only (deciding
+    // blind or re-fetching frames is forbidden by the design constraint).
+    //
+    // ADAAAA-8069: evidence-only still means it IS an observation inside the
+    // window span, so it joins the window's observation set (the perceive
+    // timeline) while staying out of the image set — no decide frame, no
+    // cadence/anchor change, no budget token.
+    if (!frameB64 || typeof frameB64 !== "string") {
+      const ts = this.contentTs(rawTs);
+      // Evidence-only: the observation's findings still belong on the timeline.
+      this.live.recordObservation(ts, seedFromObservation(ts, obs));
       return;
     }
     const ts = this.contentTs(rawTs);
@@ -484,6 +501,28 @@ export class MediaRailObserver {
       }
       await this.live.maybeFire(ts, false, lagMs);
     });
+  }
+
+  /**
+   * ADAAAA-8069: one PUBLISHED frame clock from the media node — a frame it put
+   * on the video-in rail whether or not the perceive runner ever observed it.
+   *
+   * This is the RTC arm's observation-set source. The runner fast-forwards (a
+   * measured share published 848 frames but produced ~93 observations), so
+   * sourcing the window's observation set from delivered observations put the
+   * perceive timeline back onto the image set. A tick carries only a clock: it
+   * never becomes a decide frame (no pixels, no decide), never fires the
+   * cadence, and never spends a budget token.
+   */
+  onFrameTick(rawTs: number): void {
+    if (this.closed) return;
+    if (!Number.isFinite(rawTs)) return;
+    if (rawTs < MIN_EPOCH_SECONDS) {
+      this.rejectClock(rawTs);
+      return;
+    }
+    this.frameTicks++;
+    this.live.recordObservation(this.contentTs(rawTs));
   }
 
   /** One ~100 ms mono int16 PCM chunk from the media-edge audio relay. Buffered
@@ -573,6 +612,7 @@ export class MediaRailObserver {
     const recon = this.live.triggerReconciliation();
     return {
       observations: this.observations,
+      frameTicks: this.frameTicks,
       frames: this.frames,
       audioChunks: this.audioChunks,
       triggers: this.triggers,
