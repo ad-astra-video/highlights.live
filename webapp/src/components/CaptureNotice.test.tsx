@@ -65,4 +65,23 @@ describe("CaptureNotice (ADAAAA-7750 AC3)", () => {
     expect(render(null)).toBe("");
     expect(render({ ...base, state: "unknown", cause: null })).toBe("");
   });
+
+  // ADAAAA-8105: a live share that stores no video still delivers frames and can
+  // accept highlights, so the notice must render as an ALERT above the list —
+  // that card is exactly what will have no clip.
+  it("warns that a live share is not saving video (ADAAAA-8105)", () => {
+    const html = render({
+      ...base,
+      state: "recording_missing",
+      frames: 40,
+      highlights: 2,
+      firstWindowInS: null,
+      cause: "This share is not saving video, so its highlight clips will be missing.",
+      action: "Stop the share and start it again; if it repeats, use another browser.",
+    });
+    expect(html).toContain("not saving video");
+    expect(html).toContain('data-capture-state="recording_missing"');
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("another browser");
+  });
 });

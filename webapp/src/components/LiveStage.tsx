@@ -40,6 +40,7 @@ export function LiveStageViewBlock({
   staleSec = 0,
   stopping = false,
   stopError = null,
+  captureNotice = null,
   onStop,
 }: {
   view: LiveStageView;
@@ -50,6 +51,9 @@ export function LiveStageViewBlock({
   staleSec?: number;
   stopping?: boolean;
   stopError?: string | null;
+  /** ADAAAA-8105: live "recording not captured" copy while this tab owns the
+   *  share and its recorder is producing no video bytes. */
+  captureNotice?: string | null;
   onStop?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -102,6 +106,16 @@ export function LiveStageViewBlock({
           </button>
         )}
       </div>
+
+      {captureNotice && (
+        <div
+          className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2 text-sm font-bold text-yellow"
+          data-live-stage-capture-notice
+          role="alert"
+        >
+          {captureNotice}
+        </div>
+      )}
 
       {view.showVideo && (
         <video
@@ -197,6 +211,7 @@ export function LiveStage({ job, liveProgress, staleSec = 0 }: LiveStageProps) {
       staleSec={staleSec}
       stopping={stopping}
       stopError={stopError}
+      captureNotice={cap.jobId === job.id ? cap.recordingNotice : null}
       onStop={() => void onStop()}
     />
   );
