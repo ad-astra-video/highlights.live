@@ -196,6 +196,37 @@ def test_ledger_carries_the_configured_content_fps():
     assert "contentFps" not in bare
 
 
+def test_ledger_carries_the_enrichment_arm(monkeypatch=None):
+    """ADAAAA-8108 (AC-E3): the ON/OFF arm rides the row next to the density keys.
+
+    The arm is allocated per DECIDED window by the server (`alternate` starts OFF
+    so the ON arm is never read through the warm image prefix). Without the
+    passthrough a leg could only INFER the arm from `records == 0` or the prompt
+    text; stamping it makes the split a column read. A payload that states no arm
+    (VOD / legacy / the shipped `on` posture) leaves the key OFF the row rather
+    than claiming an arm it never ran."""
+    _block, ledger = render_perceive_timeline(
+        {"perceiveTimeline": []},
+        {"seeds": 21, "withFindings": 8, "timelineRecords": 21, "observationsInSpan": 21,
+         "imageCount": 4, "spanSec": 7, "cadenceMs": 5000, "contentFps": 3,
+         "enrichmentArm": "off"},
+    )
+    # The OFF arm renders NO block, but the window's density is still measured.
+    assert _block == ""
+    assert ledger["records"] == 0
+    assert ledger["timelineRecords"] == 21
+    assert ledger["enrichmentArm"] == "off"
+
+    block, on_ledger = render_perceive_timeline(
+        {"perceiveTimeline": timeline(21)}, {"seeds": 21, "enrichmentArm": "on"}
+    )
+    assert block.startswith("perceive timeline")
+    assert on_ledger["enrichmentArm"] == "on"
+
+    _block, bare = render_perceive_timeline({"perceiveTimeline": timeline(4)}, {"seeds": 4})
+    assert "enrichmentArm" not in bare
+
+
 def test_render_is_ordered_and_dense_with_a_ledger():
     block, ledger = render_perceive_timeline(
         {"perceiveTimeline": timeline(29)}, {"seeds": 29, "withFindings": 29, "centerTs": 10.0}
