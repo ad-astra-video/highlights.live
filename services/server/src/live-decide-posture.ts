@@ -28,6 +28,9 @@ export interface LiveDecidePosture {
   /** ADAAAA-8102: the CONTENT consume rate (`LIVE_OBSERVE_CONTENT_FPS`), undefined
    *  = the 2 fps default. */
   liveObserveContentFps?: number;
+  /** ADAAAA-8108: the live decide ENRICHMENT arm (`LIVE_DECIDE_ENRICH`), undefined
+   *  = the shipped `on`. */
+  liveDecideEnrich?: "on" | "off" | "alternate";
 }
 
 /**
@@ -53,5 +56,12 @@ export function liveDecideBootLines(cfg: LiveDecidePosture): string[] {
     `[boot] live content consume: ${cfg.liveObserveContentFps ?? OBSERVE_CONTENT_FPS} fps ` +
       `(LIVE_OBSERVE_CONTENT_FPS, default ${OBSERVE_CONTENT_FPS}, both live rails; ` +
       `ingest sampleFps still governs persistence + clip cut)`,
+    // ADAAAA-8108 (AC-E3): the ENRICHMENT arm. A leg's ON/OFF split is graded off
+    // `perceiveTimeline.enrichmentArm` on each decide row; this line states what
+    // THIS process resolved for the arm, so a recreate that booted the wrong arm
+    // is readable in the log instead of being inferred from latency.
+    `[boot] live decide enrichment: ${cfg.liveDecideEnrich ?? "on"} ` +
+      `(LIVE_DECIDE_ENRICH, default on; off/alternate are the AC-E3 measurement arms ` +
+      `and alternate starts OFF)`,
   ];
 }

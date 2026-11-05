@@ -347,6 +347,23 @@ export interface ServerConfig {
    * AC-C4 ON/OFF latency pairing can be measured on ONE build with alternating
    * order. Instrumentation only — leave it unset in production. */
   livePerceiveTimelineSource: "observations" | "seeds";
+  /** ADAAAA-8108 (AC-E3): the runtime arm of the live decide ENRICHMENT (the
+   * per-window `perceiveTimeline` text block).
+   *
+   * `on` (the shipped posture, and the value an unset env resolves to) sends the
+   * timeline on every live window. `off` sends NONE of it — span, cadence, image
+   * budget, in-flight depth and `KEEP_RATIO` are untouched, so the delta against
+   * `on` is the enrichment cost alone. `alternate` allocates the arm per DECIDED
+   * window in content order, OFF first (`off`, `on`, `off`, …), so one leg yields
+   * a same-cell ON/OFF pair that is not read through the warm image prefix: an
+   * ON-first leg measures the first window against a cold engine and inflates
+   * the ON arm by ~0.6 s.
+   *
+   * Instrumentation only — a measurement lever, never a posture. The resolved
+   * arm is stamped on every decide_audit row (`perceiveTimeline.enrichmentArm`)
+   * so a leg is graded off the payload instead of `printenv`.
+   * `LIVE_DECIDE_ENRICH=off|alternate`. */
+  liveDecideEnrich: "on" | "off" | "alternate";
   /** ADAAAA-7774: frame-consumption rate (content fps) of the LIVE observe pass.
    * The live ingest delivers ~5 fps (rtmp/file-sim decode) while the decide
    * window only ever carries `OBSERVE_CONTENT_FPS` (2) frames per content second
@@ -926,6 +943,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // latency measurement. Anything else is the default — an A/B lever never
     // becomes a posture by typo.
     livePerceiveTimelineSource: env.LIVE_PERCEIVE_TIMELINE_SOURCE === "seeds" ? "seeds" : "observations",
+    // ADAAAA-8108 (AC-E3): the live decide ENRICHMENT arm (see
+    // AnalyzerConfig.liveDecideEnrich). Default `on` = the shipped posture, so an
+    // unset env is byte-identical; `off` / `alternate` are the measurement arms
+    // and anything else normalises back to `on` (a lever never becomes a posture
+    // by typo).
+    liveDecideEnrich:
+      env.LIVE_DECIDE_ENRICH === "off"
+        ? "off"
+        : env.LIVE_DECIDE_ENRICH === "alternate"
+          ? "alternate"
+          : "on",
     // ADAAAA-7758: one live decide slot per box (opt-in). Off by default: the
     // queued-stream wording is a CEO decision (ADAAAA-7757), so the shipped
     // behaviour only changes once the flag is enabled on the deployment.

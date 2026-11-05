@@ -686,6 +686,14 @@ export class LiveObserver {
    *  trigger that comes due on a dropped window stays PENDING (never consumed)
    *  and anchors the next kept window. */
   private readonly decideKeepRatio: number;
+  /** ADAAAA-8108 (AC-E3): the enrichment arm mode for this rail (`on` = the
+   *  shipped posture; `off`/`alternate` are the AC-E3 measurement arms). */
+  private readonly enrichmentMode: "on" | "off" | "alternate";
+  /** ADAAAA-8108: DECIDED windows seen by this rail — the alternator's index.
+   *  Counted only at the point a window is committed to a decide (after every
+   *  budget/gate/admission/backpressure refusal has returned), so a refused tick
+   *  can never consume a parity slot and leave the ON arm with two neighbours. */
+  private enrichWindows = 0;
   /** ADAAAA-7799: decide opportunities dropped by the rate cap. */
   private throttleSkips = 0;
   /** ADAAAA-7799: decide opportunities seen (kept + dropped). */
@@ -756,6 +764,13 @@ export class LiveObserver {
      *  spend — is bounded deterministically. `undefined`/1 = off, byte-identical
      *  to the unbounded pass. Wired from `LIVE_DECIDE_KEEP_RATIO`. */
     decideKeepRatio?: number;
+    /** ADAAAA-8108 (AC-E3): the enrichment arm for this rail. `on` (default)
+     *  sends the per-window `perceiveTimeline` exactly as shipped; `off` omits it
+     *  from every window; `alternate` alternates per DECIDED window in content
+     *  order, OFF first. Only the decide request's timeline moves — span,
+     *  cadence, image budget, in-flight depth and the keep ratio are the same
+     *  values, which is what makes the arm pair a same-cell measurement. */
+    enrichment?: "on" | "off" | "alternate";
     /** ADAAAA-7758: admission predicate evaluated before this tick spends a
      *  decide. `false` skips the tick (no decide, no latency sample, no budget
      *  token, pending triggers stay pending) and counts an admission skip — the
@@ -795,6 +810,11 @@ export class LiveObserver {
     // unbounded, so an unset env is byte-identical.
     const keepRatio = Number(opts.decideKeepRatio ?? 1);
     this.decideKeepRatio = Number.isFinite(keepRatio) && keepRatio > 0 && keepRatio < 1 ? keepRatio : 1;
+    // ADAAAA-8108 (AC-E3): the enrichment arm. Any value outside the two
+    // measurement arms normalises to the shipped `on` posture, so a typo can
+    // never silently ship a leg with the timeline missing.
+    this.enrichmentMode =
+      opts.enrichment === "off" || opts.enrichment === "alternate" ? opts.enrichment : "on";
     this.stageA = opts.stageA ?? null;
     this.stageB = opts.stageB ?? null;
     // ADAAAA-8005 (gate 3): absent = the VOD/test shape (no delivery rows).
@@ -1332,6 +1352,18 @@ export class LiveObserver {
     this.triggers.coverThrough(lo, nowTs);
     const lag = lagMs ?? 0;
     this.lastFired = { centerTs: nowTs, lagMs: lag };
+    // ADAAAA-8108 (AC-E3): stamp the ENRICHMENT arm on this window now that it
+    // is committed to a decide (every refusal above has already returned, so a
+    // skipped tick cannot consume a parity slot). `alternate` starts OFF — an
+    // ON-first leg reads the ON arm through the cold/warm image prefix and
+    // overstates it by ~0.6 s, which is the false delta this arm order exists to
+    // avoid. The arm rides the payload into `buildObserveDecideRequest`, so the
+    // decide request and its audit row state the same value.
+    if (this.enrichmentMode !== "on") {
+      payload.enrichmentArm =
+        this.enrichmentMode === "off" ? "off" : this.enrichWindows % 2 === 0 ? "off" : "on";
+      this.enrichWindows++;
+    }
     // ADAAAA-8081: kick the window's ASR the moment the window is committed (all
     // budget/gate/admission refusals above already returned), so the
     // transcription runs in the side lane WHILE the previous window's decide is
@@ -1754,6 +1786,15 @@ export interface ObserveDecidePayload {
    *  decide was scheduled by a fired audio-noise trigger rather than the blind
    *  cadence. Absent on a cadence tick (the pre-trigger behaviour). */
   trigger?: AudioTriggerRecord;
+  /** ADAAAA-8108 (AC-E3): the ENRICHMENT arm this window is decided under, set
+   *  by {@link LiveObserver} only when the rail is in a measurement mode
+   *  (`LIVE_DECIDE_ENRICH=off|alternate`). Absent = the shipped `on` posture, so
+   *  every existing payload (and the whole VOD rail) stays byte-identical. `off`
+   *  drops the per-window `perceiveTimeline` text block from the decide request
+   *  and nothing else: the frames, the span, the cadence and the observation set
+   *  are the same objects, which is what makes the ON/OFF delta a measurement of
+   *  the enrichment alone. */
+  enrichmentArm?: "on" | "off";
   /** ADAAAA-8081: the SIDE-LANE transcription started at fire time for this
    *  window's audio clip (see `asr-prefetch.ts`). A symbol key on purpose: the
    *  payload is the decide request's own object, and a Promise must never be

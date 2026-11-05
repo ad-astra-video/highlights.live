@@ -1408,6 +1408,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // today's values, so merging changes nothing on a running box.
         cadenceS: cfg.liveObserveCadenceS,
         windowS: cfg.liveObserveWindowS,
+        // ADAAAA-8108 (AC-E3): the enrichment ON/OFF arm for this rail, wired from
+        // `LIVE_DECIDE_ENRICH` (unset = the shipped `on`, byte-identical).
+        enrichment: cfg.liveDecideEnrich,
         stageA: shared.stageAOutcomes,
         signalGate: cfg.observeSignalGate,
         signalGateOpts: buildObserveSignalGateOpts(cfg),
@@ -6396,6 +6399,10 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7799 (lever C): the decide-rate cap (fraction of decide
     // opportunities kept). Forwarded verbatim; undefined leaves it unbounded.
     liveDecideKeepRatio: cfg.liveDecideKeepRatio,
+    // ADAAAA-8108 (AC-E3): the live enrichment arm (the per-window
+    // `perceiveTimeline` text block). Forwarded verbatim so both live rails and
+    // the decide-request builder read ONE value; `on` is the shipped posture.
+    liveDecideEnrich: cfg.liveDecideEnrich,
     // ADAAAA-7791: the four LIVE perceive knobs were parsed by config.ts but
     // never forwarded here, so the live rail always fell back to the defaults
     // (OBSERVE_CONTENT_FPS=2, cadence auto-on, utilisation 0.6) and an operator
