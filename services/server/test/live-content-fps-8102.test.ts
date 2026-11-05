@@ -193,6 +193,89 @@ describe("contentFps is stamped on the live decide payload (AC-8101-1)", () => {
   });
 });
 
+describe("the timeline is the CONSUME set at a content rate (AC-8101-5 density)", () => {
+  /** Relay a share the way the media node does on the funded rail: observations
+   *  at the ingest clock (~2.78 fps) PLUS the batched published-frame tick clock
+   *  (~3/s) that ADAAAA-8069 added for the RTC arm. */
+  async function feedShare(opts: { contentFps?: number; seconds?: number; ingestFps?: number; tickFps?: number }) {
+    const ingestFps = opts.ingestFps ?? 2.78;
+    const tickFps = opts.tickFps ?? 3;
+    const seconds = opts.seconds ?? 120;
+    const T0 = Date.now() / 1000;
+    const decided: any[] = [];
+    const rail = new MediaRailObserver({
+      jobId: "job-8102-share",
+      fps: 3,
+      ...(opts.contentFps !== undefined ? { contentFps: opts.contentFps } : {}),
+      windowS: 7,
+      cadenceS: 5,
+      maxFrames: 4,
+      onDecide: async (payload) => {
+        decided.push(payload);
+        return false;
+      },
+    });
+    const ingestN = Math.floor(seconds * ingestFps);
+    const tickN = Math.floor(seconds * tickFps);
+    // Interleave both clocks in timestamp order, the way the two callbacks land.
+    let i = 0;
+    let j = 0;
+    while (i < ingestN || j < tickN) {
+      const obsTs = T0 + i / ingestFps;
+      const tickTs = T0 + j / tickFps;
+      if (i < ingestN && (j >= tickN || obsTs <= tickTs)) {
+        rail.onObservation({ timestamp: obsTs, tracks: [], objects: [], ocr: [] } as any, "a");
+        i++;
+      } else {
+        rail.onFrameTick(tickTs);
+        j++;
+      }
+      // The rail decides on an async serial chain; yield so the window is
+      // assembled while the frame buffer still holds this moment (a tight feed
+      // loop would let the observer trim to the last ~10 s before the chain
+      // reached the first window — a harness artifact, not rail behaviour).
+      await new Promise((r) => setImmediate(r));
+    }
+    return { rail, ingestN, tickN, decided };
+  }
+
+  it("reads 7-9 records per 7 s span — one record per content second, not the tick clock", async () => {
+    const { rail, decided } = await feedShare({ contentFps: 1, seconds: 120 });
+    await rail.finish();
+    expect(decided.length).toBeGreaterThanOrEqual(20);
+    const perSpan = decided.map((p: any) => (p.observations ?? []).length);
+    // Funded leg 977294d7 read ~20 records/span because the published clock and
+    // the consumed frames were both in the set. The consume set is ~1/s.
+    // Window 0 is the bootstrap fire and window 1 is the first span truncated by
+    // the stream start; every steady-state span reads 7-8 records.
+    const steady = decided.slice(2);
+    expect(steady.length).toBeGreaterThanOrEqual(15);
+    for (const p of steady) {
+      const records = (p.observations ?? []).length;
+      expect(records).toBeGreaterThanOrEqual(7);
+      expect(records).toBeLessThanOrEqual(9);
+      expect(p.frames.length).toBeLessThanOrEqual(4);
+      // records still exceed the image budget (the clause AC-8101-5 grades)
+      expect(records).toBeGreaterThan(p.frames.length);
+    }
+    // The tick clock kept running (the clip clock), it just left the timeline.
+    expect(rail.stats().frameTicks).toBeGreaterThan(rail.frameCount());
+  });
+
+  it("unset keeps ADAAAA-8069: the published tick clock IS the observation set", async () => {
+    const { rail, decided } = await feedShare({ seconds: 60 });
+    await rail.finish();
+    expect(decided.length).toBeGreaterThanOrEqual(8);
+    // No content rate: every relayed frame is consumed and every tick is an
+    // observation, so each span carries the ~3/s published clock.
+    const perSpan = decided.map((p: any) => (p.observations ?? []).length);
+    // Unset: both clocks join the set (the published tick ~3/s AND every relayed
+    // frame), so a steady span carries ~40 records — the 1 fps cell above reads
+    // 7-8 on the same feed, which is the difference the change makes.
+    expect(Math.min(...perSpan.slice(1))).toBeGreaterThanOrEqual(30);
+  });
+});
+
 describe("the boot readout names the content consume rate (ADAAAA-8102 Step 4)", () => {
   it("names the resolved rate on both the default and the 1 fps posture", async () => {
     const { liveDecideBootLines } = await import("../src/live-decide-posture");

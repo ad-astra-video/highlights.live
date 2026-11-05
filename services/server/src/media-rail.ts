@@ -536,6 +536,12 @@ export class MediaRailObserver {
       objects: (obs.objects ?? []).filter((o) => Array.isArray(o.bbox)) as any,
       ocr: obs.ocr ?? [],
     });
+    // ADAAAA-8102: at a content consume rate the window's observation set IS the
+    // consume set — one timeline record per content second. A consumed frame
+    // therefore joins the observation set here, so the 1 fps cell reads ~7
+    // records per 7 s span (AC-8101-5). Without this the set was the published
+    // tick clock alone (~2/s) and read 20 records/span on funded leg 977294d7.
+    if (this.contentFps > 0) this.live.recordObservation(ts);
     // `seq` rides the recorded frame so the decide window can name the frame
     // files it actually saw (the analysis refs persisted on the decide note).
     this.live.record(ts, frameB64, seedFromObservation(ts, obs), seq);
@@ -603,6 +609,13 @@ export class MediaRailObserver {
       return;
     }
     this.frameTicks++;
+    // ADAAAA-8102: a content-rate rail takes its timeline from the frames it
+    // CONSUMED, so the published clock only advances the clip clock (the
+    // `/media/frames` route calls `noteBrowserContentTs`). Adding it here too
+    // stacks ~2 ticks/s on top of ~1 consumed frame/s — the 20 records/span
+    // measured on funded leg 977294d7. Unset (the shipped default) keeps the
+    // ADAAAA-8069 behaviour exactly: the tick IS the observation set.
+    if (this.contentFps > 0) return;
     this.live.recordObservation(this.contentTs(rawTs));
   }
 
