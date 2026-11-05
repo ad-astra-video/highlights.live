@@ -1687,7 +1687,11 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
   // it is not part of the comparison — but a claim clause IS part of it (§2).
   const sources = [wholeStoredSentence(gated), wholeStoredSentence(raw)].filter(Boolean);
   const quiet = input.quiet === true;
-  const fits = (text: string): boolean => !!text && (!quiet || wordCount(text) <= QUIET_MAX_WORDS);
+  // ADAAAA-8043 (v7 §3.1): AC5 measures the LEAD before the beat separator, and
+  // a derived beat is a delivered clause the row carries — so the quiet budget
+  // applies to the lead, never to the lead + beat.
+  const fits = (text: string): boolean =>
+    !!text && (!quiet || wordCount(captionLead(text)) <= QUIET_MAX_WORDS);
   // ADAAAA-7995 AC4: a quiet row carries no colour, so a fallback variant that
   // still names one is skipped (the reduction list removes it).
   const QUIET_COLOUR_PHRASE =
