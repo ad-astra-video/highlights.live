@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, existsSync, readFileSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -258,6 +258,38 @@ describe("browser rail: the clip is cut DURING the share (ADAAAA-8032)", () => {
     // The stop path still produces it.
     await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: { authorization: `Bearer ${token}` }, payload: {} });
     expect(await clipUriFor(app, token, jobId)).toMatch(/^\/clips\/.+\.mp4$/);
+    await app.close();
+  }, 30_000);
+
+  it("a header-only capture is reported as 'no recording', never an ffmpeg cut failure (ADAAAA-8055)", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "lc4@test.dev", "password123");
+    const jobId = await startBrowserJob(app, token);
+    // ADAAAA-8055: a recorder that claims a container it cannot encode emits the
+    // header and no frame data — 752 B is the header size measured on the box.
+    const headerOnly = Buffer.alloc(752, 0).toString("base64");
+    const rec = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/recording`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { base64: headerOnly, mime: "video/mp4;codecs=avc1" },
+    });
+    expect(rec.statusCode).toBe(200);
+    const accepted = await ingest(app, token, jobId, 0, 0);
+    expect(accepted.highlight).toBeTruthy();
+
+    await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+
+    const row = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } }))
+      .json()
+      .highlights.find((h: any) => h.jobId === jobId);
+    expect(row.clipUri).toBe("");
+    // The honest reason, not `Clip cut failed: <ffmpeg noise>`.
+    expect(row.clipError).toBe("No screen-share recording was captured, so this highlight's clip could not be produced.");
+    // Nothing was cut from the frame-less file.
+    const clipsDir = path.join(cfg.dataDir, "clips");
+    const clipped = existsSync(clipsDir) ? readdirSync(clipsDir).filter((f: string) => f.startsWith(jobId)) : [];
+    expect(clipped).toEqual([]);
     await app.close();
   }, 30_000);
 });
