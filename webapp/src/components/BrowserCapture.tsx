@@ -68,6 +68,15 @@ export function BrowserCapture({ gameHint }: { gameHint: string }) {
       </div>
       {/* Stream health (ADAAAA-7726 Inc 2): five plain-language chips, 2 s cadence. */}
       {cap.sharing && <StreamHealthStrip chips={cap.healthChips} className="mt-3" />}
+      {cap.recordingNotice && (
+        <div
+          className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2 text-sm font-bold text-yellow"
+          data-capture-recording-notice
+          role="alert"
+        >
+          {cap.recordingNotice}
+        </div>
+      )}
       {cap.error && (
         <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red" data-capture-error>
           {cap.error}

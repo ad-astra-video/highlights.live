@@ -5,7 +5,16 @@ import { readSSE } from "./sse";
 import { captureEndedNotice } from "./captureLoss";
 import { useSettings } from "./settings";
 import { blobToBase64 } from "./blobToBase64";
-import { RECORDING_STALL_MS, recordingStalled, supportedRecordingMimes } from "./recordingCodec";
+import {
+  ENCODER_PROBE_MS,
+  ENCODER_PROBE_MIN_BYTES,
+  RECORDING_HEALTH_POLL_MS,
+  RECORDING_STALL_NOTICE,
+  chooseRecordingMime,
+  recordingHealth,
+  supportedRecordingMimes,
+  type RecordingHealth,
+} from "./recordingCodec";
 import { useStreamHealth } from "./useStreamHealth";
 import type { ChipView } from "./streamHealth";
 
@@ -80,6 +89,13 @@ export interface LiveCaptureValue {
   stopped: boolean;
   /** Stream-health chips (ADAAAA-7730) for the views. */
   healthChips: ChipView[];
+  /** ADAAAA-8105: whether the share's recorder is producing real video bytes.
+   *  `stalled` means the clips for this share will be missing, and it is known
+   *  WHILE the share is live (not only at stop). */
+  recording: RecordingHealth;
+  /** The live "recording not captured" copy, `null` while the recorder is
+   *  healthy or still starting. */
+  recordingNotice: string | null;
   start: (gameHint: string) => Promise<void>;
   stop: () => Promise<void>;
   dismissError: () => void;
@@ -98,6 +114,8 @@ const LiveCaptureContext = createContext<LiveCaptureValue>({
   startedAt: null,
   stopped: false,
   healthChips: [],
+  recording: "pending",
+  recordingNotice: null,
   start: noop,
   stop: noop,
   dismissError: () => {},
@@ -142,9 +160,15 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
   // complete when the server cuts clips (ADAAAA-6522).
   const pendingUploadsRef = useRef<Set<Promise<void>>>(new Set());
   // Bytes the recorder has PRODUCED (before upload) this share, plus the type it
-  // actually chose. Feeds the stall check below (ADAAAA-8055).
+  // actually chose. Feeds the live health readout below (ADAAAA-8055/8105).
   const recStatsRef = useRef<{ bytes: number; startedAt: number }>({ bytes: 0, startedAt: 0 });
-  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // ADAAAA-8105: chunks are uploaded through ONE promise chain so the server's
+  // append-only recording file keeps chunk order (two overlapping POSTs could
+  // land out of order and corrupt the container), and so the chunks a probe
+  // buffered before commit are flushed ahead of the ones that follow.
+  const uploadChainRef = useRef<Promise<void>>(Promise.resolve());
+  const healthTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [recording, setRecording] = useState<RecordingHealth>("pending");
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Stream-health strip sources (ADAAAA-7730): only ARRIVAL times and a clip
   // count are read from the job event feed (frame seq etc. stay admin-only).
@@ -334,24 +358,183 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     return p;
   }
 
-  /** ADAAAA-8055: warn (once, during the share) when the recorder has started
-   *  but produced no usable video bytes — a container the browser claimed but
-   *  cannot encode emits only a header (~752 B mp4 / ~49 B webm). Silent in the
-   *  healthy case; the stop path still reports an honest clipError per highlight
-   *  and the server refuses to cut from a frame-less recording. */
-  function scheduleRecordingStallCheck(jobId: string) {
-    if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
-    stallTimerRef.current = setTimeout(() => {
-      stallTimerRef.current = null;
-      const rec = recRef.current;
-      if (!rec || stoppingRef.current || jobIdRef.current !== jobId) return;
-      const stats = recStatsRef.current;
-      if (!recordingStalled({ bytes: stats.bytes, ms: Date.now() - stats.startedAt, state: rec.state })) return;
-      setError(
-        "This browser started a screen recorder that produced no video data, so highlight clips may be missing for this share. Stop and share again (or use another browser) if no clips appear."
-      );
-    }, RECORDING_STALL_MS);
+  /** Queue one MediaRecorder chunk for upload, in order. Every chunk of a share
+   *  is appended to ONE file server-side, so overlapping POSTs could reorder the
+   *  bytes and corrupt the container — and the chunks a probe buffered before
+   *  commit must go out ahead of the chunks that follow it. */
+  function queueRecordingChunk(data: Blob, mime: string) {
+    let tracked: Promise<void>;
+    const queued = uploadChainRef.current.then(async () => {
+      await uploadRecordingChunk(await blobToBase64(data), mime);
+    });
+    // The chain continues past a failed chunk; `uploadRecordingChunk` already
+    // retried and surfaced it.
+    uploadChainRef.current = queued.catch(() => {});
+    tracked = queued
+      .catch(() => {})
+      .finally(() => {
+        pendingUploadsRef.current.delete(tracked);
+      });
+    pendingUploadsRef.current.add(tracked);
   }
+
+  /** One ladder arm kept running while we decide whether it can encode. The
+   *  chunks it produces during the probe are HELD (not uploaded): if the arm
+   *  wins they are the recording's first chunks, and if it loses they are a
+   *  header we must not append to the file. */
+  interface ProbeArm {
+    mime: string;
+    rec: MediaRecorder;
+    bytes: number;
+    held: Blob[];
+  }
+
+  /** Start `mime` and watch it for `ENCODER_PROBE_MS`. Resolves as soon as the
+   *  arm proves itself (real bytes), on an encoder error, or at the deadline. */
+  function probeRecorderArm(
+    capture: MediaStream,
+    mime: string,
+    onChunk: (arm: ProbeArm, blob: Blob) => void,
+  ): Promise<ProbeArm | null> {
+    let rec: MediaRecorder;
+    try {
+      rec = new MediaRecorder(capture, { mimeType: mime, videoBitsPerSecond: 3_000_000 });
+    } catch {
+      return Promise.resolve(null); // constructor rejects this mime outright
+    }
+    const arm: ProbeArm = { mime, rec, bytes: 0, held: [] };
+    return new Promise<ProbeArm>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(arm);
+      };
+      const timer = setTimeout(finish, ENCODER_PROBE_MS);
+      rec.ondataavailable = (e) => {
+        if (!e.data || e.data.size <= 0) return;
+        arm.bytes += e.data.size;
+        onChunk(arm, e.data);
+        if (arm.bytes >= ENCODER_PROBE_MIN_BYTES) finish();
+      };
+      // A recorder that errors emits nothing further: stop waiting for it.
+      rec.onerror = () => finish();
+      try {
+        rec.start(1000); // 1 s chunks keep the uploads small
+      } catch {
+        finish();
+      }
+    });
+  }
+
+  /** ADAAAA-8105: PROVE the chosen container can encode before committing to it.
+   *
+   *  `isTypeSupported` is not a capability answer: job `ccc9f1aa` claimed
+   *  `video/mp4;codecs=avc1`, accepted `start()` and then emitted zero chunks,
+   *  so nothing was uploaded and the whole recording was lost silently. Each
+   *  ladder arm now runs for `ENCODER_PROBE_MS` and must produce real bytes
+   *  (`ENCODER_PROBE_MIN_BYTES`) before it is committed; a header-only or silent
+   *  arm is stopped and the next arm is tried.
+   *
+   *  The winning arm keeps running, so a healthy browser records from the same
+   *  instant it did before this change — the probe IS the first chunk. Only a
+   *  failing arm costs timeline (~1.5 s lost mid-window, well inside the 7 s
+   *  clip pad), and that arm produced nothing to begin with. */
+  async function commitRecordingArm(capture: MediaStream): Promise<MediaRecorder | null> {
+    const candidates = supportedRecordingMimes((m) => MediaRecorder.isTypeSupported(m));
+    const arms = new Map<string, ProbeArm>();
+    let committed: ProbeArm | null = null;
+
+    const commit = await chooseRecordingMime(candidates, async (mime) => {
+      const arm = await probeRecorderArm(capture, mime, (a, blob) => {
+        if (a === committed) queueRecordingChunk(blob, a.mime);
+        else a.held.push(blob);
+      });
+      if (!arm) return 0;
+      arms.set(mime, arm);
+      return arm.bytes;
+    });
+
+    // Stop every arm that lost the walk, so no second recorder keeps encoding.
+    for (const [mime, arm] of arms) {
+      if (mime === commit.mime) continue;
+      stopRecorderQuietly(arm.rec);
+    }
+
+    const kept = arms.get(commit.mime) ?? null;
+    if (kept) {
+      committed = kept;
+      recStatsRef.current = { bytes: kept.bytes, startedAt: Date.now() - ENCODER_PROBE_MS };
+      recRef.current = kept.rec;
+      // Flush the chunks the probe held, in order, ahead of the chunks that
+      // follow (the chain guarantees the order).
+      for (const blob of kept.held) queueRecordingChunk(blob, kept.mime);
+      kept.held.length = 0;
+      return kept.rec;
+    }
+
+    // No candidate arm could even be constructed (or the ladder was empty): fall
+    // back to the browser's own default container rather than recording nothing.
+    let rec: MediaRecorder;
+    try {
+      rec = new MediaRecorder(capture);
+    } catch {
+      return null;
+    }
+    recStatsRef.current = { bytes: 0, startedAt: Date.now() };
+    rec.ondataavailable = (e) => {
+      if (!e.data || e.data.size <= 0) return;
+      recStatsRef.current.bytes += e.data.size;
+      queueRecordingChunk(e.data, rec.mimeType || "");
+    };
+    try {
+      rec.start(1000);
+    } catch {
+      return null;
+    }
+    recRef.current = rec;
+    return rec;
+  }
+
+  function stopRecorderQuietly(rec: MediaRecorder) {
+    try {
+      if (rec.state !== "inactive") rec.stop();
+    } catch {
+      /* already gone */
+    }
+  }
+
+  /** ADAAAA-8105: keep reading the recorder's health for the WHOLE share.
+   *
+   *  The old check was a single timeout at `RECORDING_STALL_MS`: it could fire
+   *  once, so a recorder that died 30 s into a healthy share was never reported,
+   *  and a recorder that died before its first chunk (`state` flipped to
+   *  inactive, zero chunks) was treated as "not running" and stayed silent until
+   *  stop. The views now render `recordingNotice` while the share is live. */
+  function startRecordingMonitor(jobId: string) {
+    stopRecordingMonitor();
+    const tick = () => {
+      if (stoppingRef.current || jobIdRef.current !== jobId) return;
+      const rec = recRef.current;
+      const stats = recStatsRef.current;
+      if (!rec || !stats.startedAt) return;
+      const next = recordingHealth({
+        bytes: stats.bytes,
+        ms: Date.now() - stats.startedAt,
+        state: rec.state,
+      });
+      setRecording((prev: RecordingHealth) => (prev === next ? prev : next));
+    };
+    healthTimerRef.current = setInterval(tick, RECORDING_HEALTH_POLL_MS);
+    tick();
+  }
+
+  function stopRecordingMonitor() {
+    if (healthTimerRef.current) clearInterval(healthTimerRef.current);
+    healthTimerRef.current = null;
+  }
+
 
   /** Await every in-flight recording chunk upload, re-sampling (bounded). */
   async function flushRecordingUploads() {
@@ -370,10 +553,8 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
 
   /** Clear every capture resource and put the views in their stopped state. */
   function finishCapture() {
-    if (stallTimerRef.current) {
-      clearTimeout(stallTimerRef.current);
-      stallTimerRef.current = null;
-    }
+    stopRecordingMonitor();
+    setRecording("pending");
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
     try {
@@ -538,27 +719,14 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
 
       await openMedia(job.job.id, capture);
 
-      // ADAAAA-8055: the ladder is ordered by containers this rail has actually
-      // produced (see recordingCodec.ts). `isTypeSupported('video/mp4;codecs=avc1')`
-      // is true in browsers that then record a header and no frames, which left
-      // every accepted highlight with "No screen-share recording was captured".
-      const mimes = supportedRecordingMimes((m) => MediaRecorder.isTypeSupported(m));
-      const mime = mimes[0] ?? "";
-      const rec = new MediaRecorder(capture, mime ? { mimeType: mime, videoBitsPerSecond: 3_000_000 } : undefined);
-      recStatsRef.current = { bytes: 0, startedAt: Date.now() };
-      rec.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          recStatsRef.current.bytes += e.data.size;
-          blobToBase64(e.data).then((b64) => {
-            // Report the type the recorder actually chose, so the server names the
-            // file after the real container instead of the requested one.
-            uploadRecordingChunk(b64, rec.mimeType || mime);
-          });
-        }
-      };
-      rec.start(1000); // 1 s chunks keep the uploads small
-      recRef.current = rec;
-      scheduleRecordingStallCheck(job.job.id);
+      // ADAAAA-8055/8105: the ladder is ordered by containers this rail has
+      // actually produced (see recordingCodec.ts), and every arm must now PROVE
+      // it can encode before it is committed. `isTypeSupported('video/mp4;codecs=avc1')`
+      // is true in browsers that then record a header and no frames — or, as
+      // measured on job `ccc9f1aa`, nothing at all, which lost the whole
+      // recording with no clip and no warning until stop.
+      const rec = await commitRecordingArm(capture);
+      if (rec) startRecordingMonitor(job.job.id);
 
       // WS / HTTP fallback only: sample the stream -> JPEG -> push to the media
       // WS (or /ingest). In RTC mode the media server decodes the track itself.
@@ -709,6 +877,11 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     startedAt,
     stopped,
     healthChips,
+    recording,
+    // ADAAAA-8105: one persistent notice, driven by the monitor above, so the
+    // loss is visible DURING the share (the job page the user is routed to
+    // rendered no capture health at all before this).
+    recordingNotice: sharing && recording === "stalled" ? RECORDING_STALL_NOTICE : null,
     start,
     stop,
     dismissError: () => setError(null),

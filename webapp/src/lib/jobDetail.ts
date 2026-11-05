@@ -460,6 +460,8 @@ export interface LiveCapture {
     | "waiting_first_window"
     | "capturing"
     | "interrupted"
+    /** ADAAAA-8105: live share, frames arriving, no video bytes stored. */
+    | "recording_missing"
     | "no_capture"
     | "no_highlights"
     | "unknown";

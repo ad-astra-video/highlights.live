@@ -1993,6 +1993,10 @@ export const LiveCaptureSchema = z.object({
     "waiting_first_window",
     "capturing",
     "interrupted",
+    /** ADAAAA-8105: the share is live and frames arrive, but no video bytes are
+     *  being stored — its highlight clips will be missing. Reported DURING the
+     *  share, not only at stop. */
+    "recording_missing",
     "no_capture",
     "no_highlights",
     "unknown",

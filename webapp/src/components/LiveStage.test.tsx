@@ -86,4 +86,28 @@ describe("LiveStage markup (ADAAAA-7976)", () => {
     expect(ladderAt).toBeGreaterThan(-1);
     expect(stageAt).toBeLessThan(ladderAt);
   });
+
+  // ADAAAA-8105: the user is routed to this page ~1 s after Start, so this is
+  // where a share that is storing no video must say so — DURING the share, not
+  // only at stop. Before this the stage rendered no capture health at all.
+  it("renders the live 'recording not captured' notice with the stream", () => {
+    const html = renderToString(
+      React.createElement(LiveStageViewBlock, {
+        view: view({ ownsCapture: true, hasCaptureStream: true }),
+        jobId: "job-1",
+        source: "browser",
+        stream: null,
+        captureNotice: "No screen video is being recorded for this share, so highlight clips will be missing.",
+        onStop: () => {},
+      }),
+    );
+    expect(html).toContain("data-live-stage-capture-notice");
+    expect(html).toContain("No screen video is being recorded for this share");
+    expect(html).toContain('role="alert"');
+  });
+
+  it("renders no capture notice on a healthy share", () => {
+    const html = render(view({ ownsCapture: true, hasCaptureStream: true }));
+    expect(html).not.toContain("data-live-stage-capture-notice");
+  });
 });

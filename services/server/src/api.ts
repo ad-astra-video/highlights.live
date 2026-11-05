@@ -851,14 +851,31 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
   }
+  /** ADAAAA-8105: bytes the share's recording file holds right now — the only
+   *  server-side recording-health signal. 0 when nothing has landed yet, which
+   *  is what a browser that cannot encode keeps saying for the whole share. */
+  function browserRecordingBytes(jobId: string): number {
+    try {
+      return statSync(browserRecordingPath(jobId)).size;
+    } catch {
+      return 0;
+    }
+  }
   /** ADAAAA-8055: a MediaRecorder that claimed a container it cannot actually
    *  encode emits the container header and then no frame data — Chrome writes a
    *  ~752 B `capture.mp4` (24 of the box's capture files are under 100 KB from
    *  real shares, and 7-42 B mp4s exist). Such a file is NOT a recording: treat
    *  it as missing so every highlight carries the honest
    *  "No screen-share recording was captured" reason instead of an opaque ffmpeg
-   *  cut failure, and neither cut path spends ffmpeg on it. */
-  const MIN_USABLE_RECORDING_BYTES = 1024;
+   *  cut failure, and neither cut path spends ffmpeg on it.
+   *
+   *  ADAAAA-8105 raised the floor from 1024 B: job `202d0dad`'s header-only webm
+   *  was 1,194 B — above the old floor, so it passed a check that exists to
+   *  catch exactly that, and the cut ran on a file with no frames. 4 KB clears
+   *  every measured header size (max 1,194 B) by more than 3x while staying
+   *  below the smallest real footage the suite produces (a 2-frame 320x180 mp4
+   *  is 6,096 B), so a short share is still cut. */
+  const MIN_USABLE_RECORDING_BYTES = 4096;
   function recordingIsUsable(jobId: string, recPath: string | null): recPath is string {
     if (!recPath) return false;
     let size = 0;
@@ -4676,6 +4693,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // is carrying it; the row is cleared when the job ends.
           hasLiveMediaSession:
             (await db.getMediaSession(job.id).catch(() => undefined))?.status === "active",
+          // ADAAAA-8105: what the share's recording actually holds right now, so
+          // a browser that claims a codec it cannot encode (frames flow, video
+          // bytes never do) reads as "not saving video" DURING the share instead
+          // of only at stop. Non-browser sources record server-side → undefined.
+          recordingBytes: job.source === "browser" ? browserRecordingBytes(job.id) : undefined,
         }),
       }),
       user.role
