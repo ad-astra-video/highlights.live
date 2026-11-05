@@ -237,10 +237,13 @@ def _audit_record(
         "timings": {
             "elapsedMs": round((time.time() - started_at) * 1000.0, 3),
             "asrLatencyS": asr_latency_s,
-            # ADAAAA-8056 (AC-E1): the per-window perceive coverage ledger. Lives
-            # on `timings` (an existing JSON column on decide_audit) so it needs
-            # no schema migration and is queryable per decide row.
-            **({"perceiveTimeline": timings_extra["perceiveTimeline"]} if timings_extra and "perceiveTimeline" in timings_extra else {}),
+            # ADAAAA-8056 (AC-E1/AC-E2): per-window coverage ledgers. They live on
+            # `timings` (an existing JSON column on decide_audit) so they need no
+            # schema migration and are queryable per decide row. Merged here, at
+            # record-build time, so the record written to DECIDE_AUDIT_DIR carries
+            # them — stamping them later onto the response descriptor only reached
+            # the server's decide_audit row and left the on-disk trail bare.
+            **(timings_extra or {}),
         },
         "createdAt": round(time.time(), 3),
     }
@@ -2014,6 +2017,77 @@ def _window_analysis(
     }
 
 
+def _audio_coverage(
+    *,
+    audio_b64: str,
+    asr_ran: bool,
+    transcript: str,
+    asr_latency_s: float,
+    audio_presence: object,
+) -> tuple[dict, dict]:
+    """ADAAAA-8056 (AC-E2): the per-window audio-coverage record.
+
+    Returns ``(audio_context, flat_timings)``: the block the caller sees as
+    ``audioContext`` on the decision, and the flat form stamped onto the audit
+    record's ``timings``. Computed BEFORE the audit record is built so the JSONL
+    written to DECIDE_AUDIT_DIR carries the same coverage as the server's
+    decide_audit row; stamping it only after ``_emit_audit`` left the on-disk
+    trail with zero audio fields, which reads as "no audio" to an offline grade.
+    """
+    # `path` reports which audio channel the model actually received: native
+    # `input_audio` when raw send is on (GEMMA_SEND_AUDIO=1, ADAAAA-6350), else
+    # the ASR->text transcript (Path 2), else "none" when no audio entered.
+    send_audio_active = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
+    # `windowAudioPresent` says whether this window carried ANY audio (the server
+    # reports the tap span + clip bytes), and `noAudioReason` NAMES why nothing
+    # was transcribed — otherwise a no-audio window is indistinguishable from a
+    # transcribed-to-empty one, which is exactly the inference AC-E2 forbids.
+    presence = audio_presence if isinstance(audio_presence, dict) else {}
+    try:
+        presence_clip_bytes = int(presence.get("clipBytes") or 0)
+    except (TypeError, ValueError):
+        presence_clip_bytes = 0
+    try:
+        presence_tap_chunks = int(presence.get("tapChunks") or 0)
+    except (TypeError, ValueError):
+        presence_tap_chunks = 0
+    # ADAAAA-8056: the server states whether the window clip was ALLOWED onto the
+    # live payload (LIVE_DECIDE_AUDIO_CLIP, the ADAAAA-7777 trim). A gated window
+    # is a named posture, not a retention gap and not a silent stream.
+    clip_enabled = presence.get("clipEnabled") is not False
+    window_audio_present = bool(audio_b64)
+    no_audio_reason = ""
+    if not window_audio_present:
+        if not clip_enabled:
+            no_audio_reason = "audio_clip_disabled"
+        elif presence_tap_chunks > 0:
+            # The tap banked chunks but this window's clip is empty: the window
+            # fell outside the retained span (retention gap), not a silent stream.
+            no_audio_reason = "retention_gap"
+        else:
+            no_audio_reason = "no_audio_clip"
+    elif not asr_ran and not send_audio_active:
+        no_audio_reason = "asr_unavailable" if not _asr_url() else "audio_context_off"
+    audio_context = {
+        "path": "input_audio" if send_audio_active else ("asr_text" if asr_ran else "none"),
+        "transcribed": bool(transcript),
+        "asrRan": asr_ran,
+        "asrLatencyS": asr_latency_s,
+        "windowAudioPresent": window_audio_present,
+        "noAudioReason": no_audio_reason,
+    }
+    flat_timings = {
+        "audioPath": audio_context["path"],
+        "asrRan": asr_ran,
+        "asrLatencyS": round(asr_latency_s, 3),
+        "windowAudioPresent": window_audio_present,
+        "noAudioReason": no_audio_reason,
+        "audioTapChunks": presence_tap_chunks,
+        "audioClipBytes": presence_clip_bytes,
+    }
+    return audio_context, flat_timings
+
+
 def ask(
     url: str,
     event_type: str,
@@ -2032,6 +2106,7 @@ def ask(
     match_context: object = None,
     prior_game_state: object = None,
     perceive_window: object = None,
+    audio_timings: dict | None = None,
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -2169,9 +2244,13 @@ def ask(
         fallback=False,
         started_at=started_at,
         prompt_layout=_prompt_layout(parts),
-        # ADAAAA-8056 (AC-E1): the perceive coverage ledger for this window, so
-        # the server's decide_audit row proves the enrichment actually landed.
-        timings_extra={"perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1]},
+        # ADAAAA-8056 (AC-E1/AC-E2): the perceive + audio coverage ledgers for
+        # this window, so both the server's decide_audit row AND the on-disk
+        # audit record prove the enrichment actually landed.
+        timings_extra={
+            **(audio_timings or {}),
+            "perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1],
+        },
     )
     _emit_audit(_record)
     # Emit the compact audit descriptor on the decision (ADAAAA-7028 Inc 2) so
@@ -2247,6 +2326,17 @@ def decide_with_gemma(
         if asr_url:
             transcript, asr_latency_s = transcribe_audio(asr_url, audio_b64, audio_sample_rate)
             asr_ran = True
+    # ADAAAA-8056 (AC-E2): compute the coverage block BEFORE the gemma call so
+    # the audit record emitted inside `ask` carries it (the previous placement
+    # stamped only the response descriptor, so the on-disk audit trail had no
+    # audio fields at all). Same dict feeds `result["audioContext"]` below.
+    audio_context, audio_timings = _audio_coverage(
+        audio_b64=audio_b64,
+        asr_ran=asr_ran,
+        transcript=transcript,
+        asr_latency_s=asr_latency_s,
+        audio_presence=audio_presence,
+    )
     g = ask(
         u,
         event_type,
@@ -2264,6 +2354,7 @@ def decide_with_gemma(
         match_context=match_context,
         prior_game_state=prior_game_state,
         perceive_window=perceive_window,
+        audio_timings=audio_timings,
     )
     if g is not None:
         result = g
@@ -2299,66 +2390,10 @@ def decide_with_gemma(
     else:
         rs = _rule_summary(story_so_far, result.get("outcome") or "not_highlight", event_type, result.get("reason"))
     result["runningSummary"] = rs
-    # Per-highlight audio-context cost/latency readout. `path` reports which
-    # audio channel the model actually received: native `input_audio` when raw
-    # send is on (GEMMA_SEND_AUDIO=1, ADAAAA-6350), else the ASR->text
-    # transcript (Path 2), else "none" when no audio context entered the call.
-    send_audio_active = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
-    # ADAAAA-8056 (AC-E2): ASR coverage. `windowAudioPresent` says whether this
-    # window carried ANY audio (the server reports the tap span + clip bytes), and
-    # `noAudioReason` NAMES why nothing was transcribed — otherwise a no-audio
-    # window is indistinguishable from a transcribed one in the record.
-    presence = audio_presence if isinstance(audio_presence, dict) else {}
-    try:
-        presence_clip_bytes = int(presence.get("clipBytes") or 0)
-    except (TypeError, ValueError):
-        presence_clip_bytes = 0
-    try:
-        presence_tap_chunks = int(presence.get("tapChunks") or 0)
-    except (TypeError, ValueError):
-        presence_tap_chunks = 0
-    # ADAAAA-8056: the server states whether the window clip was ALLOWED onto the
-    # live payload (LIVE_DECIDE_AUDIO_CLIP, the ADAAAA-7777 trim). A gated window
-    # is a named posture, not a retention gap and not a silent stream.
-    clip_enabled = presence.get("clipEnabled") is not False
-    window_audio_present = bool(audio_b64)
-    no_audio_reason = ""
-    if not window_audio_present:
-        if not clip_enabled:
-            no_audio_reason = "audio_clip_disabled"
-        elif presence_tap_chunks > 0:
-            # The tap banked chunks but this window's clip is empty: the window
-            # fell outside the retained span (retention gap), not a silent stream.
-            no_audio_reason = "retention_gap"
-        else:
-            no_audio_reason = "no_audio_clip"
-    elif not asr_ran and not send_audio_active:
-        no_audio_reason = "asr_unavailable" if not _asr_url() else "audio_context_off"
-    result["audioContext"] = {
-        "path": "input_audio" if send_audio_active else ("asr_text" if asr_ran else "none"),
-        "transcribed": bool(transcript),
-        "asrRan": asr_ran,
-        "asrLatencyS": asr_latency_s,
-        "windowAudioPresent": window_audio_present,
-        "noAudioReason": no_audio_reason,
-    }
-    # ADAAAA-8056 (AC-E2): stamp the same coverage onto the audit descriptor's
-    # `timings` (an existing JSON column) so the server's decide_audit row carries
-    # path/asrRan/asrLatencyS/window-audio for every decide — no schema change,
-    # and no inference from log lines.
-    _audit_timings = (result.get("audit") or {}).get("timings") if isinstance(result.get("audit"), dict) else None
-    if isinstance(_audit_timings, dict):
-        _audit_timings.update(
-            {
-                "audioPath": result["audioContext"]["path"],
-                "asrRan": asr_ran,
-                "asrLatencyS": round(asr_latency_s, 3),
-                "windowAudioPresent": window_audio_present,
-                "noAudioReason": no_audio_reason,
-                "audioTapChunks": presence_tap_chunks,
-                "audioClipBytes": presence_clip_bytes,
-            }
-        )
+    # The audio-context readout goes on the decision: `audioContext` was computed
+    # ahead of the call (see _audio_coverage) so the coverage reported to the
+    # caller is exactly the coverage stamped on the audit record.
+    result["audioContext"] = audio_context
     # ADAAAA-7155 Incr A: finalize the per-window analysis block. On the gemma
     # path the prompt/dataItems were captured inside `ask`; here we sync the full
     # response (incl. the just-computed audioContext + runningSummary) and the
