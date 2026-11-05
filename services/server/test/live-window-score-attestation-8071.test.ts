@@ -22,6 +22,7 @@
 import { describe, expect, it } from "vitest";
 import {
   LIVE_UNATTESTED_GOAL_NOTE,
+  LiveRunShared,
   deriveWindowAttestation,
   downgradeUnattestedLiveGoal,
   liveGoalAttestationUsed,
@@ -167,7 +168,7 @@ describe("scoreboardDeltaFromReadings (ADAAAA-8071)", () => {
     expect(scoreboardDeltaFromReadings(scoreReadingsFromTimeline(jump), { lo: 95, hi: 104 })).toBeUndefined();
   });
 
-  it("fires once: a window that already re-reads the stable new score credits nothing", () => {
+  it("re-reads the stable new score after the transition (ADAAAA-8078 supersedes fire-once here)", () => {
     const later = [
       { ts: 95, ocr: ["18:01 RMA 1-1 BAR"] },
       { ts: 98, ocr: ["18:05 RMA 1-1 BAR"] },
@@ -175,8 +176,16 @@ describe("scoreboardDeltaFromReadings (ADAAAA-8071)", () => {
       { ts: 104, ocr: ["18:13 RMA 2-1 BAR"] },
       { ts: 107, ocr: ["18:17 RMA 2-1 BAR"] },
     ];
-    expect(scoreboardDeltaFromReadings(scoreReadingsFromTimeline(later), { lo: 95, hi: 107 })).toBeUndefined();
-    // ... while the window that COMPLETES the transition still credits it.
+    // ADAAAA-8078: the POST side only needs `>= minSamples` contiguous reads — the
+    // exact-`minSamples` rule was perceive's fire-once cadence, which no decide
+    // window obeys. "Credit each transition once" now lives on the run ledger.
+    const delta = scoreboardDeltaFromReadings(scoreReadingsFromTimeline(later), { lo: 95, hi: 107 });
+    expect(delta?.postSamples).toBe(3);
+    expect(delta?.deltaTs).toBe(101);
+    const run = new LiveRunShared();
+    expect(run.claimScoreTransition(delta)).toBe(true);
+    expect(run.claimScoreTransition(delta)).toBe(false);
+    // ... while the window that COMPLETES the transition still credits it too.
     expect(scoreboardDeltaFromReadings(scoreReadingsFromTimeline(later.slice(0, 4)), { lo: 95, hi: 104 })).toBeDefined();
   });
 

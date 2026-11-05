@@ -924,6 +924,10 @@ export function scoreboardDeltaAttestsDeferredWindow(input: {
 
 /** Mirrors `SCOREBOARD_MIN_CONSISTENT_SAMPLES` in services/perceive/app/scoreboard.py. */
 export const SCOREBOARD_MIN_CONSISTENT_READS = 2;
+/** ADAAAA-8078: the run-scoped cap on credited score transitions (FIFO eviction).
+ * One transition per goal; a 5-minute live leg cannot approach this, and a
+ * longer stream only loses the de-dup for its oldest transitions. */
+export const CREDITED_SCORE_TRANSITIONS_MAX = 256;
 /** Mirrors `SCOREBOARD_MAX_CONFIRM_GAP_S` in services/perceive/app/scoreboard.py. */
 export const SCOREBOARD_MAX_CONFIRM_GAP_S = 10;
 
@@ -973,14 +977,30 @@ export function scoreReadingsFromTimeline(
  *
  *  1. the transition is the most recent boundary between two consecutive
  *     readings that differ;
- *  2. each side must be supported by >= `minSamples` contiguous readings (a
+ *  2. the PRE side must be supported by >= `minSamples` contiguous readings (a
  *     single-frame misread can never attest a goal);
- *  3. the POST side must be exactly `minSamples` long at this window — the same
- *     fire-once rule perceive's `delta()` applies, so one transition is credited
- *     by the window that completes it, not by every later window that re-reads
- *     the stable new score;
+ *  3. the POST side must ALSO carry >= `minSamples` contiguous readings — the
+ *     same legibility bar, not perceive's fire-once cadence. Perceive's tracker
+ *     ends its window exactly `minSamples` reads after the transition because it
+ *     fires once; a DECIDE window is not that cadence. At the measured live cell
+ *     (`LIVE_OBSERVE_MAX_FRAMES=4` / `IN_FLIGHT=2`) a window carries ~28 timeline
+ *     records over a 4-10 s span and windows overlap every ~4.4 s, so the
+ *     boundary lands in a window with 1 post read (window ends AT the transition)
+ *     or 4-33 post reads (window ends well after it) — requiring exactly
+ *     `minSamples` was a ~1-in-N coincidence (ADAAAA-8078: 0/60 stored rows
+ *     derived on job f0c9c6fb while three of them carried a legible transition).
+ *     "Credit each transition once" is therefore NOT this pure function's job:
+ *     the run-scoped ledger owns it (`scoreTransitionKey` +
+ *     `LiveRunShared.claimScoreTransition`), so overlapping windows cannot mint
+ *     one scoring event twice;
  *  4. the transition instant must be inside `[lo, hi]` and within the confirm gap
- *     of the previous reading.
+ *     of the previous reading;
+ *  5. the window must carry at most ONE distinct score transition. A matured
+ *     POST side can run past the NEXT goal (windows span 4-10 s, cadence ~4.4 s),
+ *     and the last-boundary scan below would then credit that later transition to
+ *     this window's candidate — lifting an ADAAAA-7996 demotion with the wrong
+ *     goal. A return to an already-seen score (OCR flicker `A -> B -> A`) is one
+ *     transition, not two, so the count is of NEW score states.
  *
  * Returns `undefined` (never a guess) when any clause fails. Pure + deterministic.
  */
@@ -995,6 +1015,16 @@ export function scoreboardDeltaFromReadings(
   const hi = Number.isFinite(window?.hi) ? window.hi : Number.POSITIVE_INFINITY;
   const inWin = readings.filter((r) => Number.isFinite(r?.ts) && r.ts >= lo - 1e-9 && r.ts <= hi + 1e-9);
   if (inWin.length < 2 * need) return undefined;
+  // ADAAAA-8078 guard: one distinct transition per window (see clause 5).
+  const seenScores = new Set<string>();
+  let transitions = 0;
+  for (const r of inWin) {
+    const key = `${r.score[0]}-${r.score[1]}`;
+    if (seenScores.has(key)) continue;
+    if (seenScores.size > 0) transitions++;
+    seenScores.add(key);
+  }
+  if (transitions > 1) return undefined;
   let idx = -1;
   for (let i = inWin.length - 1; i > 0; i--) {
     if (inWin[i - 1].score[0] !== inWin[i].score[0] || inWin[i - 1].score[1] !== inWin[i].score[1]) {
@@ -1015,7 +1045,9 @@ export function scoreboardDeltaFromReadings(
     if (inWin[j].score[0] !== pre[0] || inWin[j].score[1] !== pre[1]) break;
     preSamples++;
   }
-  if (preSamples < need || postSamples !== need) return undefined;
+  // ADAAAA-8078: the POST side bar is `>= need` (legibility), not `=== need`
+  // (perceive's fire-once cadence). See clause 3 in the doc block above.
+  if (preSamples < need || postSamples < need) return undefined;
   const preTs = inWin[idx - 1].ts;
   const deltaTs = inWin[idx].ts;
   if (deltaTs < lo - 1e-9 || deltaTs > hi + 1e-9) return undefined;
@@ -1031,6 +1063,26 @@ export function scoreboardDeltaFromReadings(
   };
   if (!scoreboardDeltaSingleGoalStep(delta)) return undefined;
   return scoreboardDeltaLegible(delta) ? delta : undefined;
+}
+
+/**
+ * ADAAAA-8078: the identity of ONE score transition, so the run that credits it
+ * can de-dup the overlapping decide windows that re-read it.
+ *
+ * The unit is the SCORE PAIR the transition moves between, not the instant: the
+ * score is monotonic within a match, so (pre -> post) identifies at most one
+ * goal per stream, while `deltaTs` is only a window's view of where the boundary
+ * landed — the OCR re-lands it up to ~1 s apart in overlapping windows when a
+ * frame flickers (measured on job f0c9c6fb: the 2-1 -> 2-2 boundary is read at
+ * 168.1 s in one window and 169.1 s in the next). `preSamples`/`postSamples` are
+ * a function of where the window ends and are never part of the identity.
+ */
+export function scoreTransitionKey(
+  delta: Pick<ScoreboardDeltaEvidence, "pre" | "post">
+): string {
+  const pre = Array.isArray(delta?.pre) ? delta.pre : [];
+  const post = Array.isArray(delta?.post) ? delta.post : [];
+  return `${pre[0] ?? "?"}-${pre[1] ?? "?"}>${post[0] ?? "?"}-${post[1] ?? "?"}`;
 }
 
 /** ADAAAA-8071: the judged span a payload covers — the delivered frames' content
@@ -1078,7 +1130,17 @@ export function deriveWindowAttestation(
     observations?: ReadonlyArray<{ ts: number; ocr?: string[] }>;
     biasHints: ReadonlyArray<ObserveBiasHint>;
   },
-  opts: { minSamples?: number } = {}
+  opts: {
+    minSamples?: number;
+    /**
+     * ADAAAA-8078: claim the derived transition for THIS window. Returns `false`
+     * when the run already credited it from an earlier overlapping window, in
+     * which case the window's attestation carries no score evidence — the
+     * claiming window is the one that owns the transition (see
+     * {@link scoreTransitionKey}). Absent => pure derivation (unit tests, VOD).
+     */
+    claimScoreTransition?: (delta: ScoreboardDeltaEvidence) => boolean;
+  } = {}
 ): WindowAttestation {
   const out: WindowAttestation = { ...foldWindowAttestation(payload.biasHints as ReadonlyArray<ObserveBiasHint>) };
   if (payload.biasHints.some((h) => h.scoreBoardChanged === true)) out.scoreAttestationSource = "perceive_hint";
@@ -1095,7 +1157,13 @@ export function deriveWindowAttestation(
       }),
       { minSamples: opts.minSamples }
     );
-    if (derived) {
+    // ADAAAA-8078: one score transition is credited ONCE per run. The derive
+    // path now accepts any post side >= minSamples, so every overlapping window
+    // covering the boundary would otherwise derive the same delta — and the
+    // accept path reads a legible delta as independent transition evidence
+    // (ADAAAA-7865), which would mint one GOAL per window.
+    const credit = derived ? (opts.claimScoreTransition ? opts.claimScoreTransition(derived) : true) : false;
+    if (derived && credit) {
       out.scoreBoardChanged = true;
       out.scoreBoardDelta = derived;
       out.scoreAttestationSource = out.scoreAttestationSource ?? "perceive_timeline";
@@ -3080,6 +3148,11 @@ export class LiveRunShared {
    * of these clips is the same goal re-read and is delivered as a celebration,
    * not as a second scoring event. Bounded — a run cannot grow it unboundedly. */
   private acceptedGoalEvents: AcceptedGoalEvent[] = [];
+  /** ADAAAA-8078: score transitions this run has already CREDITED, keyed by
+   * {@link scoreTransitionKey}. A decide window now attests any post side of
+   * `>= minSamples` contiguous readings, so every overlapping window covering the
+   * same boundary derives the same delta; the run claims it once. Bounded. */
+  private creditedScoreTransitions = new Set<string>();
   /** ADAAAA-8006: LIVE goal-shaped accepts demoted for lack of a measured
    * attestation inside their judged window, waiting for a later scoreboard read
    * to re-attest them. Bounded (a run cannot hold unboundedly). */
@@ -3237,6 +3310,30 @@ export class LiveRunShared {
    * board (the ledger's own `acceptedGoalTs` check). Read-only + bounded. */
   acceptedGoalAnchors(): number[] {
     return this.acceptedGoalEvents.map((e) => e.anchorTs).filter((ts) => Number.isFinite(ts));
+  }
+  /**
+   * ADAAAA-8078: claim ONE score transition for this run. Returns `true` the
+   * first time a transition (see {@link scoreTransitionKey}) is credited and
+   * `false` for every later overlapping window that derives the same one, so the
+   * derive path can credit a post side of any length without minting a second
+   * scoring event. Fails closed on an illegible delta. Bounded FIFO eviction
+   * (a 5-minute leg cannot exceed the cap; eviction only risks a re-credit on a
+   * stream longer than the bound).
+   */
+  claimScoreTransition(delta: ScoreboardDeltaEvidence | undefined | null): boolean {
+    if (!scoreboardDeltaLegible(delta)) return false;
+    const key = scoreTransitionKey(delta as ScoreboardDeltaEvidence);
+    if (this.creditedScoreTransitions.has(key)) return false;
+    this.creditedScoreTransitions.add(key);
+    if (this.creditedScoreTransitions.size > CREDITED_SCORE_TRANSITIONS_MAX) {
+      const oldest = this.creditedScoreTransitions.values().next();
+      if (!oldest.done) this.creditedScoreTransitions.delete(oldest.value);
+    }
+    return true;
+  }
+  /** ADAAAA-8078: the transitions credited in this run (read-only, audit/tests). */
+  creditedScoreTransitionKeys(): string[] {
+    return [...this.creditedScoreTransitions];
   }
   /** ADAAAA-8006: a LIVE goal-shaped accept that had to be demoted for lack of a
    * measured attestation inside its judged window. Kept (bounded) so a later
@@ -5730,7 +5827,12 @@ export async function observeAcceptOnly(
   // Stage-2 confirm reconcile + deriveHighlightTrigger see the attestation
   // (hasIndependentAttestation excludes an attested goal from the un-attested
   // confirm dive) rather than treating the goal as un-attested.
-  const windowAttestation = deriveWindowAttestation(payload);
+  // ADAAAA-8078: the run owns the "credit each transition once" rule — the derive
+  // path now accepts any post side >= minSamples, so the overlapping windows that
+  // re-read the same boundary must not each mint a scoring event.
+  const windowAttestation = deriveWindowAttestation(payload, {
+    claimScoreTransition: (delta) => run.claimScoreTransition(delta),
+  });
   const candidate: CandidateSignal = {
     eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
     timestamp: payload.centerTs,
