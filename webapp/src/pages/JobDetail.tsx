@@ -83,7 +83,12 @@ import {
 } from "../lib/decideAudit";
 import { jobTitle } from "../lib/vodJobs";
 import { failureReasonLabel } from "../lib/failureReason";
-import { customerWindowRange, customerWindowStatus, customerWindowStatusKey } from "../lib/customerDetail";
+import {
+  customerWindowRange,
+  customerWindowStatus,
+  customerWindowStatusKey,
+  type CustomerWindowKey,
+} from "../lib/customerDetail";
 import { startDetailPoll } from "../lib/detailPoll";
 import { frameFetchWindow } from "../lib/frameFetchWindow";
 
@@ -285,6 +290,19 @@ const KIND_TONE: Record<NoteKind, string> = {
 };
 
 /**
+ * ADAAAA-8135: accent classes for the CUSTOMER window status (token-only). An
+ * established highlight keeps the green tone; a demoted goal awaiting its score
+ * and a non-goal celebration both read yellow; a checked window stays muted.
+ */
+const CUSTOMER_WINDOW_TONE: Record<CustomerWindowKey, string> = {
+  highlight: "border-green/40 bg-green/10",
+  goal_pending: "border-yellow/40 bg-yellow/10",
+  notable: "border-yellow/40 bg-yellow/10",
+  checked: "border-mut/30 bg-mut/10",
+};
+
+
+/**
  * Stable identity for one decide-call listing (ADAAAA-7471). A "decide call" is
  * anchored by the timestamp/event the LLM inspected — the banner reads
  * "Decide @ T+Ns — <event>". Dedup by this key so a candidate row persisted more
@@ -451,7 +469,7 @@ export function CustomerAnalysisWindow({ section }: { section: FrameSection }) {
   const key = customerWindowStatusKey(status);
   return (
     <div
-      className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${key === "highlight" ? KIND_TONE.highlight : KIND_TONE.not_highlight}`}
+      className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${CUSTOMER_WINDOW_TONE[key]}`}
       data-analysis-window
       data-section-index={section.index}
       data-analysis-window-status={key}
@@ -542,7 +560,7 @@ export function CustomerInspectWindow({
   const loading = inspection?.status === "loading";
   return (
     <section
-      className={`rounded-lg border ${key === "highlight" ? "border-green/40 bg-green/10" : "border-mut/30 bg-mut/10"}`}
+      className={`rounded-lg border ${CUSTOMER_WINDOW_TONE[key]}`}
       data-analysis-window
       data-section-index={section.index}
       data-analysis-window-status={key}
@@ -1241,12 +1259,52 @@ export function HighlightCard({
 }
 
 /**
+ * ADAAAA-8135: the metadata line of one secondary-lane row, shared by the text
+ * row and the notable lane's clip card so both stay in lockstep (and the
+ * customer projection stays free of internals: no score, event type, outcome
+ * code or reason for a non-admin session).
+ */
+function LaneRowFacts({
+  h,
+  admin,
+  lane,
+}: {
+  h: JobDetailHighlight;
+  admin: boolean;
+  lane: "merged" | "notable";
+}) {
+  return (
+    <>
+      <span className="font-bold text-ink">
+        T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
+      </span>
+      {admin && <span className="ml-2">· score {Math.round(h.score)}</span>}
+      {admin && h.eventType && <span className="ml-2">· {h.eventType}</span>}
+      {admin && h.outcome && <span className="ml-2">· outcome {h.outcome}</span>}
+      {admin && lane === "merged" && h.duplicateOf && (
+        <span className="ml-2">· merged into {h.duplicateOf.slice(0, 8)}</span>
+      )}
+      {admin && h.reason && <div className="mt-0.5 text-slate-ink">{h.reason}</div>}
+    </>
+  );
+}
+
+/**
  * Compact row list for the lanes ADAAAA-7621 put beside the postable gallery:
  * `duplicateHighlights` (overlapping clips the dedupe folded into a kept
  * moment) and `notableHighlights` (non-scoring near_miss / big_play clips the
- * precision gate keeps out of the postable list). Rows are deliberately
- * text-only — a second grid of playable cards would re-present merged footage
- * as if it were its own highlight, which is the bug this ticket closed.
+ * precision gate keeps out of the postable list).
+ *
+ * Merged rows stay text-only: their footage lives in the moment they were folded
+ * into, and a second playable card would re-present it as if it were its own
+ * highlight (the bug ADAAAA-7621 closed).
+ *
+ * ADAAAA-8135: the NOTABLE lane is different — a row that carries footage gets a
+ * playable clip card (`data-detail-lane-clip`), because a detected play the
+ * scoring lane demoted must stay inspectable ("detected → notable → no clip" was
+ * the reported experience). Only a row with neither `clipUri` nor `clipError`
+ * stays a text row, and a row with a `clipError` names its reason through the
+ * shared VideoClip failure state ("Clip unavailable").
  */
 export function SecondaryHighlightLane({
   title,
@@ -1272,26 +1330,32 @@ export function SecondaryHighlightLane({
       <h4 className={`text-sm font-bold ${tone === "yellow" ? "text-yellow" : "text-mut"}`}>{title}</h4>
       <div className="mt-1 text-xs text-mut">{note}</div>
       <ul className="mt-2 space-y-1">
-        {highlights.map((h) => (
-          <li
-            key={h.id}
-            className="rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
-            data-detail-lane-row={lane}
-          >
-            <span className="font-bold text-ink">
-              T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
-            </span>
-            {admin && <span className="ml-2">
-              · score {Math.round(h.score)}
-            </span>}
-            {admin && h.eventType && <span className="ml-2">· {h.eventType}</span>}
-            {admin && h.outcome && <span className="ml-2">· outcome {h.outcome}</span>}
-            {admin && lane === "merged" && h.duplicateOf && (
-              <span className="ml-2">· merged into {h.duplicateOf.slice(0, 8)}</span>
-            )}
-            {admin && h.reason && <div className="mt-0.5 text-slate-ink">{h.reason}</div>}
-          </li>
-        ))}
+        {highlights.map((h) =>
+          // ADAAAA-8135: a notable row with footage (or a named clip failure)
+          // renders the SAME player the postable cards use, so the demoted play
+          // is watchable where it now lives.
+          lane === "notable" && (h.clipUri || h.clipError) ? (
+            <li
+              key={h.id}
+              className="min-w-0 overflow-hidden rounded-lg border border-mut/30 bg-mut/10"
+              data-detail-lane-row={lane}
+              data-detail-lane-clip={lane}
+            >
+              <VideoClip src={h.clipUri || ""} label={admin ? h.eventType : undefined} error={h.clipError} />
+              <div className="flex flex-wrap items-center gap-2 px-2 py-1 text-xs text-mut">
+                <LaneRowFacts h={h} admin={admin} lane={lane} />
+              </div>
+            </li>
+          ) : (
+            <li
+              key={h.id}
+              className="rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
+              data-detail-lane-row={lane}
+            >
+              <LaneRowFacts h={h} admin={admin} lane={lane} />
+            </li>
+          )
+        )}
       </ul>
     </div>
   );
