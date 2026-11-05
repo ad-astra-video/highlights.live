@@ -240,6 +240,29 @@ def test_drive_emits_decisions_on_the_post_7108_contract(tmp_path, stub_url):
     assert trace["events"][0]["type"] == "observation"
 
 
+def test_provenance_file_is_merged_into_the_trace(tmp_path, stub_url):
+    """The caller (a measurement run) records the deployed build identity next
+    to the numbers, so a trace can never be quoted without its build."""
+    clip = _tiny_clip(tmp_path)
+    manifest = {"video": {"path": "clip.mp4"}, "windows": [
+        {"id": "w", "t_start": 0.0, "t_end": 2.0, "instant": 1.0,
+         "ground_truth": "goal"}]}
+    mpath = tmp_path / "m.json"
+    mpath.write_text(json.dumps(manifest))
+    prov = tmp_path / "prov.json"
+    prov.write_text(json.dumps({"decideAppMd5": "8b5be1fd", "gemmaModel": "12B"}))
+    out = tmp_path / "trace.json"
+    r = subprocess.run([sys.executable, os.path.join(EVALS, "drive_decide_cycle.py"),
+                        "--manifest", str(mpath), "--perceive", stub_url,
+                        "--decide", stub_url, "--clip-root", str(tmp_path),
+                        "--fps", "1", "--cadence", "1", "--window", "2",
+                        "--provenance", str(prov), "--out", str(out)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    trace = json.loads(out.read_text())
+    assert trace["drive"]["provenance"]["decideAppMd5"] == "8b5be1fd"
+
+
 def test_zero_event_run_exits_non_zero_and_names_the_seam(tmp_path, stub_url):
     """Guardrail: a run that decides nothing must not look like a scored trace."""
     clip = _tiny_clip(tmp_path)

@@ -485,6 +485,10 @@ def main():
     ap.add_argument("--mode", default=None, help="only drive units of this mode (live|vod)")
     ap.add_argument("--max-decides", type=int, default=0,
                     help="hard cap on decide calls (0 = unbounded)")
+    ap.add_argument("--provenance", default=None,
+                    help="optional JSON file merged into the trace's `drive` "
+                         "block (e.g. the deployed container image ids / app "
+                         "md5s / gemma model id, recorded by the caller)")
     ap.add_argument("--commit", default=None,
                     help="commit sha to record in the trace provenance "
                          "(default: git rev-parse in the repo, when available)")
@@ -649,6 +653,12 @@ def main():
             "observation IS the body, there is no `candidate`) and that the "
             "clip/manifest span actually resolves to frames."
         )
+    if args.provenance:
+        if not os.path.exists(args.provenance):
+            print(f"ERROR: --provenance {args.provenance} not found", file=sys.stderr)
+            return 2
+        prov = json.load(open(args.provenance))
+        trace["drive"]["provenance"] = prov
     with open(args.out, "w") as fh:
         json.dump(trace, fh, indent=2)
     print(f"\nWrote {len(events)} events ({decides_done} decides) -> {args.out}")
