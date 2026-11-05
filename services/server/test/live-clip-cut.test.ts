@@ -292,4 +292,49 @@ describe("browser rail: the clip is cut DURING the share (ADAAAA-8032)", () => {
     expect(clipped).toEqual([]);
     await app.close();
   }, 30_000);
+
+  it("treats a 1,194 B webm header as no recording, not as footage (ADAAAA-8105)", async () => {
+    // Job 202d0dad shipped a 1,194 B webm: above the old 1,024 B floor, so the
+    // cut ran on a file with no frames. The floor now rejects every measured
+    // header size, and the highlight carries the honest reason instead of an
+    // opaque ffmpeg failure.
+    const { app, cfg, store } = await buildTestApp();
+    const token = await register(app, "lc5@test.dev", "password123");
+    const jobId = await startBrowserJob(app, token);
+    const headerOnly = Buffer.alloc(1194, 0).toString("base64");
+    const rec = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/recording`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { base64: headerOnly, mime: "video/webm;codecs=vp9" },
+    });
+    expect(rec.statusCode).toBe(200);
+    expect((await ingest(app, token, jobId, 0, 0)).highlight).toBeTruthy();
+    // The live projection names it too, so the customer is not waiting for stop.
+    // Age the share past the 20 s recording grace window first (and give it the
+    // analysed frames a live rail would have: the notice is specifically "frames
+    // arrive, video bytes do not", not "nothing arrives").
+    await store.patchJob(jobId, {
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      framesAnalyzed: 12,
+    });
+    const detail = (await app.inject({
+      method: "GET",
+      url: `/jobs/${jobId}/detail`,
+      headers: { authorization: `Bearer ${token}` },
+    })).json();
+    expect(detail.capture?.state).toBe("recording_missing");
+    expect(detail.capture?.cause).toContain("not saving video");
+
+    await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: { authorization: `Bearer ${token}` }, payload: {} });
+    const row = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } }))
+      .json()
+      .highlights.find((h: any) => h.jobId === jobId);
+    expect(row.clipUri).toBe("");
+    expect(row.clipError).toBe("No screen-share recording was captured, so this highlight's clip could not be produced.");
+    const clipsDir = path.join(cfg.dataDir, "clips");
+    const clipped = existsSync(clipsDir) ? readdirSync(clipsDir).filter((f: string) => f.startsWith(jobId)) : [];
+    expect(clipped).toEqual([]);
+    await app.close();
+  }, 30_000);
 });

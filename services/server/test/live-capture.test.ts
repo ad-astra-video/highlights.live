@@ -3,6 +3,8 @@ import {
   deriveLiveCapture,
   LIVE_CAPTURE_FIRST_WINDOW_BUDGET_S,
   LIVE_CAPTURE_STALE_S,
+  LIVE_RECORDING_GRACE_S,
+  LIVE_RECORDING_MIN_BYTES,
   type LiveCaptureInput,
 } from "../src/live-capture";
 
@@ -172,5 +174,88 @@ describe("deriveLiveCapture (ADAAAA-7750 AC3)", () => {
   it("pins the thresholds the copy cites", () => {
     expect(LIVE_CAPTURE_FIRST_WINDOW_BUDGET_S).toBe(30);
     expect(LIVE_CAPTURE_STALE_S).toBe(15);
+  });
+});
+
+// ADAAAA-8105: the recording rail is independent of the analysis rail. Job
+// `ccc9f1aa` delivered frames, decided windows and 2 accepted highlights while
+// the browser stored ZERO recording bytes — the page said nothing until stop,
+// then shipped `2 highlight(s) produced no clip (recording=missing)`. The
+// projection must name it WHILE the share is live, including on a share that
+// already has accepted highlights (those are the clips that will be missing).
+describe("deriveLiveCapture recording health (ADAAAA-8105)", () => {
+  const flow = (over: Record<string, unknown> = {}) => ({
+    job: browserJob({ startedAt: "2026-11-02T06:00:00.000Z", ...over }),
+    observationCount: 40,
+    highlightCount: 0,
+    hasLiveMediaSession: true,
+    nowMs: NOW,
+  });
+
+  it("names a live share that is storing no video bytes", () => {
+    const cap = deriveLiveCapture({ ...flow(), recordingBytes: 0 });
+    expect(cap.state).toBe("recording_missing");
+    expect(cap.cause).toBe("This share is not saving video, so its highlight clips will be missing.");
+    expect(cap.action).toBe("Stop the share and start it again; if it repeats, use another browser.");
+    // The counters stay honest: frames are still arriving.
+    expect(cap.frames).toBe(40);
+  });
+
+  it("treats the measured container headers as no recording at all", () => {
+    // 752 B mp4 header and job 202d0dad's 1,194 B webm header: both were above
+    // the old 1024 B floor / indistinguishable from footage to the old guard.
+    for (const bytes of [752, 1194, LIVE_RECORDING_MIN_BYTES - 1]) {
+      const cap = deriveLiveCapture({ ...flow(), recordingBytes: bytes });
+      expect(cap.state).toBe("recording_missing");
+    }
+  });
+
+  it("warns even when highlights are already accepted (the measured job)", () => {
+    const cap = deriveLiveCapture({ ...flow({ summaryLog: windows(2) }), highlightCount: 2, recordingBytes: 0 });
+    expect(cap.state).toBe("recording_missing");
+    expect(cap.highlights).toBe(2);
+  });
+
+  it("stays silent inside the grace window", () => {
+    const cap = deriveLiveCapture({
+      ...flow(),
+      job: browserJob({ startedAt: "2026-11-02T06:04:10.000Z" }), // 14 s in
+      recordingBytes: 0,
+    });
+    expect(cap.state).toBe("waiting_first_window");
+    expect(cap.state).not.toBe("recording_missing");
+  });
+
+  it("stays silent while a healthy recording is being stored", () => {
+    // ~3 MB is an 8 s capture of a 3 Mbps share.
+    const cap = deriveLiveCapture({ ...flow({ summaryLog: windows(3) }), recordingBytes: 3_000_000 });
+    expect(cap.state).toBe("capturing");
+  });
+
+  it("stays silent when the server cannot see a recording file", () => {
+    // Non-browser sources record server-side; `undefined` must never warn.
+    const cap = deriveLiveCapture({ ...flow(), recordingBytes: undefined });
+    expect(cap.state).toBe("waiting_first_window");
+    const rtmp = deriveLiveCapture({
+      ...flow({ source: "rtmp" }),
+      recordingBytes: 0,
+    });
+    expect(rtmp.state).not.toBe("recording_missing");
+  });
+
+  it("leaves the terminal copy to the stop path", () => {
+    // At stop each highlight already carries its own clipError; the live notice
+    // must not displace the terminal explanation.
+    const cap = deriveLiveCapture({
+      ...flow({ status: "done", framesAnalyzed: 386, summaryLog: windows(63) }),
+      observationCount: 386,
+      recordingBytes: 0,
+    });
+    expect(cap.state).toBe("no_highlights");
+  });
+
+  it("pins the recording thresholds", () => {
+    expect(LIVE_RECORDING_MIN_BYTES).toBe(4096);
+    expect(LIVE_RECORDING_GRACE_S).toBeGreaterThan(LIVE_CAPTURE_STALE_S);
   });
 });

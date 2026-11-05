@@ -1580,7 +1580,13 @@ export function CustomerAnalysisSection({
   // ABOVE the list — the board's share rendered 133 analysed windows and zero
   // highlights, which reads as "windows processed but nothing found" only if it
   // is said out loud.
-  const noticeAbove = capture?.state === "capturing" || capture?.state === "no_highlights";
+  // ADAAAA-8105: `recording_missing` belongs ABOVE the list too — it can fire on
+  // a share that already has accepted highlights, and those highlights are
+  // exactly the ones whose clips will be missing.
+  const noticeAbove =
+    capture?.state === "capturing" ||
+    capture?.state === "no_highlights" ||
+    capture?.state === "recording_missing";
   return (
     <>
       <div className="flex flex-wrap items-center gap-2" data-analysis-header>

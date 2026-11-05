@@ -16,6 +16,8 @@
 //   - `waiting_first_window`  frames arriving, no decided window yet
 //   - `capturing`             windows decided, none confirmed as a highlight
 //   - `interrupted`           in-flight, no frames, and no live media session
+//   - `recording_missing`     in-flight, video bytes not being stored, so clips
+//                             will be missing (ADAAAA-8105)
 //   - `no_capture`            terminal, zero frames ever captured
 //   - `no_highlights`         terminal, frames analysed, nothing confirmed
 //
@@ -37,6 +39,23 @@ export const LIVE_CAPTURE_FIRST_WINDOW_BUDGET_S = 30;
  * measured on the box) never reads as a failure. */
 export const LIVE_CAPTURE_STALE_S = 15;
 
+/** ADAAAA-8105: stored recording bytes below this are not footage. A
+ *  MediaRecorder that claimed a container it cannot encode writes only a header
+ *  (752 B mp4, 49 B webm, and job `202d0dad`'s webm was 1,194 B), while a
+ *  healthy 3 Mbps share stores ~3 MB per 8 s. 4 KB clears every measured header
+ *  by more than 3x and stays under the smallest real footage in the suite
+ *  (6,096 B), so a short share is not reported as missing. Mirrors the client
+ *  floor (`MIN_RECORDED_BYTES` in webapp/src/lib/recordingCodec.ts) and the
+ *  server's clip floor (`MIN_USABLE_RECORDING_BYTES` in api.ts). */
+export const LIVE_RECORDING_MIN_BYTES = 4096;
+
+/** ADAAAA-8105: grace from share start before a missing recording is reported
+ *  live. The browser's encoder has to prove itself first (`ENCODER_PROBE_MS`),
+ *  its first chunk uploads ~1 s later, and the same 15 s staleness budget keeps
+ *  a slow start from reading as a failure: 20 s leaves that whole path inside
+ *  the grace window while still warning during the share. */
+export const LIVE_RECORDING_GRACE_S = 20;
+
 /** Sources whose frames arrive in real time (same set live-progress.ts uses). */
 const LIVE_SOURCES = new Set(["rtmp", "screen", "file-sim", "browser", "webrtc", "screenshare"]);
 
@@ -47,6 +66,7 @@ export type LiveCaptureState =
   | "waiting_first_window"
   | "capturing"
   | "interrupted"
+  | "recording_missing"
   | "no_capture"
   | "no_highlights"
   | "unknown";
@@ -93,6 +113,10 @@ export interface LiveCaptureInput {
   /** True while the job still holds an `active` media_sessions row, i.e. a
    * media node is carrying (or about to carry) this share. */
   hasLiveMediaSession?: boolean;
+  /** ADAAAA-8105: bytes the share's recording file holds right now (the browser
+   *  rail appends them during the share). `undefined` = the server cannot tell
+   *  (non-browser source), which never produces a recording notice. */
+  recordingBytes?: number;
   /** Injected reference time (ms) so the derivation is unit-testable. */
   nowMs?: number;
 }
@@ -124,8 +148,10 @@ function windowsFor(input: LiveCaptureInput): number {
  * clock, so the unit test pins the exact copy and thresholds.
  *
  * The ordering matters: a job WITH windows never gets a capture notice (the
- * window list is the answer), and a job that is still connecting is never
- * reported as interrupted inside the staleness grace window.
+ * window list is the answer) — EXCEPT a browser share that is storing no video
+ * (ADAAAA-8105), which is checked first because its accepted highlights are
+ * exactly the ones whose clips will be missing — and a job that is still
+ * connecting is never reported as interrupted inside the staleness grace window.
  */
 export function deriveLiveCapture(input: LiveCaptureInput): LiveCapture {
   const job = input.job ?? {};
@@ -141,9 +167,37 @@ export function deriveLiveCapture(input: LiveCaptureInput): LiveCapture {
 
   const base = { frames, windows, highlights, firstWindowInS: null, cause: null, action: null };
 
-  // Not a live rail, or there is already a confirmed highlight: nothing to
-  // explain, and a notice would be noise.
-  if (!live || highlights > 0) {
+  // Not a live rail: nothing to explain, and a notice would be noise.
+  if (!live) {
+    return { ...base, state: "unknown", updatedAt: new Date(nowMs).toISOString() };
+  }
+
+  // ADAAAA-8105: the RECORDING is a separate rail from the analysis. A browser
+  // that claims a codec it cannot encode still delivers frames — so frames,
+  // windows and highlights all look healthy — while storing no video at all.
+  // The whole share is then lost and only the stop path said so. Report it live,
+  // and BEFORE the `highlights > 0` early return below: an accepted highlight
+  // with no recording is exactly the case that shipped a card with no clip and
+  // no warning until the share ended.
+  const recordingBytes = finiteNumber(input.recordingBytes);
+  if (
+    !terminal &&
+    String(job.source ?? "") === "browser" &&
+    recordingBytes !== null &&
+    frames > 0 &&
+    ageS >= LIVE_RECORDING_GRACE_S &&
+    recordingBytes < LIVE_RECORDING_MIN_BYTES
+  ) {
+    return {
+      ...base,
+      state: "recording_missing",
+      cause: "This share is not saving video, so its highlight clips will be missing.",
+      action: "Stop the share and start it again; if it repeats, use another browser.",
+      updatedAt: new Date(nowMs).toISOString(),
+    };
+  }
+
+  if (highlights > 0) {
     return { ...base, state: "unknown", updatedAt: new Date(nowMs).toISOString() };
   }
 
