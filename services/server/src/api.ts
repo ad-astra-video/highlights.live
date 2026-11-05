@@ -34,6 +34,7 @@ import type { SignalGateOptions } from "./observe-loop";
 import { audioTriggerFromCandidate, audioTriggerFromWhistle } from "./audio-trigger";
 import { MediaRailObserver } from "./media-rail";
 import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
+import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
@@ -1337,7 +1338,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // `/ingest` rail (which would regress the Phase-2 media-server migration,
   // ADAAAA-6867). Lazily created on the first relayed observation/audio chunk.
   async function ensureMediaRail(
-    job: { id: string; ownerId?: string; gameHint?: string; preferLabels?: string[]; cameraId?: string },
+    job: { id: string; ownerId?: string; gameHint?: string; preferLabels?: string[]; cameraId?: string; perceiveSessionId?: string },
     bj: { rail?: MediaRailObserver; mediaSessionId?: string; frames?: LiveFrameWriter }
   ): Promise<MediaRailObserver | null> {
     if (bj.rail) return bj.rail;
@@ -1371,6 +1372,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
       // measures the transition just past its judged window (~0 added GPU).
       onDeferredGoalAttested: deferredGoalAttestationHook(job.id, () => shared.delivery),
+      // ADAAAA-8139: the bounded re-read of a demoted window's persisted frames
+      // (score-bug OCR only; <= 8 OCR calls/leg, no decide call, no Livepeer
+      // debit). Unset when the rail is off or perceive is unreachable.
+      liveFrameReread: buildLiveFrameReread({ cfg, jobId: job.id, store, sessionId: job.perceiveSessionId }),
     });
     // Clips are cut from the browser recording at share end (finishBrowserJob
     // cuts every highlight that has no clipUri yet): the recording is still
@@ -1638,7 +1643,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   }
   async function runLiveJob(
     ingest: LiveIngest,
-    job: { id: string; gameHint?: string; preferLabels?: string[] },
+    job: { id: string; gameHint?: string; preferLabels?: string[]; perceiveSessionId?: string },
     user: any,
     sub: any
   ) {
@@ -1687,6 +1692,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
         // measures the transition just past its judged window (~0 added GPU).
         onDeferredGoalAttested: deferredGoalAttestationHook(job.id, () => shared.delivery),
+        // ADAAAA-8139: bounded persisted-frame re-read of a demoted goal window.
+        liveFrameReread: buildLiveFrameReread({ cfg, jobId: job.id, store, sessionId: job.perceiveSessionId }),
       });
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -6357,7 +6364,7 @@ function buildObserveSignalGateOpts(cfg: ServerConfig): SignalGateOptions | unde
  */
 export interface LiveAnalyzerConfigDeps {
   cfg: ServerConfig;
-  job: { id: string; gameHint?: string; preferLabels?: string[]; cameraId?: string };
+  job: { id: string; gameHint?: string; preferLabels?: string[]; cameraId?: string; perceiveSessionId?: string };
   clipWindow: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec?: number };
   onDecision?: AnalyzerConfig["onDecision"];
   onDecideAudit?: AnalyzerConfig["onDecideAudit"];
@@ -6366,6 +6373,39 @@ export interface LiveAnalyzerConfigDeps {
   onRunningSummary?: AnalyzerConfig["onRunningSummary"];
   /** ADAAAA-8006: re-attest a demoted LIVE goal from a later scoreboard read. */
   onDeferredGoalAttested?: AnalyzerConfig["onDeferredGoalAttested"];
+  /** ADAAAA-8139: bounded persisted-frame re-read of a demoted goal window. */
+  liveFrameReread?: AnalyzerConfig["liveFrameReread"];
+}
+
+/**
+ * ADAAAA-8139: production wiring of the persisted-frame re-read.
+ *
+ * The frame inventory is the job's own relayed-frame ledger (one row per frame
+ * with its content timestamp, written by {@link LiveFrameWriter}), the bytes are
+ * the frames the server ALREADY wrote to `live/<jobId>/frames`, and the OCR is
+ * one score-bug crop pass on perceive. No decide call, no perceive pipeline pass,
+ * no Livepeer debit — the rail pays for nothing new here.
+ *
+ * Returns `undefined` when the rail is off or no perceive endpoint is configured
+ * (absent OCR would only burn disk reads), which restores the 8134 pooled path.
+ */
+export function buildLiveFrameReread(deps: {
+  cfg: ServerConfig;
+  jobId: string;
+  store: Pick<Store, "observationsForJob">;
+  sessionId?: string;
+}): AnalyzerConfig["liveFrameReread"] {
+  if (!deps.cfg.liveFrameReread || !deps.cfg.perceiveUrl) return undefined;
+  return {
+    io: {
+      framesInSpan: (lo: number, hi: number) =>
+        (deps.store.observationsForJob(deps.jobId) ?? [])
+          .filter((o) => Number.isFinite(o.timestamp) && o.timestamp >= lo && o.timestamp <= hi)
+          .map((o) => ({ seq: o.seq, ts: o.timestamp })),
+      loadFrame: diskFrameLoader(deps.cfg.dataDir, deps.jobId),
+      ocrFrame: perceiveScoreboardOcr(deps.cfg.perceiveUrl, deps.sessionId),
+    },
+  };
 }
 
 export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerConfig {
@@ -6379,6 +6419,7 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     getMatchContext,
     onRunningSummary,
     onDeferredGoalAttested,
+    liveFrameReread,
   } = deps;
   return {
     jobId: job.id,
@@ -6490,6 +6531,8 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-8006: pass the deferred-attestation persist seam straight through
     // (the live rails re-attest a demoted goal on a later scoreboard read).
     onDeferredGoalAttested,
+    // ADAAAA-8139: the bounded persisted-frame re-read of a demoted goal window.
+    liveFrameReread,
     // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary
     // evidence). Live uses the default analysis_fps / windows.
     analysisFps: cfg.analysisFps,

@@ -58,6 +58,13 @@ import {
   type LiveGoalRecall,
 } from "./live-goal-recall";
 import { liveDecideAdmission } from "./live-decide-admission";
+import {
+  LIVE_FRAME_REREAD_MAX_FRAMES,
+  LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN,
+  planDueRereads,
+  runFrameRereadPass,
+  type FrameRereadIo,
+} from "./live-frame-reread";
 import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
 import type { TriggerFamilyLatency } from "./observe-loop";
 // ADAAAA-8081: the live ASR side lane (fire-time prefetch) + the observer's
@@ -822,6 +829,10 @@ export interface DeferredGoalAttestation {
   cardTitles?: string[];
   colour?: ColourSignal;
   reasonRaw?: string;
+  /** ADAAAA-8134 read counts the gate measured for this window (AC-R4). ADAAAA-8139:
+   * the persisted-frame re-read triggers on `postSamples < need` alone, so it needs
+   * the disclosure the demoted row already carries. */
+  scoreReads?: ScoreReadDiagnostics;
 }
 
 /** ADAAAA-8006: the re-emit handed to the caller's persist hook. */
@@ -2833,6 +2844,12 @@ export interface AnalyzerConfig {
    * caught + logged, never a pipeline failure). Unset => the re-emit is audited
    * and dropped (no persistence), which is the VOD/misconfigured-rail posture. */
   onDeferredGoalAttested?: (upgrade: DeferredGoalAttestationUpgrade) => void;
+  /** ADAAAA-8139: re-read the ALREADY-PERSISTED frames of a demoted LIVE goal
+   * window, once, after the deferred lookahead closes. OCR-only (one score-bug
+   * crop pass per frame): no decide call, no perceive pipeline pass, no Livepeer
+   * debit. Bounded by {@link LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN}. Unset =>
+   * the rail keeps the ADAAAA-8134 pooled re-read only (byte-identical). */
+  liveFrameReread?: LiveFrameRereadConfig;
   /**
    * ADAAAA-7948 (Inc 3): ground every FAST caption before it is persisted —
    * gate goal claims on the window's own verdict, replace names the window's
@@ -3881,6 +3898,31 @@ export class LiveRunShared {
   /** ADAAAA-8006: the demoted rows this run still holds (read-only snapshot). */
   pendingDeferredGoalAttestations(): readonly DeferredGoalAttestation[] {
     return [...this.deferredGoalAttestations];
+  }
+  /** ADAAAA-8139: demoted rows whose ONE persisted-frame re-read pass has already
+   * been spent (keyed on the delivered row id), so a re-produced window or a
+   * retried consume can never double-bill the same window. */
+  private frameRereadAttempts = new Set<string>();
+  /** ADAAAA-8139: OCR calls this run has spent on persisted-frame re-reads. Hard
+   * ceiling is `LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN` (8/leg). */
+  private frameRereadOcrCallCount = 0;
+  /** ADAAAA-8139: keys already re-read (read-only snapshot for the executor). */
+  frameRereadAttempted(): ReadonlySet<string> {
+    return this.frameRereadAttempts;
+  }
+  /** ADAAAA-8139: mark one demoted window's re-read pass as spent. */
+  noteFrameRereadAttempt(key: string): void {
+    if (!key) return;
+    this.frameRereadAttempts.add(key);
+  }
+  /** ADAAAA-8139: OCR calls spent on re-reads so far (the per-run budget read). */
+  frameRereadOcrCalls(): number {
+    return this.frameRereadOcrCallCount;
+  }
+  /** ADAAAA-8139: charge OCR calls against the per-run budget. */
+  addFrameRereadOcrCalls(n: number): void {
+    const add = Math.max(0, Math.floor(Number(n) || 0));
+    if (add > 0) this.frameRereadOcrCallCount += add;
   }
   /** ADAAAA-8006: resolve ONE demoted row against a later window's scoreboard
    * read. Returns the re-emit to apply, or `[]` when nothing matches.
@@ -5301,6 +5343,10 @@ export async function acceptVideoDecision(
       cardTitles: scoringSurface.cardTitles,
       colour: scoringSurface.colour,
       reasonRaw: scoringSurface.reason_raw,
+      // ADAAAA-8139: the read counts the gate measured, so the persisted-frame
+      // re-read can tell a "no post-goal read in the window" demotion (eligible
+      // for its one OCR pass) from a demotion the OCR cannot fix.
+      scoreReads: candidate.scoreReads,
     });
   }
   // ADAAAA-7865: record the delivered SCORING goal's event coverage. Only a
@@ -6514,6 +6560,107 @@ export function applyDeferredGoalAttestations(
   return upgrades.length;
 }
 
+/** ADAAAA-8139: the bounded persisted-frame re-read configuration.
+ *
+ * `io` is injected (frame inventory + bytes + OCR) so the pass is testable with
+ * no disk, no perceive service and no GPU; the production wiring lives in
+ * `api.ts` (frame dir + `store.observationsForJob` + the perceive `/scoreboard`
+ * probe). */
+export interface LiveFrameRereadConfig {
+  io: FrameRereadIo;
+  /** OCR calls per pass (default 4, the funded cell). */
+  maxFrames?: number;
+  /** OCR calls per RUN across every pass (default 8 = 2 windows x 4 frames). */
+  maxOcrCallsPerRun?: number;
+  /** Support lead the pooled span may reach back (default the 8134 constant). */
+  leadS?: number;
+  /** Per-OCR-call timeout (default 5 s) so a hung perceive cannot park the rail. */
+  ocrTimeoutMs?: number;
+  log?: (line: string) => void;
+}
+
+/**
+ * ADAAAA-8139: run the ONE bounded re-read pass a demoted window is allowed.
+ *
+ * Called from the accept seam AFTER the free (deferred/pooled) attestation has
+ * had its chance, so this can never pre-empt a read the rail already paid for.
+ * A row is eligible only when the ADAAAA-7996 gate demoted it, the ADAAAA-8134
+ * disclosure says `postSamples < need`, and the 20 s lookahead has closed — i.e.
+ * no fresh read can still arrive.
+ *
+ * The re-read readings go through the SAME ledger and the SAME
+ * `scoreboardDeltaFromPooledReadings` + `resolveDeferredGoalAttestation` path,
+ * so the legibility and attribution bars are unchanged: this can only lift a row
+ * the free path already refused, never accept a new one.
+ */
+export async function rereadDemotedWindowsFromPersistedFrames(
+  run: Pick<
+    LiveRunShared,
+    | "pendingDeferredGoalAttestations"
+    | "noteScoreReadings"
+    | "scoreReadBuffer"
+    | "resolveDeferredGoalAttestation"
+    | "frameRereadAttempted"
+    | "noteFrameRereadAttempt"
+    | "frameRereadOcrCalls"
+    | "addFrameRereadOcrCalls"
+  >,
+  cfg: Pick<AnalyzerConfig, "jobId" | "onDeferredGoalAttested" | "liveFrameReread">,
+  input: { readAt: number; lookaheadS?: number }
+): Promise<{ passes: number; ocrCalls: number; readings: number; upgrades: number }> {
+  const result = { passes: 0, ocrCalls: 0, readings: 0, upgrades: 0 };
+  const opts = cfg.liveFrameReread;
+  if (!opts?.io) return result;
+  const log = opts.log ?? ((line: string) => console.error(line));
+  const lookaheadS = Math.max(0, input.lookaheadS ?? LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S);
+  const maxOcr = Math.max(0, Math.floor(opts.maxOcrCallsPerRun ?? LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN));
+  const due = planDueRereads(run.pendingDeferredGoalAttestations(), {
+    nowTs: input.readAt,
+    lookaheadS,
+    attempted: run.frameRereadAttempted(),
+  });
+  for (const plan of due) {
+    const spent = run.frameRereadOcrCalls();
+    const budgetLeft = maxOcr - spent;
+    if (budgetLeft <= 0) {
+      log(
+        `[live-frame-reread:${cfg.jobId}] per-run OCR budget (${maxOcr}) exhausted — ` +
+          `demoted window [${plan.lo.toFixed(1)}, ${plan.hi.toFixed(1)}] not re-read`
+      );
+      break;
+    }
+    // One pass per demoted window: marked BEFORE the pass so a retried consume
+    // can never double-bill the same window.
+    run.noteFrameRereadAttempt(plan.key);
+    const { pass, readings, ocrCalls } = await runFrameRereadPass(
+      plan,
+      { ...opts.io, maxFrames: Math.min(Math.max(1, Math.floor(opts.maxFrames ?? LIVE_FRAME_REREAD_MAX_FRAMES)), budgetLeft), leadS: opts.leadS ?? SCORE_READ_SUPPORT_LEAD_S },
+      { jobId: cfg.jobId, log, ocrTimeoutMs: opts.ocrTimeoutMs },
+    );
+    result.passes++;
+    result.ocrCalls += ocrCalls;
+    run.addFrameRereadOcrCalls(ocrCalls);
+    // Fold the re-read readings into the run ledger (one reading per content
+    // frame; a frame the rail already read keeps its FIRST reading, so a
+    // re-read can only ADD coverage, never rewrite evidence).
+    const added = readings.length ? run.noteScoreReadings(readings) : 0;
+    result.readings += added;
+    log(
+      `[live-frame-reread:${cfg.jobId}] window [${plan.lo.toFixed(1)}, ${plan.hi.toFixed(1)}] ` +
+        `pass: ${pass.frames.length} frame(s), ${ocrCalls} OCR call(s), ${added} new ledger read(s) ` +
+        `(run total ${run.frameRereadOcrCalls()}/${maxOcr} calls)`
+    );
+    const delta = scoreboardDeltaFromPooledReadings({
+      readings: run.scoreReadBuffer(),
+      window: { lo: plan.lo, hi: plan.hi },
+      trailS: lookaheadS,
+      deltaRange: { lo: plan.lo, hi: plan.hi + lookaheadS },
+    });
+    result.upgrades += applyDeferredGoalAttestations(run, cfg, { readAt: input.readAt, delta });
+  }
+  return result;
+}
+
 export async function observeAcceptOnly(
   client: PipelineClient,
   run: LiveRunShared,
@@ -6673,6 +6820,18 @@ export async function observeAcceptOnly(
           deltaRange: { lo: liveWindow.lo, hi: liveWindow.hi + LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S },
         });
     applyDeferredGoalAttestations(run, cfg, { readAt: payload.centerTs, delta: deferredDelta });
+    // ADAAAA-8139: the free re-read has had its chance. If a demoted window is
+    // still pending and its 20 s lookahead has closed, spend its ONE bounded
+    // persisted-frame re-read pass (score-bug OCR only — no decide, no perceive
+    // pipeline pass, no Livepeer debit). Fail-closed and best-effort: a failed
+    // pass or hook never disturbs the window's own accept.
+    if (cfg.liveFrameReread) {
+      try {
+        await rereadDemotedWindowsFromPersistedFrames(run, cfg, { readAt: payload.centerTs });
+      } catch (e: any) {
+        console.error(`[live-frame-reread:${cfg.jobId}] pass failed:`, String(e?.message || e));
+      }
+    }
   }
   if (pendingSummary !== null && cfg.onRunningSummary) {
     try {
