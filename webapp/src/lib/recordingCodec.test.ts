@@ -10,6 +10,8 @@ import {
   recordingStalled,
   recordingHealth,
   supportedRecordingMimes,
+  recordingProbeCandidates,
+  recordingCommitPlan,
   probeProvesEncoding,
   chooseRecordingMime,
 } from "./recordingCodec";
@@ -144,6 +146,53 @@ describe("probe-before-commit mime choice (ADAAAA-8105)", () => {
   it("returns the browser default when the ladder offers nothing", async () => {
     const commit = await chooseRecordingMime([], async () => 1_000_000);
     expect(commit).toEqual({ mime: "", proved: false, attempts: [] });
+  });
+
+  it("probes the whole ladder, claimed containers first (ADAAAA-8110 AC2)", async () => {
+    // The measured browser: `isTypeSupported` answers true only for mp4/avc1,
+    // and the avc1 recorder emits nothing. Ordering the CLAIMED arm first keeps
+    // a healthy browser's probe cost unchanged; the denied arms must still be
+    // in the walk or the one-arm ladder has nowhere to fall back to.
+    const liesAboutAvc1Only = (mime: string) => mime === "video/mp4;codecs=avc1";
+    expect(recordingProbeCandidates(liesAboutAvc1Only)).toEqual([
+      "video/mp4;codecs=avc1",
+      "video/webm;codecs=vp9",
+      "video/webm",
+    ]);
+    // A browser that claims everything still walks the ladder in its order.
+    expect(recordingProbeCandidates(() => true)).toEqual([...RECORDING_MIME_LADDER]);
+    // ... and one that claims nothing still gets every arm probed, in order.
+    expect(recordingProbeCandidates(() => false)).toEqual([...RECORDING_MIME_LADDER]);
+  });
+
+  it("walks from a lying avc1 claim to an arm it denied, and records it", async () => {
+    const candidates = recordingProbeCandidates((m) => m === "video/mp4;codecs=avc1");
+    const tried: string[] = [];
+    const commit = await chooseRecordingMime(candidates, async (mime) => {
+      tried.push(mime);
+      return mime === "video/mp4;codecs=avc1" ? 0 : 380_000; // avc1 silent, vp9 records
+    });
+    expect(tried).toEqual(["video/mp4;codecs=avc1", "video/webm;codecs=vp9"]);
+    expect(commit).toMatchObject({ mime: "video/webm;codecs=vp9", proved: true });
+    // The measured AC2 expectation: the chosen container is NOT mp4/avc1.
+    expect(commit.mime).not.toBe("video/mp4;codecs=avc1");
+  });
+
+  it("drops a one-arm ladder that proved nothing instead of committing it", async () => {
+    // Job `9c2564e7`: the only claimed arm (avc1) emitted 0 bytes, and the old
+    // caller committed it anyway — 0 chunks, no capture file, no clip.
+    const commit = await chooseRecordingMime(["video/mp4;codecs=avc1"], async () => 0);
+    expect(recordingCommitPlan(commit)).toEqual({ mode: "default", mime: "" });
+  });
+
+  it("keeps a header-only arm running, and commits a proven arm", async () => {
+    expect(
+      recordingCommitPlan({ mime: "video/webm;codecs=vp9", proved: true, attempts: [{ mime: "video/webm;codecs=vp9", bytes: 500_000 }] })
+    ).toEqual({ mode: "proven", mime: "video/webm;codecs=vp9" });
+    // Job `98439bc7`: the mp4 muxer flushed its first frames just after the
+    // probe window. A header is not proof, but it is worth keeping alive.
+    const headerThenFrames = await chooseRecordingMime(["video/mp4;codecs=avc1"], async () => 752);
+    expect(recordingCommitPlan(headerThenFrames)).toEqual({ mode: "header", mime: "video/mp4;codecs=avc1" });
   });
 
   it("probes each arm for a bounded window", () => {
