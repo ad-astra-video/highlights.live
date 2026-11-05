@@ -70,6 +70,7 @@ from .match_context import (
     printed_name_pair,
     sample_scorebug_swatches,
     sample_track_colors,
+    sample_white_shirt_regions,
     resolve_match_context,
     scorebug_lines_have_team_text,
     scorebug_lines_sides,
@@ -1533,6 +1534,12 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
                 for sample in sample_track_colors(state.last_rgb, obs.get("tracks") or [], max_tracks=4):
                     sample["ts"] = timestamp
                     sample["frameSeq"] = seq
+                    state.kit_samples.append(sample)
+                # ADAAAA-8076: white shirts are recovered by SHAPE, not by tracked
+                # box — the tracking pass emits one degenerate box per frame, so
+                # Spain's white shirt reached no crop on the cited job. Same
+                # cadence, same budget, same downstream gates; no GPU work.
+                for sample in sample_white_shirt_regions(state.last_rgb, ts=timestamp, frame_seq=seq):
                     state.kit_samples.append(sample)
             except Exception as e:  # noqa: BLE001 - evidence only, never fatal
                 log.debug("match-context kit sample skipped frame %s: %s", seq, e)
