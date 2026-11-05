@@ -736,8 +736,14 @@ export function buildSummaryLadder(input: {
     const leadSentence = wholeFirstSentence(lead) || lead.trim();
     const leadDigest =
       leadSentence.length <= CHAPTER_SUMMARY_MAX_CHARS ? leadSentence : "";
+    // ADAAAA-8127 (Defect A): the digest is a SENTENCE whatever the chapter's
+    // goal count. `wholeFirstSentence` drops the ` — noise … ` trailer, and the
+    // sentence end travelled with the trailer, so a ZERO-goal chapter served
+    // `Player takes a shot from the box` while the goal-count branch closed the
+    // same line. Restore the sentence end independently of `goalNote`; the
+    // separator before the goal note then always follows a closed sentence.
     const digest =
-      leadDigest && goalNote && !/[.!?…]$/.test(leadDigest) ? `${leadDigest}.` : leadDigest;
+      leadDigest && !/[.!?…]$/.test(leadDigest) ? `${leadDigest}.` : leadDigest;
     return {
       index,
       kind,
