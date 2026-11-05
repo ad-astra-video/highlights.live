@@ -69,7 +69,7 @@ Per-window ledger, on `decide_audit.timings.perceiveTimeline` **and** mirrored i
 | `observationsInSpan` | perceived frames inside the span (the timeline source) |
 | `imageCount` | images the decide call actually carried |
 | `imageGapMaxMs` | largest gap between consecutive shipped images |
-| `recordsPerSecond` | `timelineRecords / spanS` |
+| `recordsPerSecond` | `timelineRecords / spanS`; omitted when the window has < 2 observed frames (a 1-frame tick has no span) |
 | `spanS` | observed span in content seconds (last - first) |
 | `timelineSource` | `observations` \| `seeds` |
 
