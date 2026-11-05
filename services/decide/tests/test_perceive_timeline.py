@@ -318,6 +318,47 @@ def test_no_audio_window_is_named_not_silently_transcribed(llama, monkeypatch):
     assert res3["audit"]["timings"]["noAudioReason"] == "audio_clip_disabled"
 
 
+def test_emitted_audit_record_carries_the_audio_coverage(llama, monkeypatch, tmp_path):
+    """AC-E2 regression: the coverage must reach the RECORD written to
+    DECIDE_AUDIT_DIR, not just the response descriptor. The descriptor is built
+    from the same dict, so an offline grade that reads the JSONL trail used to
+    see zero audio fields on a leg that was fully transcribed."""
+    monkeypatch.setenv("DECIDE_AUDIT_DIR", str(tmp_path))
+    monkeypatch.setenv("ASR_URL", "http://asr.test:8082")
+    monkeypatch.setenv("AUDIO_CONTEXT", "1")
+    monkeypatch.setenv("GEMMA_SEND_AUDIO", "0")
+    monkeypatch.setattr(
+        G, "transcribe_audio", lambda url, audio, sr=16000, **kw: ("goal for the home side", 0.8)
+    )
+    res = decide_with_gemma(
+        "GOAL",
+        Evidence(trackCount=3, perceiveTimeline=timeline(29)).model_dump(),
+        game_hint="soccer",
+        frames=[],
+        audio_b64="QUJD",
+        url=llama.url,
+        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "gAUD", "frameCount": 29},
+        perceive_window={"seeds": 29, "withFindings": 29, "centerTs": 10.0},
+        audio_presence={"tapChunks": 4, "clipBytes": 6, "levels": 12, "series": 12},
+    )
+    lines = (tmp_path / "decide-audit.jsonl").read_text().splitlines()
+    assert lines, "no audit record emitted"
+    rec = json.loads(lines[-1])
+    assert rec["groupKey"] == "gAUD"
+    t = rec["timings"]
+    assert t["audioPath"] == "asr_text"
+    assert t["asrRan"] is True
+    assert t["asrLatencyS"] == 0.8
+    assert t["windowAudioPresent"] is True
+    assert t["noAudioReason"] == ""
+    assert t["audioClipBytes"] == 6 and t["audioTapChunks"] == 4
+    assert t["perceiveTimeline"]["records"] == 29
+    # The file record and the descriptor agree field for field on coverage.
+    d = res["audit"]["timings"]
+    assert d["audioPath"] == t["audioPath"] and d["asrRan"] == t["asrRan"]
+    assert d["noAudioReason"] == t["noAudioReason"]
+
+
 def test_enriched_request_never_422s_the_live_loop():
     """AC-E4: a 29-seed window with the timeline rides the real /highlight route
     (whose response is validated), and an oversized timeline is a clean 422 the
