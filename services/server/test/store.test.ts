@@ -93,6 +93,46 @@ describe("Store (in-memory)", () => {
     expect(vodAfter.failureReason).toBe("server-restart");
   });
 
+  it("sweepStrandedJobs settles the stranded row's spend (ADAAAA-8061)", async () => {
+    // A swept job must never be indistinguishable from a job that never ran:
+    // the boot sweep's callback supplies the accounting patch and the row must
+    // carry endedAt + decideCalls + costUsd (or costUnavailable + partial).
+    const s = new Store();
+    const stranded = await s.createJob({ ownerId: "u", source: "file" });
+    await s.patchJob(stranded.id, { status: "active", startedAt: "2026-11-05T05:00:00.000Z" });
+    const reaped = await s.sweepStrandedJobs(() => ({
+      endedAt: "2026-11-05T05:05:00.000Z",
+      finishedAt: "2026-11-05T05:05:00.000Z",
+      decideCalls: 65,
+      perceiveSessionS: 300,
+      costUsd: 0.6508,
+      error: "media-session-lost (boot sweep)",
+    }));
+    expect(reaped).toBe(1);
+    const got = s.getJob(stranded.id)!;
+    expect(got.status).toBe("failed");
+    expect(got.endedAt).toBe("2026-11-05T05:05:00.000Z");
+    expect(got.decideCalls).toBe(65);
+    expect(got.costUsd).toBe(0.6508);
+    expect(got.error).toContain("media-session-lost");
+  });
+
+  it("sweepStrandedJobs keeps the unmeasured shape (costUnavailable) intact (ADAAAA-8061)", async () => {
+    const s = new Store();
+    const stranded = await s.createJob({ ownerId: "u", source: "file" });
+    await s.patchJob(stranded.id, { status: "active" });
+    await s.sweepStrandedJobs(() => ({
+      endedAt: "2026-11-05T05:05:00.000Z",
+      costUnavailable: "decide-count-not-persisted",
+      partialCostUsd: 0.0008,
+    }));
+    const got = s.getJob(stranded.id)!;
+    expect(got.status).toBe("failed");
+    expect(got.costUsd).toBeUndefined();
+    expect(got.costUnavailable).toBe("decide-count-not-persisted");
+    expect(got.partialCostUsd).toBe(0.0008);
+  });
+
   it("patchJob persists optional async progress + progressLabel (ADAAAA-6760)", async () => {
     const s = new Store();
     const j = await s.createJob({ ownerId: "u", source: "file" });
