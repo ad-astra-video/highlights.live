@@ -1629,6 +1629,12 @@ def render_perceive_timeline(
         # span/cadence, so AC-8101-1 grades `contentFps == 1` off the audit row
         # rather than `printenv` — the same ADAAAA-8074 lesson applied to the rate.
         "contentFps": ("contentFps", float),
+        # ADAAAA-8108 (AC-E3): the enrichment ARM this window was decided under
+        # (`on` = the shipped posture, `off` = the measurement arm that omits the
+        # timeline). A string passthrough, so a leg's ON/OFF split is read off
+        # decide_audit instead of being inferred from `records == 0` / the prompt
+        # text (both of which stay the independent cross-check).
+        "enrichmentArm": ("enrichmentArm", str),
     }
     extra: dict = {}
     source = None
