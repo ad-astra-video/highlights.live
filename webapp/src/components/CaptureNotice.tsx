@@ -16,7 +16,10 @@ import type { LiveCapture } from "../lib/jobDetail";
 export function CaptureNotice({ capture }: { capture?: LiveCapture | null }) {
   if (!capture || capture.state === "unknown" || !capture.cause) return null;
   const waiting = capture.state === "waiting_first_window" || capture.state === "connecting";
-  const interrupted = capture.state === "interrupted";
+  // ADAAAA-8105: a live share that is storing no video is a real warning — the
+  // clips for the highlights it accepts will be missing — so it reads as an
+  // alert, not a quiet status line.
+  const interrupted = capture.state === "interrupted" || capture.state === "recording_missing";
   const tone = interrupted
     ? "border-yellow/40 bg-yellow/10"
     : waiting
