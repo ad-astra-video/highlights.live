@@ -115,6 +115,14 @@ export interface ObserveWindow {
   /** Frames present in the source window but dropped by the cap (for the
    * per-call size report). */
   droppedCount: number;
+  /** ADAAAA-8064: the window's FULL observation set — every frame inside the
+   * span, oldest -> newest, BEFORE the fps grid and `subsampleToCap`. Set by
+   * {@link assembleLiveWindow} only (the live rail); a symmetric VOD
+   * {@link assembleObserveWindow} leaves it undefined so the VOD path is
+   * unchanged. The image cap applies to `frames`; the decide perceive timeline
+   * is sourced from this set, so its density never shrinks with the image
+   * budget (the B+e′ construction fix). */
+  observedFrames?: { ts: number }[];
 }
 
 /**
@@ -244,7 +252,7 @@ export function assembleLiveWindow(
   const inWindow = frames
     .filter((f) => f.imageB64 && f.ts >= lo && f.ts <= nowTs + 1e-9)
     .sort((a, b) => a.ts - b.ts);
-  if (inWindow.length === 0) return { centerTs: nowTs, frames: [], capped: false, droppedCount: 0 };
+  if (inWindow.length === 0) return { centerTs: nowTs, frames: [], capped: false, droppedCount: 0, observedFrames: [] };
 
   // Resolve to the fps grid across [start, now] (nearest frame per step).
   const step = fps > 0 ? 1 / fps : Infinity;
@@ -277,7 +285,12 @@ export function assembleLiveWindow(
 
   const { items, capped } = subsampleToCap(grid, maxFrames);
   const droppedCount = grid.length - items.length;
-  return { centerTs: nowTs, frames: items, capped, droppedCount };
+  // ADAAAA-8064: keep the PRE-CAP in-window frame list (timestamps only — the
+  // images stay in `frames`, so this costs no bytes on the payload). This is
+  // the window's observation set: the perceive timeline is a projection of THIS,
+  // so 4 shipped images still yield one text record per perceived frame.
+  const observedFrames = inWindow.map((f) => ({ ts: f.ts }));
+  return { centerTs: nowTs, frames: items, capped, droppedCount, observedFrames };
 }
 
 /** ADAAAA-7676: the live observe lag budget (wall-clock seconds). A live window
@@ -1466,6 +1479,13 @@ export interface ObserveDecidePayload {
   frames: { ts: number; imageB64: string; seq?: number }[];
   /** Perceive-seeded per-frame context, aligned to the window frames. */
   seeds: PerFrameSeed[];
+  /** ADAAAA-8064: perceive-seeded context for the window's FULL observation set
+   * (`ObserveWindow.observedFrames`, pre image-cap), ordered by `ts`. This is the
+   * source of the decide `perceiveTimeline`: one text record per perceived frame
+   * in the span, independent of how many images the call ships (B+e′). Absent on
+   * a payload built from a VOD symmetric window, where `seeds` stays the source —
+   * so the VOD request is unchanged. */
+  observations?: PerFrameSeed[];
   /** Per-window bias hints / provenance from perceive trigger signals — NOT the
    * on/off switch. When non-empty, decide treats them as evidence to weigh. A
    * hint may carry the candidate's goal-attestation signals (goalCrossed /
@@ -1547,10 +1567,18 @@ export function buildObservePayload(
   biasHints: ObserveBiasHint[] = [],
   trigger?: AudioTriggerRecord
 ): ObserveDecidePayload {
+  // ADAAAA-8064: the window's FULL observation set (pre image-cap) rides the
+  // payload so the decide timeline is not a projection of the shipped images.
+  // Only a live window carries it; a VOD window leaves the key absent and the
+  // decide builder falls back to `seeds` (VOD request unchanged).
+  const observations = win.observedFrames?.length
+    ? alignSeeds(win.observedFrames, findingsByTs)
+    : undefined;
   return {
     centerTs: win.centerTs,
     frames: win.frames,
     seeds: alignSeeds(win.frames, findingsByTs),
+    ...(observations ? { observations } : {}),
     biasHints: [...biasHints].sort((a, b) => a.ts - b.ts),
     capped: win.capped,
     droppedCount: win.droppedCount,
@@ -1656,7 +1684,16 @@ export function applyOnDemandRecall(
   const byTs = new Map<number, PerFrameSeed>();
   for (const s of payload.seeds) byTs.set(s.ts, s);
   for (const s of recall.seeds) if (s.ts !== undefined) byTs.set(s.ts, s);
-  return { ...payload, seeds: payload.frames.map((f) => byTs.get(f.ts) ?? { ts: f.ts }) };
+  // ADAAAA-8064: the recalled evidence also refreshes the FULL observation set,
+  // so a recalled frame that the image cap dropped still reaches the timeline.
+  const observations = payload.observations
+    ? payload.observations.map((s) => byTs.get(s.ts) ?? s)
+    : undefined;
+  return {
+    ...payload,
+    seeds: payload.frames.map((f) => byTs.get(f.ts) ?? { ts: f.ts }),
+    ...(observations ? { observations } : {}),
+  };
 }
 
 /** ADAAAA-7878: an issued-but-unapplied VOD window. Entries are appended in

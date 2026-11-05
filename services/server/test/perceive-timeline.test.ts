@@ -134,7 +134,21 @@ describe("buildObserveDecideRequest enrichment envelope (ADAAAA-8056 AC-E1/E4/E5
     const seeds = liveSeeds(29);
     const { evidence, opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), payload(seeds, 29));
     expect(evidence.perceiveTimeline?.length).toBe(29);
-    expect((opts as any).perceiveWindow).toEqual({ seeds: 29, records: 29, withFindings: 29, centerTs: 10 });
+    expect((opts as any).perceiveWindow).toMatchObject({
+      seeds: 29,
+      records: 29,
+      withFindings: 29,
+      centerTs: 10,
+      // ADAAAA-8064: a payload without a full observation set sources the
+      // timeline from the seeds and says so (the VOD / legacy fallback).
+      timelineRecords: 29,
+      observationsInSpan: 29,
+      imageCount: 29,
+      timelineSource: "seeds",
+    });
+    expect((opts as any).perceiveWindow.imageGapMaxMs).toBe(1000);
+    expect((opts as any).perceiveWindow.spanS).toBeGreaterThan(0);
+    expect((opts as any).perceiveWindow.recordsPerSecond).toBeGreaterThan(0);
     expect((opts as any).audioPresence).toBeDefined();
     // The clip gate is reported so a gated window is named, not blamed on retention.
     expect((opts as any).audioPresence.clipEnabled).toBe(true);
@@ -153,7 +167,62 @@ describe("buildObserveDecideRequest enrichment envelope (ADAAAA-8056 AC-E1/E4/E5
     const cfg = { gameHint: "soccer" } as Parameters<typeof buildObserveDecideRequest>[0];
     const seeds: PerFrameSeed[] = [{ ts: 9, tracks: [{ trackId: "t0" }] }, { ts: 10 }];
     const { opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), payload(seeds, 2));
-    expect((opts as any).perceiveWindow).toEqual({ seeds: 2, records: 2, withFindings: 1, centerTs: 10 });
+    expect((opts as any).perceiveWindow).toMatchObject({
+      seeds: 2,
+      records: 2,
+      withFindings: 1,
+      centerTs: 10,
+      timelineRecords: 2,
+      observationsInSpan: 2,
+      imageCount: 2,
+      timelineSource: "seeds",
+    });
+  });
+
+  // --- ADAAAA-8064: the timeline source is the observation set, not the images.
+  it("builds one timeline record per PERCEIVED frame even when the image cap ships 4", () => {
+    const cfg = { gameHint: "soccer" } as Parameters<typeof buildObserveDecideRequest>[0];
+    // A ~10 s live span: 28 perceived frames at ~2.76 obs/s, 4 images shipped
+    // at the ~3.3 s gaps a 4-image cap produces over that span.
+    const observations = liveSeeds(28, 10).map((s, i) => ({ ...s, ts: Number((i * (10 / 27)).toFixed(2)) }));
+    const images = [0, 9, 18, 27].map((i) => ({ ts: observations[i].ts, imageB64: `img${i}` }));
+    const p: ObserveDecidePayload = {
+      centerTs: 10,
+      frames: images,
+      seeds: images.map((f) => observations.find((o) => o.ts === f.ts)!),
+      observations,
+      biasHints: [],
+      capped: true,
+      droppedCount: 16,
+    };
+    const { evidence, opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), p);
+    expect(evidence.perceiveTimeline?.length).toBe(28);
+    const l = (opts as any).perceiveWindow;
+    // AC-C1: the point of the fix — records track observations, not images.
+    expect(l.timelineRecords).toBe(28);
+    expect(l.observationsInSpan).toBe(28);
+    expect(l.imageCount).toBe(4);
+    expect(l.timelineRecords).toBe(l.observationsInSpan);
+    expect(l.timelineRecords).toBeGreaterThan(l.imageCount);
+    // AC-C2: >= 1 record per second of span (~2.8 expected).
+    expect(l.spanS).toBeCloseTo(10, 1);
+    expect(l.recordsPerSecond).toBeGreaterThanOrEqual(1.0);
+    // AC-C3: honest imaging — 4 images over 10 s is ~3.3 s apart, never sub-second.
+    expect(l.imageGapMaxMs).toBeGreaterThanOrEqual(900);
+    expect(l.timelineSource).toBe("observations");
+    // The records themselves are the perceived frames, chronological.
+    const ts = (evidence.perceiveTimeline ?? []).map((r) => r.ts);
+    expect(ts).toEqual([...ts].sort((a, b) => a - b));
+    expect(new Set(ts).size).toBe(28);
+  });
+
+  it("falls back to the seeds when the payload carries no observation set", () => {
+    const cfg = { gameHint: "soccer" } as Parameters<typeof buildObserveDecideRequest>[0];
+    const seeds = liveSeeds(4);
+    const { evidence, opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), payload(seeds, 4));
+    expect(evidence.perceiveTimeline?.length).toBe(4);
+    expect((opts as any).perceiveWindow.timelineSource).toBe("seeds");
+    expect((opts as any).perceiveWindow.observationsInSpan).toBe(4);
   });
 
   it("leaves the VOD payload byte-identical (AC-E5)", () => {

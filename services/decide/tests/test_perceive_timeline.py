@@ -136,19 +136,26 @@ def test_render_is_ordered_and_dense_with_a_ledger():
     assert len([ln for ln in block.splitlines() if ln.startswith("  ")]) == 29
     span = timeline(29)[-1]["ts"] - timeline(29)[0]["ts"]
     assert ledger["records"] >= int(span) + 1
-    # 29 records fit only in SCALARS form under the block budget, so the ladder
-    # compacts rather than drops: every record survives, the labels do not.
+    # ADAAAA-8064: the block budget is sized for the full-rate live window, so a
+    # 29-record span renders WHOLE — no record is thinned away and the labels /
+    # OCR anchors reach the model (they are what makes the text channel dense).
     assert ledger == {
         "records": 29,
         "chars": len(block),
-        "compacted": "scalars",
+        "compacted": "none",
         "seeds": 29,
         "withFindings": 29,
     }
     assert ledger["chars"] <= PERCEIVE_TIMELINE_MAX_CHARS
+    # <= ~120 chars/record keeps AC-E3's prefill budget (28-29 records < 3.4 KB).
+    assert len(block) / 29 <= 120
     # Ordered oldest -> newest, with t relative to the stated window center.
     ts_lines = [ln.split()[0] for ln in block.splitlines() if ln.startswith("  ")]
     assert ts_lines == sorted(ts_lines, key=lambda t: float(t.rstrip("s")))
+    # Labels and OCR anchors survive at full-rate density (the record is compact
+    # enough that the block never has to compact them away).
+    assert "objects=player,ball" in block
+    assert 'ocr="1-0"' in block
     # The decisive scalars survive compaction: the goal record still names itself.
     assert "ball=goal" in block
     assert "flag=goal_line+in_net+score_delta" in block
@@ -162,7 +169,10 @@ def test_a_short_window_keeps_the_full_record_including_labels_and_ocr():
     assert ledger["compacted"] == "none"
     assert ledger["records"] == 5
     assert "objects=player,ball" in block
-    assert "track_ids=t0,ball" in block
+    # ADAAAA-8064: track ids stay on the evidence record (audit) but are not
+    # rendered — 8 ids/record would blow the ~120 chars/record budget at the
+    # full-rate 28-record window.
+    assert "track_ids=" not in block
 
 
 def test_no_timeline_keeps_the_prompt_byte_identical():
@@ -240,19 +250,41 @@ def test_decide_carries_timeline_ledger_and_asr_coverage(llama, monkeypatch):
     )
     res = decide_with_gemma(
         "GOAL",
-        Evidence(trackCount=3, perceiveTimeline=timeline(29)).model_dump(),
+        Evidence(trackCount=3, perceiveTimeline=timeline(28)).model_dump(),
         game_hint="soccer",
         frames=[],
         audio_b64="QUJD",
         url=llama.url,
-        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "g1", "frameCount": 29},
-        perceive_window={"seeds": 29, "withFindings": 29, "centerTs": 10.0},
+        audit_ctx={"sessionId": "s1", "jobId": "j1", "groupKey": "g1", "frameCount": 4},
+        perceive_window={
+            "seeds": 4,
+            "withFindings": 4,
+            "centerTs": 10.0,
+            # ADAAAA-8064: a 4-image call whose timeline carries the window's 28
+            # perceived frames.
+            "timelineRecords": 28,
+            "observationsInSpan": 28,
+            "imageCount": 4,
+            "imageGapMaxMs": 3300,
+            "recordsPerSecond": 2.8,
+            "spanS": 10.0,
+            "timelineSource": "observations",
+        },
         audio_presence={"tapChunks": 4, "clipBytes": 6, "levels": 12, "series": 12},
     )
     tl = res["audit"]["timings"]["perceiveTimeline"]
-    assert tl["records"] == 29
-    assert tl["compacted"] in ("scalars", "thinned")
-    assert tl["seeds"] == 29 and tl["withFindings"] == 29
+    assert tl["records"] == 28
+    assert tl["compacted"] in ("none", "scalars", "thinned")
+    assert tl["seeds"] == 4 and tl["withFindings"] == 4
+    # ADAAAA-8064 (AC-C1..C3): the density ledger rides the audit row...
+    assert tl["timelineRecords"] == 28 and tl["observationsInSpan"] == 28
+    assert tl["imageCount"] == 4 and tl["imageGapMaxMs"] == 3300
+    assert tl["recordsPerSecond"] == 2.8 and tl["spanS"] == 10.0
+    assert tl["timelineSource"] == "observations"
+    # ...and is mirrored into the analysis block an inspector reads.
+    assert res["analysis"]["perceiveTimeline"]["timelineRecords"] == 28
+    assert res["analysis"]["perceiveTimeline"]["observationsInSpan"] == 28
+    assert res["analysis"]["perceiveTimeline"]["imageCount"] == 4
     assert res["audit"]["timings"]["audioPath"] == "asr_text"
     assert res["audit"]["timings"]["asrRan"] is True
     assert res["audit"]["timings"]["asrLatencyS"] == 0.7
@@ -262,7 +294,7 @@ def test_decide_carries_timeline_ledger_and_asr_coverage(llama, monkeypatch):
     assert res["audioContext"]["noAudioReason"] == ""
     types = [i["type"] for i in res["analysis"]["dataItems"]]
     assert "perceive_timeline" in types
-    assert res["analysis"]["perceiveTimeline"]["records"] == 29
+    assert res["analysis"]["perceiveTimeline"]["records"] == 28
     # The prompt actually given to the model carried the records.
     sent = llama.requests[0]["messages"][-1]["content"]
     text = sent if isinstance(sent, str) else " ".join(p.get("text", "") for p in sent)
