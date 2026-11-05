@@ -1461,9 +1461,11 @@ export type CelebrationDuplicate =
  * ADAAAA-8087: the row a celebration accept collapses into, or `undefined` when
  * the accept is a distinct moment. Two duplicate structures are recognised:
  *
- * 1. the accept's delivered clip OVERLAPS an already-delivered GOAL's clip and
- *    its anchor sits within {@link GOAL_DUPLICATE_REACH_S} of that goal: the
- *    goal row's own clip already shows this footage (R4 inside R3's clip);
+ * 1. the accept's anchor sits INSIDE an already-delivered GOAL's clip and within
+ *    {@link GOAL_DUPLICATE_REACH_S} of that goal: the goal row's own clip
+ *    already shows this footage (R4 inside R3's clip). A celebration that merely
+ *    shares a clip edge with the goal (R2, 13.2 s past R1 — outside the goal's
+ *    ±10 s clip) is a distinct, independently triggered moment and stays;
  * 2. the accept carries the SAME reason text as a celebration delivered at most
  *    {@link CELEBRATION_DUPLICATE_GAP_S} earlier: one moment, two motion accepts
  *    (R5/R6 on the same leg).
@@ -1498,8 +1500,10 @@ export function findCelebrationDuplicate(
   let nearest: AcceptedGoalEvent | undefined;
   let nearestDiff = Infinity;
   for (const g of goals) {
-    const overlaps = input.start < g.end && g.start < input.end;
-    if (!overlaps) continue;
+    // The anchor must fall inside the delivered goal's clip — a row whose focal
+    // instant the goal row already covers. Sharing only a clip edge is not the
+    // same event (the issue's R2 is 13.2 s past R1 and outside its ±10 s clip).
+    if (anchor < g.start || anchor > g.end) continue;
     const diff = Math.abs(anchor - g.anchorTs);
     if (diff <= reach && diff < nearestDiff) {
       nearestDiff = diff;
