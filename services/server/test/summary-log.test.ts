@@ -508,3 +508,120 @@ describe("write-seam parity (ADAAAA-7962, contract v4)", () => {
     expect(entry.colour).toBeUndefined();
   });
 });
+
+// ADAAAA-8053 (contract v8 §3b.3): the colour derivation must be OBSERVABLE per
+// row. QA v7 measured 0/4 eligible rows with a beat on `93fae4a` while the
+// Developer's level measured 6/6 — with no recorded reason, nobody could tell a
+// non-firing derivation from a gate refusal. Every stored caption row now carries
+// the decision, readable from the DB/API without reopening code.
+describe("per-row colour trace (ADAAAA-8053 v8 §3b.3)", () => {
+  const PROMPT = "Match context: RMA 1-1 BAR | scorebug OCR: RMA 1-1 BAR";
+  const SIGNAL = {
+    signal: "audio_noise" as const,
+    ratio: 5,
+    sustained: 0.2,
+    peak: 0.4,
+    peakT: 12,
+    frameTs: 12,
+    frameSeq: 36,
+  };
+
+  it("records `beat` with the signal that produced it when the derivation fires", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    // A LOUD row: the 40% quiet share does not apply, so the derived beat ships.
+    await appendSummaryEntry(s, job.id, "A player dribbles in the center circle.", {
+      windowTs: 12,
+      grounding: { verdict: "big_play", promptText: PROMPT, place: "in the center circle", colourSignal: SIGNAL },
+    });
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.text).toContain("noise lifts, then settles");
+    expect(entry.colourTrace).toMatchObject({
+      windowTs: 12,
+      verdict: "big_play",
+      signalPresent: true,
+      clause: "beat",
+      beat: "noise lifts, then settles",
+    });
+    expect(entry.colourTrace?.signal?.ratio).toBe(5);
+  });
+
+  it("records `derivation-not-reached` plus the seam's own reason when there is no signal", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "A player dribbles in the center circle.", {
+      windowTs: 15,
+      grounding: {
+        verdict: "not_highlight",
+        promptText: PROMPT,
+        place: "in the center circle",
+        colourSignal: null,
+        colourSignalReason: "insufficient-taps",
+      },
+    });
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.colour).toBeUndefined();
+    expect(entry.colourTrace).toMatchObject({
+      signalPresent: false,
+      clause: "derivation-not-reached",
+      signalReason: "insufficient-taps",
+    });
+    expect(entry.colourTrace?.beat).toBeUndefined();
+  });
+
+  it("records `wording-filter` with the sub-reason when a real signal cannot become a beat", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "A player dribbles in the center circle.", {
+      windowTs: 18,
+      grounding: {
+        verdict: "not_highlight",
+        promptText: PROMPT,
+        place: "in the center circle",
+        colourSignal: { ...SIGNAL, ratio: 1.2 },
+      },
+    });
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.colourTrace).toMatchObject({
+      signalPresent: true,
+      clause: "wording-filter",
+      reason: "ratio-floor",
+    });
+  });
+
+  it("records `quiet-cap` on a row whose beat the 40% share removed", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    const grounding = {
+      verdict: "not_highlight" as const,
+      promptText: PROMPT,
+      place: "in center circle",
+      colourSignal: SIGNAL,
+    };
+    const lines = Array.from({ length: 6 }, (_v, i) => `Player ${i} moves ball in center circle.`);
+    for (const [i, line] of lines.entries()) {
+      await appendSummaryEntry(s, job.id, line, { windowTs: i * 3, grounding });
+    }
+    const log = s.getJob(job.id)!.summaryLog!;
+    const capped = log.filter((e) => !(e.text ?? "").includes("noise lifts, then settles"));
+    expect(capped.length).toBeGreaterThan(0);
+    for (const e of capped) {
+      // The row still carries the derivation's verdict: a beat WAS derived, the
+      // share refused it. That is a different fact from "no signal at all".
+      expect(e.colourTrace?.clause).toBe("quiet-cap");
+      expect(e.colourTrace?.signalPresent).toBe(true);
+      expect(e.colourTrace?.beat).toBeUndefined();
+    }
+    // Every row carries a trace, so eligibility and delivery are both readable.
+    for (const e of log) expect(e.colourTrace).toBeDefined();
+  });
+
+  it("writes no trace on the VOD path (no grounding => byte-identical, AC8)", async () => {
+    const s = new Store();
+    const job = await s.createJob({ source: "file", sourceUrl: "/v.mp4", gameHint: "soccer" });
+    await appendSummaryEntry(s, job.id, "A player dribbles in the center circle.");
+    const entry = s.getJob(job.id)!.summaryLog![0];
+    expect(entry.colourTrace).toBeUndefined();
+    expect(entry.text).toBe("A player dribbles in the center circle.");
+  });
+});

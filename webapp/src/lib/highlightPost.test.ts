@@ -168,31 +168,36 @@ describe("suggested caption — one social-ready sentence (ADAAAA-7881)", () => 
   });
 });
 
-describe("post titles — 2-3 one-line candidates (ADAAAA-7881)", () => {
+describe("post titles — gated sentences only (ADAAAA-8053 v8 §3b.1)", () => {
   const narrativeLog: SummaryLogEntry[] = [
     entry(1, 68, "Argentina breaks the deadlock — the ball is in the net."),
   ];
 
   function assertTitleSet(titles: string[]) {
-    expect(titles.length).toBeGreaterThanOrEqual(2);
+    // ADAAAA-8053: one option is a valid option set (v8 §3b.1). What matters is
+    // that no option is a taxonomy token or a `<type>: ` prefix.
+    expect(titles.length).toBeGreaterThanOrEqual(1);
     expect(titles.length).toBeLessThanOrEqual(3);
     expect(new Set(titles).size).toBe(titles.length);
     for (const title of titles) {
-      expect(title.length).toBeGreaterThanOrEqual(1);
-      expect(title.length).toBeLessThanOrEqual(60);
-      expect(title).not.toMatch(/[.,;:!?]$/);
+      expect(title.trim().length).toBeGreaterThan(0);
+      expect(title.trim().length).toBe(title.length);
+      expect(title).not.toMatch(/^[a-z][a-z_ -]{0,24}[:—–]\s/i);
+      expect(title).not.toMatch(/^(?:big play|scoring_play|near_miss|not_highlight|highlight|goal|shot)$/i);
     }
   }
 
-  it("takes the narrative's leading clause, the label join and the reason clause", () => {
+  it("serves the gated narrative and the gated reason as whole sentences", () => {
     const titles = postTitles(
       hl({ localizedTs: 69.4, reason: "The striker finishes from close range." }),
       narrativeLog
     );
     assertTitleSet(titles);
+    // The dash clause that asserts the goal is removed by the claim gate, and the
+    // option is the gated line itself — no `Goal: ` variant, no bare label.
     expect(titles[0]).toBe("Argentina breaks the deadlock");
-    expect(titles).toContain("Goal: Argentina breaks the deadlock");
-    expect(titles).toContain("The striker finishes from close range");
+    expect(titles).toContain("The striker finishes from close range.");
+    expect(titles.some((t) => /^goal\b/i.test(t))).toBe(false);
   });
 
   it("handles a narrative with no punctuation", () => {
@@ -203,31 +208,40 @@ describe("post titles — 2-3 one-line candidates (ADAAAA-7881)", () => {
     expect(titles[0]).toBe("Brazil pushes forward on the counter attack");
   });
 
-  it("handles a narrative that already fits in 60 characters", () => {
+  it("never serves a label when the gate empties the line (a token is not a fallback)", () => {
+    // `Argentina scores.` is claim-suppressed to nothing on an uncorroborated GOAL
+    // row; the pre-v8 code then offered `Goal` / `Goal moment`, i.e. exactly the
+    // taxonomy token AC7 forbids. No option is the honest outcome.
     const titles = postTitles(hl({ localizedTs: 69.4 }), [entry(1, 68, "Argentina scores.")]);
-    assertTitleSet(titles);
-    expect(titles[0]).toBe("Argentina scores");
+    expect(titles).toEqual([]);
   });
 
   it("falls back to the decide reason when no narrative exists", () => {
     const titles = postTitles(hl({ reason: "Ball crossed the line at the far post." }));
     assertTitleSet(titles);
-    expect(titles[0]).toBe("Ball crossed the line at the far post");
-    expect(titles).toContain("Goal: Ball crossed the line at the far post");
+    expect(titles[0]).toBe("Ball crossed the line at the far post.");
+    expect(titles.some((t) => /^goal\b/i.test(t))).toBe(false);
   });
 
-  it("still offers two titles when nothing is known", () => {
+  it("offers no titles when nothing is known — never a placeholder token", () => {
     const titles = postTitles(hl({ reason: undefined, eventType: undefined }));
-    assertTitleSet(titles);
-    expect(titles).toEqual(["Highlight", "Highlight moment"]);
+    expect(titles).toEqual([]);
   });
 
-  it("never cuts a word when the narrative is longer than a title line", () => {
+  it("serves a long narrative whole (a title cut is a prefix, AC10)", () => {
     const long = "The action intensifies as the white-clad team pushes into the final third of the pitch.";
     const titles = postTitles(hl({ reason: undefined }), [entry(1, 68, long)]);
     assertTitleSet(titles);
-    const [first] = titles;
-    expect(long.startsWith(`${first} `)).toBe(true);
+    expect(titles[0]).toBe(long);
+  });
+
+  it("filters token options out of a stored legacy card (the `86f6ada4` triple)", () => {
+    // Verbatim served options from job `86f6ada4` (build `93fae4a`).
+    const titles = postTitles(
+      hl({ cardTitles: ["The ball shoots in midfield", "big play: The ball shoots in midfield", "big play"] }),
+      []
+    );
+    expect(titles).toEqual(["The ball shoots in midfield"]);
   });
 
   it("`Use as caption` applies the title as a sentence", () => {
@@ -416,18 +430,24 @@ describe("seeded caption + card titles consume corroboration (ADAAAA-7958 §3.4)
     expect(suggestCaption(h)).not.toMatch(GOAL_CLAIM);
   });
 
-  it("a corroborated goal keeps its claim and its 'Goal:' title", () => {
+  it("a corroborated goal keeps its claim in the caption — a `Goal:` title is gone (v8 §3b.1)", () => {
     const h = { ...measured, corroborated: true };
-    expect(postTitles(h).some((t) => t.startsWith("Goal:"))).toBe(true);
+    // ADAAAA-8053: a `goal: …` option is a taxonomy-token prefix even on a
+    // corroborated goal, so the card serves the gated caption alone.
+    for (const t of postTitles(h)) {
+      expect(t.startsWith("Goal")).toBe(false);
+      expect(t).not.toMatch(/^goal\b/i);
+    }
     const log: SummaryLogEntry[] = [entry(1, 120, "The ball is in the net at the far post")];
     const withLog = { ...h, localizedTs: 120, start: 113, end: 128 };
     expect(suggestCaption(withLog, log)).toMatch(/in the net/i);
-    expect(postTitles(withLog, log).some((t) => t.startsWith("Goal:"))).toBe(true);
+    expect(postTitles(withLog, log).length).toBeGreaterThan(0);
   });
 
-  it("no corroboration evidence (legacy / VOD) keeps the shipped verdict behaviour", () => {
+  it("no corroboration evidence (legacy / VOD) serves no `Goal:` token option", () => {
     const h = { ...measured };
-    expect(postTitles(h).some((t) => t.startsWith("Goal:"))).toBe(true);
+    expect(postTitles(h).some((t) => t.startsWith("Goal:"))).toBe(false);
+    for (const t of postTitles(h)) expect(t).not.toMatch(/^goal\b/i);
   });
 
   it("the banner-string class never reaches the caption even with a summary-log line", () => {
@@ -495,18 +515,22 @@ describe("seeded card strings agree with the ladder banner (ADAAAA-7958 §3.4)",
     }
   });
 
-  it("fast rail, confirmed_goal: the claim and the 'Goal:' title survive", () => {
+  it("fast rail, confirmed_goal: the claim survives in the caption, never as a `Goal:` token option", () => {
     const h = { ...bare, goalConfirmed: "confirmed_goal" as const };
-    expect(postTitles(h, log, highlightGrounding(h, log, true)).some((t) => t.startsWith("Goal:"))).toBe(true);
+    const titles = postTitles(h, log, highlightGrounding(h, log, true));
+    expect(titles.some((t) => /^goal\b/i.test(t))).toBe(false);
+    expect(titles.length).toBeGreaterThan(0);
   });
 
-  it("fast rail, corroborated flag: the claim survives", () => {
+  it("fast rail, corroborated flag: the claim survives in the caption", () => {
     const h = { ...bare, corroborated: true };
-    expect(postTitles(h, log, highlightGrounding(h, log, true)).some((t) => t.startsWith("Goal:"))).toBe(true);
+    const titles = postTitles(h, log, highlightGrounding(h, log, true));
+    expect(titles.some((t) => /^goal\b/i.test(t))).toBe(false);
+    expect(titles.length).toBeGreaterThan(0);
   });
 
-  it("VOD (fastRail false) keeps the shipped verdict-only behaviour — AC8", () => {
-    expect(postTitles(bare, log, highlightGrounding(bare, log, false)).some((t) => t.startsWith("Goal:"))).toBe(true);
+  it("VOD (fastRail false) keeps the shipped verdict-only caption — AC8, no token option", () => {
+    expect(postTitles(bare, log, highlightGrounding(bare, log, false)).some((t) => /^goal\b/i.test(t))).toBe(false);
     expect(postTitles(bare, log)).toEqual(postTitles(bare, log, highlightGrounding(bare, log)));
   });
 });
@@ -523,8 +547,10 @@ describe("render parity — the card renders the STORED gated string (ADAAAA-796
       cardTitles: [STORED, `Shot: ${STORED}`, "Shot"],
     });
 
-  it("returns the stored card options byte-for-byte", () => {
-    expect(postTitles(storedH(), log)).toEqual([STORED, `Shot: ${STORED}`, "Shot"]);
+  it("returns the stored gated options, with token options refused (v8 §3b.1)", () => {
+    // ADAAAA-8053: `Shot: …` and bare `Shot` are token shapes; only stored gated
+    // sentences are served. The caption itself is unchanged, byte-for-byte.
+    expect(postTitles(storedH(), log)).toEqual([STORED]);
   });
 
   it("returns the stored caption byte-for-byte (period and colour kept)", () => {

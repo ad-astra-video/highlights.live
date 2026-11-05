@@ -65,6 +65,15 @@ export interface CaptionGroundingContext {
    */
   colourSignal?: ColourSignal | null;
   /**
+   * Contract v8 §3b.3 (diagnostic, shipped): WHY the derivation produced no
+   * signal for this window, when `colourSignal` is absent. Set by the write seam
+   * from the measurement itself (`insufficient-taps` / `low-energy` / `no-frame` /
+   * `no-window-ts`), so the per-row trace can tell "the gate refused" from "the
+   * derivation never reached this row" without re-reading code. Audit only — no
+   * surface reads it.
+   */
+  colourSignalReason?: ColourSignalDecisionReason;
+  /**
    * ADAAAA-7965 (contract v5 §3.4, R21): the window's stored evidence that a
    * negative / absence claim (`the ball stays out`, `no goal`, `never crossed`)
    * is true — the stored verdict plus the frame attestation for this window.
@@ -915,6 +924,120 @@ export function colourBeatFromSignal(signal?: ColourSignal | null): string {
   return beat;
 }
 
+/* ------------------------------------------------------------------------- *
+ * Contract v8 §3b.3 — the colour derivation TRACE.
+ *
+ * QA v7 measured 0/4 eligible rows carrying a beat on build `93fae4a` while the
+ * Developer's own level (`dece44c3`, build `86ccf80`) measured 6/6 on the same
+ * gate file and clip. Nobody could tell from the artifacts whether the
+ * derivation never reached the row (no audio taps / no frame / the job lost its
+ * decide runner), whether a gate clause refused it, or whether the 40 % quiet
+ * share removed it. So every stored caption row now carries the decision that
+ * produced it: signal present?, the measured signal, which clause decided, and
+ * the beat (or none). Audit-only, additive-optional on the record.
+ * ------------------------------------------------------------------------- */
+
+/** Why the write-seam derivation did not yield a signal for a window. */
+export type ColourSignalDecisionReason =
+  | "ok"
+  | "no-window-ts"
+  | "insufficient-taps"
+  | "low-energy"
+  | "no-frame";
+
+/** Which gate clause decided whether a row carries a beat. */
+export type ColourGateClause =
+  /** the derived beat reached the row */
+  | "beat"
+  /** a beat was derived but the 40 % quiet-row share removed it */
+  | "quiet-cap"
+  /** the signal fired but the wording/threshold rules refused the beat */
+  | "wording-filter"
+  /** the derivation never produced a signal (no taps / no energy / no frame) */
+  | "derivation-not-reached";
+
+/** Per-row colour decision, stored on the caption row (v8 §3b.3). */
+export interface ColourTrace {
+  /** The window centre the decision was made for (content seconds). */
+  windowTs?: number;
+  /** The window's stored verdict. */
+  verdict?: string | null;
+  /** Did the write seam see a measurable audio-noise signal at all? */
+  signalPresent: boolean;
+  /** The signal itself, when present (the evidence for the beat). */
+  signal?: ColourSignal | null;
+  /** Why the derivation produced no signal (only when `signalPresent` is false). */
+  signalReason?: Exclude<ColourSignalDecisionReason, "ok">;
+  /** The clause that decided this row's colour. */
+  clause: ColourGateClause;
+  /** Sub-reason inside the governing clause (audit only). */
+  reason?: string;
+  /** The beat the row carries, or `undefined` when it carries none. */
+  beat?: string;
+}
+
+/** Why a PRESENT signal did not become a beat (v8 trace sub-reason). */
+function colourWordingReason(signal: ColourSignal): string {
+  if (signal.signal !== "audio_noise") return "not-audio-noise";
+  const { ratio, sustained, peak } = signal;
+  if (![ratio, sustained, peak].every((n) => typeof n === "number" && Number.isFinite(n))) return "malformed-signal";
+  if (ratio < 2) return "ratio-floor";
+  if (sustained > 0.35) return "plateau";
+  if (peak < 0.15) return "peak-floor";
+  const hasFrame =
+    (typeof signal.frameTs === "number" && Number.isFinite(signal.frameTs)) ||
+    (typeof signal.frameSeq === "number" && Number.isFinite(signal.frameSeq));
+  if (!hasFrame) return "no-frame";
+  if (colourBeatFromSignal(signal).length > COLOUR_MAX_CHARS) return "too-long";
+  return "guard";
+}
+
+/**
+ * The ONE decision function every trace reads: the beat a signal derives (or
+ * `""`), the clause that decided it, and the sub-reason. `colourBeatFromSignal`
+ * stays the derivation itself, so no caller can disagree with it.
+ */
+export function colourGateDecision(signal?: ColourSignal | null): {
+  beat: string;
+  clause: ColourGateClause;
+  reason?: string;
+} {
+  if (!signal) return { beat: "", clause: "derivation-not-reached" };
+  const beat = colourBeatFromSignal(signal);
+  if (beat) return { beat, clause: "beat" };
+  return { beat: "", clause: "wording-filter", reason: colourWordingReason(signal) };
+}
+
+/**
+ * Build the stored per-row colour trace (v8 §3b.3) from the window's grounding
+ * context and the line it delivered. `clause` starts as the derivation's own
+ * decision; the write seam's 40 % quiet-row share may later flip it to
+ * `quiet-cap` (see `applyQuietColourCap`), which is why the trace is mutable
+ * until the row is stored.
+ */
+export function colourTraceFor(
+  ctx: Pick<CaptionGroundingContext, "colourSignal" | "colourSignalReason" | "verdict">,
+  delivered: string,
+  windowTs?: number
+): ColourTrace {
+  const signal = ctx.colourSignal ?? null;
+  const decision = colourGateDecision(signal);
+  // The beat the DELIVERED line carries, without the terminal period the seam
+  // appends to the row (so `trace.beat` is the derivation's own wording and can
+  // be compared with `colourBeatFromSignal` directly).
+  const beat = captionColour(delivered ?? "").replace(/[.!?…]+$/, "").trim();
+  const present = !!signal;
+  return {
+    ...(typeof windowTs === "number" && Number.isFinite(windowTs) ? { windowTs } : {}),
+    verdict: (ctx.verdict ?? null) as string | null,
+    signalPresent: present,
+    ...(present ? { signal } : ctx.colourSignalReason && ctx.colourSignalReason !== "ok" ? { signalReason: ctx.colourSignalReason } : {}),
+    clause: decision.clause,
+    ...(decision.reason ? { reason: decision.reason } : {}),
+    ...(beat ? { beat } : {}),
+  };
+}
+
 /** The content rules a derived beat must satisfy (§3.1 + v4 §3.5). */
 function COLOUR_GUARD(beat: string): boolean {
   return (
@@ -1033,6 +1156,10 @@ export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): str
   const place = placePhraseOf(out) || (ctx?.place ?? "").trim();
   const verb = outcomeVerbFor(out);
   out = rewriteScoreClaims(out, verb);
+  // Contract v8 §3b.2: a rewrite that substituted the window's own verb can leave
+  // `<verb> and <same verb>` (the source already carried it). Rejoin before the
+  // claim re-check, so the doubled verb never reaches a surface.
+  out = collapseRepeatedVerbPhrase(out);
   // Anything the rewrite steps cannot certify fails closed to the quiet shape.
   if (hasGoalClaim(out)) out = quietShape(out, verb);
   // A rewrite keeps actor + action + PLACE. When the rewrite dropped the zone
@@ -1300,21 +1427,105 @@ export function captionForStoredLine(line: string): string {
 }
 
 /** The card options a stored gated line renders as (each one a stored value). */
-export function cardTitlesFor(line: string, label?: string): string[] {
-  const text = repairDanglingTail((line ?? "").trim());
+/**
+ * Contract v8 §3b.1 — a card OPTION is a sentence, not a label.
+ *
+ * Measured on `86f6ada4` (build `93fae4a`): the served options were
+ * `["The ball shoots in midfield", "big play: The ball shoots in midfield",
+ * "big play"]`. Option 3 is the raw event-type token, option 2 a token prefix on
+ * an otherwise good sentence. Both are user-facing strings, so both fail AC7
+ * (0 internal tokens) and AC10 (every served string byte-identical to a gated
+ * stored string). Inc 10 corroboration-gated the card LABEL, but the option list
+ * is generated here and still emitted the raw type.
+ *
+ * Every option returned is therefore a whole GATED SENTENCE. The accepted
+ * caption is the first (and, on this rail, usually only) option; `alternatives`
+ * lets a caller offer another stored gated sentence (byte-identical by
+ * construction). A label is never served — not bare, not as a `label: sentence`
+ * prefix — because that variant is minted here and is not a stored string.
+ * When nothing else is grounded the option set is ONE option, which v8 §3b.1
+ * explicitly calls valid.
+ */
+export function cardTitlesFor(line: string, alternatives?: readonly string[]): string[] {
   const out: string[] = [];
   const push = (value: string) => {
-    const v = (value ?? "").trim();
-    if (v && !out.includes(v)) out.push(v);
+    const v = repairDanglingTail((value ?? "").trim());
+    if (!v || out.includes(v)) return;
+    if (!isServableCardOption(v)) return;
+    out.push(v);
   };
-  // ADAAAA-8027 (§2): the option is the ACCEPTED caption string (whole), cut at
-  // a sentence boundary only when it overruns the card ceiling — an independent
-  // `cutAtWord` at 140 minted a prefix cut on a long line.
-  if (text) push(cutAtSentence(text, CARD_TITLE_MAX_CHARS));
-  const lbl = (label ?? "").trim();
-  if (lbl && text) push(cutAtSentence(`${lbl}: ${text}`, CARD_TITLE_MAX_CHARS));
-  if (lbl) push(lbl);
+  // ADAAAA-8053 (v8 §3b.1): the option IS the accepted caption, whole. The
+  // ADAAAA-8027 sentence-boundary cut is gone: a cut at a boundary is still a
+  // PREFIX of the stored string, and AC10 requires byte-identity for every served
+  // option. A long option is served long rather than served cut.
+  push(line);
+  for (const alt of alternatives ?? []) push(alt);
   return out.slice(0, 3);
+}
+
+/**
+ * Bare taxonomy tokens the pipeline uses as its own event types. A served card
+ * option may never be one of these (v8 §3b.1 / AC7).
+ */
+const TAXONOMY_TOKENS = new Set([
+  "big play",
+  "scoring play",
+  "near miss",
+  "not highlight",
+  "no highlight",
+  "highlight",
+  "sporting moment",
+  "goal",
+  "shot",
+  "save",
+  "corner",
+  "penalty",
+  "free kick",
+  "audio burst",
+  "near miss moment",
+  "big play moment",
+  "goal moment",
+  "highlight moment",
+  "sporting moment moment",
+]);
+
+/** `big play: …`, `scoring_play: …`, `near_miss — …`: a type-token prefix. */
+const TYPE_PREFIX = /^\s*([a-z][a-z_ -]{0,24}?)\s*[:—–]\s+\S/i;
+
+/** The normalized taxonomy form of an option (`Big-play` -> `big play`). */
+export function taxonomyKey(text: string): string {
+  return (text ?? "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^a-z ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Is this string a bare event-type token (`big play`, `scoring_play`, …)? */
+export function isTaxonomyToken(text: string): boolean {
+  return TAXONOMY_TOKENS.has(taxonomyKey(text));
+}
+
+/**
+ * May this string be SERVED as a card option (v8 §3b.1)?
+ *
+ * It must be a sentence — a verb, at least three words, a terminal sentence
+ * mark — and it must not be a taxonomy token or carry a `<type>: ` prefix. The
+ * "byte-identical to a gated stored string" half is the caller's contract: the
+ * strings pushed here are the accepted caption and stored gated alternatives.
+ */
+export function isServableCardOption(text: string): boolean {
+  const t = (text ?? "").trim();
+  if (!t || isTaxonomyToken(t)) return false;
+  if (TYPE_PREFIX.test(t)) return false;
+  // A token is one or two words; a sentence that names a moment is at least
+  // three. The caption gate upstream already guarantees actor + action + place,
+  // so this predicate only has to keep TOKENS off the surface — adding a verb
+  // whitelist here would refuse honest lines whose verb the list lacks
+  // (`Argentina breaks the deadlock`).
+  const words = normalizeServed(t).split(" ").filter(Boolean);
+  return words.length >= 3;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -1372,7 +1583,9 @@ export type ServedShapeViolation =
   | "internal-break"
   | "open-clause"
   | "fragment"
-  | "verbless";
+  | "verbless"
+  /** Contract v8 §3b.2: an immediately repeated verb phrase (`shoots and shoots`). */
+  | "verb-repeat";
 
 /** Comparison form: case, punctuation and whitespace are not content. */
 function normalizeServed(text: string): string {
@@ -1462,6 +1675,9 @@ export function servedShapeViolations(
   // the left`) — the shape that had no rule before, so a card could carry it.
   // A jersey (`No. 9`) or a decimal (`11.6`) is not a sentence end either way.
   if (/[.!?…]["'”’)\]]*\s+\p{Ll}/u.test(text)) out.push("internal-break");
+  // Contract v8 §3b.2: an immediately repeated verb phrase is malformed on every
+  // surface, not only the one path that produced it (`shoots and shoots`).
+  if (hasRepeatedVerbPhrase(text)) out.push("verb-repeat");
   const last = words[words.length - 1];
   if (SERVED_TAIL_WORDS.has(last)) out.push("function-tail");
   // A transitive verb whose object was cut: drop the trailing place phrase first,
@@ -1678,7 +1894,13 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
   // `A player shoots from the penalty area` because the claim gate removed the
   // clause that carried the period; punctuation is restored here rather than
   // invented into the words.
-  const candidate = restoreTerminalPunctuation((input.candidate ?? "").trim());
+  const candidate = restoreTerminalPunctuation(
+    // Contract v8 §3b.2: a stored row written before the repair existed still
+    // carries `<verb> and <same verb>`. The read path is a pure read of WORDS (it
+    // only deletes the duplicate verb, inventing nothing), so a legacy row is
+    // served rejoined instead of being dropped.
+    collapseRepeatedVerbPhrase((input.candidate ?? "").trim())
+  );
   const raw = (input.storedRaw ?? "").trim();
   const gated = (input.storedGated ?? "").trim();
   // The stored SENTENCE (first sentence, keeping a claim/place clause after a
@@ -1747,7 +1969,7 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
   ];
   for (const sentence of sentences) {
     if (!sentence) continue;
-    const reclaimed = input.regate ? input.regate(sentence) : sentence;
+    const reclaimed = collapseRepeatedVerbPhrase(input.regate ? input.regate(sentence) : sentence);
     for (const variant of servedReductions(reclaimed)) {
       if (clean(variant)) return accepted(variant);
     }
@@ -1922,12 +2144,53 @@ export function completeCaptionLine(input: CompleteCaptionInput): string {
  * Card options are derived from the ACCEPTED caption string, never from an
  * independent word cut.
  * ------------------------------------------------------------------------- */
+
+/** A verb phrase repeated immediately across a coordinator: `shoots and shoots`. */
+const REPEATED_VERB_SRC =
+  String.raw`\b([A-Za-z]+(?:s|es|ed|ing))\s+and\s+\1\b|\b([A-Za-z]+(?:s|es|ed|ing)(?:\s+[A-Za-z]+){0,2})\s+and\s+\2\b`;
+
+/** Does this line carry an immediately repeated verb phrase (`<verb> and <same verb>`)? */
+export function hasRepeatedVerbPhrase(text: string): boolean {
+  return new RegExp(REPEATED_VERB_SRC, "i").test(text ?? "");
+}
+
+/**
+ * Contract v8 §3b.2 — claim removal must REJOIN, not amputate.
+ *
+ * Deleting an ungrounded outcome clause and substituting the window's own
+ * non-goal verb left the verb twice, because the source already carried it:
+ *
+ *   stored `text_raw`       `The white team player shoots and scores a goal — crowd reacts`
+ *   claim rewrite           `The white team player shoots and shoots`     (verb doubled)
+ *   delivered on `86f6ada4` `The white team player shoots and shoots in midfield.`
+ *
+ * `<verb> and <same verb>` is one action, so the second copy is deleted. The
+ * repair is extractive and deterministic — no word is invented, and a line
+ * without a repeat is returned byte-identical.
+ */
+export function collapseRepeatedVerbPhrase(text: string): string {
+  const input = text ?? "";
+  if (!input) return input;
+  // Iterate to a fixed point (bounded): `shoots and shoots and shoots` and a
+  // phrase repeat (`takes a shot and takes a shot`) can both appear at once.
+  let out = input;
+  for (let i = 0; i < 3; i += 1) {
+    const next = out.replace(new RegExp(REPEATED_VERB_SRC, "gi"), (_m, one: string, two: string) => one || two);
+    if (next === out) break;
+    out = next;
+  }
+  return out === input ? input : tidy(out);
+}
+
 export interface StoredCardSurfaceInput {
   /** The gated line the row stores as its `reason`. */
   gated: string;
   /** The model's stored raw line (`decision.reason`), the §2 source. */
   raw?: string | null;
-  /** The card option label (`shot`, `big play`, …). */
+  /** The card option label (`shot`, `big play`, …). ADAAAA-8053: DEPRECATED as
+   * an option source — contract v8 §3b.1 forbids serving a bare taxonomy token
+   * or a `<type>: ` prefix, so the label no longer becomes a card option. The
+   * field is kept so call sites stay stable; it is not read. */
   label?: string;
   /** Quiet row: the 8-word budget applies to the card (the verdict's own rule). */
   quiet?: boolean;
@@ -1984,20 +2247,14 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
       ? completenessGaps(text).length === 0
       : completenessGaps(text).filter((g) => g !== "place").length === 0) &&
     servedShapeViolations(text, sources).length === 0;
-  // ADAAAA-8043 (v7 §3.4): the label is corroboration-gated BEFORE it becomes an
-  // option, so an uncorroborated goal never renders `goal:` or bare `goal`.
-  // A label is a word, not a sentence: the claim gate's terminal punctuation is
-  // not part of it.
-  const label = gateGoalClaims((input.label ?? "").trim(), {
-    verdict: input.verdict ?? null,
-    corroborated: input.corroborated,
-  })
-    .replace(/[.!?…]+$/, "")
-    .trim();
+  // ADAAAA-8043 (v7 §3.4) label gate removed by contract v8 §3b.1: the label is
+  // no longer an option (a bare token or a `label: sentence` prefix is not a
+  // gated stored string), so there is nothing to corroboration-gate here. AC4b
+  // is still enforced on the caption itself (`regate` -> `gateGoalClaims`).
   const candidate = captionForStoredLine(gated);
   const violations = servedShapeViolations(candidate, sources);
   if (clean(candidate)) {
-    return { caption: candidate, cardTitles: cardTitlesFor(candidate, label), violations: [] };
+    return { caption: candidate, cardTitles: cardTitlesFor(candidate), violations: [] };
   }
   // Fallback (a): the WHOLE first sentence of the stored raw, re-gated on the same
   // terms, then reduced ONLY extractively (the ladder's `servedReductions`) so a
@@ -2007,7 +2264,7 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
   for (const variant of servedReductions(reclaimed)) {
     const whole = captionForWholeSentence(variant);
     if (clean(whole)) {
-      return { caption: whole, cardTitles: cardTitlesFor(whole, label), violations: [] };
+      return { caption: whole, cardTitles: cardTitlesFor(whole), violations: [] };
     }
   }
   // Fallback (b): no honest string -> no card. Never store a violating string.
