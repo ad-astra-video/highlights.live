@@ -4640,7 +4640,16 @@ export async function acceptVideoDecision(
   // misses never reach here (the confirm gate downgrades them to near_miss first),
   // so AC3 is unaffected.
   const corroborated = confirm?.corroborated === true;
-  if (run.suppressIfGoalBurst(candidate.timestamp, decision.eventType ?? candidate.eventType, { corroborated })) {
+  // ADAAAA-8085: key the ledger on the SAME derived label the ADAAAA-7996
+  // demotion gate below reads (`highlightEventType`), never on the raw model
+  // label. Live job `00edb27a` stored two rows 3.2 s apart for ONE goal: the
+  // decide service labelled the window "BIG_PLAY" while its outcome was
+  // `scoring_play`, so `decision.eventType ?? candidate.eventType` skipped the
+  // 30 s burst ledger, and the window then reached the demotion gate (which
+  // keys on the outcome-derived GOAL) and shipped as a celebration card. The
+  // control leg's analog read kept the raw label GOAL and was suppressed here
+  // instead. One key, one lane: a goal-shaped read is a goal-shaped read.
+  if (run.suppressIfGoalBurst(candidate.timestamp, highlightEventType(decision, candidate.eventType), { corroborated })) {
     buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis);
     onEvent?.({
       seq: emit.seq,
