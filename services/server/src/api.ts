@@ -935,7 +935,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     h: { start: number; end: number },
     recPath: string,
     cw: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number }
-  ): Promise<{ name: string; uri: string; hasAudio: boolean | null; bytes: number; mode: string; ms: number }> {
+  ): Promise<{ name: string; uri: string; hasAudio: boolean | null; bytes: number; mode: string; ms: number; seekMs: number | null; encodeMs: number }> {
     const outDir = path.join(cfg.dataDir, "clips");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(outDir, { recursive: true });
@@ -972,12 +972,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const hasAudio = await probeHasAudio(cfg.ffmpegPath, recPath);
     if (cut.mode === "reencode") {
       const src = cut.sourceFormat;
+      // ADAAAA-8106 AC2: name the split — seek (demux into the growing
+      // recording) vs encode — so a slow cut is gradeable from this line alone.
       console.log(
         `[browser:${jobId}] cut ${name}.mp4 by re-encoding ` +
-          `(${src?.container || "?"} ${src?.videoCodec || "?"}/${src?.audioCodec || "none"} -> mp4 h264/aac, ${cut.bytes} B)`
+          `(${src?.container || "?"} ${src?.videoCodec || "?"}/${src?.audioCodec || "none"} -> mp4 h264/aac, ${cut.bytes} B, ` +
+          `seek ${cut.seekMs ?? "?"}ms, encode ${cut.encodeMs}ms)`
       );
     }
-    return { name, uri: `/clips/${name}.mp4`, hasAudio, bytes: cut.bytes, mode: cut.mode, ms };
+    return { name, uri: `/clips/${name}.mp4`, hasAudio, bytes: cut.bytes, mode: cut.mode, ms, seekMs: cut.seekMs, encodeMs: cut.encodeMs };
   }
 
   /** Track the newest content instant the share has produced, so the live cut
@@ -1049,9 +1052,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             clipError: undefined as any,
           } as any);
           // AC6 cost evidence: the measured CPU seconds + bytes per live cut.
+          // ADAAAA-8106 AC2: the line splits seek (demux into the growing
+          // recording) from encode, so the next reader can grade the cut cost
+          // without re-instrumenting.
           console.log(
             `[browser:${jobId}] live clip ${rec.name}.mp4 ready mid-share ` +
-              `(${rec.mode}, ${rec.bytes} B, ${rec.ms} ms ffmpeg)`
+              `(${rec.mode}, ${rec.bytes} B, seek ${rec.seekMs ?? "?"}ms, encode ${rec.encodeMs}ms)`
           );
           emitJobEvent(jobId, {
             seq: -1,

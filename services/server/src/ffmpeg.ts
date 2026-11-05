@@ -453,29 +453,105 @@ export function canStreamCopy(src: MediaFormat | null, outPath: string): boolean
 
 /** Re-encode args for a container ffmpeg cannot stream-copy into. H.264/AAC
  * into mp4 is the browser-safe target (every <video> plays it); VP9/opus into
- * webm mirrors what a MediaRecorder client produces. */
+ * webm mirrors what a MediaRecorder client produces.
+ *
+ * ADAAAA-8106: `-fps_mode vfr` is load-bearing, not cosmetic. A browser
+ * MediaRecorder webm reports `r_frame_rate 1000/1` (its 1 ms timescale makes the
+ * demuxer's smallest frame duration look like 1 ms), so ffmpeg's default CFR
+ * output duplicates every real frame up to that nominal rate: a 15 s 1080p
+ * window of a ~30 fps screen share encoded 15,030 frames instead of ~441 and
+ * took ~20 s instead of ~2.5 s on the box. VFR passes the source frame timings
+ * through, so the encode costs real frames only — same window, same duration,
+ * same pictures, ~8x less CPU (measured: 20.3 s -> 2.5 s, 14.8 MB -> 10.1 MB). */
 function reencodeArgs(kind: "mp4" | "webm"): string[] {
   if (kind === "webm") {
     return [
       "-map", "0:v:0", "-map", "0:a:0?",
       "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0",
       "-c:a", "libopus", "-b:a", "96k",
+      "-fps_mode", "vfr",
     ];
   }
   return [
     "-map", "0:v:0", "-map", "0:a:0?",
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-b:a", "128k",
+    "-fps_mode", "vfr",
     "-movflags", "+faststart",
   ];
 }
 
+/** The exact ffmpeg argument vector for a clip cut, split out from `cutClip` so
+ * a unit test can pin the seek/encode strategy (ADAAAA-8106). Two properties
+ * are contract, not taste:
+ *   - `-ss`/`-t` stay BEFORE `-i` (fast demuxer seek); moving them after `-i`
+ *     decodes the whole recording up to the in-point (measured 35 s vs 2.5 s
+ *     on a 332 MB share) and changes nothing about the delivered window.
+ *   - a re-encode keeps `-fps_mode vfr` (see `reencodeArgs`) so a source whose
+ *     demuxer reports a bogus frame rate cannot inflate the encode.
+ * A copy-mode cut must stay byte-for-byte the historical `-c copy` cut so the
+ * h264/720p path keeps its exact bytes. */
+export function buildClipArgs(opts: {
+  source: string;
+  outPath: string;
+  startS: number;
+  durationS: number;
+  mode: "copy" | "reencode";
+  kind: "mp4" | "webm";
+}): string[] {
+  const args: string[] = [
+    "-y",
+    "-ss", String(Math.max(0, opts.startS)),
+    "-t", String(opts.durationS),
+    "-i", opts.source,
+  ];
+  if (opts.mode === "copy") {
+    args.push("-c", "copy", "-avoid_negative_ts", "make_zero");
+  } else {
+    args.push(...reencodeArgs(opts.kind));
+  }
+  args.push(opts.outPath);
+  return args;
+}
+
+/** Time the demux/seek pass for the SAME window (stream copy into the null
+ * muxer). It is the part of a cut spent seeking into a growing recording
+ * rather than encoding, it costs ~2% of an encode, and measuring it separately
+ * is what lets one log line split the cost (ADAAAA-8106 AC2). A probe failure
+ * (a recording mid-append, a corrupt tail) returns null instead of failing the
+ * cut — the cut itself is the operation that matters. */
+async function probeSeekCost(
+  ffmpegPath: string,
+  source: string,
+  startS: number,
+  durationS: number
+): Promise<number | null> {
+  const t0 = Date.now();
+  try {
+    await runFfmpeg(ffmpegPath, [
+      "-hide_banner", "-loglevel", "error",
+      "-ss", String(Math.max(0, startS)),
+      "-t", String(durationS),
+      "-i", source,
+      "-c", "copy",
+      "-f", "null", "-",
+    ]);
+    return Date.now() - t0;
+  } catch {
+    return null;
+  }
+}
+
 /** Result of a clip cut — the strategy actually used, so callers can log WHY a
- * webm recording was re-encoded instead of silently swallowing an empty clip. */
+ * webm recording was re-encoded instead of silently swallowing an empty clip.
+ * `seekMs`/`encodeMs` split the cost (ADAAAA-8106): `seekMs` is the measured
+ * demux/seek pass for the same window, `encodeMs` the ffmpeg encode itself. */
 export interface ClipCutResult {
   mode: "copy" | "reencode";
   sourceFormat: MediaFormat | null;
   bytes: number;
+  seekMs: number | null;
+  encodeMs: number;
 }
 
 /**
@@ -501,18 +577,13 @@ export async function cutClip(
   const sourceFormat = await probeMediaFormat(ffmpegPath, source);
   const kind = containerKind(outPath);
   const mode: ClipCutResult["mode"] = canStreamCopy(sourceFormat, outPath) ? "copy" : "reencode";
-  const args: string[] = [
-    "-y",
-    "-ss", String(Math.max(0, startS)),
-    "-t", String(durationS),
-    "-i", source,
-  ];
-  if (mode === "copy") {
-    args.push("-c", "copy", "-avoid_negative_ts", "make_zero");
-  } else {
-    args.push(...reencodeArgs(kind ?? "mp4"));
-  }
-  args.push(outPath);
+  // Split the cost before spending it (ADAAAA-8106 AC2): a re-encode's seek
+  // (demux into the growing recording) is measured separately from the encode
+  // so one log line can say which half is slow. A copy-mode cut has no encode
+  // worth separating, so it skips the probe and reports null.
+  const seekMs = mode === "reencode" ? await probeSeekCost(ffmpegPath, source, startS, durationS) : null;
+  const args = buildClipArgs({ source, outPath, startS, durationS, mode, kind: kind ?? "mp4" });
+  const encodeT0 = Date.now();
   try {
     await runFfmpeg(ffmpegPath, args);
   } catch (e) {
@@ -521,6 +592,7 @@ export async function cutClip(
     await rm(outPath, { force: true }).catch(() => {});
     throw e;
   }
+  const encodeMs = Date.now() - encodeT0;
   let bytes = 0;
   try {
     bytes = (await stat(outPath)).size;
@@ -534,7 +606,7 @@ export async function cutClip(
       : "unknown source format";
     throw new Error(`ffmpeg produced a 0-byte clip for ${path.basename(outPath)} (${mode} of ${fmt})`);
   }
-  return { mode, sourceFormat, bytes };
+  return { mode, sourceFormat, bytes, seekMs, encodeMs };
 }
 
 /** ADAAAA-7285: extract the audio for `[startS, startS + durationS]` of a job
