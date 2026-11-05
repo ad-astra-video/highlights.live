@@ -467,6 +467,10 @@ function condenseKeepingPlace(text: string, placeOverride?: string | null): stri
     .slice(0, keep)
     .join(" ")
     .replace(/\s+\b(?:the|a|an|to|of|in|at|on|with|and|from)\b$/i, "")
+    // ADAAAA-8043 (v7 §3.2): a directional preposition whose object was the
+    // place we are re-attaching would double up (`toward in midfield`, measured
+    // row 6 on `dece44c3`). It goes with its object.
+    .replace(/\s+\b(?:toward|towards|to|into|onto)\b$/i, "")
     .trim();
   if (!head) return "";
   return tidy(`${head} ${place}`);
@@ -831,6 +835,10 @@ export function trimQuietLine(text: string, placeOverride?: string | null): stri
         .join(" ");
   }
   out = repairDanglingTail(out);
+  // ADAAAA-8043 (v7 §3.2): a directional preposition left with no object after
+  // the trim (`moves the ball toward`) reads as a double preposition once the
+  // injected zone lands (`toward in midfield` — measured row 6 on `dece44c3`).
+  out = out.replace(/\s+\b(?:toward|towards|to|into|onto)\s*$/i, "").trim();
   if (out === input) return input;
   return tidy(out);
 }
@@ -1233,7 +1241,15 @@ export function ensureLeadPlace(text: string, ctx?: CaptionGroundingContext): st
   // reflect a shot. on the right` — a sentence break followed by a dangling
   // fragment. The lead's own terminal punctuation moves to the end of the line.
   const terminal = lead.match(/[.!?…]+$/)?.[0] ?? "";
-  const body = (terminal ? lead.slice(0, -terminal.length) : lead).trim();
+  // ADAAAA-8043 (v7 §3.2): a directional preposition whose OBJECT was the place
+  // we are replacing would read as a double preposition once the zone lands
+  // (`moves the ball toward in midfield` — measured row 6 on `dece44c3`). The
+  // preposition goes with the object; the zone is the object.
+  const body = tidy(
+    (terminal ? lead.slice(0, -terminal.length) : lead)
+      .trim()
+      .replace(/\s+\b(?:toward|towards|to|into|onto)\s*$/i, "")
+  );
   if (!body) return input;
   return tidy(`${body} ${place}${terminal}${colour ? ` — ${colour}` : ""}`);
 }
@@ -1786,6 +1802,8 @@ function hasActorHead(line: string): boolean {
 const COMPLETENESS_VERB =
   /\b(?:react|mov|driv|control|contest|dribbl|stand|pass|play|tak(?:e|es|en|ing|ed)?|took|hold|watch|wait|run|shoot|shot|strik|struck|head|clear|tackl|block|sav|beat(?:en|s)?|jump|turn|attack|press|chas|follow|keep|set|score|carri|win|send|sent|put|make|made|find|found|get|got|come|came|go|went|rise|rose|fall|fell|lift|loft|roll|bounc|cross|fire|volley|try|tried|see|saw|look|appear|erupt|celebrat|updat|becom|read|show|interact|attempt|remain|stay|sit|rest|touch|kick|throw|lose|lost|defend|mark|trap|chest|nod|poke|bundle)(?:s|es|ed|ing)?\b/i;
 
+/** Two prepositions in a row (`moves the ball toward in midfield`). */
+const DOUBLE_PREP = /\b(?:toward|towards|to|into|onto)\s+(?:in|at|on|from|near|inside)\b/i;
 /** A place remnant that lost its head (`remains of the pitch`). */
 const ORPHAN_PLACE_REMNANT = /\b(?:of|in|at|on|from)\s+(?:the\s+)?(?:pitch|field|ground)\b/i;
 /** A place noun left holding `of the pitch` (`remains in center of the pitch`). */
@@ -1805,6 +1823,7 @@ export function completenessGaps(text: string): CompletenessGap[] {
   // head phrase and left the preposition that modified it (`remains of the
   // pitch`). It reads as a place but names none, so it fails as a fragment.
   if (SPLIT_PLACE.test(line)) gaps.push("fragment");
+  if (DOUBLE_PREP.test(line)) gaps.push("fragment");
   if (ORPHAN_PLACE_REMNANT.test(line) && !PLACE_HEAD_PRESENT.test(line)) gaps.push("fragment");
   return gaps;
 }
