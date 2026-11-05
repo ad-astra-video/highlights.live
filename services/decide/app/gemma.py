@@ -2388,6 +2388,10 @@ def decide_with_gemma(
     # we are not sending raw bytes AND audio context is enabled AND an ASR
     # endpoint is configured.
     transcript = ""
+    # ADAAAA-8081: the incoming `asr_latency_s` argument is the side lane's
+    # measured ASR time; the working local is reset to 0 below for the inline
+    # path, so capture the argument BEFORE that reset.
+    prefetched_latency_s = float(asr_latency_s or 0.0)
     asr_latency_s = 0.0
     asr_ran = False
     # ADAAAA-8081: prefer the server's side-lane transcription. It is the SAME
@@ -2399,7 +2403,7 @@ def decide_with_gemma(
     asr_source = "none"
     if asr_prefetched:
         transcript = usable_transcript(asr_transcript or "")
-        asr_latency_s = float(asr_latency_s or 0.0)
+        asr_latency_s = prefetched_latency_s
         asr_ran = True
         asr_source = "prefetch"
     elif (
