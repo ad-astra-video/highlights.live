@@ -175,6 +175,27 @@ def test_ledger_carries_the_configured_span_and_cadence():
     assert "cadenceMs" not in bare
 
 
+def test_ledger_carries_the_configured_content_fps():
+    """ADAAAA-8102 (AC-8101-1): the live CONTENT consume rate rides the row next
+    to `spanSec`/`cadenceMs`. The directive is "consume at 1 FPS", and a leg
+    grades `contentFps == 1` on 100 % of payloads/rows instead of reading
+    `printenv` — the shipped media rail consumed at the ingest rate while the
+    analyzer pass read the knob (job `8024a341`: 833 frames / 300 s). A payload
+    that states no rate (VOD / legacy) leaves the key OFF the row rather than
+    publishing a default it never ran."""
+    _block, ledger = render_perceive_timeline(
+        {"perceiveTimeline": timeline(7)},
+        {"seeds": 7, "withFindings": 7, "imageCount": 4, "imagesPerDecide": 4,
+         "imageBudget": 4, "imageBudgetApplied": True,
+         "spanSec": 7, "cadenceMs": 5000, "contentFps": 1},
+    )
+    assert ledger["contentFps"] == 1.0
+    assert ledger["spanSec"] == 7.0
+
+    _block, bare = render_perceive_timeline({"perceiveTimeline": timeline(29)}, {"seeds": 29})
+    assert "contentFps" not in bare
+
+
 def test_render_is_ordered_and_dense_with_a_ledger():
     block, ledger = render_perceive_timeline(
         {"perceiveTimeline": timeline(29)}, {"seeds": 29, "withFindings": 29, "centerTs": 10.0}
