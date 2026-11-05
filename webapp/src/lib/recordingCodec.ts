@@ -91,6 +91,24 @@ export function supportedRecordingMimes(isSupported: (mime: string) => boolean):
   });
 }
 
+/** The arms to PROBE, in order: the containers `isTypeSupported` claims first
+ *  (so a healthy browser pays no extra probe time), then the ones it denies.
+ *
+ *  ADAAAA-8107 AC2 measured why the denied arms must still be probed. The
+ *  browser class this ticket exists for answers true ONLY for
+ *  `video/mp4;codecs=avc1` and its avc1 recorder emits nothing. A ladder
+ *  filtered by `isTypeSupported` therefore had exactly ONE candidate, that
+ *  candidate failed its own probe, and the caller committed it anyway — job
+ *  `9c2564e7` uploaded 0 chunks and lost the whole recording. `isTypeSupported`
+ *  is a claim, not a capability: such a browser usually still encodes WebM, and
+ *  only a probe can tell. Construction decides the rest (an arm the UA really
+ *  cannot record throws in `new MediaRecorder` and probes as 0 bytes). */
+export function recordingProbeCandidates(isSupported: (mime: string) => boolean): string[] {
+  const claimed = supportedRecordingMimes(isSupported);
+  const denied = RECORDING_MIME_LADDER.filter((mime) => !claimed.includes(mime));
+  return [...claimed, ...denied];
+}
+
 /** Health of a live recorder, from bytes it has PRODUCED (before upload). */
 export type RecordingHealth = "ok" | "pending" | "stalled";
 
@@ -168,4 +186,31 @@ export async function chooseRecordingMime(
   if (attempts.length === 0) return { mime: "", proved: false, attempts };
   const best = attempts.reduce((a, b) => (b.bytes > a.bytes ? b : a));
   return { mime: best.bytes > 0 ? best.mime : attempts[0].mime, proved: false, attempts };
+}
+
+/** What the caller should DO with a walk's result (ADAAAA-8107 AC2/AC4).
+ *  - `proven`: commit the arm that produced real bytes; it is already running.
+ *  - `header`: nothing proved, but one arm wrote real container bytes. Keep it
+ *    running: an mp4 muxer can flush its first frame just after the window (job
+ *    `98439bc7` did at ~2 s), so its header may still become footage.
+ *  - `default`: every arm was silent. Committing one of them uploads NOTHING
+ *    (measured job `9c2564e7`: chosen avc1, 0 chunks, no capture file), so the
+ *    caller drops them and lets the browser pick its own container instead.
+ *
+ *  The measured AC2 bug was the caller committing `attempts[0]` even when the
+ *  kept arm had proved `proved: false` with 0 bytes, which made the
+ *  default-constructor fallback unreachable for a one-candidate ladder. */
+export type RecordingCommitMode = "proven" | "header" | "default";
+
+export interface RecordingCommitPlan {
+  mode: RecordingCommitMode;
+  /** The mime to commit. `""` in `default` mode: let the browser choose. */
+  mime: string;
+}
+
+export function recordingCommitPlan(commit: MimeCommit): RecordingCommitPlan {
+  if (commit.proved) return { mode: "proven", mime: commit.mime };
+  const best = commit.attempts.reduce<MimeProbe | null>((a, b) => (a === null || b.bytes > a.bytes ? b : a), null);
+  if (best && best.bytes > 0) return { mode: "header", mime: best.mime };
+  return { mode: "default", mime: "" };
 }
