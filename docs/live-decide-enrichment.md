@@ -122,6 +122,22 @@ Expected shape at a 4-image cap: `timelineRecords > imageCount`,
 `timelineRecords == observationsInSpan`, `recordsPerSecond` ≈ the rail's publish
 rate (~2.8/s at 3 fps).
 
+#### ADAAAA-8069 measured grades (media/RTC leg, build `821af33`, 4-image cell)
+
+Job `74e34b22` (media rail, werift VP8 share, 176.2 s,
+`LIVE_OBSERVE_MAX_FRAMES=4`; media session `24470b7f`:
+`published=496 delivered=420 skipped=65`):
+
+- 46 `decide_audit` rows, every one with a span; 46/46 `timelineRecords >
+  imageCount` (imageCount 1-4, observationsInSpan 7-29).
+- 46/46 `timelineRecords == observationsInSpan`; 46/46 `recordsPerSecond >= 1.0`
+  (min 2.73, mean 2.95 — the rail's publish rate).
+- `imageGapMaxMs` ~3.5 s at the 4-image cap: the honest imaging statement.
+- 46/46 `timelineSource=observations`.
+
+The pre-fix control is job `8024a341` on the same cell: 39/39 rows
+`timelineRecords == imageCount`, `recordsPerSecond` 0.22-1.30.
+
 ### Prompt budget (AC-E3)
 
 `render_perceive_timeline` (`services/decide/app/gemma.py`) renders the block into
