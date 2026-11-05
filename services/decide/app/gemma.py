@@ -822,6 +822,309 @@ def apply_goal_attestation_gate(
     )
 
 
+# --- scoring_play contract guard (ADAAAA-8120 / ADAAAA-8101 AC-E3) ----------
+#
+# The v3 decide-emphasis A/B (ADAAAA-8103) proved a contract hole that NEITHER
+# prompt arm closes: a warm-up / commentary-lull window whose frames read
+# `not_highlight` on their own, but whose commentary text is replaced by a goal
+# shout, is accepted as `scoring_play` by 8 of 8 calls at both prompt versions
+# and both output contracts (`contradictedBy: null` throughout). More emphasis
+# text in the prompt is not the fix — a deterministic check on the ACCEPT path
+# is.
+#
+# This guard compares the MEASURED goal attestation the model was actually given
+# (perceive-timeline records, ball / goal-line geometry, scoreboard reads) with
+# the claim the decision made (a goal-type `scoring_play` accept whose support is
+# commentary text). It fires ONLY when the claim is text and the measurement
+# that would have to support it is absent or explicitly refuting:
+#
+#   goal_text_without_measurement : the window's ASR transcript carries a goal
+#       shout (and/or the reason cites the commentary), and NO measured channel
+#       attests the goal (ballOutcome != goal, no goalCrossed, no scoreboard
+#       change, no timeline goal flag, no goal-line geometry crossed).
+#   perceive_timeline_not_goal : the window's own perceive timeline reads a
+#       non-goal ball outcome (off_target / blocked / no_shot / cross) on every
+#       decisive record, with no goal flag anywhere in the window.
+#   ball_before_goal_line : measured geometry puts the ball before the goal line
+#       (`goalLineDelta` < 0) with no other measured attestation.
+#
+# The guard is deliberately INERT in every other case, so the audited contract
+# does not move:
+#   - `isHighlight=false` and `null` are never touched (`null` = unverifiable,
+#     and the wire verdict keeps its tri-state criteria — the guard never turns
+#     an unverifiable read into a rejection);
+#   - an accept that no measured channel attests AND that carries no goal-text
+#     claim is left to the existing anti-fabrication gate (ADAAAA-6610), which
+#     owns that class; the guard records `outcome="inert"` and does nothing;
+#   - when the Stage-2 confirm pass is enabled (ADAAAA-6973) a rejection still
+#     leaves the decision goal-shaped + un-attested, so the server's confirm
+#     deep-frame dive runs for it (`isGateRejectedBareGoal`) and can re-attest a
+#     genuine goal — the guard records `stage2ConfirmEligible` rather than
+#     silently passing the accept.
+#
+# Everything the guard decides is recorded on the decision (`contractGuard`) and
+# merged into the decide audit row's `timings.contractGuard`, so a stored job can
+# be re-graded without a replay (ADAAAA-8120 AC-G5).
+CONTRACT_GUARD_VERSION = "1"
+CONTRACT_GUARD_SCORE_CAP = 55.0
+
+# A goal shout in the commentary transcript. Noun/verb family only — a bare
+# "shot"/"save" is a play report, not a goal claim.
+_GOAL_SHOUT_RE = re.compile(
+    r"\b(?:it'?s in|goal(?:!|\b)|gooo+a+l|scored?|scores|scoring|what a finish"
+    r"|in the net|into the net|level(?:s|led)? it|equaliser|equalizer"
+    r"|winner|back of the net)\b",
+    re.IGNORECASE,
+)
+# A score line in the text ("2-1 to the away side"). A claim about the scoreboard
+# is a claim only a measured score read can attest.
+_SCORE_LINE_RE = re.compile(r"\b\d{1,2}\s*[-–:]\s*\d{1,2}\b")
+# The decision citing the commentary ASR as its basis (vs a measured signal).
+_COMMENTARY_CITATION_RE = re.compile(
+    r"\b(?:asr|commentary|commentator|transcript|shout|audio confirms)\b",
+    re.IGNORECASE,
+)
+_NON_GOAL_BALL_OUTCOMES = ("off_target", "blocked", "no_shot", "cross")
+
+
+def _num(value) -> float | None:
+    """A finite float from a wire value, or None (bools are never numbers here)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    v = float(value)
+    return v if v == v and abs(v) != float("inf") else None
+
+
+def measured_goal_attestation(evidence: Optional[dict], perceive_window: object = None) -> dict:
+    """The MEASURED goal attestation this window carries (ADAAAA-8120).
+
+    Computed only from evidence the model was already given — perceive-timeline
+    records, ball / goal-line geometry, scoreboard reads — NEVER from the
+    model's self-reported verdict/criteria (that self-report is precisely what
+    the ADAAAA-8103 contradiction case confabulated). Deterministic and
+    side-effect free.
+
+    Returns ``{attested, signals, channels, missing, timeline..., audio...}``:
+    `attested` is True when at least one measured channel attests a goal, and
+    `missing` names every measured channel the window did NOT carry (the audit
+    trail a reviewer reads when the guard fires).
+    """
+    e = evidence if isinstance(evidence, dict) else {}
+    signals: list[str] = []
+    missing: list[str] = []
+
+    ball_outcome = str(e.get("ballOutcome") or "").strip().lower()
+    if ball_outcome == GOAL_CRITERION_OUTCOME:
+        signals.append("ballOutcome=goal")
+    elif not ball_outcome:
+        missing.append("ballOutcome")
+
+    if e.get("goalCrossed") is True:
+        signals.append("goalCrossed=true")
+    elif e.get("goalCrossed") is not False:
+        missing.append("goalCrossed")
+
+    if e.get("scoreBoardChanged") is True:
+        signals.append("scoreBoardChanged=true")
+    else:
+        missing.append("scoreBoardChanged")
+
+    gld = _num(e.get("goalLineDelta"))
+    if gld is not None and gld >= 0 and abs(gld) > 0:
+        signals.append(f"goalLineDelta={gld:.2f}>=0")
+
+    recs = [r for r in (e.get("perceiveTimeline") or []) if isinstance(r, dict)]
+    goal_reads = 0
+    non_goal_reads = 0
+    non_goal_examples: list[str] = []
+    for r in recs:
+        bo = str(r.get("ballOutcome") or "").strip().lower()
+        ts = _num(r.get("ts"))
+        if bo == GOAL_CRITERION_OUTCOME:
+            goal_reads += 1
+            signals.append("timeline:ballOutcome=goal")
+        elif bo in _NON_GOAL_BALL_OUTCOMES:
+            non_goal_reads += 1
+            if len(non_goal_examples) < 3:
+                non_goal_examples.append(f"{bo}@{ts if ts is not None else '?'}s")
+        if r.get("ballInNet") is True:
+            signals.append("timeline:ballInNet=true")
+        if r.get("goalCrossed") is True:
+            signals.append("timeline:goalCrossed=true")
+        if r.get("scoreBoardChanged") is True:
+            signals.append("timeline:score_delta")
+    if not recs:
+        missing.append("perceiveTimeline")
+
+    levels = [v for v in (e.get("audioLevels") or []) if _num(v) is not None]
+    # The audio curve is a TRIGGER channel, never goal attestation (a roar also
+    # accompanies a near-miss) — it is recorded for the audit trail only.
+    audio_peak = round(max(float(v) for v in levels), 3) if levels else None
+
+    return {
+        "attested": bool(signals),
+        "signals": list(dict.fromkeys(signals)),
+        "missing": missing,
+        "timelineRecords": len(recs),
+        "timelineGoalReads": goal_reads,
+        "timelineNonGoalReads": non_goal_reads,
+        "timelineNonGoalExamples": non_goal_examples,
+        "scoreReads": int(e.get("ocrHits") or 0),
+        "audioSamples": len(levels),
+        "audioPeak": audio_peak,
+        "goalLineDelta": gld,
+        # The candidate event type / warp hint the model was testing. Kept on the
+        # record so a re-grade can see the hypothesis the accept was for.
+        "eventType": (perceive_window or {}).get("eventType") if isinstance(perceive_window, dict) else None,
+    }
+
+
+def goal_text_claim(decision: dict, transcript: str = "") -> dict:
+    """The commentary-text goal claim a decision made (ADAAAA-8120).
+
+    `transcript_goal_shout` is a goal shout in the window's own ASR text;
+    `reason_cites_commentary` is the decision naming the commentary/ASR as its
+    basis; `score_line_claim` is a score line ("2-1") in either. A claim made
+    only from vision (no text at all) leaves ``text_bits`` empty — the guard is
+    inert on that class and leaves it to the anti-fabrication gate.
+    """
+    t = (transcript or "").strip()
+    reason = " ".join(
+        str(decision.get(k) or "") for k in ("reason", "reasoning")
+    ).strip()
+    attested = [a for a in (decision.get("evidenceAttested") or []) if isinstance(a, str)]
+    attested_text = " ".join(attested)
+    text_bits: list[str] = []
+    if t and _GOAL_SHOUT_RE.search(t):
+        text_bits.append("transcript_goal_shout")
+    cites = bool(_COMMENTARY_CITATION_RE.search(reason)) or (
+        bool(attested) and all(_COMMENTARY_CITATION_RE.search(a) for a in attested)
+    )
+    if reason and cites and _GOAL_SHOUT_RE.search(reason + " " + attested_text):
+        text_bits.append("reason_cites_commentary")
+    score_line = bool(_SCORE_LINE_RE.search(t)) or bool(_SCORE_LINE_RE.search(reason))
+    return {
+        "transcript_goal_shout": "transcript_goal_shout" in text_bits,
+        "reason_cites_commentary": "reason_cites_commentary" in text_bits,
+        "score_line_claim": score_line,
+        "text_bits": text_bits,
+        "transcript": t[:160] or None,
+    }
+
+
+def apply_contract_guard(
+    decision: dict,
+    evidence: Optional[dict] = None,
+    event_type: Optional[str] = None,
+    transcript: str = "",
+    perceive_window: object = None,
+) -> tuple[dict, dict]:
+    """Reject a goal-type `scoring_play` accept that commentary text alone carries.
+
+    Mutates ``decision`` (forces ``isHighlight=false``, caps the score, appends
+    the contradicting evidence to ``reason``, stamps ``contradictedBy`` +
+    ``contractGuard``) and returns ``(decision, guard_record)``. A no-op on
+    everything outside its narrow scope, so `isHighlight=false`/`null` reads, a
+    genuinely absent-but-plausible accept, and the confirm-enabled posture are
+    all untouched. See the section comment above for the rules.
+    """
+    record: dict = {
+        "version": CONTRACT_GUARD_VERSION,
+        "outcome": "inert",
+        "contradictedBy": None,
+        "claim": None,
+        "attestation": measured_goal_attestation(evidence, perceive_window),
+        "refutingEvidence": [],
+        "detail": None,
+    }
+    if decision.get("isHighlight") is not True:
+        # `false` and `null` are never touched: null == unverifiable, not a
+        # rejection (audited contract; ADAAAA-8120 binding constraint).
+        record["outcome"] = "not_an_accept"
+        return decision, record
+    if not is_goal_accept(decision, event_type):
+        record["outcome"] = "not_a_goal_accept"
+        return decision, record
+
+    att = record["attestation"]
+    if att["attested"]:
+        record["outcome"] = "attested"
+        # Stamp the record on an accepted decision too, so a stored job's
+        # decide_audit row shows WHICH measured channel attested it (AC-G5).
+        decision["contractGuard"] = record
+        return decision, record
+
+    claim = goal_text_claim(decision, transcript)
+    record["claim"] = claim
+    # Recall path (ADAAAA-6973): a guard rejection leaves the decision
+    # goal-shaped and un-attested (outcome scoring_play / GOAL label,
+    # isHighlight=false), which is exactly the server's Stage-2 confirm
+    # population (`isGateRejectedBareGoal` in analyzer.ts). The confirm deep-frame
+    # dive still runs and can re-attest a genuine goal, so rejecting here does
+    # NOT drop the confirm rescue — unlike a silent Stage-A pass, it records the
+    # contradiction the dive has to overturn.
+    if _confirm_pass_enabled():
+        record["stage2ConfirmEligible"] = True
+
+    code: str | None = None
+    refuting: list[str] = []
+    missing = ", ".join(att["missing"]) or "none"
+    if claim["text_bits"]:
+        code = "goal_text_without_measurement"
+        bits = " + ".join(claim["text_bits"])
+        refuting.append(
+            f"the accept's support is commentary text only ({bits}) and no measured "
+            f"channel attests the goal (absent: {missing})"
+        )
+        if claim["score_line_claim"]:
+            refuting.append(
+                "the text claims a score line but no scoreboard read / score_delta "
+                "record carries it"
+            )
+    elif att["timelineRecords"] and att["timelineNonGoalReads"] and not att["timelineGoalReads"]:
+        code = "perceive_timeline_not_goal"
+        refuting.append(
+            "the window's own perceive timeline reads a non-goal ball outcome on every "
+            f"decisive record ({', '.join(att['timelineNonGoalExamples'])}) and carries "
+            "no goal flag"
+        )
+    elif att["goalLineDelta"] is not None and att["goalLineDelta"] < 0:
+        code = "ball_before_goal_line"
+        refuting.append(
+            f"measured goal-line geometry puts the ball before the line "
+            f"(goalLineDelta={att['goalLineDelta']:.2f}) and no other measured channel attests a goal"
+        )
+    if code is None:
+        # Evidence genuinely absent-but-plausible and no text claim: leave the
+        # decision exactly as the model read it (never turn null/absent into false).
+        record["outcome"] = "unverifiable_evidence"
+        decision["contractGuard"] = record
+        return decision, record
+
+    detail = "; ".join(refuting)
+    record.update(
+        {
+            "outcome": "rejected",
+            "contradictedBy": code,
+            "refutingEvidence": refuting,
+            "detail": f"{code}: {detail}",
+        }
+    )
+    decision["isHighlight"] = False
+    try:
+        score = float(decision.get("score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    if score > CONTRACT_GUARD_SCORE_CAP:
+        decision["score"] = CONTRACT_GUARD_SCORE_CAP
+    decision["contradictedBy"] = record["detail"]
+    decision["reason"] = (
+        (decision.get("reason") or "") + "; rejected by contract guard: " + detail
+    ).strip("; ")
+    decision["contractGuard"] = record
+    return decision, record
+
+
 # --- near-miss reconciliation (ADAAAA-6481 / §8 near_miss_recall) ----------
 #
 # A goal-bound shot that does NOT convert is a NEAR-MISS, not a non-event:
@@ -2361,6 +2664,20 @@ def ask(
     log.debug("gemma result event=%s parsed=%s", event_type, result)
     if result is None:
         log.error("gemma reply unparseable event=%s reply=%r", event_type, text[:500])
+    # ADAAAA-8120: the deterministic scoring_play contract guard runs on the
+    # accept path BEFORE the audit record is built, so its outcome and the
+    # evidence that refuted the claim land on the decide_audit row
+    # (`timings.contractGuard`) as well as on the decision
+    # (`contradictedBy` / `contractGuard`) — re-gradable without a replay.
+    guard_record: dict | None = None
+    if result is not None:
+        result, guard_record = apply_contract_guard(
+            result,
+            evidence,
+            event_type,
+            transcript=transcript,
+            perceive_window=perceive_window,
+        )
     _record = _audit_record(
         audit_ctx=audit_ctx,
         mode="single",
@@ -2377,6 +2694,8 @@ def ask(
         timings_extra={
             **(audio_timings or {}),
             "perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1],
+            # ADAAAA-8120 (AC-G5): the guard's verdict + refuting evidence.
+            **({"contractGuard": guard_record} if guard_record is not None else {}),
         },
     )
     _emit_audit(_record)

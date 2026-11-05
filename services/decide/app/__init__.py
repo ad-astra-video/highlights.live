@@ -27,6 +27,7 @@ from .confirm import (  # noqa: F401
 )
 from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
+    apply_contract_guard,
     apply_goal_attestation_gate,
     decide_group_with_gemma,
     decide_with_gemma,
@@ -405,6 +406,13 @@ class HighlightDecision(BaseModel):
     reasoning: str = ""
     verdict: Optional[Verdict] = None
     evidenceAttested: list[str] = Field(default_factory=list)
+    # ADAAAA-8120: the deterministic contract guard's verdict. `contradictedBy`
+    # is the machine-readable code + the evidence that refuted the claim (a
+    # goal-type scoring_play accepted on commentary text alone); `contractGuard`
+    # is the full guard record (outcome, measured attestation, missing channels,
+    # refuting evidence) mirrored into `decide_audit.timings.contractGuard`.
+    contradictedBy: Optional[str] = None
+    contractGuard: Optional[dict] = None
     audioContext: Optional[AudioContext] = None
     # Group mode: one verdict dict per candidate, in the same order as the
     # request's `candidates` array. Empty for single-candidate calls, whose
@@ -612,6 +620,11 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
                 + "; ".join(rejects)
             ).strip("; ")
     decision = finalize_goal_acceptance(decision, prefer_labels)
+    # ADAAAA-8120: contract guard LAST, so it sees the final accept (group mode
+    # carries no ASR transcript, so the claim is read off the decision's reason).
+    decision, _guard = apply_contract_guard(
+        decision, evidence, event_type, transcript="", perceive_window=None
+    )
     return decision
 
 
@@ -653,6 +666,9 @@ def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
     if not att_ok and dec.get("isHighlight"):
         dec["isHighlight"] = False
         dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
+    # ADAAAA-8120: contract guard on the group rule path too (no transcript on
+    # this path; the claim is read off the deterministic reason).
+    dec, _guard = apply_contract_guard(dec, evidence, cand.eventType)
     return dec
 
 
@@ -907,6 +923,15 @@ def create_app() -> FastAPI:
         if not att_ok and dec.get("isHighlight"):
             dec["isHighlight"] = False
             dec["reason"] = ((dec.get("reason") or "") + "; " + (att_reason or "")).strip("; ")
+        # ADAAAA-8120: contract guard on the rule path too (mirror of the gemma
+        # path). The rule never confabulates a goal reason, so this is inert in
+        # practice — it keeps the accept contract identical on both paths.
+        dec, _guard = apply_contract_guard(
+            dec,
+            req.evidence.model_dump(),
+            req.eventType,
+            transcript=(req.asrTranscript or "") if isinstance(req.asrTranscript, str) else "",
+        )
         # ADAAAA-7111 (Increment D): running video summary on the rule path too.
         dec["runningSummary"] = _rule_summary(
             req.storySoFar or "", dec.get("outcome") or _rule_outcome(d), req.eventType, dec.get("reason")
