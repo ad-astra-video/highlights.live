@@ -3965,11 +3965,20 @@ export function storedSurfaceFor(
           regate: (sentence: string) => regateServedSentence(sentence, grounding),
         })
       : { caption: "", cardTitles: [] as string[] };
+  // ADAAAA-8040 (Defect 2): the stored `reason` is user-readable copy on the
+  // detail route (the card is literally derived from it), so it crosses the SAME
+  // store-time post-condition the card crosses — it IS the accepted caption. The
+  // pre-fix verbless lead (`Shot on the left` while the caption read `The
+  // goalkeeper falls to the ground.`) can no longer be stored, because a refused
+  // shape yields no accepted caption. When nothing could be accepted, `reason` is
+  // omitted instead of falling back to a violating string: "no reason" on the
+  // route is the honest state, exactly as a missing card is.
+  const storedReason = grounding ? card.caption : gatedReason;
   return {
-    reason: gatedReason,
-    ...(grounding?.colourSignal && captionColour(gatedReason ?? "") ? { colour: grounding.colourSignal } : {}),
+    ...(storedReason ? { reason: storedReason } : {}),
+    ...(grounding?.colourSignal && captionColour(storedReason) ? { colour: grounding.colourSignal } : {}),
     ...(card.caption ? { caption: card.caption, cardTitles: card.cardTitles } : {}),
-    ...(grounding && gatedReason !== decision.reason && (decision.reason ?? "").trim() ? { reason_raw: decision.reason } : {}),
+    ...(grounding && storedReason !== decision.reason && (decision.reason ?? "").trim() ? { reason_raw: decision.reason } : {}),
   };
 }
 

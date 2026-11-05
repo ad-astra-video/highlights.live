@@ -689,8 +689,21 @@ export function repairDanglingTail(text: string): string {
     if (lastOpener) {
       const rest = out.slice(lastOpener.index + lastOpener[0].length).trim();
       // Only a SHORT verb-less tail is a cut clause. A longer tail is a real
-      // phrase (`… with the outside of the boot`) and stays.
-      if (rest && wordCount(rest) <= 3 && !VERBISH.test(rest)) out = out.slice(0, lastOpener.index).trim();
+      // phrase (`… with the outside of the boot`) and stays. ADAAAA-8040 (§2
+      // residual): a verb-less tail that carries its OWN sentence end is a whole
+      // coordinate phrase (`… and defensive areas.`), not a clause that was cut
+      // mid-way — deleting it left the row as a prefix cut of its stored
+      // sentence (`Players move in the center` for `Players move in the center
+      // and defensive areas.`).
+      if (
+        rest &&
+        wordCount(rest) <= 3 &&
+        !VERBISH.test(rest) &&
+        !hasTerminalPunctuation(rest) &&
+        out.slice(0, lastOpener.index).trim().length > 0
+      ) {
+        out = out.slice(0, lastOpener.index).trim();
+      }
     }
     if (out === before) break;
   }
@@ -977,8 +990,18 @@ export function gateQuietWindow(text: string, ctx?: CaptionGroundingContext): st
 export function gateGoalClaims(text: string, ctx?: CaptionGroundingContext): string {
   if (goalAllowed(ctx)) return text;
   if (!hasGoalClaim(text)) return text;
+  // ADAAAA-8040 (§2 residual): the suppressed claim clause carried the
+  // sentence's own end punctuation (`… — the ball misses the goal.`), so
+  // dropping the clause left the pre-dash lead with NO sentence end and the
+  // ladder served it as a prefix cut. The period belongs to the SENTENCE, not to
+  // the clause that was removed, so it is restored here — the line is then a
+  // whole sentence with the claim suppressed INSIDE it.
+  const terminal = text.match(/[.!?…]+$/)?.[0] ?? ".";
   // v4 §3.4: the claim goes, the place stays.
   let out = dropColourClause(text);
+  // The shortened line is a SENTENCE: it keeps the source's own end mark, or
+  // earns a full stop when the model never wrote one (`… — goal 22:15`).
+  if (out && !/[.!?…]+$/.test(out.trim())) out = `${out.replace(/[\s,;:—–-]+$/, "").trim()}${terminal}`;
   const place = placePhraseOf(out) || (ctx?.place ?? "").trim();
   const verb = outcomeVerbFor(out);
   out = rewriteScoreClaims(out, verb);
@@ -1331,8 +1354,58 @@ function lastLexicalToken(text: string): string {
 }
 
 /** A served string ends a clause when it carries terminal punctuation. */
-function hasTerminalPunctuation(text: string): boolean {
+export function hasTerminalPunctuation(text: string): boolean {
   return /[.!?…]["'”’)\]]*$/.test((text ?? "").trim());
+}
+
+/**
+ * ADAAAA-8040 (§2 residual): a served row is a SENTENCE. When a rule removed a
+ * clause that carried the sentence's own end punctuation (the claim-suppression
+ * path excises a post-dash goal clause), the remaining line is a complete clause
+ * with no sentence end — the shape that shipped as
+ * `A player shoots from the penalty area`. Punctuation is the only thing added
+ * here: no word is invented, deleted or reordered, and a string that already
+ * ends a sentence is returned byte-identical.
+ */
+export function restoreTerminalPunctuation(text: string): string {
+  const input = (text ?? "").trim();
+  if (!input || hasTerminalPunctuation(input)) return input;
+  // A line that stops on a dangling marker (`… —`, `… ,`) has nothing to
+  // close; those are refused by the shape rules instead of being patched here.
+  const body = input.replace(/[\s,;:—–-]+$/, "").trim();
+  return body ? `${body}.` : input;
+}
+
+/**
+ * A dash clause that is an atmosphere/colour beat (`— crowd erupts`,
+ * `— noise spikes over the play`). §3.1: model colour copy is never a served
+ * sentence part, so it is the ONE excision that may shorten a stored sentence
+ * without the row being a prefix cut. A dash clause that carries a scoreline or
+ * a goal mention is a CLAIM clause, not a colour beat.
+ */
+function isColourClause(clause: string): boolean {
+  const c = (clause ?? "").trim();
+  if (!c || c.length > COLOUR_MAX_CHARS) return false;
+  if (findScoreClaims(c).length > 0) return false;
+  return COLOUR_REACTION_NOUN.test(c);
+}
+
+/**
+ * ADAAAA-8040 (§2 residual): the stored SENTENCE a served row is compared with.
+ *
+ * `wholeFirstSentence` (above) drops everything after an em dash, because a
+ * colour beat is never copy. That is right for a colour beat and WRONG for a
+ * claim clause: `A player shoots from the penalty area — the ball misses the
+ * goal.` is ONE sentence whose second clause was claim-suppressed, so dropping
+ * the clause made the served lead compare equal to its own source and the cut
+ * went unnoticed. This helper keeps a non-colour dash clause, so the claim
+ * suppression is visible as a prefix of the sentence it happened inside.
+ */
+export function wholeStoredSentence(text: string): string {
+  const first = (captionBeats(text ?? "")[0] ?? (text ?? "")).trim();
+  if (!first) return "";
+  const clause = captionColour(first);
+  return clause && isColourClause(clause) ? captionLead(first) : first;
 }
 
 /**
@@ -1379,18 +1452,47 @@ export function servedShapeViolations(
   const lastOpener = openers[openers.length - 1];
   if (lastOpener) {
     const rest = text.slice((lastOpener.index ?? 0) + lastOpener[0].length).trim();
-    if (rest && rest.split(/\s+/).filter(Boolean).length <= 3 && !VERBISH.test(rest)) out.push("open-clause");
+    // ADAAAA-8040 (§2 residual): a verb-less tail that carries its OWN sentence
+    // end is a whole coordinate phrase (`… and defensive areas.`), not a clause
+    // cut mid-way — the same rule `repairDanglingTail` now applies.
+    if (
+      rest &&
+      rest.split(/\s+/).filter(Boolean).length <= 3 &&
+      !VERBISH.test(rest) &&
+      !hasTerminalPunctuation(rest)
+    ) {
+      out.push("open-clause");
+    }
   }
   for (const source of sources) {
-    const stored = normalizeServed(source ?? "");
+    const storedText = (source ?? "").trim();
+    const stored = normalizeServed(storedText);
     if (!stored || stored === normalized) continue;
     // A stored sentence that itself ends in a dangling clause is the broken one:
     // the candidate that drops that clause is the REPAIR, not a prefix cut of it.
     const remainder = stored.slice(normalized.length).trim();
+    // ... but only when the stored sentence itself does NOT end a sentence there:
+    // `Players move in the center and defensive areas.` is a whole sentence, so
+    // the candidate that stops before `and` is a prefix cut, not its repair.
     const remainderIsCutClause =
-      /^(?:while|as|when|and|but|with|which|that|who)\b/i.test(remainder) && !VERBISH.test(remainder);
+      /^(?:while|as|when|and|but|with|which|that|who)\b/i.test(remainder) &&
+      !VERBISH.test(remainder) &&
+      !hasTerminalPunctuation(storedText);
     if (remainderIsCutClause) continue;
     if (stored.startsWith(`${normalized} `)) {
+      // ADAAAA-8040 (§2 residual): a dash CLAUSE inside the stored sentence
+      // (a goal/score mention or an atmosphere beat) is excised by the claim and
+      // colour gates. A candidate that IS the sentence's own lead — the whole
+      // clause before the dash — is the sanctioned "claim suppressed INSIDE the
+      // sentence" shape, not a prefix cut: the sentence keeps its actor, action
+      // and place and ends on a real clause boundary. What the shipped build got
+      // wrong was serving that lead with NO terminal punctuation (the period had
+      // belonged to the removed clause), so the sentence end is the test here.
+      const lead = normalizeServed(captionLead(storedText));
+      if (lead && lead === normalized) {
+        if (!terminal) out.push("open-clause");
+        continue;
+      }
       out.push("prefix-cut");
       if (!terminal) out.push("open-clause");
     } else if (stored.startsWith(normalized) && !terminal) {
@@ -1535,37 +1637,62 @@ export interface ServedShapeResult {
 
 /** The served post-condition: pass, replace with a whole sentence, or drop. */
 export function servedShape(input: ServedShapeInput): ServedShapeResult {
-  const candidate = (input.candidate ?? "").trim();
+  // ADAAAA-8040 (§2 residual): a ladder row is a sentence, so the candidate is
+  // closed with its sentence end before it is graded. The shipped build served
+  // `A player shoots from the penalty area` because the claim gate removed the
+  // clause that carried the period; punctuation is restored here rather than
+  // invented into the words.
+  const candidate = restoreTerminalPunctuation((input.candidate ?? "").trim());
   const raw = (input.storedRaw ?? "").trim();
   const gated = (input.storedGated ?? "").trim();
-  // The stored SENTENCE (its lead beat) is the text a served row may not be a
-  // prefix cut of. A colour clause after an em dash is a contract-level excision,
-  // not a cut of the sentence, so it is not part of the comparison.
-  const sources = [captionLead(gated), captionLead(raw)].filter(Boolean);
+  // The stored SENTENCE (first sentence, keeping a claim/place clause after a
+  // dash) is the text a served row may not be a prefix cut of. A COLOUR clause
+  // after an em dash is a contract-level excision, not a cut of the sentence, so
+  // it is not part of the comparison — but a claim clause IS part of it (§2).
+  const sources = [wholeStoredSentence(gated), wholeStoredSentence(raw)].filter(Boolean);
   const quiet = input.quiet === true;
   const fits = (text: string): boolean => !!text && (!quiet || wordCount(text) <= QUIET_MAX_WORDS);
   // ADAAAA-7995 AC4: a quiet row carries no colour, so a fallback variant that
   // still names one is skipped (the reduction list removes it).
   const QUIET_COLOUR_PHRASE =
     /\bin\s+(?:an?\s+|the\s+)?(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b/i;
-  const clean = (text: string): boolean =>
-    fits(text) &&
-    (!quiet || !QUIET_COLOUR_PHRASE.test(text)) &&
-    servedShapeViolations(text, sources).length === 0;
+  const punctuated = (text: string): string => restoreTerminalPunctuation((text ?? "").trim());
+  const clean = (text: string): boolean => {
+    const t = punctuated(text);
+    return (
+      fits(t) &&
+      (!quiet || !QUIET_COLOUR_PHRASE.test(t)) &&
+      servedShapeViolations(t, sources).length === 0
+    );
+  };
+  const accepted = (text: string): ServedShapeResult => {
+    const served = punctuated(text);
+    return { text: served, violations: [], replaced: served !== candidate };
+  };
   const refused = servedShapeViolations(candidate, sources);
   if (refused.length === 0) {
     if (fits(candidate)) return { text: candidate, violations: [], replaced: false };
     // Quiet row over the word budget: reduce it extractively, never cut its tail.
     for (const variant of servedReductions(candidate)) {
-      if (clean(variant)) return { text: variant, violations: [], replaced: variant !== candidate };
+      if (clean(variant)) return accepted(variant);
     }
   }
   // A raw sentence may only be served when the write seam did not ANONYMISE a
   // name in it: the ladder has no prompt evidence to re-ground that name, and
   // re-introducing it would undo the §3.3 name gate. It is re-gated for the
   // window's corroboration before it may assert a goal.
-  const rawSentence = wholeFirstSentence(raw);
-  const gatedSentence = wholeFirstSentence(gated);
+  // ADAAAA-8040 (§2 residual): the stored SENTENCE keeps a claim/place clause
+  // after a dash (that is the "claim suppressed INSIDE the sentence" source the
+  // fallback order names); a dash COLOUR beat is still removed before it is
+  // re-gated, because model colour copy is never served (§3.1).
+  const sentenceOf = (text: string): string => {
+    const sentence = wholeStoredSentence(text);
+    if (!sentence) return "";
+    const clause = captionColour(sentence);
+    return clause && isColourClause(clause) ? captionLead(sentence) : sentence;
+  };
+  const rawSentence = sentenceOf(raw);
+  const gatedSentence = sentenceOf(gated);
   const rawUsable = !!rawSentence && (!hasProperName(rawSentence) || hasProperName(gated));
   // Order: the raw sentence when it is name-safe, then the stored gated line
   // (already anonymised by the seam), then — as the LAST resort before losing the
@@ -1582,7 +1709,7 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
     if (!sentence) continue;
     const reclaimed = input.regate ? input.regate(sentence) : sentence;
     for (const variant of servedReductions(reclaimed)) {
-      if (clean(variant)) return { text: variant, violations: [], replaced: variant !== candidate };
+      if (clean(variant)) return accepted(variant);
     }
   }
   return { text: "", violations: refused.length ? refused : ["empty"], replaced: true };
