@@ -75,6 +75,8 @@ async function main() {
     healthToken: cfg.healthToken,
     // ADAAAA-7656 restart/crash ledger for `/health`.
     lifecycle,
+    // ADAAAA-8050 provenance: where the reported revision came from.
+    buildRefSource: cfg.buildRefSource,
     // ADAAAA-7700 open-session ledger: same state dir as the lifecycle ledger so
     // the leftover list survives the recreate/deploy that killed the sessions.
     stateDir: cfg.stateDir,
