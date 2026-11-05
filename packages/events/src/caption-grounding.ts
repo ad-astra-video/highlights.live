@@ -642,7 +642,14 @@ const TRAILING_SCORE_NOUN =
   /\s+\b(?:(?:as|while|when|and|with)\s+(?:the\s+)?(?:score\s*board|score|scoreline)|(?:the\s+)?(?:score\s*board|scoreline))\s*[\s,;:—–-]*$/i;
 
 /** A clause boundary inside a sentence (`… while players`, `… and shoots`). */
-const TAIL_CLAUSE_OPENER = /\s+\b(while|as|when|and|but|with|which|that|who|because|although)\b/gi;
+/**
+ * ADAAAA-8040 (§2 residual): `with` is deliberately ABSENT — `with ball`,
+ * `with the outside of the boot` is a complete prepositional adjunct, not a
+ * clause waiting for a verb, so deleting it turned a whole stored sentence into
+ * a prefix cut (`Player in center field with ball` -> `Player in center field`).
+ * A verb-less tail introduced by a SUBORDINATOR (`while players`) is the cut.
+ */
+const TAIL_CLAUSE_OPENER = /\s+\b(while|as|when|and|but|which|that|who|because|although)\b/gi;
 
 /**
  * Tokens that make a tail CLAUSE complete. A tail with none of these is an
@@ -1475,7 +1482,7 @@ export function servedShapeViolations(
     // `Players move in the center and defensive areas.` is a whole sentence, so
     // the candidate that stops before `and` is a prefix cut, not its repair.
     const remainderIsCutClause =
-      /^(?:while|as|when|and|but|with|which|that|who)\b/i.test(remainder) &&
+      /^(?:while|as|when|and|but|which|that|who)\b/i.test(remainder) &&
       !VERBISH.test(remainder) &&
       !hasTerminalPunctuation(storedText);
     if (remainderIsCutClause) continue;
