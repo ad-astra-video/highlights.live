@@ -304,7 +304,16 @@ function normalizeLog(log: SummaryLogEntry[]): NormalizedEntry[] {
     // ladder drops the clause, so the stored row is not rewritten and only the
     // served reading conforms. A row with no stored verdict is legacy, not quiet.
     const verdict = (e as { verdict?: string | null }).verdict;
-    const quieted = isQuietVerdict(verdict) && captionColour(gated) ? tidyColourStrip(dropColourClause(gated)) : gated;
+    // ADAAAA-8043 (contract v7 §3.1): a row whose `colour` field carries the
+    // measured signal holds the beat DERIVED at the write seam — a delivered,
+    // gated clause, not the model's colour copy. It must render (AC10: 0 dropped
+    // colour clauses). Only a legacy row (no stored signal) still has its model
+    // clause dropped here.
+    const derivedBeat = !!(e as { colour?: unknown }).colour;
+    const quieted =
+      isQuietVerdict(verdict) && captionColour(gated) && !derivedBeat
+        ? tidyColourStrip(dropColourClause(gated))
+        : gated;
     const clean = repairDanglingTail(captionBeats(quieted)[0] ?? quieted);
     // ADAAAA-7995: `text_raw` is the write seam's own record that the gate
     // changed this row — the provenance the display cap needs.
