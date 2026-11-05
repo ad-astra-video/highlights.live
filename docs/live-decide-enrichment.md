@@ -156,6 +156,16 @@ can read either layer:
 
 ## 4. Grading a fresh live leg
 
+- **The JSONL is container-local and dies with a recreate.** `DECIDE_AUDIT_DIR`
+  (`/srv/decide/audit` on the box) is inside the decide image, not a mounted
+  volume, and `decide` and `decide-b` each keep their own file. Any
+  `docker compose up -d --build decide` — including a sibling ticket's deploy —
+  starts an empty trail, and `highlights-asr`'s `[asr] done` lines die the same
+  way. Copy the rows out of the container (or grade `decide_audit`) as soon as
+  the leg ends. The file is append-only while the DB upserts on
+  `(session_id, group_key)`, so a retried window shows twice in the file and once
+  in the row: compare latest-per-group, never line counts.
+
 - **AC-E2 precondition — the clip must be ON.** `AC-E2` is satisfiable only with
   `LIVE_DECIDE_AUDIO_CLIP=1` on the live payload (`docker/.env`, server env).
   With it at `0` the honest number is 0 % and every window is named
