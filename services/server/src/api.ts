@@ -102,6 +102,7 @@ import {
   resumeStartTs,
   resumeWarmupFrames,
   resumeWarmupS,
+  runningAttemptAccumulators,
   shouldArmResumeRetry,
   type ResumeAttemptEvidence,
   type ResumeCheckpointPatch,
@@ -1952,12 +1953,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const failedDecideCalls = stats?.decideCalls ?? 0;
       const failedCostUsd =
         cfg.decideFee * failedDecideCalls + (failedPerceiveS / 3600) * PERCEIVE_PER_HOUR_USD;
-      const totals = accumulateAttemptTotals(stats?.accumBase, {
-        decideCalls: failedDecideCalls,
-        perceiveSessionS: failedPerceiveS,
-        costUsd: failedCostUsd,
-        wallClockS: failedWallClockS,
-      });
+      const totals = accumulateAttemptTotals(
+        stats?.accumBase,
+        {
+          decideCalls: failedDecideCalls,
+          perceiveSessionS: failedPerceiveS,
+          costUsd: failedCostUsd,
+          wallClockS: failedWallClockS,
+        },
+        // ADAAAA-8089: floor the folded cost at what the summed counters imply,
+        // so a base checkpoint that wrote decide calls without their fees can
+        // never settle this row below the spend it actually incurred.
+        { decideFee: cfg.decideFee }
+      );
       const attemptPatch: ResumeCheckpointPatch = {
         phase,
         attempts,
@@ -2264,6 +2272,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       vodResumeCursors.set(jobId, resumeState.cursorTs);
       // Persist every Nth decided window (~30 s of content at the default 10).
       if (resumeState.decidedWindows % cfg.vodResumeCheckpointWindows !== 0) return;
+      // ADAAAA-8089: the checkpoint carries the FEES this attempt has already
+      // billed, not just its decide count. Marking `decideCalls` alone left
+      // `costUsd` at the previous base, so a process killed mid-attempt (deploy
+      // recreate, OOM, SIGKILL) persisted a base of zero spend and the resumed
+      // attempt's meter closed at its own spend only — the record then reported
+      // 31 decides at the price of 10 (measured on 8cc0d263). Billed perceive
+      // seconds and wall clock ride along so the totals stay coherent across
+      // attempts; the base is the block READ AT CLAIM, so each write is a
+      // running total rather than an accumulation.
+      const perceiveSoFarS = attemptStats.analyzeStartedMs
+        ? Math.max(0, (Date.now() - attemptStats.analyzeStartedMs) / 1000)
+        : 0;
       void writeResumeCheckpoint({
         phase: "analyze",
         analyze: {
@@ -2271,9 +2291,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           decideWindows: resumeState.decidedWindows,
           lastWindowAt: new Date().toISOString(),
         },
-        accumulators: {
-          decideCalls: (checkpoint?.accumulators?.decideCalls ?? 0) + resumeState.decidedWindows,
-        },
+        accumulators: runningAttemptAccumulators(
+          checkpoint?.accumulators,
+          {
+            decideCalls: resumeState.decidedWindows,
+            perceiveSessionS: perceiveSoFarS,
+            wallClockS: Math.max(0, (Date.now() - runStartedMs) / 1000),
+          },
+          { decideFee: cfg.decideFee }
+        ),
       });
     };
     const anaCfg: AnalyzerConfig = {
@@ -2934,12 +2960,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // than at analyze end so `wallClockS` is the real claim -> done span that
     // `stageTimings.totalMs` has to equal (§4.1 invariant 3). Prior attempts'
     // accumulator block is folded in, so a resumed job still closes exactly.
-    const totals = accumulateAttemptTotals(attemptStats.accumBase, {
-      decideCalls,
-      perceiveSessionS,
-      costUsd,
-      wallClockS: Math.max(0, (finalizeEndMs - runStartedMs) / 1000),
-    });
+    const totals = accumulateAttemptTotals(
+      attemptStats.accumBase,
+      {
+        decideCalls,
+        perceiveSessionS,
+        costUsd,
+        wallClockS: Math.max(0, (finalizeEndMs - runStartedMs) / 1000),
+      },
+      // ADAAAA-8089: the folded total is floored at the cost its counters imply.
+      // A resumed job whose attempt 1 checkpointed decide calls without the fees
+      // (a build that predates this fix, e.g. the image attempt 1 ran before the
+      // deploy restart) now closes at the spend both attempts incurred instead
+      // of attempt 2's share.
+      { decideFee: cfg.decideFee }
+    );
     const vodMeter = buildVodMeter({
       wallClockS: totals.wallClockS,
       decideCalls: totals.decideCalls,

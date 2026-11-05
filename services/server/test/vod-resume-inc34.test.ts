@@ -26,7 +26,9 @@ import {
   recordAttemptProgress,
   resumeEligibleSource,
   resumePointLabel,
+  runningAttemptAccumulators,
 } from "../src/vod-resume";
+import { PERCEIVE_PER_HOUR_USD } from "../src/job-settlement";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -60,14 +62,23 @@ const KILLED_DECIDE_CALLS = 3;
 const KILLED_PERCEIVE_CALLS = 40;
 
 /** Counting fake perceive/decide adapter (same shape as vod-resume.test.ts). */
-function resumeAdapter(opts: { failDecideCall?: number; failAllDecide?: boolean } = {}) {
+function resumeAdapter(opts: { failDecideCall?: number; failAllDecide?: boolean; holdFromDecide?: number } = {}) {
   const state = {
     reserveCount: 0,
     analyzeCalls: 0,
     decideCalls: 0,
     decideKeys: [] as string[],
     failedDecide: false,
+    // ADAAAA-8089: park the pass mid-attempt until the test has read the
+    // checkpoint it persisted, so "killed here" is observable instead of a race.
+    hold: Promise.resolve(),
+    release: () => {},
   };
+  let releaseHold: () => void = () => {};
+  state.hold = new Promise<void>((r) => {
+    releaseHold = r;
+  });
+  state.release = () => releaseHold();
   return {
     state,
     async reservePerceive() {
@@ -87,6 +98,9 @@ function resumeAdapter(opts: { failDecideCall?: number; failAllDecide?: boolean 
       if (shouldFail || nthFail) {
         state.failedDecide = true;
         throw new Error("decide failed: HTTP 503");
+      }
+      if (typeof opts.holdFromDecide === "number" && state.decideCalls >= opts.holdFromDecide) {
+        await state.hold;
       }
       return { isHighlight: false, score: 0, eventType: "GOAL", outcome: "not_highlight" };
     },
@@ -206,6 +220,63 @@ describe("vod-resume Inc 3+4 pure parts (ADAAAA-7907)", () => {
     });
     // Negative / garbage input can never reduce a total.
     expect(accumulateAttemptTotals(prev, { decideCalls: -5, wallClockS: Number.NaN }).decideCalls).toBe(12);
+  });
+
+  it("a mid-attempt checkpoint carries the fees it already billed (ADAAAA-8089)", () => {
+    const pricing = { decideFee: 0.0033 };
+    // Attempt 1 so far: 20 applied windows and 150 billed perceive seconds.
+    const ck = runningAttemptAccumulators(
+      undefined,
+      { decideCalls: 20, perceiveSessionS: 150, wallClockS: 170 },
+      pricing
+    );
+    // The FEES are on disk, not just the decide count — the whole defect was a
+    // checkpoint that persisted `decideCalls` and left `costUsd` at the base.
+    expect(ck.decideCalls).toBe(20);
+    expect(ck.costUsd).toBeCloseTo(20 * 0.0033 + (150 / 3600) * PERCEIVE_PER_HOUR_USD, 4);
+    expect(ck.costUsd).toBeGreaterThan(20 * 0.0033);
+    expect(ck.wallClockS).toBe(170);
+    // A LATER checkpoint of the same attempt overwrites with a bigger running
+    // total instead of accumulating (the base is the block read at claim).
+    const later = runningAttemptAccumulators(
+      undefined,
+      { decideCalls: 24, perceiveSessionS: 180, wallClockS: 200 },
+      pricing
+    );
+    expect(later.decideCalls).toBe(24);
+    expect(later.costUsd).toBeGreaterThan(ck.costUsd);
+    // The resumed attempt folds onto that block instead of starting a fresh
+    // meter, so the completed record covers both attempts.
+    const final = accumulateAttemptTotals(
+      ck,
+      { decideCalls: 11, perceiveSessionS: 190.5, costUsd: 0.0368, wallClockS: 60 },
+      pricing
+    );
+    expect(final.decideCalls).toBe(31);
+    expect(final.costUsd).toBeCloseTo(ck.costUsd + 0.0368, 4);
+    expect(final.costUsd + 1e-4).toBeGreaterThanOrEqual(pricing.decideFee * final.decideCalls);
+  });
+
+  it("a resumed job never closes at attempt-2-only cost when the base lost its fees (ADAAAA-8089)", () => {
+    const pricing = { decideFee: 0.0033 };
+    // The measured 8cc0d263 shape: attempt 1's checkpoint persisted 20 decide
+    // calls but no fees, so the resumed attempt starts on a zero-spend base.
+    const accumBase = { decideCalls: 20, perceiveSessionS: 0, costUsd: 0, wallClockS: 0 };
+    const attempt2 = { decideCalls: 11, perceiveSessionS: 190.5, costUsd: 0.0368, wallClockS: 60 };
+    // Without pricing (the pre-fix arithmetic) the total IS attempt-2-only —
+    // the regression this test pins.
+    expect(accumulateAttemptTotals(accumBase, attempt2).costUsd).toBe(0.0368);
+    const folded = accumulateAttemptTotals(accumBase, attempt2, pricing);
+    expect(folded.decideCalls).toBe(31);
+    expect(folded.costUsd).toBeGreaterThan(attempt2.costUsd);
+    // The acceptance floor: 31 decides at $0.0033 is $0.1023, plus the 190.5
+    // billed perceive seconds ($0.0005) = $0.1028 — never attempt 2's $0.0368.
+    expect(folded.costUsd).toBeCloseTo(0.1028, 4);
+    expect(folded.costUsd).toBeGreaterThanOrEqual(0.1023);
+    expect(folded.costUsd + 1e-4).toBeGreaterThanOrEqual(pricing.decideFee * folded.decideCalls);
+    // The floor never LOWERS a legitimately higher summed cost.
+    const rich = { decideCalls: 10, perceiveSessionS: 3600, costUsd: 0.2, wallClockS: 0 };
+    expect(accumulateAttemptTotals(rich, { decideCalls: 1, costUsd: 0.01 }, pricing).costUsd).toBe(0.21);
   });
 
   it("closes only the OPEN attempt entry, and only once", () => {
@@ -579,6 +650,42 @@ describe("VOD resume Inc 3+4 end to end (ADAAAA-7907 AC7, AC9, AC10)", () => {
     await t.app.close();
   }, 180000);
 
+  it("ADAAAA-8089: an in-flight attempt's checkpoint carries the fees it billed, so a kill cannot zero the base", async () => {
+    // Park the pass at its 3rd decide: the checkpoints written before it are
+    // exactly what a process killed HERE leaves on disk (no exit hook runs).
+    const adapter = resumeAdapter({ holdFromDecide: 3 });
+    const t = await buildTestApp({ ...ENV }, { adapter });
+    const owner = await register(t.app, "inc34-midcheckpoint@test.dev");
+    const admin = await adminToken(t.app);
+    const jobId = await submit(t.app, owner, videoPath);
+    // ENV sets VOD_RESUME_CHECKPOINT_WINDOWS=1, so every applied window writes.
+    const mid = await waitForState(
+      t.app,
+      jobId,
+      admin,
+      (job) => job.status === "analyzing" && (job.resume?.accumulators?.decideCalls ?? 0) >= 2
+    );
+    const acc = mid.job.resume.accumulators;
+    expect(acc.decideCalls).toBeGreaterThanOrEqual(2);
+    // The defect: `decideCalls` persisted while `costUsd` stayed at the base.
+    // At least the decide fees of the windows already applied must be there.
+    expect(acc.costUsd).toBeGreaterThan(0);
+    expect(acc.costUsd + 1e-4).toBeGreaterThanOrEqual(t.cfg.decideFee * acc.decideCalls);
+    // The rest of the block rides along, so the resumed attempt folds a
+    // coherent total rather than a decide count with no spend behind it.
+    expect(acc.wallClockS).toBeGreaterThan(0);
+    expect(acc.perceiveSessionS).toBeGreaterThanOrEqual(0);
+    // The attempt trail carries the running counters too (AC10 crash half).
+    const open = mid.job.resume.attempts.filter((a: any) => !a.endedAt);
+    expect(open).toHaveLength(1);
+    expect(open[0].decideCalls).toBe(acc.decideCalls);
+
+    // Let the pass finish so this app closes on a settled row.
+    adapter.state.release();
+    await waitForJob(t.app, jobId, owner, 60000);
+    await t.app.close();
+  }, 180000);
+
   it("AC10: exactly one [vod-resume] line per attempt, with all seven fields", async () => {
     // Fail the 3rd decide, then let the automatic retry finish the job: two
     // attempts, two lines — no more, no fewer (the mid-pass lines that used to
@@ -711,6 +818,19 @@ describe("VOD resume boot recovery (ADAAAA-7907 Increment 4)", () => {
       resume: {
         ...failedAdmin.job.resume,
         phase: "analyze" as const,
+        // ADAAAA-8089: this is the exact shape the measured 8cc0d263 row was
+        // found in — the checkpoint carried the decide COUNT but no fees, so the
+        // resumed attempt began on a zero-spend base. The completed record must
+        // still close at the spend both attempts incurred (asserted below).
+        accumulators: {
+          ...(attempt1Acc as any),
+          // A real checkpoint persists base + this attempt's applied windows, so
+          // the count covers attempt 2's windows while the fees were never
+          // written — the gap the fix closes.
+          decideCalls: attempt1Acc.decideCalls + KILLED_DECIDE_CALLS,
+          costUsd: 0,
+          perceiveSessionS: 0,
+        },
         attempts: [
           ...failedAdmin.job.resume.attempts,
           // ADAAAA-7907 (AC10): attempt 2 was CLAIMED and killed mid-analyze, so
@@ -779,6 +899,18 @@ describe("VOD resume boot recovery (ADAAAA-7907 Increment 4)", () => {
     expect(body.job.vodMeter.decideCalls).toBeGreaterThan(attempt1Acc.decideCalls);
     expect(body.job.vodMeter.decideCalls).toBe(body.job.resume.accumulators.decideCalls);
     expect(body.job.vodMeter.wallClockS).toBeGreaterThanOrEqual(attempt1Acc.wallClockS ?? 0);
+
+    // ---- ADAAAA-8089: the record never closes at attempt-3-only spend --------
+    // The interrupted checkpoint above kept its decide COUNT but zero fees (the
+    // measured 8cc0d263 shape). The completed record must therefore report at
+    // least every decide call's fee, not just the resumed attempt's share.
+    const meter = body.job.vodMeter as any;
+    expect(meter.decideFeeUsd).toBeGreaterThan(0);
+    expect(meter.decideCalls).toBeGreaterThan(KILLED_DECIDE_CALLS);
+    expect(body.job.costUsd + 1e-4).toBeGreaterThanOrEqual(meter.decideFeeUsd * meter.decideCalls);
+    // And the banked counts are still inside the record's own totals.
+    expect(body.job.decideCalls).toBe(meter.decideCalls);
+    expect(body.job.costUsd).toBe(meter.costUsd);
 
     // AC10: TWO lines now — one synthesized at boot recovery for the attempt the
     // kill took out (no exit hook ran), one measured for the resumed attempt. The
