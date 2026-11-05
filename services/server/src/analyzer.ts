@@ -272,6 +272,9 @@ export interface CandidateSignal {
   /** ADAAAA-7844: the measured delta backing `scoreBoardChanged`, when one was
    * measured legibly inside the window. */
   scoreBoardDelta?: ScoreboardDeltaEvidence;
+  /** ADAAAA-8134: on the live rail, the pooled score-read counts behind a window
+   * the read-side attestation could not carry (disclosed on the demoted row). */
+  scoreReads?: ScoreReadDiagnostics;
 }
 
 /**
@@ -724,6 +727,12 @@ export function liveUnattestedGoalNote(used?: LiveGoalAttestationUsed): string {
     `ballOutcome=${used.ballOutcome ?? "none"}`,
     `corroborated=${yes(used.corroborated)}`,
     `goalConfirmed=${used.goalConfirmed ?? "none"}`,
+    // ADAAAA-8134: the score-read counts the pooled re-read measured, so the
+    // demoted row itself says whether the scorebug was read at all and whether
+    // the transition landed inside the span (AC-R4).
+    ...(used.scoreReads === undefined
+      ? []
+      : [`scoreReads=${used.scoreReads} preSamples=${used.preSamples ?? 0} postSamples=${used.postSamples ?? 0} need=${used.need ?? 0}`]),
   ].join(" ");
   return (
     `live scoring lane: no measured attestation in this window (${fields}); ` +
@@ -944,23 +953,68 @@ export interface TimelineScoreReading {
   score: [number, number];
 }
 
+/** ADAAAA-8071: one score-shaped pair in an OCR line (ints <= 99). */
+const OCR_SCORE_PAIR_RE = /(\d{1,3})\s*[-–—]\s*(\d{1,3})/g;
+
+/** ADAAAA-8134: is the pair immediately adjacent to a team-like token on that
+ * side? The scorebug always renders the two scores BETWEEN/next to the team
+ * abbreviations, so adjacency is the cheapest signal that a pair is the score
+ * and not something else the line carries (a clock, a stat line). One separator
+ * character (space, pipe, dot, hyphen) is allowed between the token and the
+ * pair, because OCR glues them together both ways ("|RHA2-1 BAR",
+ * "RMA-2-1", "2-1 BAR"). */
+function ocrPairTeamAdjacent(text: string, index: number, len: number): { left: boolean; right: boolean } {
+  const before = text.slice(Math.max(0, index - 3), index);
+  const after = text.slice(index + len, index + len + 3);
+  const token = /[A-Za-z]{2,}[^A-Za-z0-9]{0,1}$/;
+  const tokenRight = /^[^A-Za-z0-9]{0,1}[A-Za-z]{2,}/;
+  return { left: token.test(before), right: tokenRight.test(after) };
+}
+
 /**
- * ADAAAA-8071: parse the FIRST clean two-integer score line out of one timeline
- * record's OCR lines, or `null`. Mirrors perceive's `_SCORE_LINE_RE`
- * (`(\d{1,3})\s*[-–—]\s*(\d{1,3})`, ints <= 99) so a clock ("18:13") can never
- * become a score and the two layers agree on what a scoreboard line is.
+ * ADAAAA-8071: parse the clean two-integer score line out of one timeline
+ * record's OCR lines, or `null`. The pair pattern mirrors perceive's
+ * `_SCORE_LINE_RE` (`(\d{1,3})\s*[-–—]\s*(\d{1,3})`, ints <= 99) so a clock
+ * ("18:13") can never become a score and the two layers agree on what a
+ * scoreboard line is.
+ *
+ * ADAAAA-8134: the FIRST pair in a line is not always the score. A broadcast
+ * clock can OCR with a dash separator instead of a colon, and the measured
+ * screen-share fixture is exactly that — `"19-41 RMA-2-1 BAR"` — so
+ * first-match-wins read the clock as the score `(19,41)`. That injected a
+ * spurious third score state into the window's timeline, which trips the
+ * "at most one distinct transition" clause of {@link scoreboardDeltaFromReadings}
+ * and demoted a window whose real score (`2-1`) never changed at all (live job
+ * 68a4c53d g5/g7, ADAAAA-8134).
+ *
+ * Selection is therefore ordered by how score-shaped the pair looks, NOT by its
+ * position: a pair with a team token immediately BEFORE it wins (the score sits
+ * after the home abbreviation in every measured variant), then one with a team
+ * token immediately AFTER it, then the first pair of the record. The
+ * legibility bar itself (ints <= 99, one pair per reading, unreadable => null)
+ * is unchanged, so this can only move which pair a line yields — never widen
+ * what counts as a score.
  */
 export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [number, number] | null {
+  let leftPick: [number, number] | undefined;
+  let rightPick: [number, number] | undefined;
+  let anyPick: [number, number] | undefined;
   for (const raw of lines ?? []) {
     const text = typeof raw === "string" ? raw.trim() : "";
     if (!text) continue;
-    const m = /(\d{1,3})\s*[-–—]\s*(\d{1,3})/.exec(text);
-    if (!m) continue;
-    const a = Number(m[1]);
-    const b = Number(m[2]);
-    if (Number.isInteger(a) && Number.isInteger(b) && a <= 99 && b <= 99) return [a, b];
+    const re = new RegExp(OCR_SCORE_PAIR_RE.source, "g");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (!Number.isInteger(a) || !Number.isInteger(b) || a > 99 || b > 99) continue;
+      const adj = ocrPairTeamAdjacent(text, m.index, m[0].length);
+      if (adj.left && !leftPick) leftPick = [a, b];
+      else if (adj.right && !rightPick) rightPick = [a, b];
+      else if (!adj.left && !adj.right && !anyPick) anyPick = [a, b];
+    }
   }
-  return null;
+  return leftPick ?? rightPick ?? anyPick ?? null;
 }
 
 /** ADAAAA-8071: every parseable score reading in a window's perceive timeline,
@@ -1072,6 +1126,203 @@ export function scoreboardDeltaFromReadings(
   return scoreboardDeltaLegible(delta) ? delta : undefined;
 }
 
+// ---------------------------------------------------------------------------
+// ADAAAA-8134: pooled score reads — the run-scoped re-read of the score
+// timeline the live rail already paid for.
+//
+// Regression source: 5 demotions on the 18 browser screen-share legs of
+// 2026-11-05 14:30-15:51Z (parent ADAAAA-8133), all five with every
+// attestation channel false. Read from the stored `decide_audit.prompt_text`
+// timelines, the demoted windows were NOT short of reads (1-20 parseable score
+// records each), and `scoreboardDeltaFromReadings` over one window's own
+// timeline still could not attest them, for two measured reasons:
+//
+//  1. the same score read twice per record with a scoreboard flicker (or a
+//     clock parsed as a score) makes the window carry more than one distinct
+//     score state, and clause 5 throws the window away (see
+//     {@link parseOcrScoreLine}'s ADAAAA-8134 note);
+//  2. the transition instant was NOT inside the window: the window opens
+//     already reading the new score (`2-1` on every one of its 20 records), so
+//     the >= 2 PRE reads that would legibilize the single-goal step sit in the
+//     window that closed before it. Perceive re-reads the scorebug on the same
+//     content frames for every overlapping window, but each decide payload only
+//     carries its OWN window's observation set.
+//
+// The recall lever therefore re-reads nothing that was not already read: the
+// run keeps a bounded ledger of every parsed score reading it has already
+// received (`LiveRunShared.noteScoreReadings`, fed from the payload's own
+// `observations`), and derives the delta over a READ SPAN wider than the judged
+// window — `[lo - lead, hi + trail]`. The transition instant itself must still
+// lie in the trial range (the judged window for a direct attestation, the
+// deferred lookahead for a re-attestation), and the legibility bar is the same
+// one every other path uses (>= 2 contiguous reads each side, one single-goal
+// step, `<= maxConfirmGapS` from the last PRE read to the transition, one
+// distinct transition inside the trial range). A score-steady lull therefore
+// yields no transition at all, whatever the span: the precision bar is unmoved.
+//
+// Cost: zero. No decide call, no GPU-second, no perceive call — this folds
+// readings the rail already made (AC-R3).
+// ---------------------------------------------------------------------------
+
+/** ADAAAA-8134: how far (seconds) BEFORE a judged window's `lo` the pooled
+ * re-read may take PRE support from. Bounded by the confirm-gap constant, so a
+ * PRE read older than `SCOREBOARD_MAX_CONFIRM_GAP_S` from the transition can
+ * never support it (a stale pre read is not evidence of this goal). */
+export const SCORE_READ_SUPPORT_LEAD_S = 6;
+/** ADAAAA-8134: how far (seconds) PAST a judged window's `hi` the pooled re-read
+ * may take POST support from at accept time. Kept tight (one cadence window):
+ * the accept for this window is being decided NOW, so a post read far behind it
+ * belongs to a later window's own accept, not this one. */
+export const SCORE_READ_SUPPORT_TRAIL_S = 6;
+/** ADAAAA-8134: the run's score-read ledger retention (seconds behind the newest
+ * read). Covers the widest read span (support lead + the ADAAAA-8006 deferred
+ * lookahead) with margin; a longer share only loses the oldest support. */
+export const SCORE_READ_LEDGER_SPAN_S = 120;
+/** ADAAAA-8134: hard cap on the ledger (one reading per content frame; a 120 s
+ * window at 3 fps is ~360, so 2048 is slack). */
+export const SCORE_READ_LEDGER_MAX = 2048;
+
+/** ADAAAA-8134: the read counts a demoted row discloses, so the row is gradable
+ * without a replay (AC-R4). `scoreReads` is every parseable reading in the read
+ * span, `preSamples` / `postSamples` the contiguous support around the newest
+ * transition in the trial range (0 when the span carries no transition), and
+ * `need` the legibility bar that was applied to each side. */
+export interface ScoreReadDiagnostics {
+  scoreReads: number;
+  preSamples: number;
+  postSamples: number;
+  need: number;
+}
+
+/**
+ * ADAAAA-8134: the measured score transition in a pooled read span, or
+ * `undefined`.
+ *
+ * Same clauses as {@link scoreboardDeltaFromReadings}, with two deliberate
+ * differences, both fail-closed:
+ *
+ *  - support reads may sit OUTSIDE the judged window (within
+ *    `leadS`/`trailS`). They are only support for the contiguous PRE/POST runs
+ *    around the transition, never a transition of their own;
+ *  - the transition instant must lie in `deltaRange` (default: the judged
+ *    window). A transition before `lo` belongs to an earlier window's content
+ *    and is never credited here; the ADAAAA-8006 deferred path passes its own
+ *    lookahead range instead, which is the only widening that path allows.
+ *
+ * Clause 5 ("one distinct transition") is evaluated over `deltaRange`, not over
+ * the whole read span: a widened span routinely reaches back across the
+ * PREVIOUS goal's transition, and refusing there would throw away the very
+ * window this exists to attest.
+ */
+export function scoreboardDeltaFromPooledReadings(input: {
+  readings: ReadonlyArray<TimelineScoreReading>;
+  window: { lo: number; hi: number };
+  leadS?: number;
+  trailS?: number;
+  deltaRange?: { lo: number; hi: number };
+  minSamples?: number;
+  maxConfirmGapS?: number;
+}): ScoreboardDeltaEvidence | undefined {
+  const need = Math.max(1, Math.floor(input.minSamples ?? SCOREBOARD_MIN_CONSISTENT_READS));
+  const maxGap = input.maxConfirmGapS ?? SCOREBOARD_MAX_CONFIRM_GAP_S;
+  const win = input.window;
+  if (!win || !Number.isFinite(win.lo) || !Number.isFinite(win.hi) || win.hi < win.lo) return undefined;
+  const lead = Math.max(0, input.leadS ?? SCORE_READ_SUPPORT_LEAD_S);
+  const trail = Math.max(0, input.trailS ?? SCORE_READ_SUPPORT_TRAIL_S);
+  const range = input.deltaRange ?? win;
+  if (!Number.isFinite(range.lo) || !Number.isFinite(range.hi) || range.hi < range.lo) return undefined;
+  const spanLo = Math.min(win.lo - lead, range.lo);
+  const spanHi = Math.max(win.hi + trail, range.hi);
+  const inSpan = (input.readings ?? [])
+    .filter((r) => Number.isFinite(r?.ts) && r.ts >= spanLo - 1e-9 && r.ts <= spanHi + 1e-9)
+    .sort((a, b) => a.ts - b.ts);
+  if (inSpan.length < 2) return undefined;
+  // Clause 5, scoped to the trial range (see the doc block above).
+  const inRange = inSpan.filter((r) => r.ts >= range.lo - 1e-9 && r.ts <= range.hi + 1e-9);
+  const seenScores = new Set<string>();
+  let transitions = 0;
+  for (const r of inRange) {
+    const key = `${r.score[0]}-${r.score[1]}`;
+    if (seenScores.has(key)) continue;
+    if (seenScores.size > 0) transitions++;
+    seenScores.add(key);
+  }
+  if (transitions > 1) return undefined;
+  // The newest transition whose instant lies in the trial range.
+  let idx = -1;
+  for (let i = inSpan.length - 1; i > 0; i--) {
+    if (inSpan[i].ts > range.hi + 1e-9) continue;
+    if (inSpan[i].ts < range.lo - 1e-9) break;
+    if (inSpan[i - 1].score[0] !== inSpan[i].score[0] || inSpan[i - 1].score[1] !== inSpan[i].score[1]) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) return undefined;
+  const pre = inSpan[idx - 1].score;
+  const post = inSpan[idx].score;
+  let postSamples = 0;
+  for (let j = inSpan.length - 1; j >= idx; j--) {
+    if (inSpan[j].score[0] !== post[0] || inSpan[j].score[1] !== post[1]) break;
+    postSamples++;
+  }
+  let preSamples = 0;
+  for (let j = idx - 1; j >= 0; j--) {
+    if (inSpan[j].score[0] !== pre[0] || inSpan[j].score[1] !== pre[1]) break;
+    preSamples++;
+  }
+  if (preSamples < need || postSamples < need) return undefined;
+  const preTs = inSpan[idx - 1].ts;
+  const deltaTs = inSpan[idx].ts;
+  if (deltaTs - preTs > maxGap) return undefined;
+  const delta: ScoreboardDeltaEvidence = { pre, post, preTs, postTs: deltaTs, deltaTs, preSamples, postSamples };
+  if (!scoreboardDeltaSingleGoalStep(delta)) return undefined;
+  return scoreboardDeltaLegible(delta) ? delta : undefined;
+}
+
+/**
+ * ADAAAA-8134: the read counts to disclose on a row whose goal could not be
+ * attested (AC-R4). Never a guess: an unparseable span reports
+ * `scoreReads: 0`. The counts describe the SAME read span the pooled re-read
+ * used, so a grader can reproduce the decision from the stored numbers.
+ */
+export function scoreReadDiagnostics(
+  readings: ReadonlyArray<TimelineScoreReading>,
+  window: { lo: number; hi: number },
+  opts: { leadS?: number; trailS?: number; minSamples?: number } = {}
+): ScoreReadDiagnostics {
+  const need = Math.max(1, Math.floor(opts.minSamples ?? SCOREBOARD_MIN_CONSISTENT_READS));
+  const lead = Math.max(0, opts.leadS ?? SCORE_READ_SUPPORT_LEAD_S);
+  const trail = Math.max(0, opts.trailS ?? SCORE_READ_SUPPORT_TRAIL_S);
+  const lo = Number.isFinite(window?.lo) ? window.lo - lead : Number.NEGATIVE_INFINITY;
+  const hi = Number.isFinite(window?.hi) ? window.hi + trail : Number.POSITIVE_INFINITY;
+  const inSpan = (readings ?? []).filter((r) => Number.isFinite(r?.ts) && r.ts >= lo - 1e-9 && r.ts <= hi + 1e-9)
+    .sort((a, b) => a.ts - b.ts);
+  const out: ScoreReadDiagnostics = { scoreReads: inSpan.length, preSamples: 0, postSamples: 0, need };
+  if (inSpan.length < 2) return out;
+  let idx = -1;
+  for (let i = inSpan.length - 1; i > 0; i--) {
+    if (inSpan[i - 1].score[0] !== inSpan[i].score[0] || inSpan[i - 1].score[1] !== inSpan[i].score[1]) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx < 0) return { ...out, preSamples: inSpan.length };
+  const pre = inSpan[idx - 1].score;
+  const post = inSpan[idx].score;
+  let postSamples = 0;
+  for (let j = inSpan.length - 1; j >= idx; j--) {
+    if (inSpan[j].score[0] !== post[0] || inSpan[j].score[1] !== post[1]) break;
+    postSamples++;
+  }
+  let preSamples = 0;
+  for (let j = idx - 1; j >= 0; j--) {
+    if (inSpan[j].score[0] !== pre[0] || inSpan[j].score[1] !== pre[1]) break;
+    preSamples++;
+  }
+  return { scoreReads: inSpan.length, preSamples, postSamples, need };
+}
+
 /**
  * ADAAAA-8078: the identity of ONE score transition, so the run that credits it
  * can de-dup the overlapping decide windows that re-read it.
@@ -1180,24 +1431,41 @@ export function deriveWindowAttestation(
 }
 
 /** ADAAAA-8071: the attestation fields the live scoring gate actually read, so a
- * demotion can NAME them on the record instead of narrating "no attestation". */
+ * demotion can NAME them on the record instead of narrating "no attestation".
+ *
+ * ADAAAA-8134: a demotion also discloses the score-read counts behind the
+ * decision (`scoreReads` / `preSamples` / `postSamples` / `need`), so a stored
+ * row is gradable without a replay (AC-R4). Absent on rows that did not demote
+ * and on non-live rails. */
 export interface LiveGoalAttestationUsed {
   scoreBoardChanged: boolean;
   goalCrossed: boolean;
   ballOutcome: string | null;
   corroborated: boolean;
   goalConfirmed: string | null;
+  /** ADAAAA-8134: parseable score readings in the pooled read span. */
+  scoreReads?: number;
+  /** ADAAAA-8134: contiguous PRE / POST support around the newest transition. */
+  preSamples?: number;
+  postSamples?: number;
+  /** ADAAAA-8134: the legibility bar each side had to meet. */
+  need?: number;
 }
 
 /**
  * ADAAAA-8071: build the measured attestation the gate will evaluate, from the
  * window's folded attestation + the Stage-2 confirm verdict. Kept in one place so
  * the gate, the demotion note and the record can never disagree.
+ *
+ * ADAAAA-8134: `scoreReads` (optional) carries the pooled read counts of a
+ * window whose score re-read could not attest, and is folded in flat so the
+ * stored record names them without a nested shape.
  */
 export function liveGoalAttestationUsed(input: {
   attribution: WindowAttestation;
   corroborated?: boolean;
   goalConfirmed?: string | null;
+  scoreReads?: ScoreReadDiagnostics;
 }): LiveGoalAttestationUsed {
   return {
     scoreBoardChanged: input.attribution.scoreBoardChanged === true,
@@ -1205,6 +1473,14 @@ export function liveGoalAttestationUsed(input: {
     ballOutcome: input.attribution.ballOutcome ?? null,
     corroborated: input.corroborated === true,
     goalConfirmed: input.goalConfirmed ?? null,
+    ...(input.scoreReads
+      ? {
+          scoreReads: input.scoreReads.scoreReads,
+          preSamples: input.scoreReads.preSamples,
+          postSamples: input.scoreReads.postSamples,
+          need: input.scoreReads.need,
+        }
+      : {}),
   };
 }
 
@@ -3339,6 +3615,14 @@ export class LiveRunShared {
    * attestation inside their judged window, waiting for a later scoreboard read
    * to re-attest them. Bounded (a run cannot hold unboundedly). */
   private deferredGoalAttestations: DeferredGoalAttestation[] = [];
+  /** ADAAAA-8134: every parseable score reading this run has already received,
+   * one entry per content frame (deduped by ts), oldest first. The read-side
+   * attestation paths ({@link scoreboardDeltaFromPooledReadings}) derive over a
+   * span wider than a single window from this ledger, so the PRE side of a
+   * transition can come from the window that closed before the judged one.
+   * Bounded by {@link SCORE_READ_LEDGER_SPAN_S} + {@link SCORE_READ_LEDGER_MAX}.
+   * Never fabricated: an unparseable scorebug contributes nothing. */
+  private scoreReadLedger: TimelineScoreReading[] = [];
   /** ADAAAA-7988: the live rail's bounded ledger of decided windows (their own
    * content instant + description class), used to cite the attack/shot window
    * that a celebration window follows. Fed on the DECIDE path; read on the
@@ -3538,6 +3822,51 @@ export class LiveRunShared {
   /** ADAAAA-8078: the transitions credited in this run (read-only, audit/tests). */
   creditedScoreTransitionKeys(): string[] {
     return [...this.creditedScoreTransitions];
+  }
+  /**
+   * ADAAAA-8134: fold one window's perceived observations into the run's score
+   * read ledger. Two properties matter for the recall path that reads it back:
+   *
+   *  - ONE reading per content frame. Overlapping decide windows carry the same
+   *    frames, so a re-produced window must not re-append (or rewrite) a
+   *    reading that is already recorded — a later flicker read of a frame the
+   *    earlier window already read is not new evidence;
+   *  - bounded + content-ordered, so the ledger cannot grow on a long stream and
+   *    a grader can reconstruct the exact span that attested (or failed to
+   *    attest) a window.
+   *
+   * Returns the number of NEW readings appended (audit/tests). Zero on a payload
+   * with no parseable score line — an unreadable scorebug is absent evidence.
+   */
+  noteScoreReadings(observations: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined): number {
+    const readings = scoreReadingsFromTimeline(observations);
+    if (!readings.length) return 0;
+    let added = 0;
+    for (const r of readings) {
+      let lo = 0;
+      let hi = this.scoreReadLedger.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (this.scoreReadLedger[mid].ts < r.ts) lo = mid + 1;
+        else hi = mid;
+      }
+      const at = this.scoreReadLedger[lo];
+      if (at && Math.abs(at.ts - r.ts) <= 1e-6) continue;
+      this.scoreReadLedger.splice(lo, 0, r);
+      added++;
+    }
+    if (added > 0) {
+      const newest = this.scoreReadLedger[this.scoreReadLedger.length - 1].ts;
+      const cutoff = newest - SCORE_READ_LEDGER_SPAN_S;
+      if (this.scoreReadLedger.length > SCORE_READ_LEDGER_MAX || this.scoreReadLedger[0].ts < cutoff) {
+        this.scoreReadLedger = this.scoreReadLedger.filter((r) => r.ts >= cutoff).slice(-SCORE_READ_LEDGER_MAX);
+      }
+    }
+    return added;
+  }
+  /** ADAAAA-8134: the run's score readings, oldest first (read-only). */
+  scoreReadBuffer(): readonly TimelineScoreReading[] {
+    return this.scoreReadLedger;
   }
   /** ADAAAA-8006: a LIVE goal-shaped accept that had to be demoted for lack of a
    * measured attestation inside its judged window. Kept (bounded) so a later
@@ -4757,6 +5086,9 @@ export async function acceptVideoDecision(
     },
     corroborated: confirm?.corroborated === true,
     goalConfirmed: confirm?.goalConfirmed ?? null,
+    // ADAAAA-8134: the read counts the pooled re-read measured when it could not
+    // attest this window (AC-R4).
+    scoreReads: candidate.scoreReads,
   });
   if (
     isGoalAccept &&
@@ -6226,9 +6558,51 @@ export async function observeAcceptOnly(
   // ADAAAA-8078: the run owns the "credit each transition once" rule — the derive
   // path now accepts any post side >= minSamples, so the overlapping windows that
   // re-read the same boundary must not each mint a scoring event.
+  // ADAAAA-8134: the judged content window this accept is decided over. On the
+  // live rail it is the TRAILING `[centerTs - windowS, centerTs]` span; the
+  // delivery instant is localized inside it instead of at its centre. Derived
+  // before the attestation fold so the pooled re-read below can use it.
+  const liveRail = cfg.liveObserveLoop === true && cfg.decideWindowN === undefined;
+  const liveWindow = liveRail
+    ? { lo: payload.centerTs - (cfg.observeWindowS ?? OBSERVE_WINDOW_S), hi: payload.centerTs }
+    : undefined;
+  // ADAAAA-8134: fold this window's own score reads into the run ledger FIRST, so
+  // the pooled re-read sees every read the rail has paid for (this window's own
+  // set included) and a PRE side that lives in the window that just closed.
+  const newScoreReads = liveRail ? run.noteScoreReadings(payload.observations) : 0;
   const windowAttestation = deriveWindowAttestation(payload, {
     claimScoreTransition: (delta) => run.claimScoreTransition(delta),
   });
+  // ADAAAA-8134: pooled re-read fallback. The window's own timeline is the
+  // cheapest evidence and stays first (ADAAAA-8071); when it carries no legible
+  // transition, the run ledger is re-read over a span 6 s wider on each side with
+  // the transition instant still required INSIDE the judged window. Same
+  // legibility bar, zero added decide/GPU/perceive work. Goal-shaped windows only:
+  // a non-goal window must not consume a transition it can never accept.
+  let pooledScoreReads: ScoreReadDiagnostics | undefined;
+  if (liveRail && liveWindow) {
+    if (!scoreboardDeltaLegible(windowAttestation.scoreBoardDelta) && isGoalShaped(stage1)) {
+      const pooled = scoreboardDeltaFromPooledReadings({
+        readings: run.scoreReadBuffer(),
+        window: liveWindow,
+      });
+      if (pooled && run.claimScoreTransition(pooled)) {
+        windowAttestation.scoreBoardChanged = true;
+        windowAttestation.scoreBoardDelta = pooled;
+        windowAttestation.scoreAttestationSource = "perceive_timeline";
+        console.error(
+          `[live-score-pooled:${cfg.jobId}] window @${payload.centerTs}s attested from the pooled score reads ` +
+            `(${pooled.pre.join("-")} -> ${pooled.post.join("-")} at ${pooled.deltaTs}s, ` +
+            `pre=${pooled.preSamples} post=${pooled.postSamples} of span [${(liveWindow.lo - SCORE_READ_SUPPORT_LEAD_S).toFixed(1)}, ` +
+            `${(liveWindow.hi + SCORE_READ_SUPPORT_TRAIL_S).toFixed(1)}], ${newScoreReads} new reads this window)`
+        );
+      } else {
+        // ADAAAA-8134 (AC-R4): disclose the counts that made this window
+        // unattestable, on the row, so it is gradable without a replay.
+        pooledScoreReads = scoreReadDiagnostics(run.scoreReadBuffer(), liveWindow);
+      }
+    }
+  }
   const candidate: CandidateSignal = {
     eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
     timestamp: payload.centerTs,
@@ -6238,6 +6612,9 @@ export async function observeAcceptOnly(
     // ADAAAA-7844: carry the measured delta (if any) so the confirm request can
     // be credited/labelled on a legible, time-tied measurement.
     scoreBoardDelta: windowAttestation.scoreBoardDelta,
+    // ADAAAA-8134: the read counts behind a window the pooled re-read could not
+    // attest, so the demoted row discloses them (AC-R4).
+    scoreReads: pooledScoreReads,
   };
   // ADAAAA-7253 (ACC-3): carry the window's per-frame localization inputs
   // (ts + perceive-derived goal/ball signal + max detection confidence) into
@@ -6266,13 +6643,6 @@ export async function observeAcceptOnly(
   // stored `big_play` row (level 2c025e97, seq 17/19), so the summary is written
   // with the verdict the board will actually read.
   const sink: { final?: DecisionResult; grounding?: CaptionGroundingContext } = {};
-  // ADAAAA-7996: the judged content window this accept was decided over. On the
-  // live rail it is the TRAILING `[centerTs - windowS, centerTs]` span; the
-  // delivery instant is localized inside it instead of at its centre.
-  const liveWindow =
-    cfg.liveObserveLoop && cfg.decideWindowN === undefined
-      ? { lo: payload.centerTs - (cfg.observeWindowS ?? OBSERVE_WINDOW_S), hi: payload.centerTs }
-      : undefined;
   let acceptError: unknown = null;
   try {
     await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, stage1, frameSignals, goalEventTs, sink, liveWindow);
@@ -6286,8 +6656,23 @@ export async function observeAcceptOnly(
   // The delta is a measurement the pass already paid for — no decide is added.
   // Live rail only: the VOD pass never sets `liveObserveLoop`, and its precision
   // gate owns its own attestation path.
-  if (cfg.liveObserveLoop && cfg.decideWindowN === undefined) {
-    applyDeferredGoalAttestations(run, cfg, { readAt: payload.centerTs, delta: windowAttestation.scoreBoardDelta });
+  // ADAAAA-8134: when this window's own timeline carries no legible transition,
+  // the pooled read ledger is re-read over the SAME bounded lookahead the
+  // deferred ledger applies (`hi + LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S`), so a
+  // transition that only becomes legible across several windows' reads can still
+  // re-attest the demoted row. Attribution (`deltaTs` inside [lo, hi +
+  // lookahead], `readAt >= hi`, single goal step, not owned by a delivered
+  // GOAL) is unchanged and still enforced by the ledger.
+  if (liveRail && liveWindow) {
+    const deferredDelta = scoreboardDeltaLegible(windowAttestation.scoreBoardDelta)
+      ? windowAttestation.scoreBoardDelta
+      : scoreboardDeltaFromPooledReadings({
+          readings: run.scoreReadBuffer(),
+          window: liveWindow,
+          trailS: LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S,
+          deltaRange: { lo: liveWindow.lo, hi: liveWindow.hi + LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S },
+        });
+    applyDeferredGoalAttestations(run, cfg, { readAt: payload.centerTs, delta: deferredDelta });
   }
   if (pendingSummary !== null && cfg.onRunningSummary) {
     try {
