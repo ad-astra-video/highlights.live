@@ -544,7 +544,11 @@ describe("accept path wiring - the claim reaches the live gate (ADAAAA-8078)", (
 
     expect(run.highlights.map((h) => h.eventType)).toEqual(["GOAL", "BIG_PLAY"]);
     expect(run.creditedScoreTransitionKeys()).toEqual(["2-1>2-2"]);
-    expect(run.highlights[0].attestationUsed).toBeUndefined();
+    // ADAAAA-8140: an ACCEPTED goal row discloses the attestation that carried it
+    // (this used to assert `undefined` — "a GOAL row appeared" was unauditable).
+    expect(run.highlights[0].attestationUsed?.scoreBoardChanged).toBe(true);
+    expect(run.highlights[0].attestationUsed?.transitionKey).toBe("2-1>2-2");
+    expect(run.highlights[0].attestationUsed?.scoreReads).toBeGreaterThan(0);
     // The demotion names the attestations the gate read (all false: the
     // transition was already credited by the earlier window).
     expect(run.highlights[1].attestationUsed?.scoreBoardChanged).toBe(false);

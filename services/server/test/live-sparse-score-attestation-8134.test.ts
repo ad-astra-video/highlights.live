@@ -164,16 +164,34 @@ describe("scoreReadDiagnostics — the demoted row's read counts (AC-R4)", () =>
   it("reports the span's reads and the support around the newest transition", () => {
     const ledger = [read(96.0, [1, 1]), read(99.0, [1, 1]), read(101.0, [1, 1]), read(105.0, [2, 1])];
     const d = scoreReadDiagnostics(ledger, { lo: 100, hi: 107 });
-    expect(d).toEqual({ scoreReads: 4, preSamples: 3, postSamples: 1, need: 2 });
+    // ADAAAA-8140: the span's distinct states + newest boundary ride along, so the
+    // gate can fail closed on a no-op / backward span.
+    expect(d).toEqual({
+      scoreReads: 4,
+      preSamples: 3,
+      postSamples: 1,
+      need: 2,
+      scoreStates: 2,
+      newestTransition: "1-1>2-1",
+    });
   });
 
   it("reports 0 reads for an unreadable span and all-pre for a steady one", () => {
-    expect(scoreReadDiagnostics([], { lo: 100, hi: 107 })).toEqual({ scoreReads: 0, preSamples: 0, postSamples: 0, need: 2 });
+    expect(scoreReadDiagnostics([], { lo: 100, hi: 107 })).toEqual({
+      scoreReads: 0,
+      preSamples: 0,
+      postSamples: 0,
+      need: 2,
+      scoreStates: 0,
+      newestTransition: null,
+    });
     expect(scoreReadDiagnostics([read(101, [1, 1]), read(103, [1, 1])], { lo: 100, hi: 107 })).toEqual({
       scoreReads: 2,
       preSamples: 2,
       postSamples: 0,
       need: 2,
+      scoreStates: 1,
+      newestTransition: null,
     });
   });
 
