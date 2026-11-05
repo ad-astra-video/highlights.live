@@ -205,3 +205,20 @@ describe("§3.4 — corroboration reaches the card-title surface (AC4b)", () => 
     }
   });
 });
+
+describe("§3.2 — measured residual on the bounded level `dece44c3`", () => {
+  it("never doubles a preposition when the zone replaces its object (row 6)", () => {
+    // Verbatim row 6: raw `A player in blue moves the ball toward the center of
+    // the pitch.`, stored zone `in midfield`, shipped
+    // `A player moves the ball toward in midfield.`
+    const out = groundCaption("A player in blue moves the ball toward the center of the pitch.", {
+      verdict: "not_highlight",
+      promptText: "",
+      place: "in midfield",
+    } as never);
+    expect(out).not.toMatch(/\btoward\b/i);
+    expect(out).not.toMatch(/\b(?:to|toward|into)\s+(?:in|at|on)\b/i);
+    expect(out).toMatch(/in midfield/);
+    expect(completenessGaps(out)).toEqual([]);
+  });
+});
