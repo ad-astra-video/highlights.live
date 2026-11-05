@@ -10,7 +10,7 @@
 //   - template-opener share below 10 % of emitted window narratives,
 //   - zero extra decide calls (the derivation is a pure function of stored data).
 import { describe, it, expect } from "vitest";
-import { JobDetailSchema, captionBeats, captionLineKey } from "@highlights/events";
+import { JobDetailSchema, captionBeats, captionLineKey, suppressScoreClaims } from "@highlights/events";
 import {
   MAX_MATCH_SUMMARY_CHARS,
   buildSummaryLadder,
@@ -121,21 +121,54 @@ describe("summary ladder on the real d61e52f6 payload (ADAAAA-7623)", () => {
   });
 
   it("emits 0 uncorroborated score strings anywhere in the ladder", () => {
-    expect(hasScoreClaim(ladder.matchSummary.text)).toBe(false);
-    expect(findScoreClaims(ladder.matchSummary.text)).toEqual([]);
-    for (const chapter of ladder.chapters) {
+    // ADAAAA-8059 (PO ruling): the score gate moved to the WRITE seam, so the stored
+    // rows this fixture carries are gated first — that is what the seam stores now —
+    // and the ladder is then a pure read of them.
+    const gatedLog = log.map((e) => ({ ...e, text: suppressScoreClaims(e.text) }));
+    for (const e of log) {
+      expect(findScoreClaims(suppressScoreClaims(e.text)), `seq ${e.seq}`).toEqual([]);
+      // Idempotent: re-running the gate is byte-identical (replayable store).
+      expect(suppressScoreClaims(suppressScoreClaims(e.text))).toBe(suppressScoreClaims(e.text));
+    }
+    const gatedLadder = buildSummaryLadder({
+      summaryLog: gatedLog as any,
+      highlights: postable as any,
+      gameHint: stored.job.gameHint,
+    });
+    expect(hasScoreClaim(gatedLadder.matchSummary.text)).toBe(false);
+    expect(findScoreClaims(gatedLadder.matchSummary.text)).toEqual([]);
+    for (const chapter of gatedLadder.chapters) {
       expect(hasScoreClaim(chapter.summary)).toBe(false);
       for (const entry of chapter.entries) {
         expect(hasScoreClaim(entry.text)).toBe(false);
       }
     }
-    // The gate actually fired on the stored narrative (the review found 0-0/0-1
-    // inside one 3 s window, plus invented 5-4 / 4-6 / 4-4), and nothing it
-    // refused survives in the emitted text.
-    expect(ladder.matchSummary.refusedScoreClaims.length).toBeGreaterThan(0);
-    for (const claim of ladder.matchSummary.refusedScoreClaims) {
-      expect(ladder.matchSummary.text).not.toContain(claim);
+    // ... and the ladder serves each stored row as a DELETION of it (never a
+    // rewrite, never a restored clause): every served word appears in order in the
+    // de-templated stored row.
+    const wordsOf = (s: string) =>
+      s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(" ").filter(Boolean);
+    const isDeletionOf = (served: string, stored: string) => {
+      const s = wordsOf(served);
+      const h = wordsOf(stored);
+      let i = 0;
+      for (const tok of h) {
+        if (tok === s[i]) i += 1;
+        if (i === s.length) return true;
+      }
+      return i === s.length;
+    };
+    const storedBySeq = new Map(gatedLog.map((e) => [e.seq, gateNarrative(e.text.trim())] as const));
+    for (const chapter of gatedLadder.chapters) {
+      for (const entry of chapter.entries) {
+        const storedRow = storedBySeq.get(entry.seq)!;
+        expect(isDeletionOf(entry.text, storedRow), `seq ${entry.seq}: ${entry.text}`).toBe(true);
+      }
     }
+    // The gate did fire on the stored narrative (the review found 0-0/0-1 inside one
+    // 3 s window, plus invented 5-4 / 4-6 / 4-4).
+    const removed = log.flatMap((e) => findScoreClaims(e.text)).filter((c) => c);
+    expect(removed.length).toBeGreaterThan(0);
   });
 
   it("enforces a monotonic goal count", () => {

@@ -70,7 +70,10 @@ const STORED = [
     seq: 15,
     gated: "Players move in the center",
     raw: "Players move in the center and defensive areas.",
-    served: "Players move in the center and defensive areas.",
+    // ADAAAA-8059 (PO ruling): the store is the contract, so the row is served as
+    // the stored sentence, closed — the raw's coordinate phrase is a clause the
+    // write seam dropped and the read path may not restore it.
+    served: "Players move in the center.",
     quiet: true,
   },
 ] as const;
@@ -185,9 +188,11 @@ describe("ADAAAA-8040 — terminal punctuation is restored on a claim-suppressed
 });
 
 describe("ADAAAA-8040 — the sanctioned shapes are not refused", () => {
-  it("serves a quiet row whose full sentence is the stored raw (8 words)", () => {
+  it("serves a quiet row whose stored sentence is the whole beat (8 words or less)", () => {
     const out = serve(STORED[3]);
-    expect(out.text).toBe("Players move in the center and defensive areas.");
+    // ADAAAA-8059 (PO ruling): the stored sentence is the beat; the raw's
+    // coordinate phrase is the clause the seam dropped, not a repair.
+    expect(out.text).toBe("Players move in the center.");
   });
 
   it("serves a row that keeps a colour beat after its sentence (loud window)", () => {

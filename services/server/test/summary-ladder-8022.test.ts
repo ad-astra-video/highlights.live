@@ -151,18 +151,20 @@ describe("job 34f9f2d1 re-grades without the two §2 rows (ADAAAA-8022)", () => 
   it("passes the served post-condition on every rendered row", () => {
     for (const row of rows) {
       const source = LOG.find((r) => r.seq === row.seq)!;
-      const sources = [captionLead(source.text), captionLead(source.text_raw ?? "")].filter(Boolean);
+      // ADAAAA-8059 (PO ruling): the stored gated line is the contract.
+      const sources = [captionLead(source.text)].filter(Boolean);
       expect(servedShapeViolations(row.text, sources)).toEqual([]);
     }
   });
 
-  it("loses no row to the verbless rule (seq 20 is the pre-existing duplicate collapse)", () => {
-    // seq 19 already serves "The keeper makes a save in the box." and seq 20's raw
-    // sentence repairs to the same line, so the display cap collapses it — the same
-    // drop the unfixed build makes (ADAAAA-8014 AC1/AC2), not a new loss.
+  it("loses no row: the keeper pair is kept as two distinct stored beats (ADAAAA-8059)", () => {
+    // ADAAAA-8059 lever 2: seq 19 and seq 20 are two STORED rows. A dedupe may not
+    // trade a stored row for a repair, so the store's own shorter line is served
+    // (`The keeper makes a save.`) instead of being collapsed into seq 19's beat.
     const have = new Set(rows.map((r) => r.seq));
-    expect(LOG.filter((r) => !have.has(r.seq)).map((r) => r.seq)).toEqual([20]);
+    expect(LOG.filter((r) => !have.has(r.seq)).map((r) => r.seq)).toEqual([]);
     expect(textOf(19)).toBe("The keeper makes a save in the box.");
+    expect(textOf(20)).toBe("The keeper makes a save.");
   });
 
   it("is deterministic across reads", () => {

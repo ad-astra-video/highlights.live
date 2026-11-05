@@ -3,7 +3,7 @@
 // `eba8e7c` (jobs 3d8a5a82 / 973fae84, `summaryLadder.chapters[].entries[]`), so
 // the acceptance is asserted on the payload the review failed on.
 import { describe, it, expect } from "vitest";
-import { captionLead, groundSummaryText, servedShapeViolations } from "@highlights/events";
+import { captionLead, groundSummaryText, restoreTerminalPunctuation, servedShapeViolations } from "@highlights/events";
 import { buildSummaryLadder } from "../src/summary-ladder";
 
 type Row = { seq: number; windowTs: number; text: string; text_raw?: string; verdict?: string };
@@ -60,6 +60,15 @@ const MANGLED = [
   "A player and a player are.",
   "The side.",
   "A player takes in midfield",
+];
+
+/**
+ * ADAAAA-8059 (PO ruling): these two stored lines are complete sentences whose only
+ * defect on the 8014 build was being shorter than their `text_raw`. The store is the
+ * contract, so the read path serves them closed and byte-identical — a raw clause
+ * the write seam dropped (`of the pitch`, `of Saez's goal`) is never restored.
+ */
+const STORED_WHOLE = [
   "Players compete for the ball in the center.",
   "The broadcast shows a replay.",
 ];
@@ -95,7 +104,10 @@ function rowsOf(ladder: ReturnType<typeof render>) {
 function assertServedContract(ladder: ReturnType<typeof render>, stored: Row[]) {
   for (const row of rowsOf(ladder)) {
     const source = stored.find((r) => r.seq === row.seq)!;
-    const sources = [captionLead(source.text), captionLead(source.text_raw ?? "")].filter(Boolean);
+    // ADAAAA-8059 (PO ruling): the stored gated line is the contract, so the
+    // post-condition compares against it — `text_raw` may not turn a stored row into
+    // a "prefix cut" of itself (that is how a refused clause got served back).
+    const sources = [captionLead(source.text)].filter(Boolean);
     expect(servedShapeViolations(row.text, sources)).toEqual([]);
     if (source.verdict === "not_highlight") expect(words(row.text)).toBeLessThanOrEqual(8);
   }
@@ -112,12 +124,24 @@ function assertServedContract(ladder: ReturnType<typeof render>, stored: Row[]) 
 describe("a fresh job's served rows never stop mid-phrase (ADAAAA-8014 §2)", () => {
   const ladder = render(FRESH);
 
-  it("renders none of the five re-grade shapes", () => {
+  it("renders none of the mangled shapes and serves every stored line closed", () => {
     const rows = rowsOf(ladder);
     for (const row of rows) expect(MANGLED).not.toContain(row.text);
     expect(rows.some((r) => /\bare\.$/.test(r.text))).toBe(false);
     expect(rows.some((r) => /\btakes in midfield$/.test(r.text))).toBe(false);
-    expect(rows.some((r) => /in the center\.$/.test(r.text))).toBe(false);
+    // ADAAAA-8059 (PO ruling): the read path is a PURE READ for every stored row that
+    // is itself well-formed — served == stored, closed. A row whose stored line is
+    // malformed (a function-word tail, a dropped predicate) is still repaired from
+    // `text_raw`, because a mangled row is never rendered.
+    const bySeq = new Map(FRESH.map((r) => [r.seq, r.text] as const));
+    for (const row of rows) {
+      const stored = restoreTerminalPunctuation(bySeq.get(row.seq)!);
+      if (servedShapeViolations(stored, []).length === 0) {
+        expect(row.text, `seq ${row.seq}`).toBe(stored);
+      } else {
+        expect(servedShapeViolations(row.text, [stored]), `seq ${row.seq}`).toEqual([]);
+      }
+    }
   });
 
   it("keeps every row (AC3: no row lost for a shape reason)", () => {
@@ -156,12 +180,15 @@ describe("a legacy job's stored rows are repaired or dropped, never rendered man
   it("never renders a mangled shape", () => {
     for (const row of rows) expect(MANGLED).not.toContain(row.text);
     expect(rows.some((r) => /\btakes in midfield$/.test(r.text))).toBe(false);
+    for (const line of STORED_WHOLE) expect(rows.map((r) => r.text)).toContain(line);
   });
 
   it("repairs the rows the stored raw sentence can honestly supply", () => {
     const bySeq = new Map(rows.map((r) => [r.seq, r.text] as const));
     expect(bySeq.get(1)).toBe("A player and a player are in center.");
-    expect(bySeq.get(4)).toBe("Players compete for the ball in center.");
+    // ADAAAA-8059: seq 4's stored line is already a whole sentence, so the store is
+    // served verbatim (no compression, no raw clause restored).
+    expect(bySeq.get(4)).toBe("Players compete for the ball in the center.");
   });
 
   it("drops only the row with no honest form left (named, not silently mangled)", () => {
@@ -178,7 +205,7 @@ describe("a legacy job's stored rows are repaired or dropped, never rendered man
 });
 
 describe("a repair never re-renders a line another row already serves (AC1/AC2)", () => {
-  it("collapses the pair to one row when the repaired sentence equals the previous beat", () => {
+  it("keeps both stored beats distinct instead of collapsing one away (ADAAAA-8059)", () => {
     const ladder = render([
       {
         seq: 1,
@@ -196,9 +223,14 @@ describe("a repair never re-renders a line another row already serves (AC1/AC2)"
       },
     ]);
     const rows = rowsOf(ladder);
-    expect(rows).toHaveLength(1);
+    // Both rows are STORED beats, so the ladder keeps both and no line repeats: a
+    // dedupe may not cost a stored row (ADAAAA-8059 lever 2 / 0 dropped rows).
+    expect(rows).toHaveLength(2);
     expect(new Set(rows.map((r) => r.text)).size).toBe(rows.length);
-    expect(rows[0].text).toBe("The keeper makes a save in the box.");
+    expect(rows.map((r) => r.text)).toEqual([
+      "The keeper makes a save in the box.",
+      "The keeper makes a save.",
+    ]);
   });
 });
 

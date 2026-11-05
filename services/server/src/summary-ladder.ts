@@ -36,11 +36,13 @@ import {
   dedupeDisplayLines,
   dedupeGatedLines,
   dropColourClause,
+  gateAbsenceClaims,
   gateUncorroboratedGoal,
   isQuietVerdict,
   repairDanglingTail,
   servedShape,
   servedShapeViolations,
+  suppressScoreClaims,
   wholeFirstSentence,
   windowCorroborated,
   type CorroborationWindow,
@@ -85,50 +87,14 @@ export function hasScoreClaim(text: string): boolean {
 
 /**
  * FACT GATE (scores): remove every scoreboard/score string from narrative text.
- * Contextual patterns are rewritten in place so the sentence still parses, then
- * any surviving score token is deleted outright. Pure and deterministic — the
- * same input always yields the same output, so a stored job's ladder is stable
- * across reads.
+ * ADAAAA-8059: the implementation now lives in the shared caption gate
+ * (`@highlights/events`) because the suppression moved to the WRITE seam — the
+ * string `summaryLog.text` stores must already be the suppressed string, so
+ * stored == served stays absolute. This name is kept for the ladder's audit and
+ * its tests; it is a pure delegation, not a second rule set.
  */
 export function factGateScores(text: string): string {
-  let out = text ?? "";
-  // "locked in a 0-0 stalemate" -> "locked in a stalemate"
-  out = out.replace(
-    new RegExp(String.raw`\b(?:an?\s+)?${SCORE_TOKEN_SRC}\s+(stalemate|deadlock)\b`, "gi"),
-    "a $1"
-  );
-  // "scoreboard flashes to 0-1" -> "scoreboard updates"
-  out = out.replace(
-    new RegExp(
-      String.raw`\bscore\s*board\s+(?:shows|reads|flashes\s+to|moves\s+to|displays|switches\s+to)\s+${SCORE_TOKEN_SRC}`,
-      "gi"
-    ),
-    "scoreboard updates"
-  );
-  // "takes a 2-1 lead" -> "takes the lead"
-  out = out.replace(new RegExp(String.raw`(?:an?\s+)?${SCORE_TOKEN_SRC}\s+lead\b`, "gi"), "the lead");
-  // "leads 2-1" / "trails 0-2" -> "leads" / "trails"
-  out = out.replace(
-    new RegExp(String.raw`\b(leads?|trails?)\s+(?:by\s+)?(?:an?\s+)?${SCORE_TOKEN_SRC}`, "gi"),
-    (_m, verb: string) => verb
-  );
-  // "at 1-1" / "to 0-1" -> "level" (only when the preposition dangles on a score)
-  out = out.replace(new RegExp(String.raw`\b(?:at|to)\s+${SCORE_TOKEN_SRC}`, "gi"), "level");
-  // Anything left: the token itself is not evidence — drop it.
-  out = out.replace(new RegExp(SCORE_TOKEN_SRC, "gi"), "");
-  return tidy(out);
-}
-
-/** Collapse the whitespace/punctuation the score gate leaves behind. */
-function tidy(text: string): string {
-  return text
-    .replace(/\s{2,}/g, " ")
-    .replace(/\s+([,.;:!?])/g, "$1")
-    .replace(/([,;:])\s*([,.;:!?])/g, "$1")
-    .replace(/\ba\s+(?=[,.;:!?])/gi, "")
-    .replace(/\blevel\s+level\b/gi, "level")
-    .replace(/^\s+/, "")
-    .trim();
+  return suppressScoreClaims(text);
 }
 
 /**
@@ -229,10 +195,13 @@ export function stripStockOpener(text: string): string {
   return out.charAt(0).toUpperCase() + out.slice(1);
 }
 
-/** De-template + fact-gate one narrative entry. */
+/** De-template one narrative entry. ADAAAA-8059 (PO ruling): the SCORELINE fact
+ * gate is NOT applied here any more — it runs at the WRITE seam, so the string
+ * `summaryLog.text` stores is already the score-suppressed string and the read path
+ * stays a pure read (stored == served absolute). */
 export function gateNarrative(text: string): string {
   const stripped = stripStockOpener(text);
-  return factGateScores(stripped || (text ?? "").trim());
+  return stripped || (text ?? "").trim();
 }
 
 /** `M:SS` clock for video-relative seconds. */
@@ -394,39 +363,66 @@ function propagateCorroboration(
  */
 function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
   const out: NormalizedEntry[] = [];
-  const emitted = new Set<string>();
+  /** served line key -> slot in `out` */
+  const slotOf = new Map<string, number>();
+  /** Slots whose line came from a REPAIR, not from the row's own stored line. */
+  const repairedSlots = new Set<number>();
+  /** Each slot's own (pre-repair) gated line, so a repair can be undone. */
+  const ownLine: string[] = [];
   for (const e of entries) {
     const served = servedShape({
       candidate: e.clean,
       storedRaw: e.raw,
       storedGated: e.text,
       quiet: e.quiet === true,
-      regate: (sentence) => gateUncorroboratedGoal(sentence, e.corroborated === true),
+      regate: (sentence) => gateAbsenceClaims(gateUncorroboratedGoal(sentence, e.corroborated === true)),
     });
     if (!served.text) continue;
-    if (served.text === e.clean) {
-      emitted.add(captionLineKey(e.clean));
-      out.push(e);
-      continue;
-    }
+    const key = captionLineKey(served.text);
+    const ownKey = captionLineKey(e.clean);
     // ADAAAA-8040 (§2 residual): restoring a sentence end (`.` after a claim
     // suppression, or after the model's own punctuation-less line) changes the
     // string but not the LINE. It is not a repair collision, so the row keeps its
     // place in the ladder instead of yielding to the display cap.
-    const key = captionLineKey(served.text);
-    if (key === captionLineKey(e.clean)) {
-      emitted.add(key);
-      out.push({ ...e, clean: served.text, trimmed: e.trimmed });
+    const repaired = ownKey !== key;
+    const taken = slotOf.get(key);
+    if (taken === undefined) {
+      slotOf.set(key, out.length);
+      if (repaired) repairedSlots.add(out.length);
+      ownLine.push(e.clean);
+      // ADAAAA-8040: a restored sentence end changes the string, not the line —
+      // the served string (never the pre-repair one) is what gets rendered.
+      out.push(
+        served.text === e.clean
+          ? e
+          : { ...e, clean: served.text, trimmed: repaired ? true : e.trimmed }
+      );
       continue;
     }
-    // ADAAAA-8014 (AC1/AC2): a REPAIR may land on a line an earlier row already
-    // serves (two windows whose stored lines gated to the same beat, one of them
-    // a cut of the longer sentence). The display cap's rule still holds — the
-    // emitted set stays distinct — so the repair yields to the row that already
-    // states that beat.
-    if (emitted.has(key)) continue;
-    emitted.add(key);
-    out.push({ ...e, clean: served.text, trimmed: true });
+    // ADAAAA-8059 (lever 2): a collision a REPAIR created may not cost a stored
+    // row. When THIS row's own stored line IS the beat and the earlier row only
+    // reached it by repairing, the earlier row yields back to its own line and
+    // this stored row keeps its place — no row is traded for a dedupe.
+    if (!repaired && repairedSlots.has(taken)) {
+      const priorOwn = ownLine[taken];
+      const priorKey = captionLineKey(priorOwn);
+      if (priorOwn && priorKey && priorKey !== key && !slotOf.has(priorKey)) {
+        const prior = out[taken];
+        out[taken] = { ...prior, clean: priorOwn, trimmed: false };
+        slotOf.delete(key);
+        slotOf.set(priorKey, taken);
+        slotOf.set(key, out.length);
+        repairedSlots.delete(taken);
+        ownLine.push(e.clean);
+        out.push(e);
+        continue;
+      }
+    }
+    // ADAAAA-8014 (AC1/AC2) + ADAAAA-7995 (AC1): the display cap's rule still
+    // holds — the emitted set stays distinct — so the later occurrence of the
+    // SAME beat yields to the row that already states it. A repair that lands on
+    // an already-served line yields too; it is never allowed to displace one.
+    continue;
   }
   return out;
 }
@@ -682,10 +678,13 @@ export function buildSummaryLadder(input: {
   const entries = fastRail ? finalizeServedShapes(gated) : gated;
   const timeline = goalTimelineFrom(input.highlights ?? []);
 
-  // Hard-gate EVERY narrative once; the audit list is what the gate removed.
+  // The audit list is what the WRITE seam refused: a score string `text_raw` still
+  // carries that the stored `text` does not (ADAAAA-8059: the read path no longer
+  // suppresses scores, so it can only report what the store says was suppressed).
   const refused = new Set<string>();
   for (const e of entries) {
-    for (const claim of findScoreClaims(e.text)) refused.add(claim);
+    const storedClaims = new Set(findScoreClaims(e.text));
+    for (const claim of findScoreClaims(e.raw ?? "")) if (!storedClaims.has(claim)) refused.add(claim);
   }
 
   if (entries.length === 0) {
