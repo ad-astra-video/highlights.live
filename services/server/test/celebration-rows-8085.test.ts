@@ -217,19 +217,21 @@ describe("ADAAAA-8085 celebration lane delivers one row per delivered goal", () 
     expect(h.run.highlights.length).toBe(2);
   });
 
-  it("collapses a goal-shaped re-read 20 s later even when the model copy DIFFERS (prose-independent)", async () => {
-    // The distinguishing clause this ticket's key fix adds: the ADAAAA-8087
-    // celebration rules need the SAME reason text (5 s) or an overlapping GOAL
-    // clip, so two goal-shaped re-reads of one event 20 s apart with different
-    // copy would ship two celebration cards. The burst ledger now sees them as
-    // GOAL-shaped (same derived label the demotion gate reads) and keeps one.
+  it("ships a goal-shaped re-read 20 s after a DEMOTED celebration as its own row (ADAAAA-8140 supersedes the 30 s breadth)", async () => {
+    // ADAAAA-8085 collapsed this pair (170.0 / 190.0, different copy) on the 30 s
+    // burst reference. ADAAAA-8140 measured that breadth as a LOSS path: the
+    // reference was a row that never shipped as a GOAL, and a real goal 26 s
+    // later was dropped silently. A demoted celebration is therefore only a
+    // same-MOMENT reference (the tight re-read window), and a distinct moment
+    // ships as its own (non-postable) row instead of being dropped.
     const h = harness();
     await h.accept(170.0, scoringWithCelebrationLabel("BIG_PLAY"));
     await h.accept(190.0, {
       ...scoringWithCelebrationLabel("BIG_PLAY"),
       reason: "The keeper is left standing as the net bulges.",
     } as DecisionResult);
-    expect(h.run.highlights.length).toBe(1);
+    expect(h.run.highlights.length).toBe(2);
+    expect(h.run.highlights.every((r) => r.outcome === "big_play")).toBe(true);
   });
 
   it("does not cost recall: an attested GOAL 59 s later still ships as GOAL", async () => {

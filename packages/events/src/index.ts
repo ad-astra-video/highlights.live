@@ -1827,6 +1827,34 @@ export const JobCandidateSchema = z.object({
    *   suppressed -> model accepted but the Goal burst-suppression window dropped it
    *   rejected   -> not an accepted scoring highlight (near-miss / not-highlight) */
   status: z.enum(["accepted", "suppressed", "rejected"]).default("rejected"),
+  /** ADAAAA-8140: WHY a `suppressed` row was dropped, machine-readable and
+   * self-contained — a suppressed row used to carry only the model's own read
+   * (`Ball enters net at t=-1.5s...`), so the pre-accept loss path was
+   * indistinguishable from a real dedupe. Always present on `suppressed` rows
+   * written after this change: either `goal_burst_same_transition:...` (naming
+   * the delivered GOAL it deduped against, the window and the transition) or
+   * `celebration_duplicate:...`. */
+  suppressionReason: z.string().optional(),
+  /** ADAAAA-8140: the structured evidence behind `suppressionReason`
+   * (`dedupeAgainstHighlightId` / `dedupeAgainstTs` / `dedupeAgainstIdempotencyKey`
+   * / `gapS` / `windowS` / `burstSize` / `transitionKey`). Additive optional —
+   * absent on legacy rows. Passthrough so a new suppression kind never drops the
+   * record. */
+  suppressionEvidence: z
+    .object({
+      kind: z.string(),
+      dedupeAgainstHighlightId: z.string().optional(),
+      dedupeAgainstTs: z.number().optional(),
+      dedupeAgainstIdempotencyKey: z.string().optional(),
+      gapS: z.number().optional(),
+      windowS: z.number().optional(),
+      burstSize: z.number().int().min(0).optional(),
+      transitionKey: z.string().nullable().optional(),
+      detail: z.string().optional(),
+      candidateTs: z.number().optional(),
+    })
+    .passthrough()
+    .optional(),
   // ADAAAA-6798 Inc 2: the trigger signal that started this candidate, derived
   // from the candidate object at decision time and persisted so the UI can show
   // its provenance with no re-inference. Additive optional — absent on legacy
