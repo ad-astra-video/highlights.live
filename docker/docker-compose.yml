@@ -684,7 +684,7 @@ services:
       #     the cadence is on; 1 = full pass).
       #   LIVE_PERCEIVE_UTILIZATION 0.6 => fraction of wall clock the live pass
       #     may spend in blocking perceive.
-      - LIVE_OBSERVE_CONTENT_FPS=${LIVE_OBSERVE_CONTENT_FPS:-2}
+      - LIVE_OBSERVE_CONTENT_FPS=${LIVE_OBSERVE_CONTENT_FPS:-}
       - PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-}
       - PERCEIVE_QUIET_STRIDE=${PERCEIVE_QUIET_STRIDE:-2}
       - LIVE_PERCEIVE_UTILIZATION=${LIVE_PERCEIVE_UTILIZATION:-0.6}
