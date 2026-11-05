@@ -1838,6 +1838,27 @@ export function servedShapeViolations(
         if (!terminal) out.push("open-clause");
         continue;
       }
+      // ADAAAA-8130: the row's own LEADING clause, ended at its own clause
+      // boundary, where the clause it drops is the CLAIM FRAME
+      // (`Crowd erupts in celebration | as the scoreboard shows a goal for FCB.`).
+      // That is the same sanctioned shape as the dash lead above — the claim is
+      // suppressed INSIDE the sentence, which keeps its actor, its verb and a
+      // real clause boundary — so it is not a prefix cut. Strictly gated: the
+      // candidate ends its own sentence, carries a verb, is the sentence's WHOLE
+      // leading clause (no connector inside it), is not the event ledger, and the
+      // CLAIM lives in the remainder it drops. Any other truncation is a prefix
+      // cut.
+      if (
+        terminal &&
+        VERBISH.test(text) &&
+        !CLAUSE_CONNECTOR.test(text) &&
+        CLAUSE_JOINER.test(remainder.split(/\s+/)[0] ?? "") &&
+        !hasGoalClaim(text) &&
+        hasGoalClaim(remainder) &&
+        !FRAME_LEDGER.test(text)
+      ) {
+        continue;
+      }
       out.push("prefix-cut");
       if (!terminal) out.push("open-clause");
     } else if (stored.startsWith(normalized) && !terminal) {
@@ -2468,9 +2489,11 @@ export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGro
   if (!quiet) return "";
   // Candidate order: the row's own quiet shape, then — when that still carries
   // the event frame (`The scoreboard updates from 1-1 to 2-1 as …`) — the row's
-  // own BEAT clause, the clause carrying the window's outcome verb. Both are
-  // extractive; whichever passes the gate order is the row's honest copy.
-  const candidates = [quiet, claimBearing ? quietBeatClause(quiet, src) : ""];
+  // own BEAT clauses, the clause carrying the window's outcome verb, then the
+  // row's own LEADING clause when it carries its own verb (ADAAAA-8130:
+  // `Crowd erupts in celebration as the scoreboard shows a goal for FCB.`). All
+  // are extractive; whichever passes the gate order is the row's honest copy.
+  const candidates = claimBearing ? [quiet, ...quietBeatClauses(quiet, src)] : [quiet];
   for (const candidate of candidates) {
     const served = serveQuietCandidate(candidate, storedSentence, ctx);
     if (served) return served;
@@ -2479,41 +2502,106 @@ export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGro
 }
 
 /**
- * ADAAAA-8125: the row's own BEAT clause — the clause that carries the window's
- * outcome verb (`as the player in white shoots` in
- * `The scoreboard updates from 1-1 to 2-1 as the player in white scores.`).
+ * ADAAAA-8125: the row's own BEAT clauses — the clauses that carry the window's
+ * outcome verb and, since ADAAAA-8130, the row's LEADING clause when it carries
+ * its own verb (`Crowd erupts in celebration` in
+ * `Crowd erupts in celebration as the scoreboard shows a goal for FCB.`).
  *
- * The clause before it is the event FRAME (the ledger line the model read), not
- * the beat: serving the frame alone is a prefix of the row's own sentence, which
- * §2 refuses. Extractive only — the words are the row's own, the verb is the one
- * `quietShape` already substituted, and the capitalisation is the sentence start.
+ * The clause before a beat is the event FRAME (the ledger line the model read),
+ * not the beat: serving the frame alone is a prefix of the row's own sentence,
+ * which §2 refuses. Extractive only — the words are the row's own, the verb is
+ * the one `quietShape` already substituted (or the row's own verb, for the
+ * leading clause), and the capitalisation is the sentence start.
+ *
+ * Candidates are ordered: the tail clauses nearest the substitution first (they
+ * carry the window's own outcome verb), then the leading clause.
  */
-function quietBeatClause(quiet: string, src: string): string {
+function quietBeatClauses(quiet: string, src: string): string[] {
   const verb = outcomeVerbFor(src);
-  if (!verb) return "";
-  const clauses = (quiet ?? "")
+  if (!verb) return [];
+  const clauses = splitQuietClauses(quiet);
+  if (clauses.length < 2) return [];
+  const verbRe = new RegExp(`\\b${verb.replace(/\s+/g, "\\s+")}\\b`, "i");
+  const out: string[] = [];
+  for (let i = clauses.length - 1; i >= 1; i -= 1) {
+    // The clause must carry the outcome verb BEFORE the substituted tail is
+    // stripped: the tail is the gate's own word, not evidence for this clause.
+    if (!verbRe.test(clauses[i])) continue;
+    const beat = quietBeatFromClause(clauses[i]);
+    if (beat && !out.includes(beat)) out.push(beat);
+  }
+  // ADAAAA-8130: the LEADING clause is the row's own actor-first beat. It is
+  // never offered while a tail clause already carries the window's outcome, and
+  // only when it carries its own verb and no claim/score/internal token
+  // (`quietBeatFromClause` enforces the last part).
+  const lead = quietBeatFromClause(clauses[0]);
+  if (lead && !out.includes(lead)) out.push(lead);
+  return out;
+}
+
+/** Split a quiet line into its clauses at the event-frame connectors. */
+function splitQuietClauses(text: string): string[] {
+  return (text ?? "")
     .split(/\s*[—–]\s*|\s+(?:as|while|when|and|but)\s+/i)
     .map((c) => c.trim())
     .filter(Boolean);
-  if (clauses.length < 2) return "";
-  const verbRe = new RegExp(`\\b${verb.replace(/\s+/g, "\\s+")}\\b`, "i");
-  for (let i = clauses.length - 1; i >= 1; i -= 1) {
-    if (!verbRe.test(clauses[i])) continue;
-    // `quietShape` appends the outcome verb after the determiner a claim noun
-    // left behind (`players celebrate a shoots`). Dropping that substituted tail
-    // keeps the clause's OWN verb, which is the honest beat
-    // (`Players celebrate in the penalty area.`).
-    const repaired = clauses[i].replace(
-      /\s+(?:a|an|the)\s+(?:shoots|is\s+saved|is\s+blocked|is\s+cleared|goes\s+wide)$/i,
-      ""
-    );
-    const source = MANGLED_QUIET_SUBSTITUTE.test(clauses[i]) ? repaired : clauses[i];
-    const clause = source.trim().replace(/^[a-z]/, (m) => m.toUpperCase());
-    // A beat clause is the actor + a verb; a bare phrase is not.
-    if (wordCount(clause) >= 2 && VERBISH.test(clause)) return clause;
-  }
-  return "";
 }
+
+/**
+ * ADAAAA-8130: ONE clause as a beat candidate, or `""` when it is not a beat.
+ *
+ * `quietShape` appends the window's outcome verb after the determiner a claim
+ * noun left behind (`players celebrate a shoots`, `the scoreboard shows a
+ * shoots`). That substituted tail is stripped BEFORE the beat check, so the
+ * gate's own word can never be what makes a clause a beat, and a clause whose
+ * only verb is the substituted outcome stays a non-beat (it strips down to a
+ * bare phrase and fails the verb test).
+ */
+function quietBeatFromClause(clauseText: string): string {
+  const clause = (clauseText ?? "").trim();
+  if (!clause) return "";
+  // `quietShape` appends the outcome verb after the determiner a claim noun left
+  // behind (`players celebrate a shoots`). Dropping that substituted tail keeps
+  // the clause's OWN verb, which is the honest beat
+  // (`Players celebrate in the penalty area.`).
+  const mangled = MANGLED_QUIET_SUBSTITUTE.test(clause);
+  const stripped = (mangled ? clause.replace(SUBSTITUTED_QUIET_TAIL, "") : clause).trim();
+  if (!stripped) return "";
+  const out = stripped.replace(/^[a-z]/, (m) => m.toUpperCase());
+  // A beat clause is the actor + a verb; a bare phrase is not.
+  if (wordCount(out) < 2 || !VERBISH.test(out)) return "";
+  // A claim, a scoreline or an internal token is never a beat: clause 3 keeps
+  // the window empty rather than serving one.
+  if (hasGoalClaim(out) || findScoreClaims(out).length > 0) return "";
+  if (stripInternalTokens(out) !== out) return "";
+  // The event LEDGER is never a beat: a scoreboard/graphic line (`The scoreboard
+  // updates from 1-1 to 2-1`) reports the frame the model read, not the play.
+  if (FRAME_LEDGER.test(out)) return "";
+  // The clause the claim was cut OUT of is the event FRAME, not the beat: a
+  // display verb that outlived its claim object (`the scoreboard shows a goal
+  // for FCB` -> `the scoreboard shows`) reports the claim, it does not beat it.
+  if (mangled && FRAME_DISPLAY_VERB.test(out)) return "";
+  return out;
+}
+
+/** Display verbs whose object is a claim the gate cut: the frame, not a beat. */
+const FRAME_DISPLAY_VERB =
+  /\b(?:shows?|showed|displays?|displayed|reads?|announces?|announced|reports?|reported|indicates?|indicated|confirms?|confirmed|reveals?|revealed)\b/i;
+
+/**
+ * ADAAAA-8130: the event LEDGER — a scoreboard/graphic/clock line or a raw
+ * scoreline. It is the frame the model read, never the row's beat, so it can be
+ * neither a quiet candidate nor the sanctioned prefix of its own sentence.
+ */
+const FRAME_LEDGER =
+  /\b(?:scoreboard|score ?bug|score[- ]?line|score[- ]?(?:graphic|overlay|card))\b|\b\d+\s*[-–:]\s*\d+\b/i;
+
+/** The connectors that open a new clause in a stored sentence. */
+const CLAUSE_CONNECTOR = /\b(?:as|while|when|and|but)\b/i;
+
+/** The determiner + outcome verb `quietShape` appends to a cut claim clause. */
+const SUBSTITUTED_QUIET_TAIL =
+  /\s+(?:a|an|the)\s+(?:shoots|is\s+saved|is\s+blocked|is\s+cleared|goes\s+wide)$/i;
 
 /** The gate order + post-conditions ONE quiet candidate must pass (AC1/AC2). */
 function serveQuietCandidate(
