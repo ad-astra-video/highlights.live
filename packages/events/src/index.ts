@@ -1523,6 +1523,13 @@ export const HighlightRecordSchema = z.object({
       ballOutcome: z.string().nullable(),
       corroborated: z.boolean(),
       goalConfirmed: z.string().nullable(),
+      /** ADAAAA-8134: the pooled score-read counts behind a demotion, so the row
+       * is gradable without a replay. Additive optional — absent on rows the gate
+       * did not demote and on the non-live rails. */
+      scoreReads: z.number().int().min(0).optional(),
+      preSamples: z.number().int().min(0).optional(),
+      postSamples: z.number().int().min(0).optional(),
+      need: z.number().int().min(0).optional(),
     })
     .optional(),
   deferredAttestation: z
