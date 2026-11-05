@@ -46,6 +46,15 @@ export type BootRecord = {
   bootId: string;
   /** image revision the booted code came from (`unknown` when not injected) */
   buildRef: string;
+  /**
+   * sha256 over the served media source tree (every .ts under
+   * services/media/src, recursively; ADAAAA-8048), recorded
+   * per boot so the served revision is provable from `/health` even when the
+   * recreate bypassed `docker/deploy.sh` and `buildRef` stayed `unknown`.
+   */
+  sourceDigest: string | null;
+  /** number of served files folded into `sourceDigest` */
+  sourceFiles: number;
 };
 
 export type ExitInfoIso = { at: string; code: number | null; signal: string | null; reason: string };
@@ -85,6 +94,10 @@ export type LifecycleSnapshot = {
   bootId: string | null;
   /** revision of the running image (`unknown` when the build did not inject one) */
   buildRef: string | null;
+  /** sha256 of the served media source (ADAAAA-8048); deploy-path independent */
+  sourceDigest: string | null;
+  /** served files folded into `sourceDigest` */
+  sourceFiles: number;
   lastStartAt: string | null;
   lastExit: ExitInfoIso | null;
   /** The boot before this one, with the revision it ran (null on a first boot). */
@@ -129,6 +142,10 @@ export function loadLedger(dir?: string): LifecycleLedger {
             at: b.at,
             bootId: typeof b.bootId === "string" ? b.bootId : "",
             buildRef: typeof b.buildRef === "string" ? b.buildRef : "unknown",
+            // A boot recorded before ADAAAA-8048 has no digest: null (not a
+            // guessed value), same rule as the pre-7689 buildRef fallback.
+            sourceDigest: typeof b.sourceDigest === "string" ? b.sourceDigest : null,
+            sourceFiles: typeof b.sourceFiles === "number" ? b.sourceFiles : 0,
           }))
       : [];
     return {
@@ -150,6 +167,10 @@ export type BootOptions = {
   bootId?: string;
   /** image revision this process booted from (`unknown` when not injected) */
   buildRef?: string;
+  /** sha256 of the served media source (ADAAAA-8048) */
+  sourceDigest?: string | null;
+  /** served files folded into `sourceDigest` */
+  sourceFiles?: number;
 };
 
 const asBootOptions = (v: number | BootOptions | undefined): BootOptions =>
@@ -178,6 +199,8 @@ export function recordBoot(ledger: LifecycleLedger, when?: number | BootOptions)
     at: now,
     bootId: opts.bootId ?? randomUUID(),
     buildRef: opts.buildRef ?? "unknown",
+    sourceDigest: opts.sourceDigest ?? null,
+    sourceFiles: opts.sourceFiles ?? 0,
   });
   if (ledger.bootHistory.length > MAX_BOOT_HISTORY) {
     ledger.bootHistory = ledger.bootHistory.slice(-MAX_BOOT_HISTORY);
@@ -250,6 +273,8 @@ export function snapshot(
     boots: ledger.boots,
     bootId: current?.bootId ?? null,
     buildRef: current?.buildRef ?? null,
+    sourceDigest: current?.sourceDigest ?? null,
+    sourceFiles: current?.sourceFiles ?? 0,
     lastStartAt: ledger.lastBootAt === null ? null : new Date(ledger.lastBootAt).toISOString(),
     lastExit,
     previousBoot: previous

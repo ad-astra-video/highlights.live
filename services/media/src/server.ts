@@ -612,6 +612,12 @@ export class MediaServer {
               // and the attribution of THIS boot (deploy vs crash vs restart).
               bootId: lifecycle.bootId,
               buildRef: lifecycle.buildRef,
+              // ADAAAA-8048: sha256 of the served `services/media/src/**/*.ts`,
+              // computed in this process. Unlike `buildRef` it does not depend on
+              // the recreate going through `docker/deploy.sh`, so the served
+              // revision stays provable on an unstamped boot.
+              sourceDigest: lifecycle.sourceDigest,
+              sourceFiles: lifecycle.sourceFiles,
               restartCause: lifecycle.restartCause,
               previousBoot: lifecycle.previousBoot,
               lastStartAt: lifecycle.lastStartAt,

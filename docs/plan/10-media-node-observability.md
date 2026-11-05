@@ -54,7 +54,8 @@ must not leak identifiers (the media origin sits behind the public LB).
   },
   "restarts": {
     "boots": 3, "bootId": "…", "buildRef": "abc1234", "restartCause": "deploy",
-    "previousBoot": { "bootId": "…", "buildRef": "def5678", "atIso": "…", "exit": null },
+    "sourceDigest": "sha256:…", "sourceFiles": 12,
+    "previousBoot": { "bootId": "…", "buildRef": "def5678", "sourceDigest": "sha256:…", "sourceFiles": 12, "atIso": "…", "exit": null },
     "lastStartAt": "…", "lastExit": null,
     "windowS": 600, "threshold": 3, "bootsInWindow": 1, "degraded": false
   }
@@ -98,6 +99,65 @@ volume (`MEDIA_STATE_DIR=/state`), so a recreate does not erase the comparison. 
 revision comes from the image's `BUILD_REF` build arg — deploy with
 `BUILD_REF=$(git rev-parse --short HEAD) docker compose -f docker/docker-compose.yml up -d --build media`;
 without it the node publishes `"unknown"` rather than guessing.
+
+### Served-revision proof: `restarts.sourceDigest` (ADAAAA-8048)
+
+`buildRef` is only stamped when the recreate went through `docker/deploy.sh` — the
+one path that exports `BUILD_REF=$(git rev-parse --short HEAD)`. A bare
+`docker compose up -d` (or a compose recreate triggered by an env change) falls
+back to the Dockerfile's `ARG BUILD_REF=unknown`, and then a QA run cannot prove
+which source the node is serving from the edge at all (ADAAAA-8007 makes an
+unstamped served revision void).
+
+`restarts.sourceDigest` closes that gap because it is derived from the bytes the
+container runs, not from the deploy path:
+
+- **What it is** — `sha256:<64 hex>` over every `.ts` under `services/media/src`
+  (recursive), folded in sorted relative-path order as
+  `relPath NUL content NUL` for each file. `restarts.sourceFiles` is the number of
+  files folded in (a sanity check that the whole tree was read — today the media
+  source is a flat directory of `.ts` files).
+- **Stable across a rebuild** — no timestamps, no absolute paths, no
+  directory-listing order in the hash, so rebuilding identical source in a new
+  image context reproduces the digest byte-for-byte.
+- **Changes on any served edit** — content, rename, add or delete.
+- **Recorded per boot** — the ledger (`MEDIA_STATE_DIR`) stores it beside
+  `buildRef`, and `previousBoot.sourceDigest` lets a reader compare the source of
+  the boot that just died with the one now serving, exactly like a revision.
+- **Provenance only** — it does not affect `restartCause` (that stays on
+  `buildRef` semantics) and it changes no relay behaviour, sampling or live
+  contract. It is a plain hash on the public `/health` surface, so it carries no
+  identifiers.
+
+Reproduce it outside the container (this is the exact recipe the unit test
+pins, `services/media/test/source-digest.test.ts`):
+
+```bash
+python3 - <<'PY'
+import hashlib, pathlib
+root = pathlib.Path("services/media/src")
+h = hashlib.sha256()
+for rel in sorted(p.relative_to(root).as_posix() for p in root.rglob("*.ts")):
+    h.update(rel.encode()); h.update(b"\0")
+    h.update((root / rel).read_bytes()); h.update(b"\0")
+print("sha256:" + h.hexdigest())
+PY
+```
+
+The digest is a property of the tree, so it must be computed on the same commit
+that is being deployed (on the box: `cd /home/brad/highlights.live`). Two ways to
+read it back from the edge:
+
+```bash
+curl -s "$MEDIA_SERVER_URL/health" | jq '.restarts | {buildRef, sourceDigest, sourceFiles, bootId}'
+# inside the container, if the origin is not reachable from where you are:
+docker exec highlights-media node --import tsx -e \
+  'import("./services/media/src/source-digest.ts").then(m=>console.log(m.sourceDigest()))'
+```
+
+A QA read is now sufficient proof even on a boot where `buildRef` reads
+`"unknown"`: matching `sourceDigest` names the served commit, and a mismatch
+means the container is not running the source you think it is.
 
 ### Session loss attribution: `media-session-lost` (ADAAAA-7700)
 

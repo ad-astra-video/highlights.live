@@ -170,3 +170,60 @@ describe("media boot attribution (ADAAAA-7689)", () => {
     expect(snap.restartCause).toBe("first-boot");
   });
 });
+
+// ADAAAA-8048: `buildRef` is only stamped by `docker/deploy.sh`; the served
+// source digest is recorded alongside it so the served revision is provable from
+// `/health` even on a boot that bypassed the wrapper (e.g. a bare
+// `docker compose up -d`, which leaves buildRef at the Dockerfile default).
+describe("media served-source digest in the boot ledger (ADAAAA-8048)", () => {
+  const digest = `sha256:${"b".repeat(64)}`;
+
+  it("persists the digest + file count per boot and republishes them in the snapshot", () => {
+    const dir = tmpDir();
+    const ledger = recordBoot(loadLedger(dir), {
+      now: 1_000,
+      bootId: "boot-1",
+      buildRef: "unknown",
+      sourceDigest: digest,
+      sourceFiles: 11,
+    });
+    saveLedger(ledger, dir);
+    const snap = snapshot(loadLedger(dir));
+    expect(snap).toMatchObject({ buildRef: "unknown", sourceDigest: digest, sourceFiles: 11 });
+  });
+
+  it("keeps the previous boot's digest comparable, like the previous revision", () => {
+    let ledger = recordBoot(loadLedger(tmpDir()), { now: 1_000, bootId: "b1", buildRef: "unknown", sourceDigest: digest, sourceFiles: 11 });
+    const next = `sha256:${"c".repeat(64)}`;
+    ledger = recordBoot(ledger, { now: 60_000, bootId: "b2", buildRef: "unknown", sourceDigest: next, sourceFiles: 11 });
+    const snap = snapshot(ledger);
+    expect(snap.sourceDigest).toBe(next);
+    expect(snap.previousBoot).toMatchObject({ bootId: "b1", sourceDigest: digest });
+  });
+
+  it("does not invent a digest for a boot recorded before the digest existed", () => {
+    const dir = tmpDir();
+    writeFileSync(
+      ledgerPath(dir),
+      JSON.stringify({
+        boots: 1,
+        bootAt: [1_000],
+        lastBootAt: 1_000,
+        lastExit: null,
+        bootHistory: [{ at: 1_000, bootId: "old-boot", buildRef: "52364c9" }],
+      }),
+    );
+    const snap = snapshot(loadLedger(dir));
+    expect(snap.buildRef).toBe("52364c9");
+    expect(snap.sourceDigest).toBeNull();
+    expect(snap.sourceFiles).toBe(0);
+  });
+
+  it("does not change the deploy/crash attribution (digest is provenance, not the cause)", () => {
+    // Same (unstamped) revision, unobserved exit: still a crash, even though the
+    // served bytes changed. Attribution stays on buildRef semantics.
+    let ledger = recordBoot(loadLedger(tmpDir()), { now: 1_000, bootId: "b1", buildRef: "unknown", sourceDigest: digest, sourceFiles: 11 });
+    ledger = recordBoot(ledger, { now: 60_000, bootId: "b2", buildRef: "unknown", sourceDigest: `sha256:${"d".repeat(64)}`, sourceFiles: 11 });
+    expect(snapshot(ledger).restartCause).toBe("crash");
+  });
+});

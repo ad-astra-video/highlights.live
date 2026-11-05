@@ -2,6 +2,7 @@ import { HttpSignerClient } from "@highlights/livepeer-session";
 import { loadConfig } from "./config";
 import { MediaServer } from "./server";
 import { loadLedger, recordBoot, recordExit, saveLedger, snapshot } from "./lifecycle";
+import { sourceDigest } from "./source-digest";
 
 async function main() {
   const cfg = loadConfig();
@@ -13,7 +14,15 @@ async function main() {
   // (`status` flips to "degraded" once the node restarts too often in the window).
   // ADAAAA-7689 AC4: the ledger also carries a per-boot id and the image
   // revision, so a restart reads as a deploy or a crash from `/health` alone.
-  const ledger = recordBoot(loadLedger(cfg.stateDir), { buildRef: cfg.buildRef });
+  // ADAAAA-8048: `buildRef` is only stamped by `docker/deploy.sh`; the served
+  // source digest is computed from the files this container actually runs, so
+  // the revision is provable even on a recreate that bypassed the wrapper.
+  const served = sourceDigest();
+  const ledger = recordBoot(loadLedger(cfg.stateDir), {
+    buildRef: cfg.buildRef,
+    sourceDigest: served.digest,
+    sourceFiles: served.files,
+  });
   saveLedger(ledger, cfg.stateDir);
   const lifecycle = () => snapshot(ledger, { windowS: cfg.restartWindowS, threshold: cfg.restartDegradedThreshold });
   // Record exits this process can actually see. SIGKILL / OOM run no handler;
@@ -92,7 +101,7 @@ async function main() {
   const boot = lifecycle();
   // eslint-disable-next-line no-console
   console.log(
-    `[media] lifecycle boots=${boot.boots} bootId=${boot.bootId ?? "-"} buildRef=${boot.buildRef ?? "-"} cause=${boot.restartCause} lastExit=${boot.lastExit ? `${boot.lastExit.reason}:${boot.lastExit.code ?? "-"}` : "none"} bootsInWindow=${boot.bootsInWindow}/${boot.threshold} degraded=${boot.degraded}`,
+    `[media] lifecycle boots=${boot.boots} bootId=${boot.bootId ?? "-"} buildRef=${boot.buildRef ?? "-"} sourceDigest=${boot.sourceDigest ?? "-"} sourceFiles=${boot.sourceFiles} cause=${boot.restartCause} lastExit=${boot.lastExit ? `${boot.lastExit.reason}:${boot.lastExit.code ?? "-"}` : "none"} bootsInWindow=${boot.bootsInWindow}/${boot.threshold} degraded=${boot.degraded}`,
   );
 }
 
