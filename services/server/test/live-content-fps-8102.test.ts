@@ -121,6 +121,40 @@ describe("media rail consumes at the content rate, not the ingest rate (AC-8101-
     expect(rail.frameCount()).toBeGreaterThanOrEqual(280);
     expect(rail.frameCount()).toBeLessThanOrEqual(320);
   });
+
+  it("a BURSTY relay (fast-forward gaps) still consumes ~1 frame per content second", () => {
+    // Regression source: funded leg 95622028 (300 s, 1 fps, cell 8065 applied).
+    // The relay fast-forwards, so observations arrive in bursts separated by gaps
+    // of up to 4.94 s (27 gaps > 2 s). With the analyzer pass's 2-frame credit cap
+    // the rail silently discarded 51.6 s of content time and consumed 243 frames
+    // instead of ~295 — outside AC-8101-2's 280-320 band. The media rail's credit
+    // is bounded far above a relay burst instead.
+    const T0 = Date.now() / 1000;
+    const rail = new MediaRailObserver({
+      jobId: "job-8102-bursty",
+      fps: 3,
+      contentFps: 1,
+      windowS: 7,
+      cadenceS: 5,
+      maxFrames: 4,
+      onDecide: async () => false,
+    });
+    // 2 fps ingest with a ~3.9 s fast-forward gap every 12th frame: 27 gaps over
+    // 300 s, exactly the shape leg 95622028 relayed (its gaps ran to 4.94 s).
+    let ts = 0;
+    let n = 0;
+    while (ts < 299) {
+      rail.onObservation({ timestamp: T0 + ts, tracks: [], objects: [], ocr: [] } as any, "a");
+      n++;
+      ts += n % 12 === 0 ? 3.9 : 0.5;
+    }
+    // Consumed count tracks CONTENT seconds (~299), not the 2-frame-cap count
+    // (which would read ~248 — the leg's 243).
+    expect(rail.frameCount()).toBeGreaterThanOrEqual(280);
+    expect(rail.frameCount()).toBeLessThanOrEqual(320);
+    const perceive = rail.observeMetrics().perceive!;
+    expect(perceive.framesSeen).toBeGreaterThan(rail.frameCount());
+  });
 });
 
 describe("media rail publishes the stride block (AC-8101-1 evidence)", () => {

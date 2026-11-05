@@ -545,6 +545,13 @@ export const ObserveMetricsSnapshotSchema = z.object({
       // cost-aware stride steps by it, so `> 1000/analysisFps` proves the box's
       // shared-GPU perceive limit (not the ingest rate) is the binding rate.
       perceiveMeanCostMs: z.number().min(0).optional(),
+      // ADAAAA-8102: which rail perceived the consumed frames. `server` (absent,
+      // the analyzer live pass) measures the cost counters here; `media_node` is
+      // the media/RTC rail, where the media node perceives every relayed frame
+      // and this process only consumes at `analysisFps`. Declared on the contract
+      // because a zod object STRIPS undeclared keys: without this line the field
+      // the media rail emits is dropped when the job record is persisted.
+      perceiveSource: z.enum(["server", "media_node"]).optional(),
     })
     .optional(),
   // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
