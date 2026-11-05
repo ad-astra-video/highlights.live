@@ -319,6 +319,13 @@ export interface ServerConfig {
    * Default false (an unset env is byte-identical); `LIVE_DECIDE_COMPACT=1`
    * enables it. */
   liveDecideCompact: boolean;
+  /** ADAAAA-8064 (AC-C4 A/B lever): which set the live `perceiveTimeline` is
+   * sourced from. Default `observations` (the window's full pre-image-cap
+   * observation set, the shipped construction). `LIVE_PERCEIVE_TIMELINE_SOURCE=seeds`
+   * reproduces the pre-8064 construction (timeline = the shipped images) so the
+   * AC-C4 ON/OFF latency pairing can be measured on ONE build with alternating
+   * order. Instrumentation only — leave it unset in production. */
+  livePerceiveTimelineSource: "observations" | "seeds";
   /** ADAAAA-7774: frame-consumption rate (content fps) of the LIVE observe pass.
    * The live ingest delivers ~5 fps (rtmp/file-sim decode) while the decide
    * window only ever carries `OBSERVE_CONTENT_FPS` (2) frames per content second
@@ -860,6 +867,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // see AnalyzerConfig.liveDecideCompact). Opt-in: unset keeps the full
     // contract byte-identical for both rails.
     liveDecideCompact: env.LIVE_DECIDE_COMPACT === "1",
+    // ADAAAA-8064 (AC-C4): the timeline source. Default observations (shipped
+    // construction); `=seeds` reproduces the pre-fix construction for the paired
+    // latency measurement. Anything else is the default — an A/B lever never
+    // becomes a posture by typo.
+    livePerceiveTimelineSource: env.LIVE_PERCEIVE_TIMELINE_SOURCE === "seeds" ? "seeds" : "observations",
     // ADAAAA-7758: one live decide slot per box (opt-in). Off by default: the
     // queued-stream wording is a CEO decision (ADAAAA-7757), so the shipped
     // behaviour only changes once the flag is enabled on the deployment.

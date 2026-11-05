@@ -1692,6 +1692,13 @@ export interface AnalyzerConfig {
    * against a 0.66/s cadence demand, the compact one ~150 tokens. Unset = the
    * full contract, byte-identical to the pre-flag request. */
   liveDecideCompact?: boolean;
+  /** ADAAAA-8064 (AC-C4): which set the live `perceiveTimeline` is sourced from.
+   * `observations` (default) = the window's full pre-image-cap observation set —
+   * the shipped construction. `seeds` = the images the call ships, i.e. the
+   * pre-8064 construction, kept ONLY as the A/B lever for the AC-C4 latency
+   * pairing so the delta is measured on one build with alternating order. It is
+   * an instrumentation switch, not a posture: leave it unset in production. */
+  perceiveTimelineSource?: "observations" | "seeds";
   /** Increment F / ADAAAA-6465 (plan §4.9): analysis FPS cap for the assembly
    * of the frame sequence the LLM watches per trigger. Default 5 (live). The
    * sequence is sampled at this rate around the trigger, always includes the
@@ -4698,7 +4705,9 @@ export function buildObserveDecideRequest(
   // made AC-E1 and AC-3 mutually exclusive. A payload without `observations`
   // (VOD symmetric window, or a partial stub) keeps the old source, so the VOD
   // request stays byte-identical.
-  const observations = payload.observations?.length ? payload.observations : seeds;
+  const observations = payload.observations?.length && cfg.perceiveTimelineSource !== "seeds"
+    ? payload.observations
+    : seeds;
   const perceiveTimeline = buildPerceiveTimeline(observations, { centerTs: center, anchorTs });
   const timelineSeeds = seeds.length;
   const timelineWithFindings = observations.filter((s) => seedCarriesFindings(s)).length;
@@ -4714,7 +4723,8 @@ export function buildObserveDecideRequest(
     ? Math.round(Math.max(...imageTs.slice(1).map((t, i) => t - imageTs[i])) * 1000)
     : 0;
   const recordsPerSecond = spanS > 0 ? Number((perceiveTimeline.length / spanS).toFixed(2)) : 0;
-  const timelineSource: "observations" | "seeds" = payload.observations?.length ? "observations" : "seeds";
+  const timelineSource: "observations" | "seeds" =
+    payload.observations?.length && cfg.perceiveTimelineSource !== "seeds" ? "observations" : "seeds";
   const detections = selectDecideDetections(seeds, anchorTs, DECIDE_MAX_DETECTIONS);
   // ADAAAA-7021 fix: fold the perceive candidate's goal-attestation signals that
   // rode the in-window bias hints (goalCrossed / ballOutcome / scoreBoardChanged).
