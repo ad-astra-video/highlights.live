@@ -136,6 +136,8 @@ describe("buildObserveDecideRequest enrichment envelope (ADAAAA-8056 AC-E1/E4/E5
     expect(evidence.perceiveTimeline?.length).toBe(29);
     expect((opts as any).perceiveWindow).toEqual({ seeds: 29, records: 29, withFindings: 29 });
     expect((opts as any).audioPresence).toBeDefined();
+    // The clip gate is reported so a gated window is named, not blamed on retention.
+    expect((opts as any).audioPresence.clipEnabled).toBe(true);
     // Schema clamps held on a 29-seed / 58-object window (ADAAAA-7022 + AC-E4).
     expect(evidence.trackCount).toBeLessThanOrEqual(DECIDE_MAX_TRACK_COUNT);
     expect((evidence.detections ?? []).length).toBeLessThanOrEqual(DECIDE_MAX_DETECTIONS);
