@@ -4125,6 +4125,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // sampled frames to /jobs/:id/ingest and a recording to
         // /jobs/:id/recording. Nothing to pull server-side.
         browserJobs.set(job.id, { evidence: new EvidenceTracker() });
+        // ADAAAA-7990 AC1: the resolved rate must be ON THE JOB RECORD, not only
+        // written when `/jobs/:id/media` provisions the session. A browser client
+        // (and the QA replay driver) can open the session straight on the media
+        // node — `POST /sessions { jobId, sampleFps }` — and then no server-side
+        // provision runs, so the record carried no `sampleFps` at all on the
+        // graded 3 fps rows. Same single resolution source as the live/RTMP route
+        // and `provisionMedia` (`resolveLiveSampleFps` over `LIVE_SAMPLE_BASE_FPS`
+        // / `LIVE_SAMPLE_MAX_FPS`); an explicit per-job `sampleFps` body still wins.
+        const browserSampleFps = req.body.sampleFps ?? (await resolveLiveSampleFps(cfg));
+        await store.patchJob(job.id, { sampleFps: browserSampleFps });
         return { job: jobForRole(store.getJob(job.id), (req as any).user.role), status: "ready" };
       }
       if (live) {
