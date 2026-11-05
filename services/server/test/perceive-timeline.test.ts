@@ -216,6 +216,19 @@ describe("buildObserveDecideRequest enrichment envelope (ADAAAA-8056 AC-E1/E4/E5
     expect(new Set(ts).size).toBe(28);
   });
 
+  it("publishes no rate for a degenerate one-frame window instead of a 0", () => {
+    const cfg = { gameHint: "soccer" } as Parameters<typeof buildObserveDecideRequest>[0];
+    const seeds: PerFrameSeed[] = [{ ts: 4, tracks: [{ trackId: "t0" }] }];
+    const { opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), payload(seeds, 1));
+    const l = (opts as any).perceiveWindow;
+    // AC-C2 grades a rate over rows that HAVE a span; a 1-frame window must not
+    // claim 0 records/s (which would read as an empty timeline).
+    expect(l.spanS).toBe(0);
+    expect("recordsPerSecond" in l).toBe(false);
+    expect(l.timelineRecords).toBe(1);
+    expect(l.observationsInSpan).toBe(1);
+  });
+
   it("falls back to the seeds when the payload carries no observation set", () => {
     const cfg = { gameHint: "soccer" } as Parameters<typeof buildObserveDecideRequest>[0];
     const seeds = liveSeeds(4);

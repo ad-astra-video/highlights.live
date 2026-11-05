@@ -4901,7 +4901,11 @@ export function buildObserveDecideRequest(
             observationsInSpan: observations.length,
             imageCount: payload.frames.length,
             imageGapMaxMs,
-            recordsPerSecond,
+            // A degenerate window (< 2 observed frames, e.g. the first tick of a
+            // leg) has no span to divide by, so it publishes NO rate rather than
+            // a 0 that reads as "empty timeline". The observation count and the
+            // record count still say exactly what the window carried.
+            ...(spanS > 0 ? { recordsPerSecond } : {}),
             spanS,
             timelineSource,
           },
