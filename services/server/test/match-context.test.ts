@@ -201,7 +201,7 @@ describe("createVodMatchContextResolver", () => {
     probeCommentary: async () => ({ text: "Spain in the white shirts", seconds: 90, bytes: 1000 }),
   });
 
-  it("fires the three bounded checkpoints once each and persists every result", async () => {
+  it("fires the bounded checkpoints once each and persists every result", async () => {
     const store = fakeStore();
     const calls: number[] = [];
     const client = {
@@ -217,11 +217,22 @@ describe("createVodMatchContextResolver", () => {
     r.onProgress(5);
     r.onProgress(26);
     r.onProgress(51);
-    r.onProgress(80);
+    r.onProgress(91);
     await r.finish();
     expect(calls).toEqual([...MATCH_CONTEXT_RECHECKS]);
-    expect(store.patches.filter((p) => p.matchContext)).toHaveLength(3);
-    expect(store.getJob("job1").matchContext.trail[0].progressPct).toBe(50);
+    expect(store.patches.filter((p) => p.matchContext)).toHaveLength(4);
+    expect(store.getJob("job1").matchContext.trail[0].progressPct).toBe(90);
+  });
+
+  // ADAAAA-8076: the last fold must be LATE. On the measured Portugal v Spain
+  // 90 s source the 50 % fold held only 1 red crop, so the served record named
+  // the home cluster from a junk cyan seed (`home cyan`); the red shirts are
+  // sampled at seq 132-144 and 213-216, which only a ~90 % fold sees. A
+  // checkpoint list that ends at 50 % publishes the first half of the clip as
+  // if it were the whole observation.
+  it("keeps a late fold checkpoint so second-half kit evidence is published", () => {
+    expect(MATCH_CONTEXT_RECHECKS[MATCH_CONTEXT_RECHECKS.length - 1]).toBe(90);
+    expect(MATCH_CONTEXT_RECHECKS).toEqual([0, 25, 50, 90]);
   });
 
   it("probes the commentary once per job, not once per checkpoint", async () => {
