@@ -38,11 +38,14 @@ STORY = "Goal at 42s: Ronaldo finishes low to make it 1-0 Portugal."
 #: pre-change build -- is what this test guards, and it holds for both FULL rows.
 #: Captured from the PRE-CHANGE build_prompt (no prior_game_state argument
 #: existed). If any of these move, the no-op guarantee is broken.
+# ADAAAA-8103 (v3 emphasis) re-pinned these: only the STATIC block moved
+# (+2385 preamble chars). The block-absent invariant is unchanged — an empty or
+# malformed prior game state still renders nothing (see the degrade test below).
 GOLDEN = {
-    ("full", ""): (9580, "4e79233acface0c2712ee18c7859d4b0ae3df17c42ced0387d21f4a49d8a1719"),
-    ("full", STORY): (9832, "39e892ef2ee234d99fb86ded0bbe29002ea14eea94ad1d6fb318a2c67f9b9bf1"),
-    ("compact", ""): (11773, "9af9ea04ec9158a297952d7454e6bad7e239d7bcb6eae14bd1c5b374dd830fb1"),
-    ("compact", STORY): (12025, "403bc030b57b85f7efdf41d4c6d399ea21dd40c3ac5786f8a7c641e176d738e0"),
+    ("full", ""): (12034, "462ff1861c902722391ab48f592ba39e86343992cfbecbb43e3ce0c3c8793409"),
+    ("full", STORY): (12286, "fceba52d260de7e1ac2540d8721903d88ae7026cc5b1a1f6f9ccc68c27e642ab"),
+    ("compact", ""): (14251, "e93eb440349b6b95edea294c73b6434316f462333aa36ced3f18a18ae0cbb090"),
+    ("compact", STORY): (14503, "317fe05e9816be740d10d66938c8417e3a27619cf56f5e475fe16819d4a80f9e"),
 }
 
 
