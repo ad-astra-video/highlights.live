@@ -2510,6 +2510,15 @@ export interface AnalyzerConfig {
    */
   liveObserveContentFps?: number;
   /**
+   * ADAAAA-8108 (AC-E3): the live decide ENRICHMENT arm. `on` (default, and what
+   * an unset env resolves to) sends the per-window `perceiveTimeline` as shipped;
+   * `off` omits it from every window; `alternate` alternates per DECIDED window in
+   * content order, OFF first. Wired from `LIVE_DECIDE_ENRICH`. Only the timeline
+   * block moves — span, cadence, image budget, in-flight depth and keep ratio are
+   * untouched, so a same-cell ON/OFF pair measures the enrichment alone.
+   */
+  liveDecideEnrich?: "on" | "off" | "alternate";
+  /**
    * ADAAAA-7774: fraction of wall clock the LIVE pass may spend in blocking
    * perceive (`client.analyze`). Perceive shares the GPU with the decide workers,
    * so the pass budgets it instead of awaiting one call per consumed frame; the
@@ -5104,6 +5113,19 @@ export interface PerceiveWindowLedger {
   /** ADAAAA-8064: where the timeline was sourced from — `observations` on the
    * live rail, `seeds` on the VOD symmetric window / a legacy payload. */
   timelineSource?: "observations" | "seeds";
+  /** ADAAAA-8108 (AC-E3): the enrichment arm this window was decided under.
+   *  `on` = the shipped posture (timeline sent); `off` = the measurement arm that
+   *  omits the timeline from the request. Stamped on EVERY live row, so a leg's
+   *  arm split is read off the audit row rather than inferred from `printenv` or
+   *  row order. */
+  enrichmentArm?: "on" | "off";
+  /** ADAAAA-8108 (AC-E3): timeline records that actually reached the decide
+   * prompt (0 on the OFF arm). */
+  timelineRecordsSent?: number;
+  /** ADAAAA-8108 (AC-E3): the records this window's observation set WOULD have
+   * contributed. Equal in both arms on the same cell — the field that proves the
+   * pair carried the same data and only its delivery changed. */
+  timelineRecordsProjected?: number;
 }
 
 /** ADAAAA-8056 (AC-E2): where this window's audio actually came from. `clipBytes`
@@ -5369,6 +5391,15 @@ export function buildObserveDecideRequest(
   // VOD request byte-identical (AC-E5) while every live observer window carries
   // the timeline + the ASR coverage instrumentation.
   const enrichment = cfg.decideWindowN === undefined;
+  // ADAAAA-8108 (AC-E3): the OFF arm of the enrichment measurement. The arm is
+  // allocated per DECIDED window by the live observer (`payload.enrichmentArm`)
+  // when the rail boots `LIVE_DECIDE_ENRICH=off|alternate`; an absent arm is the
+  // shipped `on` posture, so every other caller (VOD, tests, a box that never set
+  // the knob) builds the byte-identical request. OFF drops ONLY the
+  // `perceiveTimeline` text block: the frames, the observation set, the span and
+  // the cadence are still measured and still ride the ledger, which is what
+  // makes the ON/OFF pair a same-cell delta on the enrichment alone.
+  const enrichOff = enrichment && payload.enrichmentArm === "off";
   // Fold the window's perceive-derived context into the scalar evidence the
   // decide contract expects (track count / OCR / reaction) from the seeds.
   const seeds = payload.seeds;
@@ -5483,7 +5514,7 @@ export function buildObserveDecideRequest(
     // scalar fold above throws away, delivered on the text channel so the model
     // keeps "when" without paying a frame per instant. Live rail only, and
     // omitted when there are no seeds, so the VOD payload stays byte-identical.
-    ...(enrichment && perceiveTimeline.length ? { perceiveTimeline } : {}),
+    ...(enrichment && perceiveTimeline.length && !enrichOff ? { perceiveTimeline } : {}),
     // ADAAAA-7021 fix: forward the perceive candidate's goal-attestation signals
     // (folded into the in-window bias hints) FIRST-CLASS so the decide
     // goal-attestation gate can independently attest a `scoring_play`. Previously
@@ -5610,6 +5641,17 @@ export function buildObserveDecideRequest(
             // from the image count.
             timelineRecords: perceiveTimeline.length,
             observationsInSpan: observations.length,
+            // ADAAAA-8108 (AC-E3): the arm this window was decided under, and the
+            // records that actually reached the prompt. On the OFF arm
+            // `timelineRecords` is 0 while `timelineRecordsProjected` keeps the
+            // density the same observation set WOULD have contributed — so a leg
+            // proves both arms carried the same cell (same span, same
+            // observations, same images) and only the delivery differed. `on`
+            // rows state the arm explicitly too, so a grade splits arms off the
+            // row instead of inferring them from `printenv` or row order.
+            enrichmentArm: enrichOff ? "off" : "on",
+            timelineRecordsSent: enrichOff ? 0 : perceiveTimeline.length,
+            timelineRecordsProjected: perceiveTimeline.length,
             imageCount: payload.frames.length,
             // ADAAAA-8074: what the payload ACTUALLY carried and the budget that
             // selected it. `imageBudgetApplied` is the clause that would have
@@ -7073,6 +7115,10 @@ export async function analyzeJob(
           // decide rate (fraction of decide opportunities kept). Undefined
           // leaves the pass unbounded.
           decideKeepRatio: cfg.liveDecideKeepRatio,
+          // ADAAAA-8108 (AC-E3): the enrichment arm on the file-sim/RTMP rail too,
+          // so the OFF arm is measurable on BOTH live rails rather than only the
+          // media rail the cell is currently graded on. Unset is the shipped `on`.
+          enrichment: cfg.liveDecideEnrich,
           // ADAAAA-7771: pipelined depth. With K > 1 the expensive decide half
           // runs K-wide while acceptance stays serial in CONTENT order — the
           // serial loop could never hold the 3 s cadence when one decide costs

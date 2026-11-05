@@ -122,8 +122,10 @@ describe("the boot posture readout names all four cell values (ADAAAA-8065 Step 
     const lines = liveDecideBootLines(liveCfg({}));
     const text = lines.join("\n");
     // ADAAAA-8102 added the content-consume axis as a fourth line, so a grade
-    // greps the axis it measured.
-    expect(lines).toHaveLength(4);
+    // greps the axis it measured. ADAAAA-8108 adds the enrichment-arm axis as the
+    // fifth, for the same reason: the AC-E3 leg's ON/OFF split is graded off the
+    // decide rows, and the boot line states which arm this process resolved.
+    expect(lines).toHaveLength(5);
     expect(text).toContain("4 image(s)/decide");
     expect(text).toContain("4 decide(s) in flight");
     expect(text).toContain("10 s span / 3000 ms cadence");
