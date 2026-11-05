@@ -1,4 +1,6 @@
 // Media server env config.
+import { sourceDigest } from "./source-digest";
+
 export interface MediaConfig {
   port: number;
   /**
@@ -101,11 +103,62 @@ export interface MediaConfig {
    * (ADAAAA-7689 AC4). The Dockerfile bakes it at build time from the
    * `BUILD_REF` build arg (`docker compose ... up -d --build` with
    * `BUILD_REF=$(git rev-parse --short HEAD)`); an operator can also set
-   * `MEDIA_BUILD_REF` at runtime. Unset => `"unknown"`, which is published
-   * verbatim rather than guessed.
+   * `MEDIA_BUILD_REF` at runtime.
+   *
+   * ADAAAA-8050: `docker/deploy.sh` was the only caller that supplied it, so a
+   * recreate taken with a plain `docker compose up -d [--build] media` booted
+   * `buildRef: "unknown"` — a node that served code it could not name, which
+   * every "which build served this" gate had to work around with a hand md5.
+   * The resolver below falls back to the served-source digest (ADAAAA-8048), so
+   * `buildRef` is `src-<digest>` on that path instead of `unknown`.
    */
   buildRef: string;
+  /**
+   * Where `buildRef` came from (ADAAAA-8050), so a reader can tell an injected
+   * git revision from the served-source digest without guessing.
+   */
+  buildRefSource: BuildRefSource;
 }
+
+/** ADAAAA-8050: provenance of the revision a media boot reports. */
+export type BuildRefSource = "env:MEDIA_BUILD_REF" | "env:BUILD_REF" | "served-source-digest" | "none";
+
+/**
+ * ADAAAA-8050: resolve the revision a boot reports.
+ *
+ * Order: the runtime override (`MEDIA_BUILD_REF`), the revision baked into the
+ * image by the deploy (`BUILD_REF`), then the served-source digest ADAAAA-8048
+ * computes from the files this process actually runs (`src-<12 hex>`), then
+ * `"unknown"` only when even the digest could not be read.
+ *
+ * The digest fallback is what makes a recreate taken OUTSIDE `docker/deploy.sh`
+ * identifiable: it is a property of the source, not of the deploy path, so the
+ * same digest recomputes in a worktree checked out at that commit.
+ */
+export function resolveBuildRef(
+  env: NodeJS.ProcessEnv = process.env,
+  served: () => { digest: string | null } = () => sourceDigest(),
+): { buildRef: string; buildRefSource: BuildRefSource } {
+  const override = usableRevision(env.MEDIA_BUILD_REF);
+  if (override) return { buildRef: override, buildRefSource: "env:MEDIA_BUILD_REF" };
+  const injected = usableRevision(env.BUILD_REF);
+  if (injected) return { buildRef: injected, buildRefSource: "env:BUILD_REF" };
+  const digest = (served().digest ?? "").replace(/^sha256:/i, "");
+  if (/^[0-9a-f]{12,}$/i.test(digest)) {
+    return { buildRef: `src-${digest.slice(0, 12).toLowerCase()}`, buildRefSource: "served-source-digest" };
+  }
+  return { buildRef: "unknown", buildRefSource: "none" };
+}
+
+/**
+ * A revision that can identify a build. Empty and the Dockerfile's old
+ * `"unknown"` build-arg default are placeholders, not identities — treating them
+ * as present is exactly what published `buildRef: "unknown"` for a real build.
+ */
+const usableRevision = (value: string | undefined): string | null => {
+  const v = (value ?? "").trim();
+  return v === "" || v.toLowerCase() === "unknown" ? null : v;
+};
 
 /** ADAAAA-7990: resolve the node's fallback RTC sampling cadence from the SAME
  *  env knobs the control plane's live path uses (`LIVE_SAMPLE_BASE_FPS`,
@@ -132,6 +185,9 @@ export function observeDeadlineMsFromEnv(env: NodeJS.ProcessEnv = process.env): 
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
+  // ADAAAA-8050: resolve the reported revision once (env override -> injected
+  // deploy revision -> served-source digest -> "unknown").
+  const revision = resolveBuildRef(env);
   return {
     port: Number(env.PORT ?? 4070),
     orchBase: env.ORCHESTRATOR_URL ?? "http://127.0.0.1:8935",
@@ -167,6 +223,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     // ADAAAA-7689 AC4: the shipped revision. `BUILD_REF` is the build arg the
     // media Dockerfile bakes into the image; `MEDIA_BUILD_REF` is the runtime
     // override for an operator running the source tree directly.
-    buildRef: env.MEDIA_BUILD_REF || env.BUILD_REF || "unknown",
+    // ADAAAA-8050: a boot with neither falls back to the served-source digest,
+    // so `buildRef` names the build on ANY recreate path instead of "unknown".
+    buildRef: revision.buildRef,
+    buildRefSource: revision.buildRefSource,
   };
 }

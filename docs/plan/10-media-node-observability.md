@@ -98,7 +98,8 @@ an observed exit (clean exit / SIGTERM). The ledger lives on the `media-state`
 volume (`MEDIA_STATE_DIR=/state`), so a recreate does not erase the comparison. The
 revision comes from the image's `BUILD_REF` build arg — deploy with
 `BUILD_REF=$(git rev-parse --short HEAD) docker compose -f docker/docker-compose.yml up -d --build media`;
-without it the node publishes `"unknown"` rather than guessing.
+a boot with no injected revision falls back to the served-source digest (below),
+never to a bare placeholder.
 
 ### Served-revision proof: `restarts.sourceDigest` (ADAAAA-8048)
 
@@ -155,9 +156,37 @@ docker exec highlights-media node --import tsx -e \
   'import("./services/media/src/source-digest.ts").then(m=>console.log(m.sourceDigest()))'
 ```
 
-A QA read is now sufficient proof even on a boot where `buildRef` reads
-`"unknown"`: matching `sourceDigest` names the served commit, and a mismatch
-means the container is not running the source you think it is.
+A QA read is now sufficient proof even on a boot where no git revision was
+injected: matching `sourceDigest` names the served commit, and a mismatch means
+the container is not running the source you think it is.
+
+### `buildRef` never publishes a placeholder (ADAAAA-8050)
+
+`buildRef` is resolved once at boot, in this order:
+
+1. `MEDIA_BUILD_REF` — explicit runtime override (running the tree outside the image).
+2. `BUILD_REF` — the build arg `docker/deploy.sh` exports (`git rev-parse --short HEAD`).
+3. the served-source digest — `buildRef: "src-<first 12 hex of sourceDigest>"`.
+4. `"unknown"` — only when even the served source could not be read.
+
+`restarts.buildRefSource` names the path that produced the value
+(`env:MEDIA_BUILD_REF` | `env:BUILD_REF` | `served-source-digest` | `none`), so a
+reader can tell a git revision from a content identity without guessing.
+
+Empty and `unknown` are treated as ABSENT, not as identities. That was the actual
+defect: the compose build arg defaults to `unknown`, and the previous
+`env.BUILD_REF || "unknown"` chain published that placeholder verbatim for a
+real, identifiable build. A recreate taken with a plain
+`docker compose up -d [--build] media` now reports `src-<digest>` — the same
+value `/health` already publishes as `sourceDigest`, recomputable on the commit
+with the recipe above — so a gate worded "which build served this" has something
+to read on every recreate path, not only the sanctioned one.
+
+```bash
+curl -s "$MEDIA_SERVER_URL/health" | jq '.restarts | {buildRef, buildRefSource, sourceDigest}'
+# a hand recreate (no BUILD_REF):  buildRef "src-62b84f8528b4" source "served-source-digest"
+# a deploy.sh recreate:           buildRef "1a2288b"          source "env:BUILD_REF"
+```
 
 ### Session loss attribution: `media-session-lost` (ADAAAA-7700)
 

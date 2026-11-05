@@ -213,3 +213,51 @@ describe("media node restart-loop visibility (ADAAAA-7656)", () => {
     await app.close();
   });
 });
+
+// ADAAAA-8050: a boot taken outside `./docker/deploy.sh` must still name the
+// build it serves. `restarts.buildRef` now falls back to the served-source
+// digest, and `buildRefSource` says which path produced the value.
+describe("media buildRef provenance on /health (ADAAAA-8050)", () => {
+  const ledger = (buildRef: string) => () => ({
+    boots: 51,
+    bootId: "boot-51",
+    buildRef,
+    sourceDigest: "sha256:62b84f8528b4098e69d66a38aa4f9e9437bcb0e6d988e6c6d146964b1ccd74b6",
+    sourceFiles: 12,
+    restartCause: "deploy" as const,
+    previousBoot: null,
+    lastStartAt: "2026-11-05T02:01:17.366Z",
+    lastExit: null,
+    windowS: 600,
+    threshold: 3,
+    bootsInWindow: 0,
+    degraded: false,
+  });
+
+  it("names an unstamped (hand-recreated) boot from the served-source digest", async () => {
+    const app = await build({
+      nodeId: "media-0",
+      lifecycle: ledger("src-62b84f8528b4"),
+      buildRefSource: "served-source-digest",
+    });
+    const r = await app.inject({ method: "GET", url: "/health" });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().restarts).toMatchObject({
+      buildRef: "src-62b84f8528b4",
+      buildRefSource: "served-source-digest",
+      sourceDigest: "sha256:62b84f8528b4098e69d66a38aa4f9e9437bcb0e6d988e6c6d146964b1ccd74b6",
+    });
+    await app.close();
+  });
+
+  it("keeps a deploy.sh boot naming its git revision", async () => {
+    const app = await build({
+      nodeId: "media-0",
+      lifecycle: ledger("1a2288b"),
+      buildRefSource: "env:BUILD_REF",
+    });
+    const h = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(h.restarts).toMatchObject({ buildRef: "1a2288b", buildRefSource: "env:BUILD_REF" });
+    await app.close();
+  });
+});
