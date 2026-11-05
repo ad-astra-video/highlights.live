@@ -14,6 +14,7 @@
 import { describe, it, expect } from "vitest";
 import {
   captionColour,
+  captionLead,
   captionLineKey,
   colourBeatFromSignal,
   dedupeDisplayLines,
@@ -88,16 +89,18 @@ describe("§2 — a rewritten claim leaves a whole phrase, never a mangled one",
   });
 });
 
-describe("AC4 — a quiet row carries no colour and stays inside 8 words", () => {
-  it("drops the derived beat on a quiet window even when the signal fires", () => {
+describe("AC4 — a quiet row carries the derived beat inside an 8-word lead", () => {
+  it("drops the MODEL clause and keeps the DERIVED beat on a quiet window", () => {
     const ctx = { ...QUIET("in the box"), colourSignal: SIGNAL };
-    // The exact served row: `Player in blue kit dribbles in box — noise spikes
-    // over the play` (12-13 words, colour on a `not_highlight` window).
+    // ADAAAA-8043 (contract v7 §3.1) supersedes the ADAAAA-7995 blanket ban: the
+    // served row `Player in blue kit dribbles in box — noise spikes over the play`
+    // was the MODEL's clause; the derived beat is the one that may ride, and the
+    // lead (before the separator) is what AC5 grades at <= 8 words.
     const out = groundCaption("Player in blue kit dribbles in box — noise spikes over the play", ctx);
-    expect(out).toBe("Player in blue kit dribbles in box");
-    expect(captionColour(out)).toBe("");
-    expect(wordCount(out)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
-    // gateQuietWindow is idempotent on the clean row.
+    expect(captionLead(out)).toBe("Player in blue kit dribbles in box");
+    expect(captionColour(out)).toBe("noise spikes over the play");
+    expect(wordCount(captionLead(out))).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    // gateQuietWindow is idempotent on the derived row.
     expect(gateQuietWindow(out, ctx)).toBe(out);
   });
 

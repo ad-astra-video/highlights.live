@@ -18,6 +18,7 @@ import { describe, it, expect } from "vitest";
 import {
   COLOUR_MAX_CHARS,
   captionColour,
+  captionLead,
   colourBeatFromSignal,
   colourBeatAllowed,
   dedupeStoredLines,
@@ -118,11 +119,12 @@ describe("contract v5 §3.1 — colour is DERIVED from the measured signal (R18)
   const measured = { ...quiet(), colourSignal: SIGNAL };
 
   it("drops a forwarded model colour clause even on a measured window", () => {
-    // ADAAAA-7995 (AC4): a quiet window carries NO colour — the derived beat rides
-    // a loud window only (asserted below), so the measured quiet case ends clean.
+    // ADAAAA-8043 (v7 §3.1): the model's clause is always dropped; what rides is
+    // the beat DERIVED from the measured signal — on a quiet window too (v7).
     const out = groundCaption("No. 3 drives into the box and scores — crowd erupts", measured);
     expect(hasGoalClaim(out)).toBe(false);
-    expect(captionColour(out)).toBe("");
+    expect(captionColour(out)).toBe("noise lifts, then settles");
+    expect(captionColour(out)).not.toContain("crowd");
     // The derived channel itself is unchanged on a LOUD window.
     const loud = groundCaption("No. 3 drives into the box and scores — crowd erupts", {
       ...measured,
@@ -147,15 +149,17 @@ describe("contract v5 §3.1 — colour is DERIVED from the measured signal (R18)
     expect(colourBeatAllowed("noise lifts, then settles", quiet())).toBe(false);
   });
 
-  it("a measured QUIET window never carries the derived beat; a LOUD one does", () => {
-    // ADAAAA-7995 (AC4): the v5 40% share let `— noise spikes over the play` ride a
-    // `not_highlight` row and pushed it to 12-13 words on the served page. The
-    // quiet surface carries no colour; the derived beat still rides loud windows.
+  it("a measured QUIET window carries the derived beat too (v7 supersedes v6)", () => {
+    // ADAAAA-8043 (contract v7 §3.1): the v6 blanket ban made AC4 coverage 0% by
+    // construction (all 13 eligible windows on `3544e617` were `not_highlight`).
+    // The quiet branch appends the derived beat; the WRITE seam holds the 40%
+    // share, and the LEAD stays inside the 8-word budget (AC5).
     const out = groundCaption("Player in blue moves ball in center circle.", {
       ...measured,
       place: "in center circle",
     });
-    expect(captionColour(out)).toBe("");
+    expect(captionColour(out)).toBe("noise lifts, then settles");
+    expect(captionLead(out).split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(8);
     const loud = groundCaption("Player in blue moves ball in center circle.", {
       ...measured,
       verdict: "scoring_play",

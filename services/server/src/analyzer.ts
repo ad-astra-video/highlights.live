@@ -3973,6 +3973,10 @@ export function storedSurfaceFor(
           // The card's budget is the verdict's own rule, the same one the quiet
           // gate applied to the line it stores.
           quiet: isQuietVerdict(grounding?.verdict),
+          // ADAAAA-8043 (contract v7 §3.4): corroboration reaches the card-title
+          // surface, so an uncorroborated goal never renders `goal:` or `goal`.
+          corroborated: grounding?.corroborated ?? null,
+          verdict: grounding?.verdict ?? null,
           regate: (sentence: string) => regateServedSentence(sentence, grounding),
         })
       : { caption: "", cardTitles: [] as string[] };
