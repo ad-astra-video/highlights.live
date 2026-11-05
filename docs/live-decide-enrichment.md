@@ -89,7 +89,9 @@ failure returns empty text and the decide runs text-only, never a 5xx.
 
 The same coverage is stamped on the audit descriptor's `timings`, which the server
 persists as the `decide_audit` row (`timings` is an existing JSON column — no
-migration):
+migration). It is computed *before* the gemma call, so the record appended to
+`DECIDE_AUDIT_DIR/decide-audit.jsonl` on the decide box carries it too; a grade
+can read either layer:
 
 ```json
 {
@@ -103,6 +105,15 @@ migration):
 ```
 
 ## 4. Grading a fresh live leg
+
+- **AC-E2 precondition — the clip must be ON.** `AC-E2` is satisfiable only with
+  `LIVE_DECIDE_AUDIO_CLIP=1` on the live payload (`docker/.env`, server env).
+  With it at `0` the honest number is 0 % and every window is named
+  `audio_clip_disabled`; that is a config posture, not an instrumentation bug, so
+  a grade taken on `0` must read `not_captured` rather than `fail`. Flipping it
+  puts a ~560-580 KB clip on every decide, and the ASR leg (~0.7-0.9 s p50,
+  CPU-side) then rides the critical path — AC-E3's ON/OFF delta must cover
+  enrichment **plus** ASR, not the text records alone.
 
 - **AC-E1**: 100 % of decide rows carry `timings.perceiveTimeline.records >= 1`
   per ~1 s of span, and no row reports `records == 0` while
