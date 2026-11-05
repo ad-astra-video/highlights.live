@@ -52,7 +52,6 @@ import {
 } from "./observe-loop";
 import {
   LiveRunShared,
-  LIVE_STRIDE_CREDIT_CAP,
   buildLiveObserveMetrics,
   seedSignalFromEvidence,
   scoreboardDeltaLegible,
@@ -214,6 +213,14 @@ export function attestationFromObservation(
     (typeof att.ballOutcome === "string" && GOAL_OUTCOMES.has(att.ballOutcome));
   return attested ? att : null;
 }
+
+/** ADAAAA-8102: upper bound on the media rail's content-credit accumulator. The
+ *  relay hands out one frame per message, so a credit above a few frames can
+ *  never be spent on frames that are not there; this is a sanity bound, not a
+ *  rate. (The analyzer pass keeps its own `LIVE_STRIDE_CREDIT_CAP` = 2, which is
+ *  calibrated for its dense ingest — see `takeContentCredit` for the 51.6 s of
+ *  content time that cap discarded on the first media-rail leg.) */
+export const LIVE_MEDIA_STRIDE_CREDIT_MAX = 30;
 
 /** The smallest plausible epoch-second content clock (1970-01-12). Anything
  *  below this is not a wall-clock timestamp and must never set the rail's
@@ -681,7 +688,16 @@ export class MediaRailObserver {
     } else {
       const dt = ts - this.strideCreditTs;
       if (dt > 0) {
-        this.strideCredit = Math.min(LIVE_STRIDE_CREDIT_CAP, this.strideCredit + dt * this.contentFps);
+        // ADAAAA-8102: NOT clamped to the analyzer pass's `LIVE_STRIDE_CREDIT_CAP`
+        // (2). That cap assumes a DENSE ingest, where a lag spike must not let a
+        // burst of ingested frames be consumed at once. This rail receives at most
+        // ONE frame per relay message, so an accrued credit can never consume more
+        // frames than actually arrived — and clamping it silently DROPS content
+        // time. Measured on leg `95622028` (300 s at 1 fps): the relay delivered
+        // 27 bursts with gaps up to 4.94 s, the 2-frame cap discarded 51.6 s of
+        // credit, and the rail consumed 243 frames instead of ~295 (AC-8101-2's
+        // band is 280-320). Bounded far above any real burst instead.
+        this.strideCredit = Math.min(LIVE_MEDIA_STRIDE_CREDIT_MAX, this.strideCredit + dt * this.contentFps);
         this.strideCreditTs = ts;
       }
     }
