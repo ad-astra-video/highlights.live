@@ -147,6 +147,14 @@ export interface MediaServerOptions {
    * (tests and embedders).
    */
   lifecycle?: () => LifecycleSnapshot;
+  /**
+   * ADAAAA-8050: provenance of the revision this boot reports, from
+   * `loadConfig().buildRefSource`. Published as `restarts.buildRefSource` so a
+   * reader can tell an injected git revision (`env:BUILD_REF`) from the
+   * served-source digest fallback (`served-source-digest`) without guessing.
+   * Absent for embedders/tests that build a server without the config layer.
+   */
+  buildRefSource?: import("./config").BuildRefSource;
   /** Media-edge opus -> PCM audio relay (ADAAAA-7658). On by default; the
    *  decode uses the ffmpeg already in the media image, bills no GPU, and is
    *  best-effort (a failure never touches the video rail). Set
@@ -612,6 +620,9 @@ export class MediaServer {
               // and the attribution of THIS boot (deploy vs crash vs restart).
               bootId: lifecycle.bootId,
               buildRef: lifecycle.buildRef,
+              // ADAAAA-8050: where `buildRef` came from, so a reader can tell a
+              // deploy-injected revision from the served-source digest fallback.
+              buildRefSource: this.opts.buildRefSource ?? null,
               // ADAAAA-8048: sha256 of the served `services/media/src/**/*.ts`,
               // computed in this process. Unlike `buildRef` it does not depend on
               // the recreate going through `docker/deploy.sh`, so the served
