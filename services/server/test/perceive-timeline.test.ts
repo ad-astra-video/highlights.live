@@ -134,7 +134,7 @@ describe("buildObserveDecideRequest enrichment envelope (ADAAAA-8056 AC-E1/E4/E5
     const seeds = liveSeeds(29);
     const { evidence, opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), payload(seeds, 29));
     expect(evidence.perceiveTimeline?.length).toBe(29);
-    expect((opts as any).perceiveWindow).toEqual({ seeds: 29, records: 29, withFindings: 29 });
+    expect((opts as any).perceiveWindow).toEqual({ seeds: 29, records: 29, withFindings: 29, centerTs: 10 });
     expect((opts as any).audioPresence).toBeDefined();
     // The clip gate is reported so a gated window is named, not blamed on retention.
     expect((opts as any).audioPresence.clipEnabled).toBe(true);
@@ -153,7 +153,7 @@ describe("buildObserveDecideRequest enrichment envelope (ADAAAA-8056 AC-E1/E4/E5
     const cfg = { gameHint: "soccer" } as Parameters<typeof buildObserveDecideRequest>[0];
     const seeds: PerFrameSeed[] = [{ ts: 9, tracks: [{ trackId: "t0" }] }, { ts: 10 }];
     const { opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), payload(seeds, 2));
-    expect((opts as any).perceiveWindow).toEqual({ seeds: 2, records: 2, withFindings: 1 });
+    expect((opts as any).perceiveWindow).toEqual({ seeds: 2, records: 2, withFindings: 1, centerTs: 10 });
   });
 
   it("leaves the VOD payload byte-identical (AC-E5)", () => {
