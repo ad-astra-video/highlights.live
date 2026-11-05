@@ -14,6 +14,7 @@ import {
   LIVE_DECIDE_IMAGE_CEILING,
   LIVE_OBSERVE_WINDOW_S,
   OBSERVE_CADENCE_S,
+  OBSERVE_CONTENT_FPS,
 } from "./observe-loop";
 
 /** Default in-flight budget (`LIVE_OBSERVE_IN_FLIGHT` unset). */
@@ -24,6 +25,9 @@ export interface LiveDecidePosture {
   liveObserveInFlight: number;
   liveObserveWindowS?: number;
   liveObserveCadenceS?: number;
+  /** ADAAAA-8102: the CONTENT consume rate (`LIVE_OBSERVE_CONTENT_FPS`), undefined
+   *  = the 2 fps default. */
+  liveObserveContentFps?: number;
 }
 
 /**
@@ -42,5 +46,12 @@ export function liveDecideBootLines(cfg: LiveDecidePosture): string[] {
     `[boot] live decide window: ${span} s span / ${cadenceMs} ms cadence ` +
       `(LIVE_OBSERVE_WINDOW_S default ${LIVE_OBSERVE_WINDOW_S}, LIVE_OBSERVE_CADENCE_S default ` +
       `${OBSERVE_CADENCE_S} s, trailing window)`,
+    // ADAAAA-8102: the CONTENT consume rate both live rails analyse at. Named
+    // here for the same reason as the other three: `printenv` is not evidence,
+    // the decide rows carry `contentFps` and the media rail publishes its
+    // `perceive` stride block, and this line states what THIS process resolved.
+    `[boot] live content consume: ${cfg.liveObserveContentFps ?? OBSERVE_CONTENT_FPS} fps ` +
+      `(LIVE_OBSERVE_CONTENT_FPS, default ${OBSERVE_CONTENT_FPS}, both live rails; ` +
+      `ingest sampleFps still governs persistence + clip cut)`,
   ];
 }

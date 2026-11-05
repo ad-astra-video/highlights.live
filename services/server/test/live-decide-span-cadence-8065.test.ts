@@ -121,7 +121,9 @@ describe("the boot posture readout names all four cell values (ADAAAA-8065 Step 
   it("names the default cell: 4 images, 4 in flight, 10 s span, 3000 ms cadence", () => {
     const lines = liveDecideBootLines(liveCfg({}));
     const text = lines.join("\n");
-    expect(lines).toHaveLength(3); // one line per axis, so a grade greps the axis it measured
+    // ADAAAA-8102 added the content-consume axis as a fourth line, so a grade
+    // greps the axis it measured.
+    expect(lines).toHaveLength(4);
     expect(text).toContain("4 image(s)/decide");
     expect(text).toContain("4 decide(s) in flight");
     expect(text).toContain("10 s span / 3000 ms cadence");
