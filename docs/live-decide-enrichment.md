@@ -13,7 +13,9 @@ ladder on [ADAAAA-8049].
 
 ## 1. `evidence.perceiveTimeline` (live rail only)
 
-One compact record per perceive seed, ordered by `ts`:
+One compact record per **perceived frame in the window span**, ordered by `ts`.
+The source is the window's full observation set, not the images the call ships
+(ADAAAA-8064 — see §1a):
 
 ```json
 {
@@ -26,29 +28,73 @@ One compact record per perceive seed, ordered by `ts`:
 ```
 
 - Built by `buildPerceiveTimeline` (`services/server/src/analyzer.ts`) from the
-  window's aligned seeds; **one record per seed**, so a 27-29-seed / ~10 s window
-  yields ~3 records per second.
+  window's full observation set (`ObserveWindow.observedFrames`, pre image-cap);
+  **one record per perceived frame**, so a ~10 s window at ~2.8 obs/s yields ~28
+  records — independent of how many images the call ships. A payload with no
+  observation set (VOD symmetric window, legacy stub) falls back to `seeds` and
+  says so (`timelineSource: "seeds"`).
 - Bounded to `DECIDE_MAX_PERCEIVE_RECORDS` (32) and clamped per field
   (`tracks` le=8, label/anchor lists bounded), mirroring the decide service's
   `Evidence.perceiveTimeline max_length=32`. The server clamps first, so decide
   never 422s the live loop (ADAAAA-7022 contract holds).
-- A seed perceive never observed still yields a zero record (`tracks: 0`,
+- A frame perceive never observed still yields a zero record (`tracks: 0`,
   `objects: []`) — that is how an empty timeline stays distinguishable from a
   missing one.
 - Absent on the VOD rail: the enrichment is live-only, so the VOD request stays
   byte-identical.
 
+### 1a. Source decoupling (ADAAAA-8064, ruling R1 of ADAAAA-8047 rev 3)
+
+The first construction projected the timeline off the **image seeds**, so its
+density was a function of the frame budget: 4 images -> 0.40 records/s over a
+~10 s span, 12 images -> 1.20 records/s but decide p50 7 166 ms. That made AC-E1
+(density) and AC-3 (latency) mutually exclusive. It was a **construction
+defect**, not a frame-budget verdict.
+
+- `assembleLiveWindow` (`services/server/src/observe-loop.ts`) now keeps the
+  pre-cap in-window frame list (`observedFrames`, timestamps only — no image
+  bytes) alongside the capped `frames` the call ships.
+- `buildObservePayload` aligns that set to the perceive findings and puts it on
+  the payload as `observations`; `buildObserveDecideRequest` builds the timeline
+  from `observations`. Nothing new is inferred: the observations already exist.
+- The VOD symmetric window (`assembleObserveWindow`) keeps no observation set, so
+  the VOD payload is unchanged (AC-C5).
+
+Per-window ledger, on `decide_audit.timings.perceiveTimeline` **and** mirrored in
+`analysis.perceiveTimeline`:
+
+| field | meaning |
+|---|---|
+| `timelineRecords` | timeline records built for this window |
+| `observationsInSpan` | perceived frames inside the span (the timeline source) |
+| `imageCount` | images the decide call actually carried |
+| `imageGapMaxMs` | largest gap between consecutive shipped images |
+| `recordsPerSecond` | `timelineRecords / spanS` |
+| `spanS` | observed span in content seconds (last - first) |
+| `timelineSource` | `observations` \| `seeds` |
+
+`timelineRecords == imageCount < observationsInSpan` on a row is a construction
+regression (AC-C1). `imageGapMaxMs` is the honest imaging statement: ~3 s at a
+4-image cap means the images are genuinely spread over the span, not that the
+call has visual coverage every second.
+
 ### Prompt budget (AC-E3)
 
 `render_perceive_timeline` (`services/decide/app/gemma.py`) renders the block into
-the window prompt under `PERCEIVE_TIMELINE_MAX_CHARS = 1000`. When the budget
-binds, the ladder is: **scalars only** (drop object labels / OCR anchors / track
-ids, keep `t`, `tracks`, `vel`, `ball`, `poss`, flags) and only then **thinned**
-(fewer records, keeping those nearest the window center). Records are never
-silently dropped; the compaction mode is reported per window.
+the window prompt under `PERCEIVE_TIMELINE_MAX_CHARS = 3400` (ADAAAA-8064; it was
+1000, which bound on every full-rate window and thinned records — silently undoing
+the decoupling). When the budget binds, the ladder is: **scalars only** (drop
+object labels / OCR anchors, keep `t`, `tracks`, `vel`, `ball`, `poss`, flags) and
+only then **thinned** (fewer records, keeping those nearest the window center).
+Records are never silently dropped; the compaction mode is reported per window.
 
-A 29-record live window renders in scalars form (~930 chars ≈ 230 tokens); the
-delta against the pre-enrichment prompt is what AC-E3 measures on the box.
+Track ids are on the record but deliberately not rendered: eight ids per line
+pushed every record past the ~120 chars/record the full-rate window budgets. The
+ids stay joinable through `evidence.detections`.
+
+A 28-29 record live window renders at ~90-110 chars/record (~2.5-3.2 KB ≈ 650-800
+tokens), which fits the 3400-char budget without compaction. The delta against the
+pre-enrichment prompt is what AC-C4 measures on the box.
 
 ### Inspector
 
@@ -97,8 +143,12 @@ can read either layer:
 {
   "elapsedMs": 4123.4,
   "asrLatencyS": 0.68,
-  "perceiveTimeline": {"records": 29, "chars": 931, "compacted": "scalars",
-                        "seeds": 29, "withFindings": 29},
+  "perceiveTimeline": {"records": 28, "chars": 2810, "compacted": "none",
+                       "seeds": 4, "withFindings": 28,
+                       "timelineRecords": 28, "observationsInSpan": 28,
+                       "imageCount": 4, "imageGapMaxMs": 3300,
+                       "recordsPerSecond": 2.83, "spanS": 9.9,
+                       "timelineSource": "observations"},
   "audioPath": "asr_text", "asrRan": true, "windowAudioPresent": true,
   "noAudioReason": "", "audioTapChunks": 4, "audioClipBytes": 48000
 }
@@ -123,3 +173,19 @@ can read either layer:
 - **AC-E3**: same-cell A/B (≥3 distinct windows per side) — decide wall time with
   vs without the block. A delta > 0.5 s means compact further before any frame
   budget is raised.
+
+### ADAAAA-8064 density-ledger grades (one live leg at 4 images)
+
+- **AC-C1 (decoupling)**: ≥ 99 % of rows show
+  `timelineRecords == observationsInSpan > imageCount`. A row with
+  `timelineRecords == imageCount < observationsInSpan` is a FAIL of the
+  construction fix.
+- **AC-C2 (coverage)**: `recordsPerSecond >= 1.0` on 100 % of rows (~2.8 expected
+  at a ~10 s span), and 0 rows with an empty timeline while
+  `observationsInSpan > 0`.
+- **AC-C3 (honest imaging)**: `imageGapMaxMs` present on every row and ~3.0 s at a
+  4-image cap. A sub-0.9 s value at 4 images is a recording bug, not a win.
+- **AC-C4 (no latency regression)**: same-cell decide wall time vs the 4-image
+  baseline (p50 4 374 ms, max 5 165 ms) with **alternating ON/OFF order** on both
+  sides; timeline delta p50 <= 0.5 s. ON-first-only reads a false +588 ms through
+  the warm image prefix.

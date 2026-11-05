@@ -1502,8 +1502,16 @@ def render_prior_game_state_block(prior: object) -> str:
 # the budget binds the record is COMPACTED (object labels / OCR anchors dropped,
 # keep the decisive scalars), and only then THINNED (fewest records, keeping the
 # ones nearest the window center) — it is never silently dropped.
-# ---------------------------------------------------------------------------
-PERCEIVE_TIMELINE_MAX_CHARS = 1000
+#
+# ADAAAA-8064: the budget is now sized for the FULL-rate live window, not for the
+# image count. The timeline is sourced from the window's whole observation set
+# (~28 perceived frames over a ~10 s span at ~2.8 obs/s), so a 1000-char budget
+# would bind on every window and thin the record list — which would silently
+# undo the decoupling the server just built. 3400 chars holds 28-29 records at
+# <= ~120 chars/record (~3.4 KB per call); prefill for ~900 extra tokens is
+# milliseconds against a 0.5 s budget, and every frame saved is ~0.5-1.5 s of
+# decide wall time.
+PERCEIVE_TIMELINE_MAX_CHARS = 3400
 PERCEIVE_TIMELINE_MAX_RECORDS = 32
 PERCEIVE_TIMELINE_HEADER = (
     "perceive timeline (perceive's 3 fps view of this window, one record per "
@@ -1525,7 +1533,13 @@ def _timeline_center(perceive_window: object) -> float | None:
 
 def _timeline_line(rec: dict, center_ts: float | None, *, scalars_only: bool) -> str:
     """One timeline record, rendered for the prompt. `scalars_only` drops the
-    label/anchor fields and keeps the decisive scalars (the AC-E3 compaction)."""
+    label/anchor fields and keeps the decisive scalars (the AC-E3 compaction).
+
+    ADAAAA-8064: track ids are deliberately NOT rendered. Eight ids per record
+    pushed every line past the ~120 chars/record the full-rate window budgets;
+    the ids stay on the evidence record (and in `evidence.detections`), where an
+    auditor can join them, while the model gets the count plus the labels.
+    """
     try:
         ts = float(rec.get("ts") or 0.0)
     except (TypeError, ValueError):
@@ -1546,9 +1560,6 @@ def _timeline_line(rec: dict, center_ts: float | None, *, scalars_only: bool) ->
         ocr = [o for o in (rec.get("ocr") or []) if isinstance(o, str) and o]
         if ocr:
             parts.append('ocr="' + "|".join(ocr[:2]) + '"')
-        tids = [t2 for t2 in (rec.get("trackIds") or []) if isinstance(t2, str) and t2]
-        if tids:
-            parts.append("track_ids=" + ",".join(tids[:8]))
     bo = rec.get("ballOutcome")
     if isinstance(bo, str) and bo.strip():
         parts.append(f"ball={bo.strip()}")
@@ -1576,9 +1587,12 @@ def render_perceive_timeline(
 
     Returns ``(block, ledger)``. `block` is "" when the window carries no
     timeline (VOD rail / no seeds), so the prompt stays byte-identical to the
-    pre-enrichment text. `ledger` is what AC-E1 reads back off decide_audit:
-    ``{records, chars, compacted, seeds, withFindings}`` where `compacted` is one
-    of "none" | "scalars" | "thinned".
+    pre-enrichment text. `ledger` is what AC-E1/AC-C1 reads back off
+    decide_audit: ``{records, chars, compacted, seeds, withFindings}`` where
+    `compacted` is one of "none" | "scalars" | "thinned", plus (ADAAAA-8064) the
+    server-measured density keys ``{timelineRecords, observationsInSpan,
+    imageCount, imageGapMaxMs, recordsPerSecond, spanS, timelineSource}`` when the
+    window stated them.
 
     Deterministic + side-effect free (unit-testable).
     """
@@ -1586,6 +1600,22 @@ def render_perceive_timeline(
     recs = [r for r in (raw or []) if isinstance(r, dict)][:PERCEIVE_TIMELINE_MAX_RECORDS]
     seeds = 0
     with_findings = 0
+    # ADAAAA-8064: the density/decoupling ledger the server measured for this
+    # window. Passed through verbatim (typed) so `decide_audit.timings` and the
+    # `analysis` block can be graded row-by-row: timelineRecords vs
+    # observationsInSpan proves the timeline is not a projection of the image
+    # set, recordsPerSecond/spanS grade density, imageGapMaxMs grades honesty
+    # about how sparse the shipped images are.
+    passthrough = {
+        "timelineRecords": ("timelineRecords", int),
+        "observationsInSpan": ("observationsInSpan", int),
+        "imageCount": ("imageCount", int),
+        "imageGapMaxMs": ("imageGapMaxMs", int),
+        "recordsPerSecond": ("recordsPerSecond", float),
+        "spanS": ("spanS", float),
+    }
+    extra: dict = {}
+    source = None
     if isinstance(perceive_window, dict):
         for key, dst in (("seeds", "seeds"), ("withFindings", "withFindings")):
             try:
@@ -1596,13 +1626,27 @@ def render_perceive_timeline(
                 seeds = max(0, v)
             else:
                 with_findings = max(0, v)
+        for key, (dst, cast) in passthrough.items():
+            v = perceive_window.get(key)
+            if v is None:
+                continue
+            try:
+                extra[dst] = cast(v)
+            except (TypeError, ValueError):
+                continue
+        src = perceive_window.get("timelineSource")
+        if src in ("observations", "seeds"):
+            source = src
     ledger = {
         "records": 0,
         "chars": 0,
         "compacted": "none",
         "seeds": seeds,
         "withFindings": with_findings,
+        **extra,
     }
+    if source is not None:
+        ledger["timelineSource"] = source
     if not recs:
         return "", ledger
 

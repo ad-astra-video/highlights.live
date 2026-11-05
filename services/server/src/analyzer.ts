@@ -4395,11 +4395,18 @@ export const DECIDE_MAX_DETECTION_BBOX = 4;
  * `Evidence.perceiveTimeline max_length`. */
 export const DECIDE_MAX_PERCEIVE_RECORDS = 32;
 
-/** ADAAAA-8056 (AC-E1): the per-window perceive coverage ledger the server sends
- * with every live decide so the decide service can persist it in its audit
- * `timings`. `seeds` = frames aligned into the window, `records` = timeline
- * records actually forwarded, `withFindings` = seeds perceive genuinely observed
- * (a bare `{ts}` seed is a frame perceive never looked at). */
+/** ADAAAA-8056 (AC-E1) / ADAAAA-8064 (AC-C1..C3): the per-window perceive
+ * coverage AND density ledger the server sends with every live decide so the
+ * decide service can persist it in its audit `timings` and mirror it in the
+ * `analysis` block. `seeds` = frames aligned into the image set, `records` =
+ * timeline records actually forwarded, `withFindings` = observations perceive
+ * genuinely observed (a bare `{ts}` seed is a frame perceive never looked at).
+ *
+ * ADAAAA-8064 added the decoupling numbers: `timelineRecords` and
+ * `observationsInSpan` come from the window's FULL observation set (pre image
+ * cap), so a row where `timelineRecords == imageCount < observationsInSpan`
+ * is a construction regression, and `imageGapMaxMs` states how sparse the
+ * shipped images really are instead of letting the reader assume coverage. */
 export interface PerceiveWindowLedger {
   seeds: number;
   records: number;
@@ -4408,6 +4415,23 @@ export interface PerceiveWindowLedger {
    * timeline record's `t` relative to it, so "when in the window" is readable
    * without the model doing clock arithmetic. */
   centerTs?: number;
+  /** ADAAAA-8064: timeline records built for this window (pre-render count). */
+  timelineRecords?: number;
+  /** ADAAAA-8064: perceived frames inside the window span (the timeline source). */
+  observationsInSpan?: number;
+  /** ADAAAA-8064 (AC-C3): images the decide call actually carries. */
+  imageCount?: number;
+  /** ADAAAA-8064 (AC-C3): largest gap between consecutive shipped images (ms).
+   * ~3 s at a 4-image cap over a 10 s window is honest; sub-second at 4 images
+   * would mean the frames are not actually spread over the span. */
+  imageGapMaxMs?: number;
+  /** ADAAAA-8064 (AC-C2): timeline records per second of window span. */
+  recordsPerSecond?: number;
+  /** ADAAAA-8064: the observed span in content seconds (last - first). */
+  spanS?: number;
+  /** ADAAAA-8064: where the timeline was sourced from — `observations` on the
+   * live rail, `seeds` on the VOD symmetric window / a legacy payload. */
+  timelineSource?: "observations" | "seeds";
 }
 
 /** ADAAAA-8056 (AC-E2): where this window's audio actually came from. `clipBytes`
@@ -4666,9 +4690,31 @@ export function buildObserveDecideRequest(
   // the seconds around the play.
   const triggerTs = payload.trigger?.onsetTs;
   const anchorTs = Number.isFinite(triggerTs as number) ? (triggerTs as number) : center;
-  const perceiveTimeline = buildPerceiveTimeline(seeds, { centerTs: center, anchorTs });
+  // ADAAAA-8064 (B+e′ construction fix): the timeline is sourced from the
+  // window's FULL observation set, not from the images the call ships. The live
+  // payload carries `observations` (every perceived frame in the span, pre image
+  // -cap); projecting the timeline off `seeds` made its density a function of
+  // the image budget (4 images -> 4 records over a ~10 s span), which is what
+  // made AC-E1 and AC-3 mutually exclusive. A payload without `observations`
+  // (VOD symmetric window, or a partial stub) keeps the old source, so the VOD
+  // request stays byte-identical.
+  const observations = payload.observations?.length ? payload.observations : seeds;
+  const perceiveTimeline = buildPerceiveTimeline(observations, { centerTs: center, anchorTs });
   const timelineSeeds = seeds.length;
-  const timelineWithFindings = seeds.filter((s) => seedCarriesFindings(s)).length;
+  const timelineWithFindings = observations.filter((s) => seedCarriesFindings(s)).length;
+  // ADAAAA-8064 (AC-C1/C2/C3): the honest density ledger for this window. All of
+  // it is measured off data the payload already carries — no extra perception,
+  // no extra decide call.
+  const observationTs = observations.map((s) => s.ts).filter((t) => Number.isFinite(t));
+  const spanS = observationTs.length >= 2
+    ? Number((Math.max(...observationTs) - Math.min(...observationTs)).toFixed(2))
+    : 0;
+  const imageTs = payload.frames.map((f) => f.ts).filter((t) => Number.isFinite(t)).sort((a, b) => a - b);
+  const imageGapMaxMs = imageTs.length >= 2
+    ? Math.round(Math.max(...imageTs.slice(1).map((t, i) => t - imageTs[i])) * 1000)
+    : 0;
+  const recordsPerSecond = spanS > 0 ? Number((perceiveTimeline.length / spanS).toFixed(2)) : 0;
+  const timelineSource: "observations" | "seeds" = payload.observations?.length ? "observations" : "seeds";
   const detections = selectDecideDetections(seeds, anchorTs, DECIDE_MAX_DETECTIONS);
   // ADAAAA-7021 fix: fold the perceive candidate's goal-attestation signals that
   // rode the in-window bias hints (goalCrossed / ballOutcome / scoreBoardChanged).
@@ -4837,6 +4883,17 @@ export function buildObserveDecideRequest(
             records: perceiveTimeline.length,
             withFindings: timelineWithFindings,
             centerTs: center,
+            // ADAAAA-8064 (AC-C1..C3): the density/decoupling ledger. Every
+            // number is measured off the payload's own data, so the audit row
+            // states what the call actually carried instead of being inferred
+            // from the image count.
+            timelineRecords: perceiveTimeline.length,
+            observationsInSpan: observations.length,
+            imageCount: payload.frames.length,
+            imageGapMaxMs,
+            recordsPerSecond,
+            spanS,
+            timelineSource,
           },
           audioPresence: {
             tapChunks: audioTapChunks,
