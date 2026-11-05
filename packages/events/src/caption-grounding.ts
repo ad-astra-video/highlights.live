@@ -174,6 +174,12 @@ function matchCase(replacement: string, matched: string): string {
  * text that no rule touched, so an already-clean line stays byte-identical. */
 function tidy(text: string): string {
   return text
+    // ADAAAA-8127 (Defect B): removing a phrase INSIDE parentheses
+    // (`(score change confirmed)` — an evidence tag, never copy) left the
+    // brackets behind as `()`, which shipped as
+    // `The scoreboard updates from 2-1 to 2-1 ().`. An empty pair is a strip
+    // artifact, never punctuation a sentence needs.
+    .replace(/\(\s*\)/g, " ")
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([,.;:!?])/g, "$1")
     .replace(/([,;:])\s*(?=[,.;:!?])/g, "")
@@ -2387,7 +2393,18 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
   // no longer an option (a bare token or a `label: sentence` prefix is not a
   // gated stored string), so there is nothing to corroboration-gate here. AC4b
   // is still enforced on the caption itself (`regate` -> `gateGoalClaims`).
-  const candidate = captionForStoredLine(gated);
+  // ADAAAA-8127 (Defect B): a stored line whose sentence end was carried by the
+  // clause the gate excised (`The keeper is beaten` for `… and the keeper is
+  // beaten as the player in white scores.`) is a SENTENCE, not a label. The end is
+  // restored only when the row's OWN source carried one — a line whose source
+  // itself stops without a stop is the model's own text, and a stored row keeps
+  // that byte-identical (ADAAAA-8125 AC3). The candidate is closed BEFORE the
+  // post-condition, so a bare caption cannot be accepted as its own source.
+  const droppedStop =
+    hasTerminalPunctuation(rawSentence) && !hasTerminalPunctuation(gated);
+  const candidate = captionForStoredLine(
+    droppedStop ? restoreTerminalPunctuation(gated) : gated
+  );
   const violations = servedShapeViolations(candidate, sources);
   if (clean(candidate)) {
     return { caption: candidate, cardTitles: cardTitlesFor(candidate), violations: [] };
