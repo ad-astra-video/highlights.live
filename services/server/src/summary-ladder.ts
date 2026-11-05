@@ -400,12 +400,21 @@ function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
       out.push(e);
       continue;
     }
+    // ADAAAA-8040 (§2 residual): restoring a sentence end (`.` after a claim
+    // suppression, or after the model's own punctuation-less line) changes the
+    // string but not the LINE. It is not a repair collision, so the row keeps its
+    // place in the ladder instead of yielding to the display cap.
+    const key = captionLineKey(served.text);
+    if (key === captionLineKey(e.clean)) {
+      emitted.add(key);
+      out.push({ ...e, clean: served.text, trimmed: e.trimmed });
+      continue;
+    }
     // ADAAAA-8014 (AC1/AC2): a REPAIR may land on a line an earlier row already
     // serves (two windows whose stored lines gated to the same beat, one of them
     // a cut of the longer sentence). The display cap's rule still holds — the
     // emitted set stays distinct — so the repair yields to the row that already
     // states that beat.
-    const key = captionLineKey(served.text);
     if (emitted.has(key)) continue;
     emitted.add(key);
     out.push({ ...e, clean: served.text, trimmed: true });
