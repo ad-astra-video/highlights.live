@@ -1,0 +1,422 @@
+{
+ "job": "28214400-df08-4f45-a182-367f818bcfa5",
+ "level": "deploy-master 32872f2",
+ "summaryLog": [
+  {
+   "seq": 1,
+   "text": "Player in purple dribbles in the center circle.",
+   "verdict": "not_highlight",
+   "text_raw": "Player in purple jersey dribbles in the center circle",
+   "windowTs": 0
+  },
+  {
+   "seq": 2,
+   "text": "The player dribbles toward the goal in midfield.",
+   "verdict": "not_highlight",
+   "text_raw": "The player in purple dribbles toward the goal area.",
+   "windowTs": 3
+  },
+  {
+   "seq": 3,
+   "text": "Player in purple jersey falls in the box.",
+   "verdict": "not_highlight",
+   "text_raw": "Player in purple jersey falls in the penalty area.",
+   "windowTs": 12
+  },
+  {
+   "seq": 4,
+   "text": "The player in white strikes the ball, which hits the post and deflects away on the right — noise spikes over the play.",
+   "colour": {
+    "peak": 0.204058,
+    "peakT": 19.3,
+    "ratio": 13.797957941713435,
+    "signal": "audio_noise",
+    "frameTs": 18,
+    "frameSeq": 90,
+    "sustained": 0.21568627450980393
+   },
+   "verdict": "near_miss",
+   "text_raw": "The player in white strikes the ball, which hits the post and deflects away.",
+   "windowTs": 18
+  },
+  {
+   "seq": 5,
+   "text": "Player takes a shot from the box — noise lifts, then settles.",
+   "colour": {
+    "peak": 0.204058,
+    "peakT": 19.3,
+    "ratio": 8.71893693385746,
+    "signal": "audio_noise",
+    "frameTs": 19.666666666666664,
+    "frameSeq": 98,
+    "sustained": 0.3333333333333333
+   },
+   "verdict": "not_highlight",
+   "text_raw": "Player in white takes a shot from the penalty area.",
+   "windowTs": 21
+  },
+  {
+   "seq": 6,
+   "text": "Player takes a shot from the box.",
+   "verdict": "not_highlight",
+   "text_raw": "Player in white takes a shot from the penalty area.",
+   "windowTs": 30
+  },
+  {
+   "seq": 7,
+   "text": "A player takes a shot from the box.",
+   "verdict": "not_highlight",
+   "text_raw": "A player in white takes a shot from the penalty area.",
+   "windowTs": 36
+  },
+  {
+   "seq": 8,
+   "text": "A player takes a shot from the box — noise spikes over the play.",
+   "colour": {
+    "peak": 0.197407,
+    "peakT": 48.5,
+    "ratio": 11.623800270859093,
+    "signal": "audio_noise",
+    "frameTs": 48.666666666666664,
+    "frameSeq": 243,
+    "sustained": 0.26
+   },
+   "verdict": "not_highlight",
+   "text_raw": "A player in white takes a shot from the penalty area.",
+   "windowTs": 48.666666666666664
+  },
+  {
+   "seq": 9,
+   "text": "Diego Aguado loses the ball in the center.",
+   "verdict": "not_highlight",
+   "windowTs": 57.666666666666664
+  },
+  {
+   "seq": 10,
+   "text": "Players stand in a lull in center circle.",
+   "verdict": "not_highlight",
+   "text_raw": "Players stand in a lull in the center circle.",
+   "windowTs": 66.66666666666666
+  },
+  {
+   "seq": 11,
+   "text": "A player dribbles in midfield.",
+   "verdict": "not_highlight",
+   "text_raw": "A player in white dribbles and passes the ball into the center of the field.",
+   "windowTs": 91
+  },
+  {
+   "seq": 12,
+   "text": "Carlos Javier moves toward the goal in midfield.",
+   "verdict": "not_highlight",
+   "text_raw": "Carlos Javier moves toward the goal area with the ball.",
+   "windowTs": 97
+  },
+  {
+   "seq": 13,
+   "text": "Manuel Ordoñez shoots for Real Madrid in midfield.",
+   "verdict": "scoring_play",
+   "text_raw": "Manuel Ordoñez scores for Real Madrid — Crowd erupts",
+   "windowTs": 103
+  },
+  {
+   "seq": 14,
+   "text": "Manuel Ordonez shoots to put Real Madrid up 2-1 in midfield.",
+   "verdict": "scoring_play",
+   "text_raw": "Manuel Ordonez scores to put Real Madrid up 2-1 — Crowd erupts",
+   "windowTs": 109
+  },
+  {
+   "seq": 15,
+   "text": "Manuel Ordoñez shoots for Real Madrid on the left.",
+   "verdict": "scoring_play",
+   "text_raw": "Manuel Ordoñez scores for Real Madrid — Crowd erupts",
+   "windowTs": 112
+  },
+  {
+   "seq": 16,
+   "text": "A player in the box attempts a shot.",
+   "verdict": "not_highlight",
+   "text_raw": "A player in the penalty area attempts a shot.",
+   "windowTs": 123
+  },
+  {
+   "seq": 17,
+   "text": "The winger strikes the ball on the right.",
+   "verdict": "scoring_play",
+   "text_raw": "The winger strikes the ball into the net — crowd erupts as the score changes to 2-2.",
+   "windowTs": 159
+  },
+  {
+   "seq": 18,
+   "text": "David Saez shoots to level the game 2-2 in midfield.",
+   "verdict": "scoring_play",
+   "text_raw": "David Saez scores to level the game 2-2 — Crowd erupts",
+   "windowTs": 165
+  },
+  {
+   "seq": 19,
+   "text": "The player attempts a shot from the box.",
+   "verdict": "not_highlight",
+   "text_raw": "The player attempts a shot from the penalty area.",
+   "windowTs": 180
+  },
+  {
+   "seq": 20,
+   "text": "Players contest the ball on the left.",
+   "verdict": "not_highlight",
+   "text_raw": "Players contest the ball in the center of the pitch.",
+   "windowTs": 192
+  },
+  {
+   "seq": 21,
+   "text": "A player controls the ball in center circle.",
+   "verdict": "not_highlight",
+   "text_raw": "A player in a blue kit controls the ball in the center circle.",
+   "windowTs": 216
+  },
+  {
+   "seq": 22,
+   "text": "A player kicks the ball into the center.",
+   "verdict": "not_highlight",
+   "text_raw": "A player kicks the ball into the center of the pitch.",
+   "windowTs": 234
+  },
+  {
+   "seq": 23,
+   "text": "A player strikes the ball into the box.",
+   "verdict": "not_highlight",
+   "text_raw": "A player strikes the ball into the penalty area.",
+   "windowTs": 237
+  },
+  {
+   "seq": 24,
+   "text": "Navarro shoots from the box.",
+   "verdict": "near_miss",
+   "text_raw": "Navarro shoots from the box — a close miss",
+   "windowTs": 252
+  },
+  {
+   "seq": 25,
+   "text": "A player moves the ball on the right — noise spikes over the play.",
+   "colour": {
+    "peak": 0.240875,
+    "peakT": 261.6,
+    "ratio": 16.13578510182208,
+    "signal": "audio_noise",
+    "frameTs": 261,
+    "frameSeq": 1305,
+    "sustained": 0.27450980392156865
+   },
+   "verdict": "not_highlight",
+   "text_raw": "A player in white moves the ball into the center of the pitch.",
+   "windowTs": 261
+  },
+  {
+   "seq": 26,
+   "text": "Real Madrid players control the ball in center.",
+   "verdict": "not_highlight",
+   "text_raw": "Real Madrid players control the ball in the center circle.",
+   "windowTs": 270
+  },
+  {
+   "seq": 27,
+   "text": "A player controls the ball in the box.",
+   "verdict": "not_highlight",
+   "text_raw": "A player in white controls the ball in the penalty area.",
+   "windowTs": 273
+  },
+  {
+   "seq": 28,
+   "text": "Jordana shoots on the left.",
+   "verdict": "big_play",
+   "text_raw": "Jordana scores a goal — crowd erupts",
+   "windowTs": 282
+  },
+  {
+   "seq": 29,
+   "text": "A player tackles an opponent on the right.",
+   "verdict": "not_highlight",
+   "text_raw": "A player tackles an opponent in the defensive third.",
+   "windowTs": 297
+  },
+  {
+   "seq": 30,
+   "text": "A player attempts a header from the box.",
+   "verdict": "not_highlight",
+   "text_raw": "A player attempts a header from the box — ball goes wide",
+   "windowTs": 300
+  },
+  {
+   "seq": 31,
+   "text": "A player strikes the ball in midfield.",
+   "verdict": "not_highlight",
+   "text_raw": "A player strikes the ball toward the sideline.",
+   "windowTs": 306
+  },
+  {
+   "seq": 32,
+   "text": "Jordana shoots in midfield.",
+   "verdict": "scoring_play",
+   "text_raw": "Jordana scores a goal — crowd erupts",
+   "windowTs": 309
+  }
+ ],
+ "highlights": [
+  {
+   "id": "06ad4ab4-24f1-4c8a-84d5-61436406e09e",
+   "end": 108.667,
+   "jobId": "28214400-df08-4f45-a182-367f818bcfa5",
+   "score": 85,
+   "start": 93.667,
+   "reason": "The scoreboard updates, and the commentator confirms the shot by Manuel Ordoñez in midfield.",
+   "status": "accepted",
+   "caption": "The scoreboard updates, and the commentator confirms the shot by Manuel Ordoñez in midfield.",
+   "clipUri": "/clips/28214400-df08-4f45-a182-367f818bcfa5-1007.mp4",
+   "outcome": "scoring_play",
+   "ownerId": "907e0df9253dd5ad",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "AUDIO_BURST",
+    "timestamp": 103,
+    "scoreBoardChanged": true
+   },
+   "nearMiss": false,
+   "createdAt": "2026-11-05T04:59:11.289Z",
+   "eventType": "GOAL",
+   "cardTitles": [
+    "The scoreboard updates, and the commentator confirms the shot by Manuel Ordoñez in midfield."
+   ],
+   "reason_raw": "The ball enters the net, the scoreboard updates, and the commentator confirms the goal by Manuel Ordoñez.; scoreboard score change confirmed",
+   "candidateId": "01419d23-bdb4-4ea8-839f-3316634bdab1",
+   "localizedTs": 100.667,
+   "clipWindowSec": 15,
+   "idempotencyKey": "hl:28214400-df08-4f45-a182-367f818bcfa5:515:GOAL",
+   "localizeSignal": "peak_frame",
+   "clipWindowAfterS": 8,
+   "clipWindowBeforeS": 7,
+   "localizeEvidenceTs": 100.667,
+   "localizeAnchorReason": "frame_attestation",
+   "localizeAnchorDeltaSec": 0
+  },
+  {
+   "id": "515db7ec-131b-46b3-9f80-4d236f8b7126",
+   "end": 164,
+   "jobId": "28214400-df08-4f45-a182-367f818bcfa5",
+   "score": 85,
+   "start": 149,
+   "reason": "The ball shoots on the right",
+   "status": "accepted",
+   "caption": "The ball shoots on the right",
+   "clipUri": "/clips/28214400-df08-4f45-a182-367f818bcfa5-1560.mp4",
+   "outcome": "scoring_play",
+   "ownerId": "907e0df9253dd5ad",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "AUDIO_BURST",
+    "timestamp": 156
+   },
+   "nearMiss": false,
+   "createdAt": "2026-11-05T04:59:58.363Z",
+   "eventType": "GOAL",
+   "cardTitles": [
+    "The ball shoots on the right"
+   ],
+   "reason_raw": "The ball clearly enters the net and the keeper is beaten.",
+   "candidateId": "e92f2a5f-b53b-4abd-a95e-f9ae45b6ce58",
+   "localizedTs": 156,
+   "clipWindowSec": 15,
+   "idempotencyKey": "hl:28214400-df08-4f45-a182-367f818bcfa5:780:BIG_PLAY",
+   "localizeSignal": "trigger",
+   "clipWindowAfterS": 8,
+   "clipWindowBeforeS": 7,
+   "localizeEvidenceTs": 156,
+   "deferredAttestation": {
+    "pre": [
+     2,
+     1
+    ],
+    "post": [
+     2,
+     2
+    ],
+    "readAt": 165,
+    "deltaTs": 158.667,
+    "windowHi": 156,
+    "windowLo": 146
+   },
+   "localizeAnchorReason": "peak_audio_far_rejected",
+   "localizeAnchorDeltaSec": 0
+  },
+  {
+   "id": "3d147c24-44dd-4c6e-be70-e5461b43ffde",
+   "end": 291.0999999999959,
+   "jobId": "28214400-df08-4f45-a182-367f818bcfa5",
+   "score": 85,
+   "start": 276.0999999999959,
+   "reason": "The keeper falls, followed by a crowd eruption and player celebration.",
+   "status": "accepted",
+   "caption": "The keeper falls, followed by a crowd eruption and player celebration.",
+   "clipUri": "/clips/28214400-df08-4f45-a182-367f818bcfa5-2831.mp4",
+   "outcome": "big_play",
+   "ownerId": "907e0df9253dd5ad",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "AUDIO_BURST",
+    "timestamp": 282
+   },
+   "nearMiss": false,
+   "createdAt": "2026-11-05T05:02:01.937Z",
+   "eventType": "BIG_PLAY",
+   "cardTitles": [
+    "The keeper falls, followed by a crowd eruption and player celebration."
+   ],
+   "reason_raw": "The ball enters the net and the keeper falls, followed by a crowd eruption and player celebration. | live scoring lane: no measured attestation in this window (no scoreboard change, no goal-line / net signal, no corroborated confirm) — delivered as a celebration, not a GOAL",
+   "candidateId": "615f25d6-8cee-4ac0-a7f9-84a3a3a7a526",
+   "localizedTs": 283.0999999999959,
+   "clipWindowSec": 15,
+   "idempotencyKey": "hl:28214400-df08-4f45-a182-367f818bcfa5:1410:BIG_PLAY",
+   "localizeSignal": "peak_audio",
+   "clipWindowAfterS": 8,
+   "clipWindowBeforeS": 7,
+   "localizeEvidenceTs": 282,
+   "localizeAnchorReason": "peak_audio_reaction",
+   "localizeAnchorDeltaSec": 1.0999999999958732
+  },
+  {
+   "id": "16075363-bb3f-4768-a0ab-2fc3c65949e2",
+   "end": 297.4999999999973,
+   "jobId": "28214400-df08-4f45-a182-367f818bcfa5",
+   "score": 85,
+   "start": 282.4999999999973,
+   "reason": "A large 'GOL' graphic appears on screen.",
+   "status": "accepted",
+   "caption": "A large 'GOL' graphic appears on screen.",
+   "clipUri": "/clips/28214400-df08-4f45-a182-367f818bcfa5-2895.mp4",
+   "outcome": "big_play",
+   "ownerId": "907e0df9253dd5ad",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 288
+   },
+   "nearMiss": false,
+   "createdAt": "2026-11-05T05:02:10.457Z",
+   "eventType": "BIG_PLAY",
+   "cardTitles": [
+    "A large 'GOL' graphic appears on screen."
+   ],
+   "reason_raw": "The ball enters the net and a large 'GOL' graphic appears on screen. | live scoring lane: no measured attestation in this window (no scoreboard change, no goal-line / net signal, no corroborated confirm) — delivered as a celebration, not a GOAL",
+   "candidateId": "b3dcf0ba-4a6a-49bd-8352-8036a3fceca7",
+   "localizedTs": 289.4999999999973,
+   "clipWindowSec": 15,
+   "idempotencyKey": "hl:28214400-df08-4f45-a182-367f818bcfa5:1440:BIG_PLAY",
+   "localizeSignal": "peak_audio",
+   "clipWindowAfterS": 8,
+   "clipWindowBeforeS": 7,
+   "localizeEvidenceTs": 288,
+   "localizeAnchorReason": "peak_audio_reaction",
+   "localizeAnchorDeltaSec": 1.4999999999973284
+  }
+ ]
+}

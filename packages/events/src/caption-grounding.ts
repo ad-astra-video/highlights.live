@@ -689,7 +689,7 @@ const TAIL_CLAUSE_OPENER = /\s+\b(while|as|when|and|but|which|that|who|because|a
  * leaves behind; a tail with one (`… and shoots`) is a whole clause and stays.
  */
 const VERBISH =
-  /\b(?:reacts?|moves?|drives?|controls?|contests?|dribbles?|stands?|passes?|plays?|takes?|holds?|watches?|waits?|runs?|shoots?|strikes?|heads?|clears?|tackles?|blocks?|saves?|jumps?|turns?|attacks?|presses?|chases?|follows?|keeps?|sets?|scores?|scored|carries|carried|wins?|won|sends?|sent|puts?|makes?|made|finds?|found|gets?|got|comes?|came|goes?|went|rises?|rose|falls?|fell|lifts?|lofts?|rolls?|bounces?|crosses?|fires?|volleys?|tries?|tried|sees?|saw|looks?|appears?|erupts?|celebrates?|updates?|becomes?|reads?|shows?|is|are|was|were|has|have|had|does|did|can|could|will|would|may|might|must)\b/i;
+  /\b(?:reacts?|moves?|drives?|controls?|contests?|dribbles?|stands?|passes?|plays?|takes?|holds?|watches?|waits?|runs?|shoots?|strikes?|heads?|clears?|tackles?|blocks?|saves?|jumps?|turns?|attacks?|presses?|chases?|follows?|keeps?|sets?|scores?|scored|carries|carried|wins?|won|sends?|sent|puts?|makes?|made|finds?|found|gets?|got|comes?|came|goes?|went|rises?|rose|falls?|fell|lifts?|lofts?|rolls?|bounces?|crosses?|fires?|volleys?|tries?|tried|attempts?|sees?|saw|looks?|appears?|erupts?|celebrates?|updates?|becomes?|reads?|shows?|is|are|was|were|has|have|had|does|did|can|could|will|would|may|might|must)\b/i;
 
 /**
  * ADAAAA-7961 (§3.3/§3.4 residuals): repair a delivered string that stops
@@ -1284,6 +1284,83 @@ function gateScores(text: string, promptText: string): string {
   }
   if (out === text) return text;
   return out;
+}
+
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8059 (PO ruling, lever 3): the SCORELINE fact gate belongs at the WRITE
+ * seam, not at read time.
+ *
+ * An uncorroborated scoreline is a CLAIM, and the viewer-facing surface may never
+ * assert one. The old shape suppressed it while building the ladder, so the page
+ * disagreed with its own store (`2-1` stored, dropped on the way out) and that
+ * hole is what hid write-seam defects through v3-v8. The string
+ * `summaryLog.text` stores is now ALREADY the suppressed string: stored == served
+ * stays absolute, the read path stays a pure read (contract v7 decision 4) and
+ * the gate keeps failing closed.
+ *
+ * Unlike `gateScores` above this gate is UNCONDITIONAL — it does not consult the
+ * window's prompt, because a prompt scoreboard read is not a measured
+ * corroboration. It is pure and idempotent: re-running it over its own output is
+ * byte-identical, which is what makes a stored row replayable byte-for-byte.
+ * ------------------------------------------------------------------------- */
+
+/** A HYPHEN/dash scoreline (`2-2`, `0 – 1`). `M:SS` clocks are timestamps. */
+const FACT_SCORE_SRC = String.raw`(?<![\w:.])\d{1,2}\s*[-–—]\s*\d{1,2}(?![\w:.])`;
+/** `M:SS` clock; masked so a clock is never read as a score. */
+const FACT_CLOCK_SRC = String.raw`\b\d{1,3}:\d{2}\b`;
+const FACT_CLOCK_MASK = "\u0000";
+
+function maskFactClocks(text: string): string {
+  // Replace the WHOLE clock (digits included) so no digit run survives to pair
+  // with a dash; a clock is a timestamp, never a scoreline.
+  return (text ?? "").replace(new RegExp(FACT_CLOCK_SRC, "g"), FACT_CLOCK_MASK);
+}
+
+/** Tidy the whitespace/punctuation the gate leaves behind. */
+function tidyFactGate(text: string): string {
+  return text
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/([,;:])\s*([,.;:!?])/g, "$1")
+    .replace(/\ba\s+(?=[,.;:!?])/gi, "")
+    .replace(/\blevel\s+level\b/gi, "level")
+    .replace(/^\s+/, "")
+    .trim();
+}
+
+/**
+ * Remove every scoreboard/score string from narrative text. Contextual patterns
+ * are rewritten in place so the sentence still parses, then any surviving score
+ * token is deleted outright. Deterministic: the same input always yields the
+ * same output, so a stored row's served reading is stable across reads.
+ */
+export function suppressScoreClaims(text: string): string {
+  let out = text ?? "";
+  // "locked in a 0-0 stalemate" -> "locked in a stalemate"
+  out = out.replace(
+    new RegExp(String.raw`\b(?:an?\s+)?${FACT_SCORE_SRC}\s+(stalemate|deadlock)\b`, "gi"),
+    "a $1"
+  );
+  // "scoreboard flashes to 0-1" -> "scoreboard updates"
+  out = out.replace(
+    new RegExp(
+      String.raw`\bscore\s*board\s+(?:shows|reads|flashes\s+to|moves\s+to|displays|switches\s+to)\s+${FACT_SCORE_SRC}`,
+      "gi"
+    ),
+    "scoreboard updates"
+  );
+  // "takes a 2-1 lead" -> "takes the lead"
+  out = out.replace(new RegExp(String.raw`(?:an?\s+)?${FACT_SCORE_SRC}\s+lead\b`, "gi"), "the lead");
+  // "leads 2-1" / "trails 0-2" -> "leads" / "trails"
+  out = out.replace(
+    new RegExp(String.raw`\b(leads?|trails?)\s+(?:by\s+)?(?:an?\s+)?${FACT_SCORE_SRC}`, "gi"),
+    (_m, verb: string) => verb
+  );
+  // "at 1-1" / "to 0-1" -> "level" (only when the preposition dangles on a score)
+  out = out.replace(new RegExp(String.raw`\b(?:at|to)\s+${FACT_SCORE_SRC}`, "gi"), "level");
+  // Anything left: the token itself is not evidence — drop it.
+  out = out.replace(new RegExp(FACT_SCORE_SRC, "gi"), "");
+  return tidyFactGate(out);
 }
 
 /**
@@ -1917,7 +1994,15 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
   // dash) is the text a served row may not be a prefix cut of. A COLOUR clause
   // after an em dash is a contract-level excision, not a cut of the sentence, so
   // it is not part of the comparison — but a claim clause IS part of it (§2).
-  const sources = [wholeStoredSentence(gated), wholeStoredSentence(raw)].filter(Boolean);
+  const gatedSentence = wholeStoredSentence(gated);
+  const rawSentence = wholeStoredSentence(raw);
+  // ADAAAA-8059 (lever 1, PO ruling): the STORE is the contract. `text_raw` still
+  // bears witness to CONTENT LOSS (a verb the stored line dropped, ADAAAA-8015) so
+  // it stays a comparison source — but a "prefix cut" of it is not a defect of the
+  // served string when the store itself ends there, so that one class is ignored
+  // for the candidate (see `refused` below). It is never a FALLBACK when it carries
+  // a claim the store refused.
+  const sources = [gatedSentence, rawSentence].filter(Boolean);
   const quiet = input.quiet === true;
   // ADAAAA-8043 (v7 §3.1): AC5 measures the LEAD before the beat separator, and
   // a derived beat is a delivered clause the row carries — so the quiet budget
@@ -1929,19 +2014,33 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
   const QUIET_COLOUR_PHRASE =
     /\bin\s+(?:an?\s+|the\s+)?(?:white|blue|red|black|yellow|green|purple|orange|grey|gray)\b/i;
   const punctuated = (text: string): string => restoreTerminalPunctuation((text ?? "").trim());
+  // ADAAAA-8059 (lever 1, PO ruling): the STORE is the contract. When the row has a
+  // stored gated line and the string under test IS that line, a cut relative to the
+  // longer `text_raw` is not a defect: the write seam decided the string, and the
+  // read path may DELETE but never RESTORE what the seam refused. Before this, the
+  // raw line turned every gated row into a "prefix cut" of itself, the row fell into
+  // the raw fallback, and the surface served the refused clause back
+  // (`— ball goes wide` on a window whose verdict says no shot was taken).
+  const isStoredLine = (text: string): boolean =>
+    !!gatedSentence && normalizeServed(text) === normalizeServed(gatedSentence);
   const clean = (text: string): boolean => {
     const t = punctuated(text);
+    const violations = servedShapeViolations(t, sources).filter(
+      (v) => !(v === "prefix-cut" && isStoredLine(t))
+    );
     return (
       fits(t) &&
       (!quiet || !QUIET_COLOUR_PHRASE.test(t)) &&
-      servedShapeViolations(t, sources).length === 0
+      violations.length === 0
     );
   };
   const accepted = (text: string): ServedShapeResult => {
     const served = punctuated(text);
     return { text: served, violations: [], replaced: served !== candidate };
   };
-  const refused = servedShapeViolations(candidate, sources);
+  const refused = servedShapeViolations(candidate, sources).filter(
+    (v) => !(v === "prefix-cut" && isStoredLine(candidate))
+  );
   if (refused.length === 0) {
     if (fits(candidate)) return { text: candidate, violations: [], replaced: false };
     // Quiet row over the word budget: reduce it extractively, never cut its tail.
@@ -1963,19 +2062,46 @@ export function servedShape(input: ServedShapeInput): ServedShapeResult {
     const clause = captionColour(sentence);
     return clause && isColourClause(clause) ? captionLead(sentence) : sentence;
   };
-  const rawSentence = sentenceOf(raw);
-  const gatedSentence = sentenceOf(gated);
-  const rawUsable = !!rawSentence && (!hasProperName(rawSentence) || hasProperName(gated));
+  const rawFallback = sentenceOf(raw);
+  const gatedFallback = sentenceOf(gated);
+  // ADAAAA-8059 (lever 1, PO ruling): the READ path may DELETE but never RESTORE a
+  // clause, and the STORE is the contract. The stored gated sentence is therefore
+  // the only comparison source: a served line may not be a cut of it, and a raw
+  // line that merely carries a claim or an absence the store refused
+  // (`— ball goes wide`, `… of Saez's goal`) is never a fallback either.
+  // `text_raw` still repairs a row whose stored line is itself malformed (a
+  // function-word tail, a dropped predicate): a mangled row is never rendered.
+  const rawAddsClaim =
+    !!rawFallback &&
+    !!gatedFallback &&
+    ((hasGoalClaim(rawFallback) && !hasGoalClaim(gatedFallback)) ||
+      (hasAbsenceClaim(rawFallback) && !hasAbsenceClaim(gatedFallback)));
+  // A raw line that merely EXTENDS the stored sentence is the clause the write seam
+  // dropped (`… — ball goes wide` beside a gated `… from the box.`). It may witness
+  // content loss (it stays a comparison source) but it is never served back.
+  const rawExtends =
+    !!rawFallback &&
+    !!gatedFallback &&
+    normalizeServed(rawFallback) !== normalizeServed(gatedFallback) &&
+    normalizeServed(rawFallback).startsWith(normalizeServed(gatedFallback));
+  // ... unless the stored line is ITSELF malformed (`A player.` beside a raw that
+  // supplies the whole sentence): then the raw is the sanctioned repair source — a
+  // mangled row is repaired or dropped, never rendered.
+  const storedStandaloneValid =
+    !!gatedSentence && servedShapeViolations(punctuated(gatedSentence), []).length === 0;
+  const rawExtendsBlocked = rawExtends && storedStandaloneValid;
+  const rawUsable =
+    !!rawFallback && !rawAddsClaim && !rawExtendsBlocked && (!hasProperName(rawFallback) || hasProperName(gated));
   // Order: the raw sentence when it is name-safe, then the stored gated line
   // (already anonymised by the seam), then — as the LAST resort before losing the
   // row — the raw sentence again even when the gate anonymised a name in it. A
   // lost row is a graded regression (AC3); a role for a name the seam could not
   // corroborate is the lesser cost, and it is still the model's own sentence.
   const sentences = [
-    ...(rawUsable ? [rawSentence] : []),
-    gatedSentence,
+    ...(rawUsable ? [rawFallback] : []),
+    gatedFallback,
     gated,
-    ...(rawUsable ? [] : [rawSentence]),
+    ...(rawUsable || rawAddsClaim || rawExtendsBlocked ? [] : [rawFallback]),
   ];
   for (const sentence of sentences) {
     if (!sentence) continue;

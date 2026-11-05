@@ -74,8 +74,11 @@ describe("ADAAAA-8040 §2 residual — the four stored rows render whole (AC1)",
     expect(bySeq.get(34)).toBe("The player in white takes a shot from the penalty area.");
   });
 
-  it("re-serves the quiet row from its whole stored sentence", () => {
-    expect(bySeq.get(15)).toBe("Players move in the center and defensive areas.");
+  it("re-serves the quiet row as the stored sentence, closed (ADAAAA-8059)", () => {
+    // The PO ruling (2026-11-05) makes the store the contract: the read path may
+    // DELETE a clause but never RESTORE one, so the raw's `and defensive areas`
+    // does not come back — stored == served stays absolute.
+    expect(bySeq.get(15)).toBe("Players move in the center.");
   });
 
   it("no row ends on a function word, inside a clause, or as an unsanctioned prefix", () => {
@@ -87,8 +90,10 @@ describe("ADAAAA-8040 §2 residual — the four stored rows render whole (AC1)",
       if (!raw) continue;
       const isPrefix = normalize(raw).startsWith(`${normalize(row.text)} `);
       if (!isPrefix) continue;
-      // A prefix is sanctioned only when the row IS the stored sentence's own
-      // lead, closed — the claim clause was suppressed INSIDE the sentence.
+      // ADAAAA-8059: a row that IS the stored sentence is sanctioned — the seam
+      // decided that string. Otherwise a prefix must be the stored sentence's own
+      // lead, closed (the claim clause was suppressed INSIDE the sentence).
+      if (normalize(row.text) === normalize(stored.text)) continue;
       expect(normalize(captionLead(raw)), `seq ${row.seq}`).toBe(normalize(row.text));
     }
   });

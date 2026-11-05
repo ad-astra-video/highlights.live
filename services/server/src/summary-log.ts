@@ -27,6 +27,7 @@ import {
   MAX_LINE_OCCURRENCES,
   regateServedSentence,
   restoreTerminalPunctuation,
+  suppressScoreClaims,
   type CaptionGroundingContext,
 } from "@highlights/events";
 import type { Store } from "./store";
@@ -267,15 +268,25 @@ export function appendSummaryEntry(
           beat ? `${repaired.replace(/[.!?…]+$/, "").trim()} — ${beat}` : repaired
         )
       : grounded;
+    // ADAAAA-8059 (PO ruling, lever 3): the SCORELINE fact gate runs at WRITE, not
+    // at read. An uncorroborated scoreline is a claim, and the string the seam
+    // stores is the string the page renders — so the stored text must ALREADY be
+    // the suppressed string. Then stored == served stays absolute (AC3b/AC10), the
+    // ladder stays a pure read, and the fact gate keeps failing closed. The
+    // model's own line survives in `text_raw` (audit only). Both rails run it: the
+    // VOD path has no grounding context, so a read-time gate there would be the
+    // same "page may differ from the store" hole.
+    const scoredLine = suppressScoreClaims(deliveredLine);
     // ADAAAA-7956 (contract v3 rule 2) + ADAAAA-7962 (v4 §3.7): a line the job
     // has already emitted is not appended again, capped at the contract's max (2
     // identical delivered lines per job) — not "drop every repeat". De-dup reads
     // the STORED log plus the rows this same pass already kept, so a pass cannot
-    // duplicate itself.
+    // duplicate itself. ADAAAA-8059: it runs on the SUPPRESSED line, so the stored
+    // set and the served set agree about what "the same line" is.
     const priorKept = keptRows.map((r) => r.text);
     const deduped = grounding
-      ? dedupeStoredLines(deliveredLine, [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES)
-      : deliveredLine;
+      ? dedupeStoredLines(scoredLine, [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES)
+      : scoredLine;
     if (!deduped) continue;
     keptRows.push({
       seq: seq + keptRows.length,
