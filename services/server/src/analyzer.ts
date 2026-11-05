@@ -38,7 +38,9 @@ import {
   LIVE_OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_LAG_BUDGET_S,
   OBSERVE_CONTENT_FPS,
+  OBSERVE_CADENCE_S,
   OBSERVE_WINDOW_S,
+  LIVE_OBSERVE_WINDOW_S,
 } from "./observe-loop";
 import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence";
 // ADAAAA-8005 (gate 3): the per-row trigger -> delivered metric collector. One
@@ -2325,6 +2327,13 @@ export interface AnalyzerConfig {
    *  window span nor the audio noise-change trigger and leaves VOD alone.
    *  Wired from `LIVE_OBSERVE_CADENCE_S`. */
   liveObserveCadenceS?: number;
+  /** ADAAAA-8065 (rev 7): LIVE-only decide window SPAN in content seconds.
+   *  Unset => `observeWindowS` (today's 10 s), so the shipped rail is unchanged.
+   *  Rev 7's cell is 7 s of frames; BOTH live rails (the analyzer pass and the
+   *  media rail) read this ONE value, and every payload stamps it as `spanSec`
+   *  so a leg grades the decide_audit row instead of `printenv`.
+   *  Wired from `LIVE_OBSERVE_WINDOW_S`. */
+  liveObserveWindowS?: number;
   /**
    * ADAAAA-7007: observe reference window length (content seconds) assembled
    * around the current moment. Default 10 (`OBSERVE_WINDOW_S`). Decides only
@@ -5067,6 +5076,17 @@ export interface PerceiveWindowLedger {
   recordsPerSecond?: number;
   /** ADAAAA-8064: the observed span in content seconds (last - first). */
   spanS?: number;
+  /** ADAAAA-8065 (rev 7): the CONFIGURED window span this payload was built
+   * under (`LIVE_OBSERVE_WINDOW_S`, resolved to today's 10 s when unset). This is
+   * the value a leg grades — `spanS` is what the frame set happened to cover,
+   * `spanSec` is the cell that was measured. A value that only lives in the
+   * environment is not a value (ADAAAA-8074 lesson), so both live rails stamp it
+   * on every decide row. */
+  spanSec?: number;
+  /** ADAAAA-8065 (rev 7): the CONFIGURED decide cadence in MILLISECONDS
+   * (`LIVE_OBSERVE_CADENCE_S`, resolved to 3 s when unset). AC-SPAN-1 requires it
+   * on 100 % of rows. */
+  cadenceMs?: number;
   /** ADAAAA-8064: where the timeline was sourced from — `observations` on the
    * live rail, `seeds` on the VOD symmetric window / a legacy payload. */
   timelineSource?: "observations" | "seeds";
@@ -5592,6 +5612,13 @@ export function buildObserveDecideRequest(
             // record count still say exactly what the window carried.
             ...(spanS > 0 ? { recordsPerSecond } : {}),
             spanS,
+            // ADAAAA-8065 (rev 7): the CONFIGURED cell, not the measured span.
+            // `spanSec` is the `LIVE_OBSERVE_WINDOW_S` this payload was built
+            // under (10 when unset) and `cadenceMs` the resolved decide hop
+            // (3000 when unset), so AC-SPAN-1 grades the row instead of
+            // `printenv` — the 8074 lesson applied to the two knobs rev 7 adds.
+            spanSec: cfg.liveObserveWindowS ?? cfg.observeWindowS ?? LIVE_OBSERVE_WINDOW_S,
+            cadenceMs: Math.round((cfg.liveObserveCadenceS ?? cfg.observeCadenceS ?? OBSERVE_CADENCE_S) * 1000),
             timelineSource,
           },
           audioPresence: {
@@ -6992,7 +7019,10 @@ export async function analyzeJob(
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
       ? new LiveObserver({
           cadenceS: cfg.liveObserveCadenceS ?? cfg.observeCadenceS,
-          windowS: cfg.observeWindowS,
+          // ADAAAA-8065 (rev 7): the LIVE span is its own knob now. Unset keeps
+          // `observeWindowS` (today's 10 s), so the default rail is byte-identical
+          // and a configured span cannot move VOD's symmetric window.
+          windowS: cfg.liveObserveWindowS ?? cfg.observeWindowS,
           maxFrames: cfg.observeMaxFrames ?? LIVE_OBSERVE_MAX_FRAMES,
           fps: cfg.sampleFps ?? cfg.analysisFps ?? 2,
           signalGate: cfg.observeSignalGate,

@@ -10,7 +10,7 @@ import { buildApp } from "./api";
 import { makeAdapter } from "./livepeer-adapter";
 import { makeMailer } from "./mailer";
 import { liveDecideAdmission } from "./live-decide-admission";
-import { LIVE_DECIDE_IMAGE_BUDGET, LIVE_DECIDE_IMAGE_CEILING } from "./observe-loop";
+import { LIVE_DECIDE_IMAGE_BUDGET, LIVE_DECIDE_IMAGE_CEILING, LIVE_OBSERVE_WINDOW_S, OBSERVE_CADENCE_S } from "./observe-loop";
 import { runRejectSweep } from "./lifecycle";
 import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-lifecycle";
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
@@ -240,6 +240,16 @@ async function main() {
     `[boot] live decide image budget: ${cfg.liveObserveMaxFrames} image(s)/decide ` +
       `(LIVE_OBSERVE_MAX_FRAMES, default ${LIVE_DECIDE_IMAGE_BUDGET}, ceiling ${LIVE_DECIDE_IMAGE_CEILING}, ` +
       `trigger-anchored selection)`
+  );
+  // ADAAAA-8065 (rev 7): name the decide WINDOW SPAN and CADENCE the same way the
+  // image budget is named. `printenv` alone is not evidence that the rail ran the
+  // cell — the decide_audit rows carry `spanSec`/`cadenceMs` — but this line
+  // states which values THIS process resolved, so a grade compares the two.
+  console.log(
+    `[boot] live decide window: ${cfg.liveObserveWindowS ?? LIVE_OBSERVE_WINDOW_S} s span / ` +
+      `${Math.round((cfg.liveObserveCadenceS ?? OBSERVE_CADENCE_S) * 1000)} ms cadence ` +
+      `(LIVE_OBSERVE_WINDOW_S default ${LIVE_OBSERVE_WINDOW_S}, LIVE_OBSERVE_CADENCE_S default ` +
+      `${OBSERVE_CADENCE_S} s, trailing window)`
   );
 }
 

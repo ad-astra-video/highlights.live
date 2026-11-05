@@ -750,6 +750,12 @@ services:
       # the unchanged ~10 s window). Does not touch VOD, the window span or the
       # audio noise-change trigger.
       - LIVE_OBSERVE_CADENCE_S=${LIVE_OBSERVE_CADENCE_S:-}
+      # ADAAAA-8065 (rev 7): the LIVE-only decide WINDOW SPAN in content seconds
+      # (the trailing window `[now - span, now]`). Unset keeps today's 10 s; 7 is
+      # the CEO rev-7 cell ("shorten the windows to 7 s of frames run every 5 s").
+      # Both live rails (analyzer pass + media rail) read it and every decide row
+      # stamps `spanSec`, so the cell is graded off `decide_audit`, not `printenv`.
+      - LIVE_OBSERVE_WINDOW_S=${LIVE_OBSERVE_WINDOW_S:-}
       # ADAAAA-6973/7051: the live goal-confirm gate. DECIDE_CONFIRM_ENABLED=1
       # arms the Stage-2 confirm goal-leg pass (server `shouldRunConfirm`,
       # decide `_confirm_pass_enabled`) so a candidate is only published when

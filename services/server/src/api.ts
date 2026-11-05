@@ -1367,6 +1367,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // depends on this knob (it is the rail's publish clock), so applying it
         // trims images without thinning the perceive timeline.
         maxFrames: cfg.liveObserveMaxFrames,
+        // ADAAAA-8065 (rev 7): the media rail reads the SAME span/cadence knobs as
+        // the analyzer live pass. Before this the rail silently ran the 10 s / 3 s
+        // constants (its LiveObserver defaults), so a configured cell measured on
+        // THIS rail would have been a no-op — the ADAAAA-8074 class (the knob fed
+        // one rail while the shipped rail kept the default). Undefined keeps both
+        // today's values, so merging changes nothing on a running box.
+        cadenceS: cfg.liveObserveCadenceS,
+        windowS: cfg.liveObserveWindowS,
         stageA: shared.stageAOutcomes,
         signalGate: cfg.observeSignalGate,
         signalGateOpts: buildObserveSignalGateOpts(cfg),
@@ -6341,6 +6349,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7799 (lever C addendum): the LIVE-only decide hop (5 s = the CEO
     // 5 s-hop row). Undefined keeps the shared 3 s cadence.
     liveObserveCadenceS: cfg.liveObserveCadenceS,
+    // ADAAAA-8065 (rev 7): the LIVE window span. Forwarded verbatim (undefined =
+    // today's 10 s), so both live rails and the payload stamp read ONE value.
+    liveObserveWindowS: cfg.liveObserveWindowS,
     // ADAAAA-7771: the box's decide admission width, so the per-stream in-flight
     // depth is shared instead of oversubscribing the client's decide gate.
     liveDecideAdmission: cfg.decideConcurrency ?? 2,
