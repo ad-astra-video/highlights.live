@@ -815,6 +815,29 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
   }
+  /** ADAAAA-8055: a MediaRecorder that claimed a container it cannot actually
+   *  encode emits the container header and then no frame data — Chrome writes a
+   *  ~752 B `capture.mp4` (24 of the box's capture files are under 100 KB from
+   *  real shares, and 7-42 B mp4s exist). Such a file is NOT a recording: treat
+   *  it as missing so every highlight carries the honest
+   *  "No screen-share recording was captured" reason instead of an opaque ffmpeg
+   *  cut failure, and neither cut path spends ffmpeg on it. */
+  const MIN_USABLE_RECORDING_BYTES = 1024;
+  function recordingIsUsable(jobId: string, recPath: string | null): recPath is string {
+    if (!recPath) return false;
+    let size = 0;
+    try {
+      size = statSync(recPath).size;
+    } catch {
+      return false;
+    }
+    if (size >= MIN_USABLE_RECORDING_BYTES) return true;
+    console.error(
+      `[browser:${jobId}] recording is header-only (${size} B < ${MIN_USABLE_RECORDING_BYTES} B): ` +
+        `the recorder produced no video frames, so the share has no usable recording`
+    );
+    return false;
+  }
   // -------------------------------------------------------------------------
   // ADAAAA-8032: LIVE clip cuts for the browser (screen-share) rail.
   //
@@ -954,7 +977,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const cur = store.getHighlight(highlightId);
       if (!cur || cur.clipUri) return;
       const recPath = browserRecordingPath(jobId);
-      if (!existsSync(recPath) || statSync(recPath).size === 0) return; // stop path handles a missing recording
+      // A header-only capture is not a recording (ADAAAA-8055): leave it to the
+      // stop path, which reports the honest "no recording" reason per highlight.
+      if (!recordingIsUsable(jobId, recPath)) return;
       if (flush !== "flushed") {
         console.log(
           `[browser:${jobId}] live cut for ${highlightId} left to the stop path (${flush === "ended" ? "share ended" : `window not flushed within ${LIVE_CLIP_MAX_WAIT_MS / 1000}s`})`
@@ -1115,7 +1140,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // `active`), which is all `clearMediaSession` bought us here.
         await db.closeMediaSession(jobId).catch(() => {});
       }
-      const recPath = await waitForRecording(jobId, 4000);
+      const recording = await waitForRecording(jobId, 4000);
+      // ADAAAA-8055: a capture that holds only a container header is missing, not
+      // corrupt — say so per highlight instead of letting ffmpeg fail opaquely.
+      const recPath = recordingIsUsable(jobId, recording) ? recording : null;
       // ADAAAA-8032: let any live cut already running finish first, so the stop
       // path never cuts (and writes) the same clip file concurrently. Live cuts
       // bail as soon as the job starts finalizing, so this drains the one

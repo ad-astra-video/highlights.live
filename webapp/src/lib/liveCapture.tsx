@@ -5,6 +5,7 @@ import { readSSE } from "./sse";
 import { captureEndedNotice } from "./captureLoss";
 import { useSettings } from "./settings";
 import { blobToBase64 } from "./blobToBase64";
+import { RECORDING_STALL_MS, recordingStalled, supportedRecordingMimes } from "./recordingCodec";
 import { useStreamHealth } from "./useStreamHealth";
 import type { ChipView } from "./streamHealth";
 
@@ -140,6 +141,10 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
   // these (plus the rec.stop() flush) BEFORE POST /stop so the recording is
   // complete when the server cuts clips (ADAAAA-6522).
   const pendingUploadsRef = useRef<Set<Promise<void>>>(new Set());
+  // Bytes the recorder has PRODUCED (before upload) this share, plus the type it
+  // actually chose. Feeds the stall check below (ADAAAA-8055).
+  const recStatsRef = useRef<{ bytes: number; startedAt: number }>({ bytes: 0, startedAt: 0 });
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Stream-health strip sources (ADAAAA-7730): only ARRIVAL times and a clip
   // count are read from the job event feed (frame seq etc. stay admin-only).
@@ -329,6 +334,25 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     return p;
   }
 
+  /** ADAAAA-8055: warn (once, during the share) when the recorder has started
+   *  but produced no usable video bytes — a container the browser claimed but
+   *  cannot encode emits only a header (~752 B mp4 / ~49 B webm). Silent in the
+   *  healthy case; the stop path still reports an honest clipError per highlight
+   *  and the server refuses to cut from a frame-less recording. */
+  function scheduleRecordingStallCheck(jobId: string) {
+    if (stallTimerRef.current) clearTimeout(stallTimerRef.current);
+    stallTimerRef.current = setTimeout(() => {
+      stallTimerRef.current = null;
+      const rec = recRef.current;
+      if (!rec || stoppingRef.current || jobIdRef.current !== jobId) return;
+      const stats = recStatsRef.current;
+      if (!recordingStalled({ bytes: stats.bytes, ms: Date.now() - stats.startedAt, state: rec.state })) return;
+      setError(
+        "This browser started a screen recorder that produced no video data, so highlight clips may be missing for this share. Stop and share again (or use another browser) if no clips appear."
+      );
+    }, RECORDING_STALL_MS);
+  }
+
   /** Await every in-flight recording chunk upload, re-sampling (bounded). */
   async function flushRecordingUploads() {
     for (let i = 0; i < 20; i++) {
@@ -346,6 +370,10 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
 
   /** Clear every capture resource and put the views in their stopped state. */
   function finishCapture() {
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+    }
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
     try {
@@ -510,18 +538,27 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
 
       await openMedia(job.job.id, capture);
 
-      const mime =
-        ["video/mp4;codecs=avc1", "video/webm;codecs=vp9", "video/webm"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+      // ADAAAA-8055: the ladder is ordered by containers this rail has actually
+      // produced (see recordingCodec.ts). `isTypeSupported('video/mp4;codecs=avc1')`
+      // is true in browsers that then record a header and no frames, which left
+      // every accepted highlight with "No screen-share recording was captured".
+      const mimes = supportedRecordingMimes((m) => MediaRecorder.isTypeSupported(m));
+      const mime = mimes[0] ?? "";
       const rec = new MediaRecorder(capture, mime ? { mimeType: mime, videoBitsPerSecond: 3_000_000 } : undefined);
+      recStatsRef.current = { bytes: 0, startedAt: Date.now() };
       rec.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
+          recStatsRef.current.bytes += e.data.size;
           blobToBase64(e.data).then((b64) => {
-            uploadRecordingChunk(b64, mime);
+            // Report the type the recorder actually chose, so the server names the
+            // file after the real container instead of the requested one.
+            uploadRecordingChunk(b64, rec.mimeType || mime);
           });
         }
       };
       rec.start(1000); // 1 s chunks keep the uploads small
       recRef.current = rec;
+      scheduleRecordingStallCheck(job.job.id);
 
       // WS / HTTP fallback only: sample the stream -> JPEG -> push to the media
       // WS (or /ingest). In RTC mode the media server decodes the track itself.
