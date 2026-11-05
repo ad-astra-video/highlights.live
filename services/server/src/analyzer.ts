@@ -4,11 +4,10 @@
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
-import type { CaptionGroundingContext, ColourSignal } from "@highlights/events";
+import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import {
   captionColour,
   groundCaption,
-  humanEventLabel,
   isQuietVerdict,
   regateServedSentence,
   placePhraseOf,
@@ -3951,7 +3950,6 @@ export function storedSurfaceFor(
     const zone = (grounding.place ?? "").trim();
     gatedReason = quiet && zone && !placePhraseOf(quiet) ? `${quiet} ${zone}` : quiet || "";
   }
-  const eventLabel = humanEventLabel(highlightEventType(decision) || "");
   // ADAAAA-8027 (§2, card clause): the card is derived through the store-time
   // post-condition — the gated line as candidate, the stored raw sentence as its
   // source, and card options from the ACCEPTED caption string. Refused -> the
@@ -3969,7 +3967,7 @@ export function storedSurfaceFor(
       ? storedCardSurface({
           gated: gatedReason as string,
           raw: rawSurface,
-          label: eventLabel,
+          // v8 §3b.1: no `label` — a taxonomy token is never served as an option.
           // The card's budget is the verdict's own rule, the same one the quiet
           // gate applied to the line it stores.
           quiet: isQuietVerdict(grounding?.verdict),
@@ -4815,15 +4813,31 @@ export function windowColourSignal(
   cfg: Pick<AnalyzerConfig, "preWindowS" | "postWindowS" | "sampleFps" | "analysisFps">,
   frames?: readonly { ts: number; seq?: number }[]
 ): ColourSignal | null {
-  if (!Number.isFinite(centerTs)) return null;
+  return windowColourSignalDecision(run, centerTs, cfg, frames).signal;
+}
+
+/**
+ * ADAAAA-8053 (contract v8 §3b.3): the SAME derivation as `windowColourSignal`,
+ * plus WHY it produced no signal. The per-row colour trace stores this reason so
+ * a grade can tell "the derivation never reached this row" (no audio taps, no
+ * energy, no confirming frame — the shape a window written while the decide
+ * runner was unavailable produces) from "the gate refused a real signal".
+ */
+export function windowColourSignalDecision(
+  run: Pick<LiveRunShared, "seriesWindow">,
+  centerTs: number,
+  cfg: Pick<AnalyzerConfig, "preWindowS" | "postWindowS" | "sampleFps" | "analysisFps">,
+  frames?: readonly { ts: number; seq?: number }[]
+): { signal: ColourSignal | null; reason: ColourSignalDecisionReason } {
+  if (!Number.isFinite(centerTs)) return { signal: null, reason: "no-window-ts" };
   const pre = cfg.preWindowS ?? DEFAULT_PRE_WINDOW_S;
   const post = cfg.postWindowS ?? DEFAULT_POST_WINDOW_S;
   const series = run.seriesWindow(centerTs, pre, post);
   const energies = series.map((p) => p.energy).filter((e) => Number.isFinite(e));
-  if (energies.length < 4) return null;
+  if (energies.length < 4) return { signal: null, reason: "insufficient-taps" };
   const peak = Math.max(...energies);
   // Audit §5: no real energy -> no beat.
-  if (peak < 0.15) return null;
+  if (peak < 0.15) return { signal: null, reason: "low-energy" };
   const sorted = [...energies].sort((a, b) => a - b);
   const base = sorted[Math.floor(sorted.length / 2)] ?? 0;
   const ratio = peak / Math.max(base, 0.005);
@@ -4842,11 +4856,14 @@ export function windowColourSignal(
       frame = f;
     }
   }
-  if (!frame) return null;
+  if (!frame) return { signal: null, reason: "no-frame" };
   const fps = cfg.sampleFps ?? cfg.analysisFps ?? 3;
   const frameSeq =
     typeof frame.seq === "number" && Number.isFinite(frame.seq) ? Math.floor(frame.seq) : Math.round(frame.ts * fps);
-  return { signal: "audio_noise", ratio, sustained, peak, peakT, frameTs: frame.ts, frameSeq };
+  return {
+    signal: { signal: "audio_noise", ratio, sustained, peak, peakT, frameTs: frame.ts, frameSeq },
+    reason: "ok",
+  };
 }
 
 /**
@@ -4944,9 +4961,13 @@ export function captionGroundingForWindow(
    * the §3.4 absence evidence. */
   attest?: { ballOutcome?: string | null; goalCrossed?: boolean | null; seeds?: readonly PerFrameSeed[] }
 ): CaptionGroundingContext {
+  // ADAAAA-8053 (v8 §3b.3): the same derivation, plus the reason it produced no
+  // signal, so the stored per-row trace can name the non-firing clause.
+  const colour = windowColourSignalDecision(run, centerTs, cfg, frames);
   return captionGroundingForDecision(decision, {
     corroborated: selfCorroborated || windowCorroborated(run.highlights as any, centerTs),
-    colourSignal: windowColourSignal(run, centerTs, cfg, frames),
+    colourSignal: colour.signal,
+    ...(colour.reason !== "ok" ? { colourSignalReason: colour.reason } : {}),
     absenceEvidence: windowAbsenceEvidence(attest ?? {}, decision.outcome),
     // §3.2: ALWAYS resolved on the fast rail. `""` means "resolved to nothing",
     // which makes a place-less play lead drop instead of shipping.
