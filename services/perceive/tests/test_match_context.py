@@ -1682,6 +1682,19 @@ def test_printed_plates_split_the_band_and_corner_bug_glue():
     assert printed_plate_sides("CHAMPIONS2014") is None
     assert printed_plate_sides("www.cambridgecambridge.com") is None
     assert printed_plate_sides("COURTESY") is None
+    # ADAAAA-7982: the possession asterisk glued to a plate is a separator, not
+    # part of the club — measured on the football anchors, where
+    # "BELMONT WESTFORD* 6 1st" read no pair on 2 of 10 frames while the same
+    # frame without the marker read both clubs.
+    assert printed_plate_sides("BELMONT WESTFORD* 6 1st 0:212nd & 10Commentators: Todd") == (
+        "BELMONT",
+        "WESTFORD",
+    )
+    assert printed_plate_sides("BELMONT WESTFORD* 6 1st | 0:021st & 10") == ("BELMONT", "WESTFORD")
+    assert printed_plate_sides("331655 26BELMONTO WESTFORD* 6 1st 0:21") == ("BELMONTO", "WESTFORD")
+    # A lone marker carries no club, and a marker-only line stays unresolved.
+    assert printed_plate_sides("*") is None
+    assert printed_plate_sides("WESTFORD*") is None
 
 
 def test_american_football_band_resolves_both_clubs():
