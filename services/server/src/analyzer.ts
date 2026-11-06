@@ -2216,6 +2216,12 @@ export interface DecisionResult {
   // the cited prior-window evidence so the note, the confirm request and the
   // job-detail view all name the same instants.
   goalRecall?: LiveGoalRecall;
+  // ADAAAA-8216: the decide service's compact audit descriptor (read off the
+  // reply as `_audit`). It carries `promptText` — the exact prompt this window
+  // was judged with — which is the durable source of the copy gate's
+  // corroboration when the `analysis` capture is absent from the verdict the
+  // transform chain hands the write seam.
+  audit?: { promptText?: string | null; [key: string]: unknown };
 }
 /** ADAAAA-7938 (Spec A): did this window's verdict decide a SCORING play? Used
  * only to advance the prior-game state on the decide path (the accept path's
@@ -6038,9 +6044,20 @@ export async function acceptVideoDecision(
   // evidence set, so the stored set and the page can never disagree.
   const selfCorroborated =
     confirm?.corroborated === true || (confirm?.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal";
+  // ADAAAA-8216: the prompt is a property of the WINDOW, not of the verdict the
+  // transform chain handed us. `stageAnalysis` IS this window's capture (taken
+  // from `stage1` at entry, before the confirm reconcile / scoring-lane demotion
+  // / recognition rewrites), so a verdict that arrives without `analysis` must
+  // not blind the copy gate: without the prompt a demoted celebration's only
+  // honest candidate (its own measured `from X to Y` transition) cannot be
+  // corroborated and the row stores NO copy, although `storedSurfaceFor` serves
+  // one for the same sentence + prompt (measured on job `8b2dc0d4` row
+  // `f0ffe7c4`, and its repeat `9f56e509`). `decisionPromptText` still reads
+  // `decision.audit.promptText` when even the capture is absent.
+  const windowDecision: DecisionResult = decision.analysis ? decision : { ...decision, analysis: stageAnalysis };
   const writeGrounding: CaptionGroundingContext | undefined = cfg.captionGrounding
     ? captionGroundingForWindow(
-        decision,
+        windowDecision,
         run,
         candidate.timestamp,
         cfg,
@@ -6285,8 +6302,14 @@ export async function acceptVideoDecision(
   // scoring-lane verdict, so a later scoreboard read can re-emit it as a GOAL
   // without re-deriving (or degrading) the customer copy.
   if (scoringLaneDecision && liveWindow) {
+    // ADAAAA-8216: the deferred entry's copy crosses the same store-time
+    // post-condition on the same window, so it takes the same prompt recovery
+    // (the scoring-lane verdict can also arrive without its `analysis`).
+    const scoringWindowDecision: DecisionResult = scoringLaneDecision.analysis
+      ? scoringLaneDecision
+      : { ...scoringLaneDecision, analysis: stageAnalysis };
     const scoringGrounding = cfg.captionGrounding
-      ? captionGroundingForWindow(scoringLaneDecision, run, candidate.timestamp, cfg, selfCorroborated, frameSignals, {
+      ? captionGroundingForWindow(scoringWindowDecision, run, candidate.timestamp, cfg, selfCorroborated, frameSignals, {
           ballOutcome: candidate.ballOutcome ?? null,
           goalCrossed: candidate.goalCrossed ?? null,
         })
@@ -7329,13 +7352,36 @@ export async function observeDecideOnly(
  * proper name fails closed to a role. `null` stays reserved for text the webapp
  * knows is already certified.
  */
+/**
+ * ADAAAA-8216: the window's OWN prompt text, from whichever carrier survived the
+ * verdict transforms.
+ *
+ * The prompt is a property of the WINDOW, not of the verdict object: the decide
+ * reply carries it twice (`analysis.prompt`, the capture, and `audit.promptText`,
+ * the descriptor the server indexes), and a verdict that is reconciled, demoted
+ * or re-emitted can arrive at the write seam without `analysis` at all. The
+ * copy gate needs the prompt (a scoreline ships only when this window's own
+ * reads corroborate it), so an absent capture used to make the quiet fallback
+ * unable to certify the row's measured transition — the row then stored no copy
+ * although `storedSurfaceFor` serves one for the same sentence + prompt.
+ */
+export function decisionPromptText(
+  decision: { analysis?: { prompt?: string | null } | null; audit?: { promptText?: string | null } | null } | null | undefined
+): string {
+  const captured = (decision?.analysis?.prompt ?? "").trim();
+  if (captured) return decision?.analysis?.prompt as string;
+  const descriptor = (decision?.audit?.promptText ?? "").trim();
+  return descriptor ? (decision?.audit?.promptText as string) : "";
+}
+
 export function captionGroundingForDecision(
-  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis">,
+  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis"> &
+    Partial<Pick<DecisionResult, "audit">>,
   extras: Pick<CaptionGroundingContext, "corroborated" | "colourSignal" | "absenceEvidence" | "place"> = {}
 ): CaptionGroundingContext {
   return {
     verdict: decision.outcome ?? null,
-    promptText: decision.analysis?.prompt ?? "",
+    promptText: decisionPromptText(decision as any),
     eventType: decision.eventType ?? null,
     ...extras,
   };
@@ -7488,7 +7534,8 @@ export function windowAbsenceEvidence(
  *     + place even when the claim clause is dropped (§3.4).
  */
 export function captionGroundingForWindow(
-  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis" | "reason">,
+  decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis" | "reason"> &
+    Partial<Pick<DecisionResult, "audit">>,
   run: Pick<LiveRunShared, "seriesWindow" | "ballPosition" | "highlights">,
   centerTs: number,
   cfg: Pick<
@@ -7920,8 +7967,10 @@ export async function observeAcceptOnly(
           // seam's grounding computation (it returns at "rejected"), yet its story
           // row is delivered copy too — so the fallback carries the same measured
           // signal, stored place and absence evidence the accepted path would.
+          // ADAAAA-8216: and the same PROMPT recovery (the stored verdict may
+          // carry no `analysis`; the window's capture does).
           captionGroundingForWindow(
-            stored,
+            stored.analysis ? stored : { ...stored, analysis: stage1.analysis },
             run,
             payload.centerTs,
             cfg,
