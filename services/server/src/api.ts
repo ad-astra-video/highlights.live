@@ -38,7 +38,8 @@ import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeFlushedDuration, probeHasAudio, centerClipOnEvidence } from "./ffmpeg";
+import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeFlushedDuration, probeHasAudio, centerClipOnEvidence, locateScoreboardFlip, cutCenteredOnInstant } from "./ffmpeg";
+import type { ScoreFlipProbe } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import { anchorSourceCandidates, samplePlayerAnchor, vodAnchorAtSec } from "./player-anchor";
@@ -929,12 +930,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     cutStart: number;
     /** Delivered window length (seconds) — the >= 15 s floor applied. */
     dur: number;
-    method: "frame_match" | "content_clock";
+    /** ADAAAA-8152: `score_flip` centers on the first recording frame that shows
+     * the post-transition score (the instant ACC-2 grades); `frame_match` uses
+     * the accepted evidence picture when the scorebug probe cannot resolve it;
+     * `content_clock` is the honest fallback. */
+    method: "score_flip" | "frame_match" | "content_clock";
     /** Content-clock instant the anchor was taken from. */
     evidenceTs: number | null;
-    /** Recording-file instant that carries the anchor picture. */
+    /** Recording-file instant that carries the anchor. */
     fileTs: number | null;
-    /** evidenceTs - fileTs, i.e. the measured rail->recording lag. */
+    /** evidenceTs - fileTs: how late the content clock was against that anchor. */
     lagSec: number | null;
     score: number | null;
     runnerUp: number | null;
@@ -942,6 +947,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     /** Where the anchor picture actually sits in the DELIVERED file (measured,
      * not assumed) — `null` on the fallback path. */
     deliveredOffsetSec: number | null;
+    /** ADAAAA-8152: the score-flip probe's audit numbers (glyph mass + count). */
+    flipPx: number | null;
+    flipDigits: number | null;
+    flipRunnerUpTs: number | null;
   }
   // Per-job serial chain: cuts for one share never run concurrently (one
   // ffmpeg at a time keeps the CPU cost bounded and the outputs race-free).
@@ -982,6 +991,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const CLIP_ANCHOR_MAX_SCORE = 0.6; // normalized MSE; identical picture ~0.001
   const CLIP_ANCHOR_STRONG_SCORE = 0.1; // "the same picture", no second opinion needed
   const CLIP_ANCHOR_MIN_GAP = 0.5; // best score >1 s away must be clearly worse
+  /** ADAAAA-8152: how far before the accepted evidence frame the score-flip
+   * probe looks. The measured content→footage lateness was 2.2 s / 8.3 s on leg
+   * `a5de612a`; 14 s covers that with margin and one earlier goal at most. */
+  const CLIP_FLIP_LOOKBACK_S = 14;
+  /** ADAAAA-8152: how far the delivered flip may sit from the intended offset
+   * before the clip is re-cut once (the input seek lands on a keyframe). */
+  const CLIP_FLIP_RECUT_TOL_S = 0.6;
   /** Cut ONE browser highlight from `recPath` (the share's recording as it
    * exists right now). Shared by the live scheduler and the stop path so both
    * produce the same file name, window and audio probe. Throws on an ffmpeg
@@ -1023,7 +1039,61 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         strongScore: CLIP_ANCHOR_STRONG_SCORE,
         minGap: CLIP_ANCHOR_MIN_GAP,
       });
-      if (centered.mode === "frame_match" && centered.cut) {
+      // ADAAAA-8152 (fourth pass): the picture the accept rested on is NOT the
+      // goal instant. Measured frame-by-frame on leg `a5de612a` (verdict
+      // ADAAAA-8160): the accepted evidence frame sits 2.2 s (clip A) and 8.3 s
+      // (clip B) AFTER the score flip in the recording, because the rail
+      // re-emits a stale pre-score picture around the transition — clip B's
+      // first 2-2 picture is observation 70.779 s while the accept anchored on
+      // 74.284 s (the first frame whose OCR text parsed). Centering on that
+      // picture ships the play at 2-4 s of a 15 s card. So locate the flip in
+      // the recording's own scorebug pixels and center on THAT; fall back to the
+      // evidence picture, then to the content clock, and say which ran.
+      let flip: ScoreFlipProbe | null = null;
+      if (centered.mode === "frame_match" && centered.fileTs != null) {
+        flip = await locateScoreboardFlip(cfg.ffmpegPath, recPath, framePath, {
+          anchorFileTs: centered.fileTs,
+          maxLookbackS: CLIP_FLIP_LOOKBACK_S,
+        }).catch(() => null);
+      }
+      if (flip) {
+        const recut = await cutCenteredOnInstant(cfg.ffmpegPath, recPath, out, flip.fileTs, before, dur, {
+          recutTolSec: CLIP_FLIP_RECUT_TOL_S,
+          measureOffset: async (file) => {
+            // Re-measure the flip INSIDE the delivered file: the input seek's
+            // keyframe pre-roll can move the whole window, and the delivered
+            // offset is the number ACC-2 grades.
+            const again = await locateScoreboardFlip(cfg.ffmpegPath, file, framePath, {
+              anchorFileTs: before + 0.5,
+              maxLookbackS: Math.min(dur, before + 1.5),
+            }).catch(() => null);
+            return again && Number.isFinite(again.firstTs) ? again.fileTs - again.firstTs : null;
+          },
+        });
+        cut = recut.cut;
+        placement = {
+          cutStart: recut.cutStart,
+          dur: recut.dur,
+          method: "score_flip",
+          evidenceTs,
+          fileTs: flip.fileTs,
+          lagSec: evidenceTs - flip.fileTs,
+          score: centered.score,
+          runnerUp: centered.runnerUp,
+          clamped: recut.clamped,
+          deliveredOffsetSec: recut.deliveredOffset,
+          flipPx: flip.changedPx,
+          flipDigits: flip.digits,
+          flipRunnerUpTs: flip.runnerUpTs,
+        };
+        console.log(
+          `[live-anchor-flip:${jobId}] score flip at recording ${flip.fileTs.toFixed(3)}s ` +
+            `(${flip.digits} glyph(s), ${flip.changedPx} px, runner-up ${flip.runnerUpTs == null ? "none" : flip.runnerUpTs.toFixed(2) + "s/" + flip.runnerUpPx + "px"}) ` +
+            `vs evidence at ${Number(centered.fileTs).toFixed(3)}s (content ${evidenceTs.toFixed(3)}s): ` +
+            `cut [${recut.cutStart.toFixed(3)}, ${(recut.cutStart + dur).toFixed(3)}], ${recut.recuts} recut(s), ` +
+            `goal at ${recut.deliveredOffset == null ? "?" : recut.deliveredOffset.toFixed(3)}s of ${dur}s`
+        );
+      } else if (centered.mode === "frame_match" && centered.cut) {
         cut = centered.cut;
         placement = {
           cutStart: centered.cutStart,
@@ -1036,13 +1106,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           runnerUp: centered.runnerUp,
           clamped: centered.clamped,
           deliveredOffsetSec: centered.deliveredOffset,
+          flipPx: null,
+          flipDigits: null,
+          flipRunnerUpTs: null,
         };
         console.log(
           `[live-anchor-file:${jobId}] content ${evidenceTs.toFixed(3)}s -> recording ${Number(centered.fileTs).toFixed(3)}s ` +
             `(lag ${(evidenceTs - Number(centered.fileTs)).toFixed(3)}s, score ${Number(centered.score).toFixed(4)}, ` +
             `runner-up ${Number(centered.runnerUp).toFixed(3)}, ${centered.recuts} recut(s)) ` +
             `cut [${centered.cutStart.toFixed(3)}, ${(centered.cutStart + dur).toFixed(3)}]` +
-            `${centered.clamped ? " clamped-to-0" : ""}, goal at ${centered.deliveredOffset == null ? "?" : centered.deliveredOffset.toFixed(3)}s of ${dur}s`
+            `${centered.clamped ? " clamped-to-0" : ""}, goal at ${centered.deliveredOffset == null ? "?" : centered.deliveredOffset.toFixed(3)}s of ${dur}s ` +
+            `(no score-flip resolved in the band: centering on the evidence picture)`
         );
       } else {
         console.log(
@@ -1061,6 +1135,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           runnerUp: centered.runnerUp,
           clamped: false,
           deliveredOffsetSec: null,
+          flipPx: null,
+          flipDigits: null,
+          flipRunnerUpTs: null,
         };
         cut = await cutClip(cfg.ffmpegPath, recPath, out, span.start, dur);
       }
@@ -1076,6 +1153,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         runnerUp: null,
         clamped: false,
         deliveredOffsetSec: null,
+        flipPx: null,
+        flipDigits: null,
+        flipRunnerUpTs: null,
       };
       cut = await cutClip(cfg.ffmpegPath, recPath, out, span.start, dur);
     }
@@ -1159,6 +1239,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       clipCutClamped: p.clamped,
       clipDeliveredSec: rec.deliveredSec ?? undefined,
       clipAnchorDeliveredOffsetSec: p.deliveredOffsetSec ?? undefined,
+      // ADAAAA-8152: the score-flip probe's own numbers, so a grader can tell
+      // "centered on the first frame showing the new score" from "centered on
+      // the accepted picture" without re-reading pixels.
+      clipScoreFlipPx: p.flipPx ?? undefined,
+      clipScoreFlipDigits: p.flipDigits ?? undefined,
+      clipScoreFlipRunnerUpTs: p.flipRunnerUpTs ?? undefined,
       // The MEASURED offset of the accepted picture inside the delivered file —
       // the number ACC-2 actually grades (clipGoalOffsetSec is the content-clock
       // intent, which is what the two-clock skew moved).
