@@ -1,0 +1,1217 @@
+{
+"source": "live job 348bd511-ddb1-4dd4-8a27-4aa455b89c37 (ADAAAA-8185 read): distinct ocr=\"\u2026\" strings whose score pair is glued with '/' or '.', with read counts over the 396 decide prompts (1450 of 2900 readings)",
+"strings": [
+{
+"ocr": "RMA 1.0 FCB 17:22HOTELSK",
+"reads": 28
+},
+{
+"ocr": "RMA 1/2 FCB 36:14",
+"reads": 11
+},
+{
+"ocr": "RMA 1/2 FCB36:54",
+"reads": 11
+},
+{
+"ocr": "RMA 1/1 FCB 32:41LERAMLE",
+"reads": 10
+},
+{
+"ocr": "RMA 1.0 FCB17.141(Clu-Av",
+"reads": 9
+},
+{
+"ocr": "RMA 1.0 FCB17:29",
+"reads": 9
+},
+{
+"ocr": "RMA 1/0 FCB10/47",
+"reads": 9
+},
+{
+"ocr": "RMA 1/0 FCB18:03",
+"reads": 9
+},
+{
+"ocr": "RMA 1/0 FCB18:32",
+"reads": 9
+},
+{
+"ocr": "RMA 1/1 FCB 24:28TORATOR",
+"reads": 9
+},
+{
+"ocr": "RMA 1/2 FCB37:06SUPERCOR",
+"reads": 9
+},
+{
+"ocr": "FIV BETTERRMA 1/0 FCB 04",
+"reads": 8
+},
+{
+"ocr": "RMA 1.0 FCB 18:25",
+"reads": 8
+},
+{
+"ocr": "RMA 1.0 FCB1143SUPERCOPA",
+"reads": 8
+},
+{
+"ocr": "RMA 1.0 FCB19:55im kasab",
+"reads": 8
+},
+{
+"ocr": "RMA 1.1 FCB31:10Duxpobet",
+"reads": 8
+},
+{
+"ocr": "RMA 1/0 FCB 12:20",
+"reads": 8
+},
+{
+"ocr": "RMA 1/0 FCB10:01HOTELSNG",
+"reads": 8
+},
+{
+"ocr": "RMA 1/0 FCB18:55",
+"reads": 8
+},
+{
+"ocr": "RMA 1/1 FCB21133",
+"reads": 8
+},
+{
+"ocr": "RMA 1/2 FCB 36:59",
+"reads": 8
+},
+{
+"ocr": "[RMA 1/0 FCB 06:57ESPIT ",
+"reads": 8
+},
+{
+"ocr": "RMA 1 1 FCB24/04",
+"reads": 7
+},
+{
+"ocr": "RMA 1.0 FCB 13:55NG HOTE",
+"reads": 7
+},
+{
+"ocr": "RMA 1.0 FCB 20/47SUPERCO",
+"reads": 7
+},
+{
+"ocr": "RMA 1.0 FCB09:45YAG KUTA",
+"reads": 7
+},
+{
+"ocr": "RMA 1.0 FCB1112LERAM LER",
+"reads": 7
+},
+{
+"ocr": "RMA 1.0 FCB14:11SUPERCOP",
+"reads": 7
+},
+{
+"ocr": "RMA 1.0 FCB14:41LERAM LE",
+"reads": 7
+},
+{
+"ocr": "RMA 1.1 FCB32:20SUPERCOP",
+"reads": 7
+},
+{
+"ocr": "RMA 1.50 FCB 08:00",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB 08:12Emirate",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB 08:23",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB 10:37ESPA\u00d1A ",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB 12:11",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB 15:13",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB 15:16",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB 17:57",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB04:55",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB13:05",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB19:19Neil Tay",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB19:59",
+"reads": 7
+},
+{
+"ocr": "RMA 1/0 FCB371444",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB 25141",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB 25:22",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB 27147",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB 35141",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB23:19iubAvolt",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB23:35",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB24:00",
+"reads": 7
+},
+{
+"ocr": "RMA 1/1 FCB29147SUPERCOP",
+"reads": 7
+},
+{
+"ocr": "RMA 1/2 FCB 36:05",
+"reads": 7
+},
+{
+"ocr": "RMA 1/2 FCB36:01",
+"reads": 7
+},
+{
+"ocr": "RMA 1.0 FCB 12:46KOREGES",
+"reads": 6
+},
+{
+"ocr": "RMA 1.0 FCB 21:03",
+"reads": 6
+},
+{
+"ocr": "RMA 1.0 FCB06:36WWW.BAK.",
+"reads": 6
+},
+{
+"ocr": "RMA 1.0 FCB06:42SUPERCOP",
+"reads": 6
+},
+{
+"ocr": "RMA 1.0 FCB09:25ASABLANC",
+"reads": 6
+},
+{
+"ocr": "RMA 1.0 FCB12:56ELEKTRIK",
+"reads": 6
+},
+{
+"ocr": "RMA 1.00 FCB10:19N HOTEL",
+"reads": 6
+},
+{
+"ocr": "RMA 1.1 FCB 25:57DE ESPA",
+"reads": 6
+},
+{
+"ocr": "RMA 1.50 FCB 20:15ESPn o",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB 08:06Emirate",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB 09:32N KUTAH",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB 13142SPANA N",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB 13:11",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB 13:26",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB 15:22",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB 18:29",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB04:41",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB05:07",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB06:17",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB07:57",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB08:32SUPERCOP",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB11127",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB11134",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB12:08",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB12:14",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB13:29",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB13:33CAS V",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB1501",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB18:16",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB18:19",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB19:09TORA .. ",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB19:26",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB19:35",
+"reads": 6
+},
+{
+"ocr": "RMA 1/0 FCB20/40SUPERCOP",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 22:39HOTELSN",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 23:25",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 25:16SUPRCOP",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 25:35",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 28:37ubAvolt",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 30/44SUPERCO",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 34:36",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB 34:58",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB2113",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB25:03",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB25:13",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB26:00SUPERCOP",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB3133",
+"reads": 6
+},
+{
+"ocr": "RMA 1/1 FCB31:29SUPERCOP",
+"reads": 6
+},
+{
+"ocr": "RMA 1/2 FCB 35:57",
+"reads": 6
+},
+{
+"ocr": "RMA 1/2 FCB 36:49",
+"reads": 6
+},
+{
+"ocr": "RMA 1/50 FCB08:26ESPIT o",
+"reads": 6
+},
+{
+"ocr": "[RMA 1 1 FCB 34/449",
+"reads": 6
+},
+{
+"ocr": "RMA 1 1 FCB 30/40",
+"reads": 5
+},
+{
+"ocr": "RMA 1.0 FCB 14:17Your pa",
+"reads": 5
+},
+{
+"ocr": "RMA 1.0 FCB09:35KUTAHYAK",
+"reads": 5
+},
+{
+"ocr": "RMA 1.0 FCB12:43RIKOREGE",
+"reads": 5
+},
+{
+"ocr": "RMA 1.1 FCB 26:03SUPERCO",
+"reads": 5
+},
+{
+"ocr": "RMA 1.1 FCB 28:44PERCOPA",
+"reads": 5
+},
+{
+"ocr": "RMA 1.1 FCB 28:47Your la",
+"reads": 5
+},
+{
+"ocr": "RMA 1.1 FCB 33:22AHYANI ",
+"reads": 5
+},
+{
+"ocr": "RMA 1.50 FCB11:49SUPERCO",
+"reads": 5
+},
+{
+"ocr": "RMA 1.50 FCB12:49KTRIK O",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 05/01",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 07/07WURTH",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 10:15N HOTEL",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 12:17",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 13:02onvo",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 13:14onvo",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 13:36N HOTEL",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB 20:31SUPERCO",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB05:45",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB06:14SUPERCOP",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB07:00LOKOTRAN",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB07:10",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB08:03",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB09:42N. KUTAH",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB11:18",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB11:40REDATORS",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB12:05",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB12:33",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB18:00",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB18:45SUPERCOP",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB19:39Guard27P",
+"reads": 5
+},
+{
+"ocr": "RMA 1/0 FCB19:49",
+"reads": 5
+},
+{
+"ocr": "RMA 1/1 FCB 23146DUROLAN",
+"reads": 5
+},
+{
+"ocr": "RMA 1/1 FCB 34/02",
+"reads": 5
+},
+{
+"ocr": "RMA 1/1 FCB 35:38",
+"reads": 5
+},
+{
+"ocr": "RMA 1/1 FCB24141SPANATOR",
+"reads": 5
+},
+{
+"ocr": "RMA 1/1 FCB24:54TORATORA",
+"reads": 5
+},
+{
+"ocr": "RMA 1/1 FCB31:49",
+"reads": 5
+},
+{
+"ocr": "RMA 1/1 FCB32:48",
+"reads": 5
+},
+{
+"ocr": "RMA 1/2 FCB 35:54",
+"reads": 5
+},
+{
+"ocr": "RMA 1/2 FCB36:09",
+"reads": 5
+},
+{
+"ocr": "7RMA 1/1 FCB27:15",
+"reads": 4
+},
+{
+"ocr": "RMA 1 1 FCB 27/03",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB 06:23ulturSU",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB 10:34Your pa",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB09:16SUPERCOP",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB12:02",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB14:05PANA YID",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB17:23N HOTELS",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB17:32ClubAvol",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB18:06",
+"reads": 4
+},
+{
+"ocr": "RMA 1.1 FCB 27:150",
+"reads": 4
+},
+{
+"ocr": "RMA 1.1 FCB 30:03Yani Ne",
+"reads": 4
+},
+{
+"ocr": "RMA 1.50 FCB 08:45",
+"reads": 4
+},
+{
+"ocr": "RMA 1.50 FCB18:52SUPERCO",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB 08:51",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB 10:28PAN\u00c1 X",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB 15:07",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB 18:13",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB 20/08",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB 20:02",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB 20:37CRAFTED",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB05/04",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB08:18",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB08:42",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB09:10SUPERCOP",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB09:13UPERCOPA",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB09:52KUTAHYAK",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB10:05N HOTELS",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB10:41Join tod",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB110RFEF",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB11:15L'ERAM D",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB11:21E ESPANA",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB11:24OPA DE E",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB11:30",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB11:36SUPERCOP",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB12:24",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB12:27",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB12:30",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB12:36RODRYGO",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB14:58SUP",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB15/04",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB17:35port to ",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB19:02SUPERCOR",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB19:29",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0 FCB19:52mykasaba",
+"reads": 4
+},
+{
+"ocr": "RMA 1/0FCB19:12TORASUPER",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 22:154ESPANA",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 22:33N HOTEL",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 22:36N HOTEL",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 24:22",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 25:26",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 26:15",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 26:25PREDATO",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 26:38",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 27:09ESPIT O",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 27:22",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 27:25",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 27:35",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 27:38",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 28:21N HOTEL",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 28:51W ClubA",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 30:31",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 31:55PREDATI",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 32:54DUROLAN",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 33:00HYAKUTA",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 33:03KUTAHYN",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 33:16JTAHYN ",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB 35:47CRAFTED",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB21:06",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB21:3619 LAMIN",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB23141",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB23:03Your pas",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB23:32",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB25:32Dunvaoz ",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB29:19OPA DE E",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB29:28SUPERCOP",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB29:56CASARLAN",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB3142",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB31:00SUPERCOP",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB31:36",
+"reads": 4
+},
+{
+"ocr": "RMA 1/1 FCB35:28ESPn oy ",
+"reads": 4
+},
+{
+"ocr": "RMA 1/2 FCB 36:23",
+"reads": 4
+},
+{
+"ocr": "RMA 1/2 FCB 37:02LANDSYA",
+"reads": 4
+},
+{
+"ocr": "RMA 1SO FCB 04/47",
+"reads": 4
+},
+{
+"ocr": "[RMA 1/1 FCB 31:46",
+"reads": 4
+},
+{
+"ocr": "[RMA 1/1 FCB 35:32",
+"reads": 4
+},
+{
+"ocr": "RMA 1.0 FCB06:39SUPERCOP",
+"reads": 3
+},
+{
+"ocr": "RMA 1.0 FCB07:03ANSSUPER",
+"reads": 3
+},
+{
+"ocr": "RMA 1.0 FCB14:29L RAML R",
+"reads": 3
+},
+{
+"ocr": "RMA 1.0 FCB18:49SUPERCOP",
+"reads": 3
+},
+{
+"ocr": "RMA 1.0 FCB21:00",
+"reads": 3
+},
+{
+"ocr": "RMA 1.50 FCB 20/44ANA",
+"reads": 3
+},
+{
+"ocr": "RMA 1.50 FCB14:23",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB 08:38SUPERCO",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB 08:48",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB 10:22HOTELSN",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB 15:10Emirate",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB 15:19",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB 20:22",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB 20:57SUPERCO",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB05/48MBAPPE",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB09:58N HOTELS",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB11:46SUPERCOP",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB11:53BALSCRAF",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB11:59SUPERCOP",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB13:23",
+"reads": 3
+},
+{
+"ocr": "RMA 1/0 FCB17:20HOTELSXI",
+"reads": 3
+},
+{
+"ocr": "RMA 1/1 FCB 21:26",
+"reads": 3
+},
+{
+"ocr": "RMA 1/1 FCB 26:12SUPERCO",
+"reads": 3
+},
+{
+"ocr": "RMA 1/1 FCB 35:35",
+"reads": 3
+},
+{
+"ocr": "RMA 1/1 FCB25/07",
+"reads": 3
+},
+{
+"ocr": "RMA 1/1 FCB29:00LERAMLCR",
+"reads": 3
+},
+{
+"ocr": "RMA 1/1 FCB32:05LK KIPON",
+"reads": 3
+},
+{
+"ocr": "RMA 1/1 FCB32:45DUROLANE",
+"reads": 3
+},
+{
+"ocr": "1RMA 1/1 FCB29:15RAM DUR",
+"reads": 2
+},
+{
+"ocr": "RMA 1.0 FCB 10:31(III) C",
+"reads": 2
+},
+{
+"ocr": "RMA 1.0 FCB 14:54LIRAM D",
+"reads": 2
+},
+{
+"ocr": "RMA 1.0 FCB08:35SUPERCOP",
+"reads": 2
+},
+{
+"ocr": "RMA 1.0 FCB14:26Join tod",
+"reads": 2
+},
+{
+"ocr": "RMA 1.0 FCB17:38For trav",
+"reads": 2
+},
+{
+"ocr": "RMA 1.1 FCB 29:31PERCOPA",
+"reads": 2
+},
+{
+"ocr": "RMA 1.50 FCB09:49KUTAHYA",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB 08:15",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB 13:46NG HOTE",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB 13:52TELSNG ",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB 14/48SUPERCO",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB05:52",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB06:08SUPERCOP",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB06:45obokWWW.",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB06:48SUPERCOP",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB09:39KUTAHYAN",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB12:39EKTRK OR",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB13149HOTELSNG",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB14:45RAM DURO",
+"reads": 2
+},
+{
+"ocr": "RMA 1/0 FCB20:18",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB 22:17",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB 2547ERCOPA D",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB 25:19SUPERCO",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB 26:57SUPERCO",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB 27:32",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB 33:59",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB25:29Dunyaoz ",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB29:03LIRAM DU",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB29:13LIRAM DU",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB29:22ROLANELE",
+"reads": 2
+},
+{
+"ocr": "RMA 1/1 FCB33:13SUPERCOP",
+"reads": 2
+},
+{
+"ocr": "RMA 1/2 FCB 36:26",
+"reads": 2
+},
+{
+"ocr": "RMA 1/50 FCB19:15TORATOR",
+"reads": 2
+},
+{
+"ocr": "RMA 1.0 FCB 14:35 AM DUR",
+"reads": 1
+},
+{
+"ocr": "RMA 1.0 FCB12:53ELEKTRIK",
+"reads": 1
+},
+{
+"ocr": "RMA 1/0 FCB09:22",
+"reads": 1
+},
+{
+"ocr": "RMA 1/0 FCB11:56PREDATOR",
+"reads": 1
+},
+{
+"ocr": "RMA 1/0 FCB18:42SUPERCOP",
+"reads": 1
+},
+{
+"ocr": "RMA 1/1 FCB 35:51oboLITP",
+"reads": 1
+},
+{
+"ocr": "RMA 1/1 FCB27:56",
+"reads": 1
+},
+{
+"ocr": "RMA 1/1 FCB29:34EXCLUSIV",
+"reads": 1
+},
+{
+"ocr": "SUPERCOPARMA 1/1 FCB 28:",
+"reads": 1
+}
+]
+}
