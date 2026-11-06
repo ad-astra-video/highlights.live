@@ -511,6 +511,10 @@ export async function attestDeferredGoalHighlight(
     cardTitles: upgrade.cardTitles,
     colour: upgrade.colour,
     reason_raw: upgrade.reasonRaw,
+    // ADAAAA-8139 (interim step): the row just entered the scoring lane, so the
+    // provisional marker it carried as a celebration must not survive on the
+    // confirmed GOAL. Absent (undefined) on rows the gate never marked.
+    provisionalGoal: undefined,
     deferredAttestation: {
       deltaTs: upgrade.deltaTs,
       readAt: upgrade.readAt,

@@ -415,6 +415,16 @@ export interface Highlight {
   // rows without a candidate degrade to "trigger unknown".
   candidateId?: string;
   trigger?: HighlightTrigger;
+  /** ADAAAA-8139 (interim step): a demoted LIVE goal window whose ASR / frames /
+  // crowd reaction carried a goal cue but whose scoreboard change had not landed.
+  // The row is still a non-postable celebration; the marker clears when the
+  // deferred re-attestation turns the same row into the confirmed GOAL. */
+  provisionalGoal?: {
+    status: "provisional";
+    cues: Array<"asr_goal_call" | "frame_celebration" | "crowd_reaction">;
+    declaredTs: number;
+    note: string;
+  };
 }
 // Async-VOD job record (ADAAAA-6760). Mirrors packages/events JobSchema (the
 // shared contract) so the webapp's processing-jobs surface can render a job's
