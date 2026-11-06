@@ -330,6 +330,14 @@ export class MediaRailObserver {
    *  content clock skipped. Published as `observeMetrics.perceive`. */
   private framesSeen = 0;
   private framesStrided = 0;
+  /** ADAAAA-8121: the CONSUME CLOCK in content seconds. `lastConsumedTs` is the
+   *  newest frame this rail ANALYSED (the position the live indicator names on a
+   *  stored record) and `lastSeenTs` the newest frame the relay DELIVERED,
+   *  strided frames included (the live edge the delay is measured against).
+   *  Both are content timestamps — never frame counts — so the derived delay is
+   *  the same at 1 fps and at 2 fps. 0 = nothing observed yet. */
+  private lastConsumedTs = 0;
+  private lastSeenTs = 0;
   private frames = 0;
   private audioChunks = 0;
   private triggers = 0;
@@ -510,11 +518,17 @@ export class MediaRailObserver {
     // cadence/anchor change, no budget token.
     if (!frameB64 || typeof frameB64 !== "string") {
       const ts = this.contentTs(rawTs);
+      // ADAAAA-8121: an evidence-only frame still reached the TAP, so it moves
+      // the live edge's content clock (it is never the analysed position).
+      if (ts > this.lastSeenTs) this.lastSeenTs = ts;
       // Evidence-only: the observation's findings still belong on the timeline.
       this.live.recordObservation(ts, seedFromObservation(ts, obs));
       return;
     }
     const ts = this.contentTs(rawTs);
+    // ADAAAA-8121: every relayed frame moves the tap clock before the stride can
+    // refuse it — the strided frames ARE content the live edge already holds.
+    if (ts > this.lastSeenTs) this.lastSeenTs = ts;
     // ADAAAA-8102: consume at the CONTENT rate, not the ingest rate. The media
     // node relays every frame it sampled (~2.8 fps on the funded share); the rail
     // used to record, seed and persist all of them — 833 frames / 300 s on job
@@ -538,6 +552,9 @@ export class MediaRailObserver {
     const seq = this.frames;
     this.observations++;
     this.frames++;
+    // ADAAAA-8121: this frame was CONSUMED (analysed) — the content position the
+    // live indicator names. Strided frames never reach here.
+    if (ts > this.lastConsumedTs) this.lastConsumedTs = ts;
     this.run.addFrame(seq, ts, frameB64);
     // Cache the already-computed findings for the window-facts/seeds path. The
     // media node relays whatever perceive emitted, so normalize the arrays (a
@@ -780,6 +797,11 @@ export class MediaRailObserver {
         perceiveHotCalls: 0,
         analysisFps: this.contentFps,
         perceiveSource: "media_node",
+        // ADAAAA-8121: the consume clock on the CONTENT axis, so a stored record
+        // still says where the analysis got to and how far the tap ran ahead of
+        // it — the two numbers the live indicator reads, both content ts.
+        analysedThroughTs: Number(this.lastConsumedTs.toFixed(3)),
+        tapThroughTs: Number(this.lastSeenTs.toFixed(3)),
       },
     };
   }

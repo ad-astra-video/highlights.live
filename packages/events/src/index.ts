@@ -550,8 +550,18 @@ export const ObserveMetricsSnapshotSchema = z.object({
       // the media/RTC rail, where the media node perceives every relayed frame
       // and this process only consumes at `analysisFps`. Declared on the contract
       // because a zod object STRIPS undeclared keys: without this line the field
-      // the media rail emits is dropped when the job record is persisted.
+      // the field the media rail emits is dropped when the job record is persisted.
       perceiveSource: z.enum(["server", "media_node"]).optional(),
+      // ADAAAA-8121: the CONSUME CLOCK, in content seconds (content ts 0 = the
+      // job's content anchor). `analysedThroughTs` is the newest frame this pass
+      // actually ANALYSED (the position the live indicator names) and
+      // `tapThroughTs` the newest frame the ingest DELIVERED, strided frames
+      // included — the live edge the delay is measured against. Both are content
+      // timestamps, never frame counts and never the wall clock, so the derived
+      // delay reads the same at 1 fps and at 2 fps. Declared here because a zod
+      // object STRIPS undeclared keys (the `perceiveSource` lesson above).
+      analysedThroughTs: z.number().min(0).optional(),
+      tapThroughTs: z.number().min(0).optional(),
     })
     .optional(),
   // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
@@ -2148,6 +2158,29 @@ export const LiveProgressSchema = z.object({
    * for a terminal job (no live edge — the UI shows the completion state). */
   state: z.enum(["caught_up", "behind", "unknown"]),
   updatedAt: z.string(),
+  /** ADAAAA-8121: content ts of the newest frame the run ANALYSED — the
+   * position the live indicator names. Sourced from the job's own consume
+   * evidence (stored observation rows while in flight, `observeMetrics.perceive.
+   * analysedThroughTs` on a stored record); never a client estimate, never the
+   * wall clock. Additive optional. */
+  analysedPositionTs: z.number().min(0).optional(),
+  /** ADAAAA-8121: `liveEdgeTs - analysedPositionTs` on the CONTENT clock,
+   * clamped >= 0. Content ts on both endpoints, so the number is unchanged by a
+   * 1 fps -> 2 fps consume rate. Absent when the position is unknown. */
+  analysedLagSec: z.number().min(0).optional(),
+  /** ADAAAA-8121: Frames the ingest delivered (`framesSeen` on the perceive
+   * stride block). Count only. */
+  strideFramesSeen: z.number().int().min(0).optional(),
+  /** ADAAAA-8121: Frames the stride SKIPPED (`framesStrided`). This is a COUNT,
+   * never a position marker: a strided window is content the analysis never
+   * reached, so it must never be drawn on the position track. */
+  strideFramesSkipped: z.number().int().min(0).optional(),
+  /** ADAAAA-8121: the resolved content consume rate (`analysisFps`). */
+  strideAnalysisFps: z.number().min(0).optional(),
+  /** ADAAAA-8121: `false` when the job carries NO consume/stride evidence
+   * (`observeMetrics.perceive` absent — the knob was unset on that run). The
+   * indicator then reads "no stride data" instead of inventing a position. */
+  strideData: z.boolean().optional(),
 });
 export type LiveProgress = z.infer<typeof LiveProgressSchema>;
 
