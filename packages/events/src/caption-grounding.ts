@@ -695,7 +695,7 @@ const TAIL_CLAUSE_OPENER = /\s+\b(while|as|when|and|but|which|that|who|because|a
  * leaves behind; a tail with one (`… and shoots`) is a whole clause and stays.
  */
 const VERBISH =
-  /\b(?:reacts?|moves?|drives?|controls?|contests?|dribbles?|stands?|passes?|plays?|takes?|holds?|watches?|waits?|runs?|shoots?|strikes?|heads?|clears?|tackles?|blocks?|saves?|jumps?|turns?|attacks?|presses?|chases?|follows?|keeps?|sets?|scores?|scored|carries|carried|wins?|won|sends?|sent|puts?|makes?|made|finds?|found|gets?|got|comes?|came|goes?|went|rises?|rose|falls?|fell|lifts?|lofts?|rolls?|bounces?|crosses?|fires?|volleys?|tries?|tried|attempts?|sees?|saw|looks?|appears?|erupts?|celebrates?|updates?|becomes?|reads?|shows?|is|are|was|were|has|have|had|does|did|can|could|will|would|may|might|must)\b/i;
+  /\b(?:reacts?|moves?|drives?|controls?|contests?|dribbles?|stands?|passes?|plays?|takes?|holds?|watches?|waits?|runs?|shoots?|strikes?|heads?|clears?|tackles?|blocks?|saves?|jumps?|turns?|attacks?|presses?|chases?|follows?|keeps?|sets?|scores?|scored|carries|carried|wins?|won|sends?|sent|puts?|makes?|made|finds?|found|gets?|got|comes?|came|goes?|went|rises?|rose|falls?|fell|lifts?|lofts?|rolls?|bounces?|crosses?|fires?|volleys?|tries?|tried|attempts?|sees?|saw|looks?|appears?|erupts?|celebrates?|updates?|changes?|becomes?|reads?|shows?|is|are|was|were|has|have|had|does|did|can|could|will|would|may|might|must)\b/i;
 
 /**
  * ADAAAA-7961 (§3.3/§3.4 residuals): repair a delivered string that stops
@@ -2502,7 +2502,15 @@ export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGro
   // quiet budget, and clause 3 emptied a row that carries an honest beat. The
   // `quiet` shape is still tried FIRST, so a row that already served copy keeps
   // serving it byte-identically.
-  const candidates = [quiet, ...quietBeatClauses(quiet, src, claimBearing)];
+  //
+  // ADAAAA-8193 (AC2, PO ruling: "scoreboard changes can be delayed"): when the
+  // row's only honest content is the event LEDGER itself — the score transition
+  // was measured in this window, the clause that named the play (`the ball is in
+  // the net`) is unmeasured — the row's own corroborated score line is the copy.
+  // Offered LAST, so every row that already has a beat keeps it byte-identically.
+  const beats = quietBeatClauses(quiet, src, claimBearing);
+  const ledger = ledgerScoreLines(quiet, ctx);
+  const candidates = [quiet, ...beats, ...ledger];
 
   for (const candidate of candidates) {
     const served = serveQuietCandidate(candidate, storedSentence, ctx);
@@ -2603,6 +2611,91 @@ function quietBeatFromClause(clauseText: string): string {
   return out;
 }
 
+/**
+ * ADAAAA-8193 (AC2): the LEDGER-LINE copy for a row whose only honest content is
+ * a MEASURED score transition.
+ *
+ * The shape this closes (`highlight c8d843fe`, GOAL): the model's sentence is
+ * ledger-only —
+ *
+ *     Scoreboard changes from 2-1 to 2-2 at t=-5.0s and the ball is in the net.
+ *
+ * The play clause (`the ball is in the net`) is UNMEASURED for this row
+ * (`goalCrossed=false`, `ballOutcome=null`) so it can never ship, the leading
+ * clause is the event frame so it is not a beat, and the whole sentence is over
+ * the 8-word quiet budget -> clause 3 stored no copy. The one corroborated fact
+ * the window HAS is the score change itself: the prompt reads `2-1` at the
+ * earlier taps and `2-2` from the transition tap on, i.e. the board caught up
+ * with the play a tap or two late ("scoreboard changes can be delayed", the PO's
+ * ruling on this ticket).
+ *
+ * So the row's own score line is the copy — extractive and gated:
+ *
+ *   1. the stored sentence must LEAD with the event ledger, and its leading
+ *      clause must carry a `from X to Y` transition (a bare `changes to Y`
+ *      sentence is a static read, not a change, and is never served here);
+ *   2. BOTH ends of the transition must be measured in THIS window's own prompt
+ *      (`X` and `Y` both appear) — that is what makes the change a measurement
+ *      rather than a claim, and it is why a delayed board is allowed: the pre
+ *      score was read first, the post score later;
+ *   3. the served line drops only the uncorroborated old score and the audit
+ *      `at t=…` marker, keeping the row's own frame verbs
+ *      (`Scoreboard changes to 2-2.`) — no word is invented, and the play clause
+ *      the window could not attest is dropped whole;
+ *   4. it then crosses the same gate order as every other quiet candidate
+ *      (`serveQuietCandidate`: claim -> absence -> names -> place -> quiet window
+ *      -> score facts -> served-shape post-condition -> fixed points), so a line
+ *      the prompt does not corroborate is refused HERE too.
+ *
+ * Offered AFTER the beat clauses, so a row that has an honest beat keeps it
+ * (row 1 of this ticket still serves `Players celebrate.`).
+ */
+function ledgerScoreLines(quiet: string, ctx?: CaptionGroundingContext): string[] {
+  const prompt = typeof ctx?.promptText === "string" ? ctx.promptText : "";
+  if (!prompt) return [];
+  const clauses = splitQuietClauses(quiet);
+  if (clauses.length < 2) return [];
+  const frame = clauses[0] ?? "";
+  // The CLOCK form (`Scoreboard reads 22:19`) is not a score change.
+  if (!FRAME_LEDGER.test(frame)) return [];
+  // `from X to Y` — both ends of the transition, in the row's own words.
+  const pair = frame.match(SCORE_PAIR);
+  if (!pair) return [];
+  const ends = findScoreClaims(pair[0]);
+  if (ends.length < 2) return [];
+  const pre = ends[0];
+  const post = ends[ends.length - 1];
+  if (!pre || !post || pre === post) return [];
+  // The row must cite WHEN the change was read (`at t=-5.0s`): that marker is the
+  // model's own measured instant inside the window, which is what tells a read
+  // transition from a prose restatement of the score. The marker is dropped from
+  // the copy (audit provenance is never served).
+  if (!/\bat\s+t=-?[\d.]+\s*s\b/i.test(frame)) return [];
+  // Both ends MEASURED in this window: the pre score was read before the change
+  // and the post score after it (the delayed-board shape). A prompt carrying only
+  // the post score is a static read and earns no copy.
+  if (!promptHas(prompt, pre) || !promptHas(prompt, post)) return [];
+  // Extractive reduction of the row's own frame clause: drop the superseded old
+  // score and the audit marker, keep the row's own ledger words.
+  const line = tidy(
+    frame
+      .replace(SCORE_PAIR, `to ${post}`)
+      .replace(/\s+at\s+t=[^,;]*$/i, "")
+      .replace(/\s+at\s+-?[\d.]+\s*s$/i, "")
+  ).trim();
+  if (!line) return [];
+  const out = restoreTerminalPunctuation(line.replace(/^[a-z]/, (m) => m.toUpperCase()));
+  // The served line reports exactly ONE score — the post score. The old score is
+  // never served beside it (a both-ends line is the uncorroborated read).
+  const claims = findScoreClaims(out);
+  if (claims.length !== 1 || claims[0] !== post) return [];
+  if (!LEDGER_VERB.test(out) || hasGoalClaim(out)) return [];
+  return [out];
+}
+
+/** The ledger's own verbs: the frame's report words, never a play verb. */
+const LEDGER_VERB = /\b(?:changes?|updates?|changes?|becomes?|goes?|moves?|reads?|shows?|stands?|is\s+now)\b/i;
+
 /** Display verbs whose object is a claim the gate cut: the frame, not a beat. */
 const FRAME_DISPLAY_VERB =
   /\b(?:shows?|showed|displays?|displayed|reads?|announces?|announced|reports?|reported|indicates?|indicated|confirms?|confirmed|reveals?|revealed)\b/i;
@@ -2671,6 +2764,10 @@ function serveQuietCandidate(
   // (`The commentator announces The striker shoots`): the clause extraction or
   // the name gate left a second sentence inside the line.
   if (/\p{Ll}\s+(?:The|A|An)\b/u.test(out)) return "";
+  // ADAAAA-8193: the model's window-relative AUDIT marker (`at t=-5.0s`) is
+  // evidence provenance, never copy — a line that keeps it reads as a log row
+  // (`Scoreboard changes at t=-5.0s.`). Refused here so no shape can serve one.
+  if (/\bat\s+t=-?[\d.]+\s*s\b/i.test(out)) return "";
   // A quote is an OCR label the model quoted, never copy
   // (`… the stadium displays 'GOAL' …` reduced to `displays '`).
   if (/['"‘’“”]/.test(out)) return "";

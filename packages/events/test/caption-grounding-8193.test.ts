@@ -23,9 +23,13 @@
 // because the ball-in-net clause is NOT measured (`goalCrossed=false`,
 // `ballOutcome=null`). Whether a LEDGER-ONLY row is served a corroborated
 // scoreboard line or carries an explicit clause-3 exemption is a product ruling
-// (ADAAAA-8124); until it is recorded this row stays empty, and the tests below
-// pin BOTH sides of that boundary: no uncorroborated claim ships, and no ledger
-// line is invented by the extractor.
+// (ADAAAA-8124). The PO's ruling on this ticket closed it the other way: a
+// scoreboard change can be DELAYED (the board catches up a tap or two after the
+// play), so the row's own MEASURED transition is honest copy — but only when both
+// ends of the change were read in this window's own evidence (`2-1` before,
+// `2-2` after) and the row cites the measured instant. The unmeasured play clause
+// (`ball is in the net`) never rides. The tests below pin both sides of that
+// boundary: no uncorroborated claim ships, and no ledger line is invented.
 //
 // Three things this file grades:
 //   1. a claim-free row that LEADS with the ledger offers its own trailing beat
@@ -35,8 +39,10 @@
 //   2. that widening is SCOPED: a claim-free row that does not lead with the
 //      ledger keeps its single quiet candidate, and a ledger-lead whose tail
 //      carries no verb is still refused (clause 3 stays honest);
-//   3. row 2 stays empty, and its unmeasured `ball is in the net` clause is
-//      never served — the ledger is not turned into copy by this fix.
+//   3. a LEDGER-ONLY row (row 2) serves its corroborated score line
+//      (`Scoreboard changes to 2-2.`) while its unmeasured `ball is in the net`
+//      clause is never served — and a static read, a transition the prompt does
+//      not corroborate, or a sentence with no `from X to Y` change serves nothing.
 import { describe, it, expect } from "vitest";
 import {
   QUIET_MAX_WORDS,
@@ -136,17 +142,58 @@ describe("ADAAAA-8193 Q1 forward residual: claim-free ledger-leading row", () =>
   });
 });
 
-describe("ADAAAA-8193 row 2: ledger-only row stays empty until the ADAAAA-8124 ruling", () => {
-  it("stores no copy for the ledger-only row", () => {
-    expect(quietStoredCopy(ROW2_RAW, ctxFor("scoring_play", "GOAL", ROW2_PROMPT))).toBe("");
+describe("ADAAAA-8193 row 2: the LEDGER-ONLY row serves its corroborated score line", () => {
+  it("serves the row's own measured score transition as copy", () => {
+    const ctx = ctxFor("scoring_play", "GOAL", ROW2_PROMPT);
+    const copy = quietStoredCopy(ROW2_RAW, ctx);
+    expect(copy).toBe("Scoreboard changes to 2-2.");
+    // Every ADAAAA-8125 post-condition the served copy must cross.
+    const stored = wholeStoredSentence(ROW2_RAW);
+    expect(words(copy)).toBeLessThanOrEqual(QUIET_MAX_WORDS);
+    expect(servedShapeViolations(copy, [stored])).toEqual([]);
+    expect(hasGoalClaim(copy)).toBe(false);
+    expect(stripInternalTokens(copy)).toBe(copy);
+    expect(gateGoalClaims(copy, ctx)).toBe(copy);
+    expect(gateQuietWindow(copy, ctx)).toBe(copy);
+    // Extractive: every word is the row's OWN — the line drops the superseded old
+    // score and the audit marker, it never adds one.
+    const storedWords = stored.toLowerCase().match(/[\p{L}\d-]+/gu) ?? [];
+    for (const w of copy.toLowerCase().match(/[\p{L}\d-]+/gu) ?? []) {
+      expect(storedWords).toContain(w);
+    }
+    // One score only — the measured post score, never the old one beside it.
+    expect(findScoreClaims(copy)).toEqual(["2-2"]);
   });
 
   it("never serves the unmeasured `ball is in the net` clause", () => {
     const copy = quietStoredCopy(ROW2_RAW, ctxFor("scoring_play", "GOAL", ROW2_PROMPT));
     expect(copy).not.toContain("net");
     expect(hasGoalClaim(copy)).toBe(false);
-    // The corpus's own claim survives in the stored sentence; only the copy is
-    // refused, never the row.
+    // The corpus's own claim survives in the stored sentence; only the play clause
+    // is dropped from the copy, never the row.
     expect(findScoreClaims(wholeStoredSentence(ROW2_RAW))).toEqual(["2-1", "2-2"]);
+  });
+
+  it("serves nothing when the window measured no score at all (no prompt)", () => {
+    expect(quietStoredCopy(ROW2_RAW, ctxFor("scoring_play", "GOAL"))).toBe("");
+  });
+
+  it("serves nothing on a STATIC read (prompt carries the post score only)", () => {
+    // A delayed board is allowed only because BOTH ends of the transition were
+    // measured: the pre score read before the change, the post score after it.
+    const staticPrompt = '  -5.0s ocr="22:19 |RMA 2-2 BAR"';
+    expect(quietStoredCopy(ROW2_RAW, ctxFor("scoring_play", "GOAL", staticPrompt))).toBe("");
+  });
+
+  it("invents no ledger line for a sentence with no `from X to Y` transition", () => {
+    const raw = "Scoreboard changes to 2-2 at t=0.0s and the ball is in the net.";
+    expect(quietStoredCopy(raw, ctxFor("scoring_play", "GOAL", ROW2_PROMPT))).toBe("");
+  });
+
+  it("row 1 keeps its beat: the ledger line is offered LAST", () => {
+    // Row 1's sentence has no `from X to Y` pair, and even with the transition
+    // measured the row's own tail beat wins.
+    const ctx = ctxFor("big_play", "BIG_PLAY", '22:19 |RMA 1-1 BAR');
+    expect(quietStoredCopy(ROW1_RAW, ctx)).toBe("Players celebrate.");
   });
 });
