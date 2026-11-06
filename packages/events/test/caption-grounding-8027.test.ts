@@ -439,7 +439,12 @@ describe("ADAAAA-8027 §2 — the store seam refuses what it cannot make whole",
       quiet: isQuietVerdict(row.outcome),
       regate: (sentence: string) => regateServedSentence(sentence, ctx),
     });
-    expect(gated).toBe("Shot in midfield");
+    // ADAAAA-8221 re-pin: the live scoring-lane audit tail is stripped before
+    // the claim gate now, so the gated line keeps this window's own claim-free
+    // beat instead of the taxonomy substitution (`Shot in midfield`) the
+    // pre-fix path stored once the tail's `GOAL`/`celebration` words had made
+    // the gate drop the row. The card caption is unchanged.
+    expect(gated).toBe("The scoreboard updates, followed by player celebrations.");
     expect(card.caption).toBe("The scoreboard updates, followed by player celebrations.");
     expect(card.caption).not.toMatch(/\b\d{1,2}\s*[-–—]\s*\d{1,2}\b/);
     expect(card.violations).toEqual([]);
