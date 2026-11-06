@@ -1443,7 +1443,7 @@ export const HighlightRecordSchema = z.object({
    * now centered on the evidence frame the accept rested on, located inside the
    * recording by pixel match; these fields record that measurement so the
    * delivered offset is computable from the row alone. Additive optional. */
-  clipAnchorMethod: z.enum(["frame_match", "content_clock"]).optional(),
+  clipAnchorMethod: z.enum(["frame_match", "content_clock", "score_flip"]).optional(),
   /** Recording-file instant (seconds) that carries the accepted evidence frame. */
   clipAnchorFileTs: z.number().min(0).optional(),
   /** The content-clock instant the anchor was taken from (`localizedTs`). */
@@ -1467,6 +1467,18 @@ export const HighlightRecordSchema = z.object({
    * is the content-clock intent, and the rail->recording skew is what moved the
    * delivered placement away from it. */
   clipAnchorDeliveredOffsetSec: z.number().min(0).optional(),
+  /** ADAAAA-8152 (ACC-2/ACC-3, fourth pass): the score-flip probe's audit.
+   * `score_flip` centers the delivered card on the FIRST recording frame that
+   * shows the post-transition score — the instant ACC-2 grades — because the
+   * content clock does not carry that frame (measured on legit `a5de612a`: the
+   * accepted picture trailed the flip by 2.2 s / 8.3 s). `clipScoreFlipPx` is
+   * the bright glyph mass that changed at that instant, `clipScoreFlipDigits`
+   * the number of once-flipping glyph components, and `clipScoreFlipRunnerUpTs`
+   * the heaviest competing change instant (the probe's margin). Absent on
+   * `frame_match`/`content_clock` rows. */
+  clipScoreFlipPx: z.number().min(0).optional(),
+  clipScoreFlipDigits: z.number().min(0).optional(),
+  clipScoreFlipRunnerUpTs: z.number().min(0).optional(),
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
