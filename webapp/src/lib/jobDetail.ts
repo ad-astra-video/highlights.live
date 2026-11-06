@@ -340,6 +340,17 @@ export interface JobDetailHighlight {
   // URL and never marks anything. Absent on servers that predate it (fall back
   // to `clipUri`).
   exportUri?: string;
+  // ADAAAA-8139 (interim step): a demoted LIVE goal window whose ASR / frames /
+  // crowd reaction carried a goal cue but whose scoreboard change had not landed
+  // when the window closed. The row stays a non-postable celebration and the
+  // marker clears on the SAME row id when the deferred re-attestation confirms
+  // the goal. Absent on legacy/VOD rows and on every attested goal.
+  provisionalGoal?: {
+    status: "provisional";
+    cues: Array<"asr_goal_call" | "frame_celebration" | "crowd_reaction">;
+    declaredTs: number;
+    note: string;
+  };
 }
 
 export interface JobDetail {
