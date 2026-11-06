@@ -24,6 +24,7 @@ import { StageAMetrics, StageAOutcomeLedger } from "./stage-a-metrics";
 import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
 import { clipWindow } from "./config";
+import type { ClipCut } from "./clip-anchor";
 import {
   ObserveDecider,
   LiveObserver,
@@ -5412,7 +5413,7 @@ export function storedSurfaceFor(
 export async function acceptVideoDecision(
   client: PipelineClient,
   run: LiveRunShared,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cut: (ts: number) => Promise<ClipCut>,
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   emit: { seq: number; timestamp: number },
@@ -5768,7 +5769,22 @@ export async function acceptVideoDecision(
   // pre-downgrade verdict instead of re-deriving copy at read time.
   const surface = storedSurfaceFor(decision, writeGrounding);
   const gatedReason = surface.reason;
-  const { clipId, clipUri } = await cut(loc.ts);
+  // ADAAAA-8168: a failed cut must never lose the accepted moment. The ingest
+  // rail's cut can now refuse to publish (its window was not flushed in time,
+  // or the delivered file came up short), and before this the throw unwound
+  // the whole live pass — the goal row vanished with it. Publish the row with
+  // an empty clipUri and the honest `clipError` instead, the same contract the
+  // browser rail's stop path uses.
+  let clip: ClipCut = { clipId: "", clipUri: "" };
+  let clipError: string | undefined;
+  try {
+    clip = await cut(loc.ts);
+  } catch (e: any) {
+    clipError = `Clip cut failed: ${String(e?.message || e)}`;
+    console.error(`[live-clip:${cfg.jobId}] ${clipError} (row ${loc.ts.toFixed(3)}s kept as an unclipped highlight)`);
+  }
+  const { clipUri } = clip;
+
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
@@ -5820,6 +5836,13 @@ export async function acceptVideoDecision(
     // re-decides the same candidate cannot double-persist/double-bill.
     idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),
     clipUri,
+    // ADAAAA-8168: HOW the delivered file was placed — the same audit contract
+    // the browser rail writes (`clipPlacementPatch`), so the ingest rail's
+    // centering is gradeable from the row alone instead of re-reading pixels.
+    // Absent when the cut failed: then `clipError` says why and the row keeps
+    // the moment instead of disappearing with the clip.
+    ...(clip.clipAudit ? clip.clipAudit : {}),
+    clipError,
     start: win.start,
     end: win.end,
     eventType: highlightEventType(decision),
@@ -7231,7 +7254,7 @@ export async function rereadDemotedWindowsFromPersistedFrames(
 export async function observeAcceptOnly(
   client: PipelineClient,
   run: LiveRunShared,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cut: (ts: number) => Promise<ClipCut>,
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   payload: ObserveDecidePayload,
@@ -7472,7 +7495,7 @@ export async function observeAcceptOnly(
 export async function observeOnDecide(
   client: PipelineClient,
   run: LiveRunShared,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cut: (ts: number) => Promise<ClipCut>,
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   sessionId: string,
@@ -8050,7 +8073,7 @@ export async function configurePerceiveCalibration(
 export async function analyzeJob(
   client: PipelineClient,
   iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>,
-  cut: (ts: number) => Promise<{ clipId: string; clipUri: string }>,
+  cut: (ts: number) => Promise<ClipCut>,
   cfg: AnalyzerConfig,
   onEvent?: (ev: AnalyzeEvent) => void,
   /** Optional pre-reserved session (shared with a concurrent audio tap so both
