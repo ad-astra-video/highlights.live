@@ -1,0 +1,122 @@
+{
+  "n": 12,
+  "werReference": "deployed faster-whisper base int8 transcript (no human reference available)",
+  "werMean": 1.0,
+  "werMedian": 1.0,
+  "lfm3_p50_ms": 3166.0,
+  "lfm3_p95_ms": 4262.6,
+  "baseline_p50_ms": 2642.7,
+  "baseline_p95_ms": 10069.7,
+  "bar_p95_ms": 700,
+  "lfm3Pass": false,
+  "rows": [
+    {
+      "clipId": "soc-goal-01",
+      "phase": "goal",
+      "lfm3Text": "Thank you.",
+      "baselineText": "Hey!  Jackie!  Jackie!  Jackie, Jackie!  Jackie, Jackie!  Jackie, Jackie!  Where's that camera?  Jackie!  Hey!",
+      "wer": 1.0,
+      "lfm3LatencyMs": 3640.4,
+      "baselineLatencyMs": 8434.3
+    },
+    {
+      "clipId": "soc-goal-02",
+      "phase": "goal",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 3185.7,
+      "baselineLatencyMs": 1290.5
+    },
+    {
+      "clipId": "soc-goal-03",
+      "phase": "goal",
+      "lfm3Text": "Thank you.",
+      "baselineText": "Well done!",
+      "wer": 1.0,
+      "lfm3LatencyMs": 4150.6,
+      "baselineLatencyMs": 1949.2
+    },
+    {
+      "clipId": "soc-goal-04",
+      "phase": "goal",
+      "lfm3Text": "Thank you.",
+      "baselineText": "That's it.  To this system,  to this system,  to this system,  to this system.",
+      "wer": 1.0,
+      "lfm3LatencyMs": 3683.2,
+      "baselineLatencyMs": 1774.4
+    },
+    {
+      "clipId": "soc-near-01",
+      "phase": "near_goal",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 3052.1,
+      "baselineLatencyMs": 5168.0
+    },
+    {
+      "clipId": "soc-near-02",
+      "phase": "near_goal",
+      "lfm3Text": "Thank you.",
+      "baselineText": "Let's go, we'll go.  Let's go, let's go.  Let's go.  Let's go.  Let's go.  Let's go.  All right.",
+      "wer": 1.0,
+      "lfm3LatencyMs": 3875.8,
+      "baselineLatencyMs": 6406.3
+    },
+    {
+      "clipId": "soc-off-01",
+      "phase": "off_target",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 4399.6,
+      "baselineLatencyMs": 3952.4
+    },
+    {
+      "clipId": "soc-off-02",
+      "phase": "off_target",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 2937.1,
+      "baselineLatencyMs": 973.3
+    },
+    {
+      "clipId": "soc-warm-01",
+      "phase": "warm_up",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 2702.5,
+      "baselineLatencyMs": 968.1
+    },
+    {
+      "clipId": "soc-warm-02",
+      "phase": "warm_up",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 3146.4,
+      "baselineLatencyMs": 3336.2
+    },
+    {
+      "clipId": "soc-lull-01",
+      "phase": "commentary_lull",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 2467.6,
+      "baselineLatencyMs": 12068.5
+    },
+    {
+      "clipId": "soc-replay-01",
+      "phase": "replay_loop",
+      "lfm3Text": "Thank you.",
+      "baselineText": "",
+      "wer": 1.0,
+      "lfm3LatencyMs": 2448.2,
+      "baselineLatencyMs": 950.8
+    }
+  ]
+}

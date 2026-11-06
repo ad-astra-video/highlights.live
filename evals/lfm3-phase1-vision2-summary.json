@@ -1,0 +1,349 @@
+{
+  "generatedAt": "2026-11-06T23:45:51Z",
+  "server": "http://127.0.0.1:8099",
+  "anchorFrame": true,
+  "probs": true,
+  "preWinS": 2.0,
+  "postWinS": 2.0,
+  "nCandidates": 49,
+  "nErrors": 0,
+  "gateRule": "keep iff crowd_eruption==yes OR whistle==yes OR celebration_visible==yes (unparseable => reject)",
+  "clips": {
+    "soc-goal-01": {
+      "phase": "goal",
+      "isHighlight": true,
+      "nCandidates": 8,
+      "nGemmaAccepted": 5,
+      "nKept": 8,
+      "nKeptAccepted": 5,
+      "keptAcceptedTs": [
+        0.25,
+        1.75,
+        4.25,
+        4.25,
+        6.25
+      ],
+      "acceptedTs": [
+        0.25,
+        1.75,
+        4.25,
+        4.25,
+        6.25
+      ],
+      "rejectedTs": [],
+      "_keepByTs": {
+        "0.25": true,
+        "1.75": true,
+        "2.25": true,
+        "4.25": true,
+        "6.25": true
+      }
+    },
+    "soc-goal-02": {
+      "phase": "goal",
+      "isHighlight": true,
+      "nCandidates": 8,
+      "nGemmaAccepted": 5,
+      "nKept": 7,
+      "nKeptAccepted": 4,
+      "keptAcceptedTs": [
+        4.25,
+        9.25,
+        10.75,
+        11.75
+      ],
+      "acceptedTs": [
+        0.25,
+        4.25,
+        9.25,
+        10.75,
+        11.75
+      ],
+      "rejectedTs": [
+        0.25
+      ],
+      "_keepByTs": {
+        "0.25": false,
+        "2.25": true,
+        "2.75": true,
+        "4.25": true,
+        "6.75": true,
+        "9.25": true,
+        "10.75": true,
+        "11.75": true
+      }
+    },
+    "soc-goal-03": {
+      "phase": "goal",
+      "isHighlight": true,
+      "nCandidates": 6,
+      "nGemmaAccepted": 5,
+      "nKept": 5,
+      "nKeptAccepted": 4,
+      "keptAcceptedTs": [
+        4.25,
+        8.75,
+        10.25,
+        11.25
+      ],
+      "acceptedTs": [
+        3.75,
+        4.25,
+        8.75,
+        10.25,
+        11.25
+      ],
+      "rejectedTs": [
+        3.75
+      ],
+      "_keepByTs": {
+        "3.75": false,
+        "4.25": true,
+        "6.25": true,
+        "8.75": true,
+        "10.25": true,
+        "11.25": true
+      }
+    },
+    "soc-goal-04": {
+      "phase": "goal",
+      "isHighlight": true,
+      "nCandidates": 4,
+      "nGemmaAccepted": 3,
+      "nKept": 4,
+      "nKeptAccepted": 3,
+      "keptAcceptedTs": [
+        0.75,
+        6.25,
+        6.75
+      ],
+      "acceptedTs": [
+        0.75,
+        6.25,
+        6.75
+      ],
+      "rejectedTs": [],
+      "_keepByTs": {
+        "0.75": true,
+        "4.25": true,
+        "6.25": true,
+        "6.75": true
+      }
+    },
+    "soc-near-01": {
+      "phase": "near_goal",
+      "isHighlight": true,
+      "nCandidates": 4,
+      "nGemmaAccepted": 3,
+      "nKept": 4,
+      "nKeptAccepted": 3,
+      "keptAcceptedTs": [
+        3.75,
+        4.25,
+        8.75
+      ],
+      "acceptedTs": [
+        3.75,
+        4.25,
+        8.75
+      ],
+      "rejectedTs": [],
+      "_keepByTs": {
+        "3.75": true,
+        "4.25": true,
+        "6.25": true,
+        "8.75": true
+      }
+    },
+    "soc-near-02": {
+      "phase": "near_goal",
+      "isHighlight": true,
+      "nCandidates": 2,
+      "nGemmaAccepted": 1,
+      "nKept": 2,
+      "nKeptAccepted": 1,
+      "keptAcceptedTs": [
+        5.75
+      ],
+      "acceptedTs": [
+        5.75
+      ],
+      "rejectedTs": [],
+      "_keepByTs": {
+        "5.75": true,
+        "8.25": true
+      }
+    },
+    "soc-off-01": {
+      "phase": "off_target",
+      "isHighlight": false,
+      "nCandidates": 5,
+      "nGemmaAccepted": 2,
+      "nKept": 5,
+      "nKeptAccepted": 2,
+      "keptAcceptedTs": [
+        0.25,
+        12.75
+      ],
+      "acceptedTs": [
+        0.25,
+        12.75
+      ],
+      "rejectedTs": [],
+      "_keepByTs": {
+        "0.25": true,
+        "2.25": true,
+        "2.75": true,
+        "9.25": true,
+        "12.75": true
+      }
+    },
+    "soc-off-02": {
+      "phase": "off_target",
+      "isHighlight": false,
+      "nCandidates": 3,
+      "nGemmaAccepted": 1,
+      "nKept": 0,
+      "nKeptAccepted": 0,
+      "keptAcceptedTs": [],
+      "acceptedTs": [
+        7.75
+      ],
+      "rejectedTs": [
+        0.25,
+        4.25,
+        7.75
+      ],
+      "_keepByTs": {
+        "0.25": false,
+        "4.25": false,
+        "7.75": false
+      }
+    },
+    "soc-warm-01": {
+      "phase": "warm_up",
+      "isHighlight": false,
+      "nCandidates": 5,
+      "nGemmaAccepted": 3,
+      "nKept": 5,
+      "nKeptAccepted": 3,
+      "keptAcceptedTs": [
+        2.25,
+        6.25,
+        5.25
+      ],
+      "acceptedTs": [
+        2.25,
+        6.25,
+        5.25
+      ],
+      "rejectedTs": [],
+      "_keepByTs": {
+        "2.25": true,
+        "4.25": true,
+        "4.75": true,
+        "6.25": true,
+        "5.25": true
+      }
+    },
+    "soc-warm-02": {
+      "phase": "warm_up",
+      "isHighlight": false,
+      "nCandidates": 4,
+      "nGemmaAccepted": 3,
+      "nKept": 4,
+      "nKeptAccepted": 3,
+      "keptAcceptedTs": [
+        0.25,
+        1.25,
+        2.25
+      ],
+      "acceptedTs": [
+        0.25,
+        1.25,
+        2.25
+      ],
+      "rejectedTs": [],
+      "_keepByTs": {
+        "0.25": true,
+        "1.25": true,
+        "2.25": true,
+        "6.25": true
+      }
+    },
+    "soc-lull-01": {
+      "phase": "commentary_lull",
+      "isHighlight": false,
+      "nCandidates": 0,
+      "nGemmaAccepted": 0,
+      "nKept": 0,
+      "nKeptAccepted": 0,
+      "keptAcceptedTs": [],
+      "acceptedTs": [],
+      "rejectedTs": []
+    },
+    "soc-replay-01": {
+      "phase": "replay_loop",
+      "isHighlight": false,
+      "nCandidates": 0,
+      "nGemmaAccepted": 0,
+      "nKept": 0,
+      "nKeptAccepted": 0,
+      "keptAcceptedTs": [],
+      "acceptedTs": [],
+      "rejectedTs": []
+    }
+  },
+  "latency": {
+    "gate_n": 49,
+    "gate_p50_ms": 2867.1,
+    "gate_p95_ms": 2940.4,
+    "gate_max_ms": 2943.9,
+    "gate_mean_ms": 2872.3,
+    "prob_n": 49,
+    "prob_p95_ms": 509.7
+  },
+  "ac_verdicts": {
+    "AC1_precision": {
+      "negativesWithAcceptedGoal": 4,
+      "negativesEliminated": 1,
+      "negativesEliminatedIds": [
+        "soc-off-02"
+      ],
+      "positivesLost": [],
+      "precisionBefore_pct_clip": 60.0,
+      "precisionAfter_pct_clip": 66.7,
+      "precisionBefore_pct_cand": 71.0,
+      "precisionAfter_pct_cand": 71.4,
+      "pass": false
+    },
+    "AC2_recall": {
+      "positivesTotal": 6,
+      "positivesRetained": 6,
+      "positivesLost": [],
+      "pass": false
+    },
+    "AC3_latency": {
+      "gateLatencyMs_p50": 2867.1,
+      "gateLatencyMs_p95": 2940.4,
+      "gateLatencyMs_max": 2943.9,
+      "probPassLatencyMs_p95": 509.7,
+      "bar_p95_ms": 300,
+      "pass": false
+    },
+    "AC5_noise_split": {
+      "note": "This pre-gate is measured separately from the Stage-A audio_gate FP rate.",
+      "stageA_candidates": 49,
+      "stageA_rejected": 18,
+      "stageA_fp_rate": 0.3673,
+      "pregate_candidates": 49,
+      "pregate_rejected": 5,
+      "pregate_reject_rate": 0.102
+    }
+  },
+  "killCriteriaTriggered": [
+    "<2 of 4 negatives rejected",
+    "p95 > 300 ms"
+  ],
+  "adopted": false
+}

@@ -1,0 +1,306 @@
+{
+  "shape": "single request, 4-token 'crowd whistle commentary' y/n answer",
+  "n": 49,
+  "p50_ms": 722.5,
+  "p95_ms": 762.6,
+  "max_ms": 808.2579970359802,
+  "mean_ms": 715.5,
+  "bar_p95_ms": 300,
+  "pass": false,
+  "rows": [
+    {
+      "clipId": "soc-goal-01",
+      "ts": 0.25,
+      "answer": "y y y",
+      "latencyMs": 658.0
+    },
+    {
+      "clipId": "soc-goal-01",
+      "ts": 1.75,
+      "answer": "y y y",
+      "latencyMs": 734.5
+    },
+    {
+      "clipId": "soc-goal-01",
+      "ts": 2.25,
+      "answer": "y y y",
+      "latencyMs": 762.1
+    },
+    {
+      "clipId": "soc-goal-01",
+      "ts": 1.75,
+      "answer": "y y y",
+      "latencyMs": 711.5
+    },
+    {
+      "clipId": "soc-goal-01",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 728.0
+    },
+    {
+      "clipId": "soc-goal-01",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 710.9
+    },
+    {
+      "clipId": "soc-goal-01",
+      "ts": 6.25,
+      "answer": "y y y",
+      "latencyMs": 742.8
+    },
+    {
+      "clipId": "soc-goal-01",
+      "ts": 6.25,
+      "answer": "y y y",
+      "latencyMs": 725.6
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 0.25,
+      "answer": "y y y",
+      "latencyMs": 620.6
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 2.25,
+      "answer": "y y y",
+      "latencyMs": 714.6
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 2.75,
+      "answer": "y y y",
+      "latencyMs": 707.7
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 708.5
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 6.75,
+      "answer": "y y y",
+      "latencyMs": 727.4
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 9.25,
+      "answer": "y y y",
+      "latencyMs": 768.0
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 10.75,
+      "answer": "y y y",
+      "latencyMs": 729.7
+    },
+    {
+      "clipId": "soc-goal-02",
+      "ts": 11.75,
+      "answer": "y y y",
+      "latencyMs": 713.3
+    },
+    {
+      "clipId": "soc-goal-03",
+      "ts": 3.75,
+      "answer": "y y y",
+      "latencyMs": 712.2
+    },
+    {
+      "clipId": "soc-goal-03",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 748.2
+    },
+    {
+      "clipId": "soc-goal-03",
+      "ts": 6.25,
+      "answer": "y y y",
+      "latencyMs": 724.9
+    },
+    {
+      "clipId": "soc-goal-03",
+      "ts": 8.75,
+      "answer": "y y y",
+      "latencyMs": 763.0
+    },
+    {
+      "clipId": "soc-goal-03",
+      "ts": 10.25,
+      "answer": "y y y",
+      "latencyMs": 722.5
+    },
+    {
+      "clipId": "soc-goal-03",
+      "ts": 11.25,
+      "answer": "y y y",
+      "latencyMs": 717.3
+    },
+    {
+      "clipId": "soc-goal-04",
+      "ts": 0.75,
+      "answer": "y y y",
+      "latencyMs": 683.7
+    },
+    {
+      "clipId": "soc-goal-04",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 689.1
+    },
+    {
+      "clipId": "soc-goal-04",
+      "ts": 6.25,
+      "answer": "y y y",
+      "latencyMs": 703.8
+    },
+    {
+      "clipId": "soc-goal-04",
+      "ts": 6.75,
+      "answer": "y y y",
+      "latencyMs": 700.9
+    },
+    {
+      "clipId": "soc-near-01",
+      "ts": 3.75,
+      "answer": "y y y",
+      "latencyMs": 808.3
+    },
+    {
+      "clipId": "soc-near-01",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 713.7
+    },
+    {
+      "clipId": "soc-near-01",
+      "ts": 6.25,
+      "answer": "y y y",
+      "latencyMs": 704.8
+    },
+    {
+      "clipId": "soc-near-01",
+      "ts": 8.75,
+      "answer": "y y y",
+      "latencyMs": 708.6
+    },
+    {
+      "clipId": "soc-near-02",
+      "ts": 5.75,
+      "answer": "y y y",
+      "latencyMs": 735.1
+    },
+    {
+      "clipId": "soc-near-02",
+      "ts": 8.25,
+      "answer": "y y y",
+      "latencyMs": 747.6
+    },
+    {
+      "clipId": "soc-off-01",
+      "ts": 0.25,
+      "answer": "y y y",
+      "latencyMs": 648.7
+    },
+    {
+      "clipId": "soc-off-01",
+      "ts": 2.25,
+      "answer": "y y y",
+      "latencyMs": 725.4
+    },
+    {
+      "clipId": "soc-off-01",
+      "ts": 2.75,
+      "answer": "y y y",
+      "latencyMs": 700.5
+    },
+    {
+      "clipId": "soc-off-01",
+      "ts": 9.25,
+      "answer": "y y y",
+      "latencyMs": 728.0
+    },
+    {
+      "clipId": "soc-off-01",
+      "ts": 12.75,
+      "answer": "y y y",
+      "latencyMs": 734.0
+    },
+    {
+      "clipId": "soc-off-02",
+      "ts": 0.25,
+      "answer": "y y y",
+      "latencyMs": 610.7
+    },
+    {
+      "clipId": "soc-off-02",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 729.6
+    },
+    {
+      "clipId": "soc-off-02",
+      "ts": 7.75,
+      "answer": "y y y",
+      "latencyMs": 690.6
+    },
+    {
+      "clipId": "soc-warm-01",
+      "ts": 2.25,
+      "answer": "y y y",
+      "latencyMs": 731.9
+    },
+    {
+      "clipId": "soc-warm-01",
+      "ts": 4.25,
+      "answer": "y y y",
+      "latencyMs": 716.5
+    },
+    {
+      "clipId": "soc-warm-01",
+      "ts": 4.75,
+      "answer": "y y y",
+      "latencyMs": 723.8
+    },
+    {
+      "clipId": "soc-warm-01",
+      "ts": 6.25,
+      "answer": "y y y",
+      "latencyMs": 703.5
+    },
+    {
+      "clipId": "soc-warm-01",
+      "ts": 5.25,
+      "answer": "y y y",
+      "latencyMs": 722.8
+    },
+    {
+      "clipId": "soc-warm-02",
+      "ts": 0.25,
+      "answer": "y y y",
+      "latencyMs": 645.7
+    },
+    {
+      "clipId": "soc-warm-02",
+      "ts": 1.25,
+      "answer": "y y y",
+      "latencyMs": 731.7
+    },
+    {
+      "clipId": "soc-warm-02",
+      "ts": 2.25,
+      "answer": "y y y",
+      "latencyMs": 745.7
+    },
+    {
+      "clipId": "soc-warm-02",
+      "ts": 6.25,
+      "answer": "y y y",
+      "latencyMs": 723.9
+    }
+  ]
+}
