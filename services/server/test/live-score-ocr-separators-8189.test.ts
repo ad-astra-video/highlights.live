@@ -156,6 +156,22 @@ describe("parseOcrScoreLine — the glued score pair the live rail emits (ADAAAA
     expect(OCR_SCORE_PAIR_MAX_GLUED).toBe(9);
   });
 
+  it("ADAAAA-8160 precedent: the dot form recovers `2.2` while the colon clock stays out", () => {
+    // Leg a5de612a OCR'd the scorebug as `2.2` on the frames where the score
+    // really advanced to 2-2, while its clock line read `22:13`.
+    expect(parseOcrScoreLine(["22:13 RMA 2.2 FCB"])).toEqual([2, 2]);
+    expect(parseOcrScoreLine(["22:13 RMA 2-1 FCB"])).toEqual([2, 1]);
+    expect(parseOcrScoreLine(["22:13"])).toBeNull();
+    expect(parseOcrScoreLine(["22:17"])).toBeNull();
+  });
+
+  it("never slices a pair out of a longer digit run", () => {
+    expect(parseOcrScoreLine(["RMA 1234/5 FCB"])).toBeNull();
+    expect(parseOcrScoreLine(["RMA 12/34 FCB"])).toBeNull();
+    expect(parseOcrScoreLine(["FCB2210"])).toBeNull();
+    expect(parseOcrScoreLine(["RMA 1/0 FCB2210"])).toEqual([1, 0]);
+  });
+
   it("leaves every dash-separated reading on its ADAAAA-8134 selection", () => {
     expect(parseOcrScoreLine(["19-41 RMA-2-1 BAR"])).toEqual([2, 1]);
     expect(parseOcrScoreLine(["19-41 RMA 1-1 BAR"])).toEqual([1, 1]);
