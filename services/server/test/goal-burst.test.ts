@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   LiveRunShared,
   DEFAULT_GOAL_BURST_SUPPRESS_S,
+  GOAL_SAME_TRANSITION_HORIZON_S,
   SHOOTOUT_KICK_DEDUP_S,
   formatGoalBurstSuppressionReason,
 } from "../src/analyzer";
@@ -198,5 +199,131 @@ describe("goalBurstSuppression shootout-aware (ADAAAA-7402/7420)", () => {
     const s2 = new LiveRunShared();
     delivered(s2, 601);
     expect(s2.goalBurstSuppression({ ts: 614, eventType: "GOAL" })).toBeDefined(); // uncorroborated, 13s < 30s
+  });
+});
+
+// ADAAAA-8146: the measured live leg `9a6b1d8f` shipped ONE `1-1 -> 2-1` goal
+// three times — delivered at candidateTs 2.603s, re-read at 38.730s (gap
+// 36.127s) and again at 84.941s (gap 82.338s), every row honestly attested by a
+// legible forward score read. The ADAAAA-6610 burst window (30s) sees neither
+// re-read, so the same-transition horizon is what collapses them.
+describe("goalBurstSuppression same-transition horizon (ADAAAA-8146)", () => {
+  const DELIVERED_ID = "e17aecb0-f78b-4596-915c-0f07a2d0038e";
+
+  it("dedupes same-transition re-reads at 36s / 46s / 82s, naming the delivered row and gap", () => {
+    const s = new LiveRunShared();
+    delivered(s, 2.603, { id: DELIVERED_ID, transitionKey: "1-1>2-1" });
+
+    for (const [ts, gap] of [
+      [38.73, 36.127],
+      [48.73, 46.127],
+      [84.941, 82.338],
+    ] as const) {
+      const sup = s.goalBurstSuppression({ ts, eventType: "GOAL", transitionKey: "1-1>2-1" });
+      expect(sup, `re-read @${ts}s`).toBeDefined();
+      expect(sup!.dedupeAgainstHighlightId).toBe(DELIVERED_ID);
+      expect(sup!.dedupeAgainstKind).toBe("scoring_goal");
+      expect(sup!.dedupeAgainstTs).toBe(2.603);
+      expect(sup!.gapS).toBeCloseTo(gap, 3);
+      expect(sup!.windowS).toBe(GOAL_SAME_TRANSITION_HORIZON_S);
+      expect(sup!.transitionKey).toBe("1-1>2-1");
+      const reason = formatGoalBurstSuppressionReason(sup!);
+      expect(reason).toContain(`dedupeAgainst=${DELIVERED_ID}@2.603s(scoring_goal)`);
+      expect(reason).toContain(`gap=${gap.toFixed(3)}s`);
+      expect(reason).toContain(`window=${GOAL_SAME_TRANSITION_HORIZON_S}s`);
+      expect(reason).toContain("transition=1-1>2-1");
+    }
+  });
+
+  it("replays the measured triple as ONE delivered GOAL + two suppressions that name it (no orphan)", () => {
+    // AC2 replay from stored rows: the same three candidate instants and the
+    // same measured transition. Only the first ships; both re-reads are dropped
+    // with a reason naming the DELIVERED row (never the other suppressed one).
+    const s = new LiveRunShared();
+    delivered(s, 2.603, { id: DELIVERED_ID, transitionKey: "1-1>2-1" });
+    const shipped: string[] = [DELIVERED_ID];
+    const suppressed: { against: string; gap: number; burst: number }[] = [];
+    for (const ts of [38.73, 84.941]) {
+      const sup = s.goalBurstSuppression({ ts, eventType: "GOAL", transitionKey: "1-1>2-1" });
+      if (!sup) {
+        shipped.push(`hl-${ts}`);
+        continue;
+      }
+      suppressed.push({ against: sup.dedupeAgainstHighlightId, gap: sup.gapS, burst: sup.burstSize });
+    }
+    expect(shipped).toEqual([DELIVERED_ID]);
+    expect(suppressed.map((x) => x.against)).toEqual([DELIVERED_ID, DELIVERED_ID]);
+    expect(suppressed.map((x) => x.burst)).toEqual([1, 2]);
+    expect(suppressed[0].gap).toBeCloseTo(36.127, 3);
+    expect(suppressed[1].gap).toBeCloseTo(82.338, 3);
+    expect(suppressed.every((x) => x.against === DELIVERED_ID)).toBe(true);
+  });
+
+  it("still ships a DISTINCT transition at the same gaps", () => {
+    const s = new LiveRunShared();
+    delivered(s, 2.603, { id: DELIVERED_ID, transitionKey: "1-1>2-1" });
+    for (const ts of [38.73, 48.73, 84.941]) {
+      expect(
+        s.goalBurstSuppression({ ts, eventType: "GOAL", transitionKey: "2-1>3-1" }),
+        `distinct goal @${ts}s must ship`
+      ).toBeUndefined();
+    }
+  });
+
+  it("matches the same KEY even when a nearer delivered GOAL carries a different transition", () => {
+    // D1 (1-1>2-1) at 2s, D2 (2-1>3-1) at 30s. A 1-1>2-1 re-read at 38s is a
+    // duplicate of D1 (36s back), not of the nearer D2.
+    const s = new LiveRunShared();
+    delivered(s, 2, { id: "hl-d1", transitionKey: "1-1>2-1" });
+    delivered(s, 30, { id: "hl-d2", transitionKey: "2-1>3-1" });
+    const sup = s.goalBurstSuppression({ ts: 38, eventType: "GOAL", transitionKey: "1-1>2-1" });
+    expect(sup?.dedupeAgainstHighlightId).toBe("hl-d1");
+    expect(sup?.gapS).toBe(36);
+    expect(sup?.windowS).toBe(GOAL_SAME_TRANSITION_HORIZON_S);
+  });
+
+  it("behaves exactly as today for a same-transition candidate INSIDE the 30s window", () => {
+    const s = new LiveRunShared();
+    delivered(s, 160.55, { id: "hl-goal", transitionKey: "1-1>2-1" });
+    const sup = s.goalBurstSuppression({ ts: 168, eventType: "GOAL", transitionKey: "1-1>2-1" });
+    expect(sup?.dedupeAgainstHighlightId).toBe("hl-goal");
+    expect(sup?.windowS).toBe(DEFAULT_GOAL_BURST_SUPPRESS_S); // 30s, not the horizon
+    expect(sup?.gapS).toBeCloseTo(7.45, 5);
+    expect(formatGoalBurstSuppressionReason(sup!)).toContain("window=30s");
+  });
+
+  it("never widens a null-key candidate (shootout conversions keep the tight window)", () => {
+    // A converted penalty keeps a fixed aggregate score => no transition key.
+    // Two conversions far apart are DISTINCT kicks, not a re-read, and the
+    // 120 s horizon must never apply to them.
+    const s = new LiveRunShared();
+    delivered(s, 588);
+    delivered(s, 601);
+    expect(s.goalBurstSuppression({ ts: 620, eventType: "GOAL" })).toBeDefined(); // today: 19s < 30s
+    expect(s.goalBurstSuppression({ ts: 640, eventType: "GOAL" })).toBeUndefined(); // 39s > 30s
+    const c = new LiveRunShared();
+    delivered(c, 588);
+    delivered(c, 601);
+    expect(c.goalBurstSuppression({ ts: 620, eventType: "GOAL", corroborated: true })).toBeUndefined(); // 19s > 8s
+  });
+
+  it("stops at the horizon (a candidate beyond it is treated as a new event)", () => {
+    const s = new LiveRunShared();
+    delivered(s, 2, { id: "hl-a", transitionKey: "1-1>2-1" });
+    expect(
+      s.goalBurstSuppression({ ts: 2 + GOAL_SAME_TRANSITION_HORIZON_S - 0.1, eventType: "GOAL", transitionKey: "1-1>2-1" })
+    ).toBeDefined();
+    expect(
+      s.goalBurstSuppression({ ts: 2 + GOAL_SAME_TRANSITION_HORIZON_S, eventType: "GOAL", transitionKey: "1-1>2-1" })
+    ).toBeUndefined();
+  });
+
+  it("horizon is materially wider than the burst window but never narrower", () => {
+    expect(GOAL_SAME_TRANSITION_HORIZON_S).toBeGreaterThan(DEFAULT_GOAL_BURST_SUPPRESS_S);
+    // A configured WIDER window raises the horizon with it.
+    const s = new LiveRunShared({ goalBurstWindowS: 300 });
+    delivered(s, 2, { id: "hl-a", transitionKey: "1-1>2-1" });
+    const sup = s.goalBurstSuppression({ ts: 200, eventType: "GOAL", transitionKey: "1-1>2-1" });
+    expect(sup?.windowS).toBe(300);
   });
 });
