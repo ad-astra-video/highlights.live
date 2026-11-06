@@ -92,6 +92,7 @@ import { recordDecideAudit } from "./decide-audit";
 import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, failureReasonFor, type JobFailureReason, type JobOutcome } from "./job-failure";
 import {
   accruedSecondsSince,
+  billableConfirmCalls,
   buildTerminalAccountingPatch,
   computeCostUsd,
   PERCEIVE_PER_HOUR_USD,
@@ -1569,7 +1570,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             liveWatchMinutes: Number((railStats.sessionSeconds / 60).toFixed(3)),
             costUsd: Number(
               (
-                cfg.decideFee * (railMetrics.decideCalls + (railMetrics.confirmCalls ?? 0)) +
+                // ADAAAA-8242: bill the confirm count the SAME snapshot persists,
+                // so the share's row reconciles (one source, like the live pass).
+                cfg.decideFee * (railMetrics.decideCalls + billableConfirmCalls(railMetrics)) +
                 (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD
               ).toFixed(4)
             ),
@@ -2269,7 +2272,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const liveDecideCalls = outcome.observeMetrics?.decideCalls ?? 0;
       // ADAAAA-8205: confirm dives are decide-service calls and are metered in
       // the same term: decideFee * (decideCalls + confirmCalls) + perceive.
-      const liveConfirmCalls = outcome.observeMetrics?.confirmCalls ?? 0;
+      // ADAAAA-8242: read that count through the ONE source the settlement patch
+      // also uses, so the cost term can never bill a confirm count the persisted
+      // `observeMetrics` does not carry (leg `0705e2b5`: cost 75 calls, meter
+      // none). The snapshot wins; absent => the lane made no call.
+      const liveConfirmCalls = billableConfirmCalls(outcome.observeMetrics);
       const liveCostUsd = computeCostUsd(liveDecideCalls, perceiveSessionS, cfg.decideFee, liveConfirmCalls);
       // ADAAAA-8061: a pass stopped mid-stream settles as `cancelled` with the
       // spend it actually incurred. The stop path flips `slot.stopped` (and
@@ -2288,7 +2295,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             status: "cancelled",
             decideFee: cfg.decideFee,
             decideCalls: stoppedDecideCalls,
-            confirmCalls: outcome.observeMetrics?.confirmCalls ?? 0,
+            // ADAAAA-8242: the snapshot carries the meter, and the patch builder
+            // bills exactly that count — one source, so `costUsd` and
+            // `observeMetrics.confirmCalls` cannot disagree on the stored row.
             perceiveSessionS,
             observeMetrics: outcome.observeMetrics,
             error: "stopped (cancelled via API)",
@@ -2305,7 +2314,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           stoppedDecideCalls,
           perceiveSessionS,
           cfg.decideFee,
-          outcome.observeMetrics?.confirmCalls ?? 0
+          // ADAAAA-8242: same single source as the patch above.
+          billableConfirmCalls(outcome.observeMetrics)
         );
         console.log(
           `[live:${job.id}] stopped mid-pass: decideCalls=${stoppedDecideCalls} perceiveSessionS=${perceiveSessionS.toFixed(1)} costUsd=${stoppedCostUsd}`
