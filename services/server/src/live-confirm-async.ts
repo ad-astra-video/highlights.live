@@ -405,6 +405,25 @@ export interface ConfirmDiveResult {
 }
 
 /**
+ * ADAAAA-8205 AC-A4: did this dive actually issue a decide call? The two
+ * pre-flight drops happen before any model call is made, so they must not be
+ * billed as confirm calls. Everything else (`ok`, a timeout after the request
+ * was issued, a transport failure, a structured-verdict passthrough) did send
+ * one.
+ */
+export function confirmDiveMadeCall(result: ConfirmDiveResult): boolean {
+  if (result.ok) return true;
+  switch (result.droppedReason) {
+    case "timeout":
+    case "transport_failure":
+    case "passthrough":
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
  * Run ONE dive over the persisted artifacts. NEVER throws: every failure is a
  * fail-closed result the caller counts as `confirmDropped`.
  */
@@ -591,7 +610,12 @@ export async function runDueConfirmDives(deps: {
     }
     const result = await runConfirmDive(entry, deps.io, { jobId: deps.jobId, log });
     out.dives++;
-    deps.run.noteConfirmDiveDone(result.ok, result.latencyMs);
+    // AC-A4: only a dive that actually ISSUED a decide call is billable. The two
+    // pre-flight drops (`no_persisted_frames`, `frame_unreadable`) never reach
+    // the model, so counting them as confirm calls would over-bill `costUsd` and
+    // break the identity `confirmCalls == calls made` that a stored-row read
+    // grades. `confirmDropped` still counts them (AC-A6).
+    if (confirmDiveMadeCall(result)) deps.run.noteConfirmDiveDone(result.ok, result.latencyMs);
     if (!result.ok) {
       deps.run.dropPendingConfirmDive(key);
       deps.run.noteConfirmDiveDropped(result.droppedReason ?? "failed");
