@@ -79,6 +79,353 @@ export async function probeFlushedDuration(ffmpegPath: string, source: string): 
   return (await newestOf(["-select_streams", "v:0"])) ?? (await newestOf([]));
 }
 
+/** ADAAAA-8152: the result of locating one picture inside a recording.
+ *
+ * The live lane has TWO clocks: the media rail's content clock (which the
+ * analyzer used to pick `localizedTs`) and the recording file's own timeline.
+ * They are not the same axis — the rail timestamps frames when the media node
+ * analyzes them (~1.5-6 s after capture on the 8159 leg), and the uploader's
+ * chunks land late, so seeking a clip at the content instant lands the goal
+ * seconds before the intended offset. Pixel-matching the evidence frame the
+ * accept itself rested on is the one measurement that needs no clock model. */
+export interface FrameMatch {
+  /** The recording-file instant that carries the matched picture. */
+  fileTs: number;
+  /** Normalized mean-squared error at the match (0 = identical picture). */
+  score: number;
+  /** Best score at least one second away from the match — the uniqueness check. */
+  runnerUp: number;
+  /** Sampling rate of the (refined) probe. */
+  fps: number;
+  /** Frames the probe actually produced. */
+  frames: number;
+  /** Timestamp of the earliest sampled frame — a delivered file's own origin. */
+  firstTs: number;
+  searchStart: number;
+  searchDur: number;
+}
+
+/** Mean-and-std normalise a gray frame so a codec/scale difference between the
+ * evidence JPEG and the recording does not win the comparison. */
+export function normalizeGray(frame: Uint8Array | Float32Array): Float32Array {
+  const n = frame.length;
+  const out = new Float32Array(n);
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += frame[i];
+  const mean = n > 0 ? sum / n : 0;
+  let sq = 0;
+  for (let i = 0; i < n; i++) {
+    const d = frame[i] - mean;
+    sq += d * d;
+  }
+  const std = Math.sqrt(n > 0 ? sq / n : 0);
+  const inv = 1 / (std > 1e-6 ? std : 1e-6);
+  for (let i = 0; i < n; i++) out[i] = (frame[i] - mean) * inv;
+  return out;
+}
+
+/** Pick the frame that best matches `query` plus the best score at least
+ * `minGapFrames` away, so a caller can require a UNIQUE match instead of
+ * accepting whichever of many near-identical frames sorted first. */
+export function bestFrameMatch(
+  vecs: Float32Array[],
+  query: Float32Array,
+  minGapFrames: number
+): { index: number; score: number; runnerUp: number } {
+  const dist = (v: Float32Array): number => {
+    let acc = 0;
+    const n = Math.min(v.length, query.length);
+    for (let k = 0; k < n; k++) {
+      const d = v[k] - query[k];
+      acc += d * d;
+    }
+    return acc / (n || 1);
+  };
+  let index = -1;
+  let score = Infinity;
+  for (let i = 0; i < vecs.length; i++) {
+    const d = dist(vecs[i]);
+    if (d < score) {
+      score = d;
+      index = i;
+    }
+  }
+  let runnerUp = Infinity;
+  for (let i = 0; i < vecs.length; i++) {
+    if (Math.abs(i - index) < minGapFrames) continue;
+    const d = dist(vecs[i]);
+    if (d < runnerUp) runnerUp = d;
+  }
+  return { index, score, runnerUp };
+}
+
+/** Decode one image file (the analyzer's evidence JPEG) to a normalized
+ * SIZE×SIZE grayscale vector. Null when ffmpeg cannot read it. */
+export async function imageGrayVector(
+  ffmpegPath: string,
+  imagePath: string,
+  size = 64
+): Promise<Float32Array | null> {
+  const raw = await readGrayFrames(ffmpegPath, ["-i", imagePath], `scale=${size}:${size}:flags=bilinear,format=gray`, size);
+  return raw && raw.vecs.length ? raw.vecs[0] : null;
+}
+
+/** Sample `source` in [startS, startS+durS) at `fps` into normalized
+ * SIZE×SIZE grayscale vectors, with the ABSOLUTE source timestamp of every
+ * frame. `-copyts` keeps the original timeline across the `-ss`, and
+ * `showinfo` reports the pts each sampled frame actually carries, so the
+ * caller never has to assume where a cue-less webm's seek landed. */
+export async function sampleGrayStrip(
+  ffmpegPath: string,
+  source: string,
+  startS: number,
+  durS: number,
+  fps: number,
+  size = 64
+): Promise<{ ts: number[]; vecs: Float32Array[] } | null> {
+  const raw = await readGrayFrames(
+    ffmpegPath,
+    ["-copyts", "-ss", String(Math.max(0, startS)), "-t", String(Math.max(0.2, durS)), "-i", source],
+    `fps=${fps},scale=${size}:${size}:flags=bilinear,format=gray,showinfo`,
+    size
+  );
+  if (!raw || !raw.vecs.length) return null;
+  const ts: number[] = [];
+  for (let i = 0; i < raw.vecs.length; i++) {
+    const reported = raw.pts[i];
+    // A probe whose stderr lost a line still gets a usable grid.
+    ts.push(Number.isFinite(reported) ? reported : startS + i / fps);
+  }
+  return { ts, vecs: raw.vecs };
+}
+
+/** Locate `imagePath`'s picture inside `source` within
+ * [searchStartS, searchStartS + searchDurS). Two passes: an 8 fps sweep for the
+ * neighbourhood, then a 20 fps refine around the winner. Returns null when the
+ * probe or the evidence image cannot be read.
+
+ * `minScoreGap` guards uniqueness: a picture that repeats (a static wide shot,
+ * a replay) still matches, but the runner-up must sit clearly above the match
+ * so the caller can tell "found it" from "found something similar". */
+export async function locateImageInSource(
+  ffmpegPath: string,
+  source: string,
+  imagePath: string,
+  searchStartS: number,
+  searchDurS: number,
+  opts: { size?: number; coarseFps?: number; refineFps?: number } = {}
+): Promise<FrameMatch | null> {
+  const size = opts.size ?? 64;
+  const coarseFps = opts.coarseFps ?? 8;
+  const refineFps = opts.refineFps ?? 20;
+  const query = await imageGrayVector(ffmpegPath, imagePath, size);
+  if (!query) return null;
+  const coarse = await sampleGrayStrip(ffmpegPath, source, searchStartS, searchDurS, coarseFps, size);
+  if (!coarse) return null;
+  const first = bestFrameMatch(coarse.vecs, query, coarseFps);
+  if (first.index < 0) return null;
+  const hitTs = coarse.ts[first.index];
+  // Refine: re-probe ±0.6 s around the coarse hit at 20 fps. Cheap (a couple of
+  // decoded frames) and it turns a ±125 ms sweep into a ±25 ms answer, which is
+  // what makes the stored audit value worth reading.
+  const refined = await sampleGrayStrip(ffmpegPath, source, Math.max(0, hitTs - 0.6), 1.2, refineFps, size);
+  if (!refined || !refined.vecs.length) {
+    return {
+      fileTs: hitTs,
+      score: first.score,
+      runnerUp: first.runnerUp,
+      fps: coarseFps,
+      frames: coarse.vecs.length,
+      firstTs: coarse.ts[0],
+      searchStart: searchStartS,
+      searchDur: searchDurS,
+    };
+  }
+  const second = bestFrameMatch(refined.vecs, query, refineFps);
+  if (second.index < 0 || second.score > first.score) {
+    return {
+      fileTs: hitTs,
+      score: first.score,
+      runnerUp: first.runnerUp,
+      fps: coarseFps,
+      frames: coarse.vecs.length,
+      firstTs: coarse.ts[0],
+      searchStart: searchStartS,
+      searchDur: searchDurS,
+    };
+  }
+  return {
+    fileTs: refined.ts[second.index],
+    score: second.score,
+    runnerUp: Math.min(second.runnerUp, Math.max(first.runnerUp, second.score)),
+    fps: refineFps,
+    frames: coarse.vecs.length + refined.vecs.length,
+    firstTs: coarse.ts[0],
+    searchStart: searchStartS,
+    searchDur: searchDurS,
+  };
+}
+
+/** Shared raw-gray decode: one ffmpeg process, stdout = SIZE×SIZE gray frames,
+ * stderr's showinfo lines = the pts of each frame in order. */
+async function readGrayFrames(
+  ffmpegPath: string,
+  inputArgs: string[],
+  filter: string,
+  size: number
+): Promise<{ vecs: Float32Array[]; pts: number[] } | null> {
+  let stdout: Buffer = Buffer.alloc(0);
+  let stderr = "";
+  try {
+    const res = await exec(ffmpegPath, ["-hide_banner", "-nostdin", "-loglevel", "info", ...inputArgs, "-an", "-vf", filter, "-f", "rawvideo", "-pix_fmt", "gray", "-"], {
+      encoding: "buffer",
+      maxBuffer: 256 * 1024 * 1024,
+    } as any);
+    stdout = res.stdout as Buffer;
+    stderr = String(res.stderr ?? "");
+  } catch (e: any) {
+    // A recording still mid-append can end a cluster short: keep what decoded.
+    stdout = (e?.stdout as Buffer) ?? Buffer.alloc(0);
+    stderr = String(e?.stderr ?? "");
+    if (!stdout.length) return null;
+  }
+  const frameBytes = size * size;
+  const count = Math.floor(stdout.length / frameBytes);
+  if (!count) return null;
+  const vecs: Float32Array[] = new Array(count);
+  for (let i = 0; i < count; i++) {
+    vecs[i] = normalizeGray(stdout.subarray(i * frameBytes, (i + 1) * frameBytes));
+  }
+  const pts: number[] = [];
+  const re = /pts_time:(-?[0-9.]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stderr))) pts.push(parseFloat(m[1]));
+  return { vecs, pts };
+}
+
+/** ADAAAA-8152: locate the evidence picture in `source`, cut so it sits `beforeS`
+ * into the window, then VERIFY on the delivered file and re-cut once if the
+ * seek landed somewhere else.
+ *
+ * Why verify at all: `-ss` is an INPUT option on purpose (ADAAAA-8106: seeking
+ * after `-i` decodes the whole recording up to the in-point), and an input seek
+ * starts the output at the preceding KEYFRAME, not at the requested instant — a
+ * 24 s h264 recording cut at 1.0 s delivered a 16.2 s file starting at 0.2 s in
+ * this repo's own fixture. That pre-roll is invisible to the caller but shifts
+ * the goal's offset inside the clip, which is exactly what ACC-2 grades. So:
+ * cut, re-locate the same picture in the delivered file, and if its offset is
+ * off by more than `recutTolSec`, shift the start by the measured error and cut
+ * once more. Costs one extra probe (~0.1-0.3 s) and at most one extra encode
+ * (~0.2 s) — CPU only, no pipeline calls (AC4).
+ *
+ * Returns `mode: "content_clock"` (and does NOT cut) when the picture is not in
+ * the recording or the match is not confident, so the caller keeps its existing
+ * cut as the honest fallback. */
+export interface CenteredCut {
+  mode: "frame_match" | "content_clock";
+  cutStart: number;
+  dur: number;
+  /** Position of the picture in the source recording. */
+  fileTs: number | null;
+  /** Offset of the picture inside the DELIVERED file, from its first frame —
+   * the number ACC-2 grades and the row stores. */
+  deliveredOffset: number | null;
+  score: number | null;
+  runnerUp: number | null;
+  clamped: boolean;
+  recuts: number;
+  cut: ClipCutResult | null;
+}
+
+export async function centerClipOnEvidence(
+  ffmpegPath: string,
+  source: string,
+  outPath: string,
+  imagePath: string,
+  beforeS: number,
+  durS: number,
+  opts: {
+    searchStartS: number;
+    searchDurS: number;
+    maxScore?: number;
+    strongScore?: number;
+    minGap?: number;
+    recutTolSec?: number;
+  }
+): Promise<CenteredCut> {
+  const maxScore = opts.maxScore ?? 0.6;
+  const strongScore = opts.strongScore ?? 0.1;
+  const minGap = opts.minGap ?? 0.5;
+  const recutTol = opts.recutTolSec ?? 1.2;
+  const none: CenteredCut = {
+    mode: "content_clock",
+    cutStart: 0,
+    dur: durS,
+    fileTs: null,
+    deliveredOffset: null,
+    score: null,
+    runnerUp: null,
+    clamped: false,
+    recuts: 0,
+    cut: null,
+  };
+  const match = await locateImageInSource(
+    ffmpegPath,
+    source,
+    imagePath,
+    opts.searchStartS,
+    opts.searchDurS
+  ).catch(() => null);
+  if (!match) return none;
+  const confident =
+    match.score <= maxScore && (match.score <= strongScore || match.runnerUp >= Math.max(minGap, match.score * 3));
+  if (!confident) {
+    return { ...none, fileTs: match.fileTs, score: match.score, runnerUp: match.runnerUp };
+  }
+  const wanted = match.fileTs - beforeS;
+  const clamped = wanted < 0;
+  let cutStart = Math.max(0, wanted);
+  let cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS);
+  let recuts = 0;
+  let deliveredOffset = await measureOffsetInFile(ffmpegPath, outPath, imagePath, durS, match.score);
+  if (deliveredOffset != null && Math.abs(deliveredOffset - beforeS) > recutTol && recuts < 1) {
+    const corrected = Math.max(0, cutStart + (deliveredOffset - beforeS));
+    if (Math.abs(corrected - cutStart) > 0.01) {
+      cutStart = corrected;
+      cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS);
+      recuts += 1;
+      const again = await measureOffsetInFile(ffmpegPath, outPath, imagePath, durS, match.score);
+      if (again != null) deliveredOffset = again;
+    }
+  }
+  return {
+    mode: "frame_match",
+    cutStart,
+    dur: durS,
+    fileTs: match.fileTs,
+    deliveredOffset,
+    score: match.score,
+    runnerUp: match.runnerUp,
+    clamped,
+    recuts,
+    cut,
+  };
+}
+
+/** Where the picture sits inside `filePath`, measured from the file's own first
+ * frame (a player starts there regardless of the container's `start_time`). */
+async function measureOffsetInFile(
+  ffmpegPath: string,
+  filePath: string,
+  imagePath: string,
+  durS: number,
+  _expectedScore: number
+): Promise<number | null> {
+  const m = await locateImageInSource(ffmpegPath, filePath, imagePath, 0, durS).catch(() => null);
+  if (!m || m.firstTs == null) return null;
+  return m.fileTs - m.firstTs;
+}
+
 /** Time window (seconds) to restrict a frame extraction to a sub-range of the
  * source. Omitted bounds mean "from the start" / "to the end". */
 export interface FrameWindow {
