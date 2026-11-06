@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { LiveIngest } from "../src/live";
 import { firstPacketTs, locateScoreboardFlip, probeDuration } from "../src/ffmpeg";
-import { CLIP_FLIP_RECUT_TOL_S } from "../src/clip-anchor";
+import { CLIP_FLIP_RECUT_TOL_S, measureDeliveredFlipOffset } from "../src/clip-anchor";
 
 const hasFfmpeg = (() => {
   try {
@@ -298,6 +298,24 @@ describe("LiveIngest.cut (ADAAAA-8168 ingest rail)", () => {
     expect(typeof clip.clipAudit?.clipAnchorDeliveredOffsetSec).toBe("number");
     expect(clip.clipAudit?.clipDeliveredSec as number).toBeGreaterThanOrEqual(15.0);
     expect(Math.abs((clip.clipAudit?.clipAnchorDeliveredOffsetSec as number) - (offset as number))).toBeLessThan(0.7);
+
+    // ADAAAA-8170: the delivered clip is a second encode at the session's FULL
+    // resolution while the rail's evidence JPEG is 320x180, so the score-band
+    // probe on the card can fail its gate on real footage (measured on leg
+    // `cea0f3a8`: the audit fell back to the assumed `before` while the flip
+    // sat 1.4 s earlier). The measurement must then locate the card's start in
+    // the recording and still return a real offset.
+    const viaRecording = await measureDeliveredFlipOffset({
+      ffmpegPath: "ffmpeg",
+      file: out,
+      source: sess,
+      evidenceFramePath: null,
+      before: BEFORE,
+      dur: WINDOW,
+      sourceFlipTs: clip.clipAudit?.clipAnchorFileTs as number,
+    });
+    expect(viaRecording.basis).toBe("recording_match");
+    expect(Math.abs((viaRecording.offset as number) - BEFORE)).toBeLessThanOrEqual(CLIP_FLIP_RECUT_TOL_S);
   }, 240_000);
 
   it("refuses to publish a window the recorder has not flushed", async () => {

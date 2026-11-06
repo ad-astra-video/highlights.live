@@ -15,16 +15,22 @@
 // publishing. `cutBrowserHighlightClip` still carries its own copy of the
 // sequence (it predates this module and owns the mid-share scheduling); the two
 // must stay in step until it is migrated here.
+import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   centerClipOnEvidence,
   cutClip,
   cutCenteredOnInstant,
   firstPacketTs,
+  locateImageInSource,
   locateScoreboardFlip,
   probeDuration,
   CLIP_EXACT_TRIM_PREROLL_S,
   type ClipCutResult,
 } from "./ffmpeg";
+
+const exec = promisify(execFile);
 
 /** How the delivered file was placed. `score_flip` centers on the first
  * recording frame that shows the post-transition score (the instant ACC-2
@@ -142,9 +148,47 @@ export interface AnchorCutInput {
 }
 
 /** Basis the delivered flip offset was measured on (logged, never graded):
- * the delivered pixels, or the source instant minus the delivered file's own
- * timeline origin. */
-export type DeliveredOffsetBasis = "pixel_probe" | "arithmetic" | "geometry";
+ * the delivered pixels, the card's own start located inside the recording, or
+ * the source instant minus the delivered file's own timeline origin. */
+export type DeliveredOffsetBasis = "pixel_probe" | "recording_match" | "arithmetic" | "geometry";
+
+/** Where the card starts inside the RECORDING, by matching the delivered file's
+ * first frame there (ADAAAA-8170).
+ *
+ * Both probes then read the recording's OWN pixels: the delivered clip is a
+ * 720p second encode compared against the rail's 320x180 evidence JPEG, and the
+ * score-glyph band match fails its gate (`meanMismatch > 70`) often enough that
+ * leg `cea0f3a8` reported the geometric `before` while the flip actually sat
+ * 1.4 s earlier. `locateImageInSource` compares 64x64 gray thumbnails, which
+ * survive the resolution change and the second encode, so this basis measures
+ * what the delivered file really contains. */
+async function locateCardStartInRecording(
+  ffmpegPath: string,
+  source: string,
+  file: string,
+  wantedContentS: number,
+  dur: number
+): Promise<number | null> {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(path.join(tmpdir(), "hl-card-start-"));
+  const first = path.join(dir, "first.png");
+  try {
+    await exec(ffmpegPath, ["-y", "-v", "error", "-i", file, "-frames:v", "1", first]);
+    const m = await locateImageInSource(
+      ffmpegPath,
+      source,
+      first,
+      Math.max(0, wantedContentS - 5),
+      dur + 12
+    ).catch(() => null);
+    // The card's first frame must be the SAME picture, strongly.
+    if (!m || !Number.isFinite(m.fileTs) || m.score > 0.35) return null;
+    return m.fileTs;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
 
 /** Where the anchor picture sits inside the DELIVERED file, in the playing
  * card's own seconds.
@@ -156,22 +200,27 @@ export type DeliveredOffsetBasis = "pixel_probe" | "arithmetic" | "geometry";
  * `flipTs - firstPacketTs(file)` once the file's own origin is known
  * (ADAAAA-8170).
  *
- * Order of preference, as the ticket requires:
- * 1. the pixel probe (reads the delivered pixels, works in both modes);
- * 2. the arithmetic form (`sourceFlipTs - firstPacketTs`) — valid only when the
+ * Order of preference:
+ * 1. the pixel probe on the delivered file (cheapest, works in both modes);
+ * 2. the card's start located inside the recording (`recording_match`) — the
+ *    delivered clip's resolution and second encode defeat the score-band gate,
+ *    and this basis reads the single-compressed recording instead;
+ * 3. the arithmetic form (`sourceFlipTs - firstPacketTs`) — valid only when the
  *    trim preserved the source timestamps, so a value outside `[0, dur]` means
  *    the file was rebased and is rejected;
- * 3. the geometric fallback the caller supplies (a measured correction applied
+ * 4. the geometric fallback the caller supplies (a measured correction applied
  *    to a deterministic frame grid).
- * Never silently `null` twice in a row: the caller logs which basis it used. */
+ * The caller logs which basis it used; the audit value is never invented. */
 export async function measureDeliveredFlipOffset(input: {
   ffmpegPath: string;
   file: string;
+  /** The recording the card was cut from (for `recording_match`). */
+  source?: string;
   evidenceFramePath: string | null;
   /** How far into the card the flip belongs. */
   before: number;
   dur: number;
-  /** The flip's instant in the RECORDING (for the arithmetic form). */
+  /** The flip's instant in the RECORDING (arithmetic / recording_match). */
   sourceFlipTs?: number | null;
   /** Deterministic fallback, only valid after a measured correction. */
   fallback?: () => number | null;
@@ -191,6 +240,18 @@ export async function measureDeliveredFlipOffset(input: {
     }
   }
   const sourceFlipTs = input.sourceFlipTs;
+  if (input.source && sourceFlipTs != null && Number.isFinite(sourceFlipTs)) {
+    const srcOrigin = await firstPacketTs(ffmpegPath, input.source).catch(() => null);
+    const wantedPts = sourceFlipTs - before;
+    const start = await locateCardStartInRecording(
+      ffmpegPath,
+      input.source,
+      file,
+      wantedPts - (srcOrigin ?? 0),
+      dur
+    );
+    if (start != null) return { offset: sourceFlipTs - start, basis: "recording_match", origin };
+  }
   if (sourceFlipTs != null && Number.isFinite(sourceFlipTs) && origin != null && Number.isFinite(origin)) {
     const offset = sourceFlipTs - origin;
     // Timestamps preserved => the offset is meaningful; a rebased file makes
@@ -273,6 +334,7 @@ export async function anchorCutOnEvidence(
       measureDeliveredFlipOffset({
         ffmpegPath,
         file,
+        source,
         evidenceFramePath,
         before,
         dur,
