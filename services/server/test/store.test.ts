@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { JobCandidateSchema, type JobCandidate } from "@highlights/events";
+import { SqliteDb } from "../src/db";
 import { Store } from "../src/store";
 
 describe("Store (in-memory)", () => {
@@ -231,5 +232,73 @@ describe("Store (in-memory)", () => {
     // A different status at the same timestamp is a distinct decide call, kept.
     await s.recordJobCandidate(mk("c-d", 42.0, "goal", "accepted"));
     expect(s.candidatesForJob(j.id)).toHaveLength(3);
+  });
+});
+
+// ADAAAA-8219 (follow-up to 8205): the async confirm dive meter has to reach the
+// STORED row, not just the analyzer's in-memory snapshot. `patchJob` validates
+// through `JobSchema.parse`, so a counter missing from the contract schema is
+// silently dropped before `db.saveJob` — the measured defect was a live job
+// whose `costUsd` billed the confirm term while its stored `observeMetrics`
+// contained no "confirm" substring. This round-trips through the real SQLite
+// `record` column, which is exactly what a post-deploy read inspects.
+describe("Store persists the async confirm dive meter (ADAAAA-8219)", () => {
+  const snapshot = {
+    decideCalls: 73,
+    accepted: 1,
+    maxFrames: 30,
+    meanE2eMs: 5602,
+    maxE2eMs: 9000,
+    meanCadenceMs: 5000,
+    maxCadenceMs: 6000,
+    triggerFires: 2,
+    cadenceFires: 71,
+    confirmCalls: 2,
+    confirmDiveCount: 2,
+    confirmDropped: 0,
+  };
+
+  it("keeps the three counters in the row's serialized record", async () => {
+    const db = new SqliteDb(":memory:");
+    const s = new Store(db);
+    const j = await s.createJob({ ownerId: "u1", source: "rtmp", sourceUrl: "rtmp://test/stream" });
+    await s.patchJob(j.id, {
+      status: "done",
+      completedAt: new Date().toISOString(),
+      observeMetrics: snapshot,
+    });
+
+    const stored = await db.getJob(j.id);
+    const m = stored!.observeMetrics!;
+    expect(m.confirmCalls).toBe(2);
+    expect(m.confirmDiveCount).toBe(2);
+    expect(m.confirmDropped).toBe(0);
+    // the raw record is what QA's `record->'observeMetrics'` read returns
+    const raw = JSON.stringify(stored);
+    expect(raw).toContain('"confirmCalls":2');
+    expect(raw).toContain('"confirmDiveCount":2');
+    expect(raw).toContain('"confirmDropped":0');
+    // 8205 cost identity, reconstructible from the stored row alone
+    expect(0.0033 * (m.decideCalls + m.confirmCalls!)).toBeCloseTo(0.2475, 10);
+    // reload proves a restart reads the meter back (hydrate path)
+    const reloaded = new Store(db);
+    await reloaded.load();
+    expect(reloaded.getJob(j.id)!.observeMetrics!.confirmDiveCount).toBe(2);
+    await db.close();
+  });
+
+  it("leaves a pre-lane row without the meter (older records unchanged)", async () => {
+    const db = new SqliteDb(":memory:");
+    const s = new Store(db);
+    const j = await s.createJob({ ownerId: "u1", source: "rtmp" });
+    await s.patchJob(j.id, {
+      status: "done",
+      completedAt: new Date().toISOString(),
+      observeMetrics: { ...snapshot, confirmCalls: undefined, confirmDiveCount: undefined, confirmDropped: undefined },
+    });
+    const stored = await db.getJob(j.id);
+    expect(stored!.observeMetrics!.confirmCalls).toBeUndefined();
+    expect(JSON.stringify(stored!.observeMetrics)).not.toContain("confirm");
+    await db.close();
   });
 });
