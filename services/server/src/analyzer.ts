@@ -4450,6 +4450,68 @@ export class LiveRunShared {
     this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
     return [{ ...entry, deltaTs: d.deltaTs, readAt: input.readAt, delta: d, lookaheadS: maxLookaheadS }];
   }
+  /**
+   * ADAAAA-8199: credit a pending demoted row IN PLACE for the accept that is
+   * about to persist the same transition, so one goal never becomes two rows.
+   *
+   * The measured race (jobs `58aafd8e` / `9d7ab76c`, both `file-sim` of
+   * `kids300_7935.mp4`): the celebration landed ~52 s before the deferred
+   * re-attestation, and the window that FIRST measured the transition was an
+   * ordinary GOAL accept. That accept persisted a second row and stamped its
+   * transition onto {@link acceptedGoalEvents}, after which the deferred lane
+   * correctly refused to promote the earlier provisional row (`ownedByDeliveredGoal`)
+   * — leaving a confirmed GOAL PLUS a provisional celebration for one goal.
+   *
+   * {@link resolveDeferredGoalAttestation} cannot fix that ordering because it
+   * runs AFTER the accept. This seam runs BEFORE the insert: the accept's own
+   * measured, legible, single-goal-step delta resolves exactly one pending
+   * demoted row (same attribution rule: containment + lookahead, never before
+   * `lo`, exactly one match, not owned by a delivered GOAL), and the caller then
+   * promotes that row instead of persisting a second one. Row id, clip and
+   * instant are preserved — only the lane changes.
+   *
+   * The resolving read is the accept's OWN window (not a later one), so the
+   * `readAt >= hi` bound of the deferred lane is replaced by `readAt >= lo`:
+   * a window that CONTAINS the transition is genuine evidence about it, and the
+   * caller only reaches here on a goal-shaped accept whose measured delta it is
+   * already persisting. Fails closed on every other ambiguity.
+   */
+  promoteDeferredGoalForAccept(input: {
+    delta: ScoreboardDeltaEvidence | undefined | null;
+    readAt: number;
+  }): DeferredGoalAttestationUpgrade | undefined {
+    const delta = input.delta;
+    if (!scoreboardDeltaLegible(delta)) return undefined;
+    const d = delta as ScoreboardDeltaEvidence;
+    if (!scoreboardDeltaSingleGoalStep(d)) return undefined;
+    if (!Number.isFinite(d.deltaTs) || !Number.isFinite(input.readAt)) return undefined;
+    const matches = this.deferredGoalAttestations.filter((e) => {
+      if (!Number.isFinite(e.lo) || !Number.isFinite(e.hi) || e.hi < e.lo) return false;
+      // Attribution: the transition instant belongs to this judged window (or up
+      // to the deferred lookahead past its close), never to an earlier window.
+      if (d.deltaTs < e.lo - 1e-9) return false;
+      if (d.deltaTs - e.hi > LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S) return false;
+      // The resolving read is THIS accept's window: it must at least reach the
+      // window's own start (see the method comment for why `hi` is not required).
+      return input.readAt >= e.lo - 1e-9;
+    });
+    if (matches.length !== 1) return undefined;
+    const entry = matches[0];
+    // One score transition, one scoring row: if a delivered GOAL already owns
+    // the transition, this accept is a re-read, not the moment to promote.
+    const ownedByDeliveredGoal = this.acceptedGoalEvents.some(
+      (ev) => (ev.start <= d.deltaTs && d.deltaTs <= ev.end) || (ev.anchorTs > entry.hi && ev.anchorTs <= d.deltaTs)
+    );
+    if (ownedByDeliveredGoal) return undefined;
+    this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
+    return {
+      ...entry,
+      deltaTs: d.deltaTs,
+      readAt: input.readAt,
+      delta: d,
+      lookaheadS: LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S,
+    };
+  }
   /** ADAAAA-7938 (Spec A): fold one RESOLVED decide window into the prior-game
    * state the next window inherits. Content-ordered (a re-produced older window
    * never overwrites a newer note) and MEASURED only: the prior decision's own
@@ -5845,6 +5907,63 @@ export async function acceptVideoDecision(
   // pre-downgrade verdict instead of re-deriving copy at read time.
   const surface = storedSurfaceFor(decision, writeGrounding);
   const gatedReason = surface.reason;
+  // ADAAAA-8199: BEFORE this accept persists a new row, check whether it is the
+  // first window to MEASURE a transition a delivered celebration is still
+  // waiting on. If exactly one demoted row is attributable to this delta, credit
+  // THAT row in place (row id + clip preserved) and drop this accept: one score
+  // transition, one postable row, on both orderings (AC4 — this is the
+  // celebration-then-confirm path the deferred lane could not win, because the
+  // accept had already stamped its transition onto the delivered-GOAL ledger).
+  if (isGoalAccept && liveWindow && candidateTransitionKey) {
+    const promoted = run.promoteDeferredGoalForAccept({
+      delta: candidate.scoreBoardDelta,
+      readAt: candidate.timestamp,
+    });
+    if (promoted) {
+      console.error(
+        `[live-goal-gate-upgrade:${cfg.jobId}] promoting ${promoted.highlightId} IN PLACE for GOAL ` +
+          `@${promoted.anchorTs}s (judged window [${promoted.lo}, ${promoted.hi}], transition ` +
+          `${candidateTransitionKey} measured by the window @${candidate.timestamp}s): no second row ` +
+          `for the same transition`
+      );
+      try {
+        cfg.onDeferredGoalAttested?.(promoted);
+      } catch (e: any) {
+        console.error(`[live-goal-gate-upgrade:${cfg.jobId}] persist hook failed:`, String(e?.message || e));
+      }
+      // The promoted row now owns the transition for every later window: burst,
+      // repeat-goal and deferred resolution all read the delivered-GOAL ledger.
+      run.noteAcceptedGoalEvent({
+        highlightId: promoted.highlightId,
+        anchorTs: promoted.anchorTs,
+        start: promoted.lo,
+        end: promoted.hi,
+        candidateTs: candidate.timestamp,
+        transitionKey: candidateTransitionKey,
+      });
+      buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
+        reason:
+          `goal_promoted_in_place:${promoted.highlightId}@${promoted.anchorTs.toFixed(3)}s` +
+          `(transition=${candidateTransitionKey}; the same transition was accepted as a celebration and is now the GOAL row)`,
+        evidence: {
+          kind: "goal_promote_in_place",
+          dedupeAgainstHighlightId: promoted.highlightId,
+          dedupeAgainstTs: promoted.anchorTs,
+          candidateTs: candidate.timestamp,
+          transitionKey: candidateTransitionKey,
+        },
+      });
+      onEvent?.({
+        seq: emit.seq,
+        timestamp: emit.timestamp,
+        type: "candidateBlocked",
+        candidate: { eventType: goalShapedEventType, timestamp: candidate.timestamp },
+        reason: `goal promoted in place: ${promoted.highlightId}`,
+      });
+      if (sink) sink.final = decision;
+      return;
+    }
+  }
   // ADAAAA-8168: a failed cut must never lose the accepted moment. The ingest
   // rail's cut can now refuse to publish (its window was not flushed in time,
   // or the delivered file came up short), and before this the throw unwound

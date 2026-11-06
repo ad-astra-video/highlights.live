@@ -289,3 +289,113 @@ describe("clip counts (ADAAAA-7854)", () => {
     expect(quotaMomentCount(d61Highlights())).toBe(17);
   });
 });
+
+// ADAAAA-8199: the LIVE read-side merge. Regression source: jobs `58aafd8e` /
+// `9d7ab76c` (funded 2-stream `file-sim` leg of `kids300_7935.mp4`, GT goals at
+// 100 s and 159 s). On the served build `b07f9b9` the confirmed GOAL row and the
+// provisional celebration for the SAME transition shipped as two rows, because
+// `buildPostableHighlights` admitted only `scoring_play` into the overlap cluster
+// and the celebration lanes are never candidates. The rows below are the stored
+// ones (created_at, windows and markers verbatim); the read projection is what
+// the board and the clip counts must show.
+const PROVISIONAL_NOTE =
+  "provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet - " +
+  "the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL).";
+
+function celebration(over: Partial<HighlightRecord> & { start: number }): HighlightRecord {
+  return d61Highlight(
+    {
+      outcome: "big_play",
+      eventType: "BIG_PLAY",
+      score: 85,
+      reason: PROVISIONAL_NOTE,
+      provisionalGoal: { status: "provisional", cues: ["asr_goal_call"], declaredTs: over.start + 7, note: PROVISIONAL_NOTE },
+      ...over,
+    },
+    "58aafd8e-75af-4971-9170-78a4f7cc53e5"
+  );
+}
+
+function confirmedGoal(over: Partial<HighlightRecord> & { start: number }): HighlightRecord {
+  return d61Highlight(
+    {
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      score: 85,
+      ...over,
+    },
+    "58aafd8e-75af-4971-9170-78a4f7cc53e5"
+  );
+}
+
+describe("buildPostableHighlights (ADAAAA-8199 celebration absorption)", () => {
+  // The two GOAL+celebration pairs measured on 58aafd8e, plus the three tail
+  // rows (score-steady / backward-read true negatives at the clip loop boundary).
+  const measuredLeg = (): HighlightRecord[] => [
+    celebration({ id: "ff95095e", start: 93, end: 108 }), // provisional @100
+    confirmedGoal({ id: "0b334e6c", start: 102, end: 117 }), // confirmed @115
+    celebration({ id: "2b394fff", start: 154.7, end: 169.7 }), // provisional @160
+    confirmedGoal({ id: "20135897", start: 154, end: 169 }), // confirmed @165
+    celebration({ id: "e5f8246a", start: 293, end: 308 }), // tail: not provisional
+    celebration({ id: "94ff5875", start: 295, end: 310 }),
+    celebration({ id: "35987657", start: 307.7, end: 322.7 }),
+  ];
+
+  it("ships ONE postable GOAL per transition and absorbs the celebration into it", () => {
+    const out = buildPostableHighlights(measuredLeg());
+    // Two true goals, two postable rows - not two goals plus two celebration cards.
+    expect(out.highlights.map((h) => [h.id, h.outcome])).toEqual([
+      ["0b334e6c", "scoring_play"],
+      ["20135897", "scoring_play"],
+    ]);
+    // The celebrations left the notable lane and are auditable as duplicates.
+    expect(out.notable.map((h) => h.id)).toEqual(["e5f8246a", "94ff5875", "35987657"]);
+    expect(out.duplicates.map((h) => [h.id, h.duplicateOf])).toEqual([
+      ["ff95095e", "0b334e6c"],
+      ["2b394fff", "20135897"],
+    ]);
+    // AC2 audit trail: the merge is reported, not 0-by-construction.
+    expect(out.highlights.map((h) => [h.id, h.duplicateCount, h.mergedIds])).toEqual([
+      ["0b334e6c", 1, ["ff95095e"]],
+      ["20135897", 1, ["2b394fff"]],
+    ]);
+    expect(out.counts).toMatchObject({ total: 7, postable: 2, merged: 2, notScoring: 3, rejected: 0, contradicting: 0 });
+    // The count identity still holds (nothing counted twice or lost).
+    expect(out.counts.total - out.counts.postable).toBe(
+      out.counts.merged + out.counts.rejected + out.counts.notScoring + out.counts.contradicting
+    );
+  });
+
+  it("keeps a true non-goal notable row even when its window overlaps a GOAL (AC3)", () => {
+    const out = buildPostableHighlights([
+      confirmedGoal({ id: "goal-x", start: 100, end: 115 }),
+      // A genuine big play (no provisional marker, no GOAL label) inside the
+      // goal window: it is NOT a celebration of the same transition.
+      d61Highlight({ id: "bigplay-x", start: 104, end: 119, outcome: "big_play", eventType: "BIG_PLAY", score: 80 }),
+      // A near miss inside the window: still notable, never absorbed.
+      d61Highlight({ id: "near-x", start: 106, end: 121, outcome: "near_miss", eventType: "NEAR_MISS", score: 60 }),
+    ]);
+    expect(out.highlights.map((h) => h.id)).toEqual(["goal-x"]);
+    expect(out.notable.map((h) => h.id)).toEqual(["bigplay-x", "near-x"]);
+    expect(out.duplicates).toEqual([]);
+    expect(out.highlights[0].duplicateCount).toBeUndefined();
+  });
+
+  it("does not absorb a provisional celebration that overlaps no confirmed GOAL", () => {
+    const out = buildPostableHighlights([
+      celebration({ id: "prov-alone", start: 400, end: 415 }),
+      confirmedGoal({ id: "goal-far", start: 500, end: 515 }),
+    ]);
+    expect(out.highlights.map((h) => h.id)).toEqual(["goal-far"]);
+    expect(out.notable.map((h) => h.id)).toEqual(["prov-alone"]);
+    expect(out.duplicates).toEqual([]);
+  });
+
+  it("is ordering-independent: the celebration may be stored before OR after the GOAL (AC4)", () => {
+    const rows = measuredLeg();
+    const forward = buildPostableHighlights(rows);
+    const reversed = buildPostableHighlights([...rows].reverse());
+    expect(reversed.highlights.map((h) => h.id)).toEqual(forward.highlights.map((h) => h.id));
+    expect(reversed.duplicates.map((h) => h.id).sort()).toEqual(forward.duplicates.map((h) => h.id).sort());
+  });
+});

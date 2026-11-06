@@ -26,6 +26,14 @@
 //   4. Overlapping clip windows collapse into ONE moment: the best-scoring (then
 //      best-corroborated) clip wins, the rest are marked `duplicateOf` the
 //      winner and reported with the winner's `duplicateCount` / `mergedIds`.
+//   5. ADAAAA-8199: a GOAL-SHAPED celebration (a `big_play` row the live gate
+//      demoted from the GOAL lane, or a row carrying the ADAAAA-8139 provisional
+//      marker) whose window overlaps a postable `scoring_play` moment is absorbed
+//      into that moment instead of shipping as a second card. The overlap is the
+//      same moment, so the confirmed GOAL owns it; the celebration moves to the
+//      duplicate lane with `duplicateOf`. A true non-goal notable (near miss, a
+//      score-steady big play, the clip-loop tail reads) keeps its own row: only
+//      the narrow, goal-bounded class above is absorbable.
 import type { HighlightRecord } from "@highlights/events";
 
 /**
@@ -155,8 +163,82 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
 
   const collapsed = collapseOverlappingWindows(candidates);
   counts.merged = collapsed.merged;
+  // ADAAAA-8199: absorb the goal-shaped celebration lane into the confirmed GOAL
+  // it overlaps, so one transition never ships as a GOAL card PLUS a celebration
+  // card. The rows are NOT mutated or deleted (the persisted audit trail keeps
+  // both); the read-side projection is what the board and the counts show.
+  const absorbed = absorbGoalCelebrations(collapsed.moments, notable);
+  counts.merged += absorbed.absorbed;
+  // The absorbed rows leave the "not scoring" drop bucket and join the merged
+  // one, so the count identity `raw - postable = merged + rejected + notScoring +
+  // contradicting` still holds (nothing is counted twice or lost).
+  counts.notScoring = Math.max(0, counts.notScoring - absorbed.absorbed);
+  const duplicates = [...collapsed.duplicates, ...absorbed.duplicates].sort((a, b) => a.start - b.start);
   counts.postable = collapsed.moments.length;
-  return { highlights: collapsed.moments, notable, duplicates: collapsed.duplicates, counts };
+  return { highlights: collapsed.moments, notable: absorbed.notable, duplicates, counts };
+}
+
+/**
+ * ADAAAA-8199: is this notable row a GOAL-SHAPED celebration — i.e. a row the
+ * live gate took OUT of the scoring lane for lack of a measured attestation, as
+ * opposed to a genuine non-goal big play?
+ *
+ * Deliberately narrow (AC3 precision): only `big_play` records are candidates,
+ * and only when the ADAAAA-8139 provisional marker says a goal cue was present
+ * (the measured leg's three celebration rows all carry it) or the record's own
+ * event type is a goal label. A `near_miss`, a score-steady `big_play` or a
+ * clip-loop tail read never qualifies, so a true notable keeps its own row.
+ */
+export function isGoalShapedCelebration(h: HighlightRecord): boolean {
+  if (h.outcome !== "big_play") return false;
+  if (h.provisionalGoal) return true;
+  return /^(GOAL|GOL)$/i.test(h.eventType ?? "");
+}
+
+/** The result of absorbing goal-shaped celebrations into confirmed moments. */
+interface AbsorbedCelebrations {
+  /** The notable lane with the absorbed rows removed. */
+  notable: HighlightRecord[];
+  /** The absorbed rows, each carrying `duplicateOf` its owning GOAL. */
+  duplicates: PostableHighlight[];
+  /** How many rows were absorbed. */
+  absorbed: number;
+}
+
+/**
+ * ADAAAA-8199: move every goal-shaped celebration that overlaps a postable
+ * `scoring_play` moment into that moment's duplicate lane.
+ *
+ * Overlap is the same-moment test the postable list already uses: a celebration
+ * window that shares footage with a confirmed GOAL is that goal's row, so the
+ * GOAL owns the moment and the celebration is reported as `duplicateOf` it. Two
+ * confirmed moments can never overlap (they were collapsed first), so a
+ * celebration has at most ONE owner. A celebration that overlaps nothing stays
+ * in the notable lane untouched.
+ */
+function absorbGoalCelebrations(
+  moments: PostableHighlight[],
+  notable: HighlightRecord[]
+): AbsorbedCelebrations {
+  const kept: HighlightRecord[] = [];
+  const duplicates: PostableHighlight[] = [];
+  let absorbed = 0;
+  for (const h of notable) {
+    if (!isGoalShapedCelebration(h)) {
+      kept.push(h);
+      continue;
+    }
+    const owner = moments.find((m) => m.outcome === "scoring_play" && windowsOverlap(m, h));
+    if (!owner) {
+      kept.push(h);
+      continue;
+    }
+    owner.duplicateCount = (owner.duplicateCount ?? 0) + 1;
+    owner.mergedIds = [...(owner.mergedIds ?? []), h.id];
+    duplicates.push({ ...h, duplicateOf: owner.id });
+    absorbed += 1;
+  }
+  return { notable: kept, duplicates, absorbed };
 }
 
 /** The result of collapsing overlapping clip windows into moments. */
