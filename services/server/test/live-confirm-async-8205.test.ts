@@ -187,11 +187,28 @@ describe("confirmDiveAdoption — the verdict moves the SAME row", () => {
     expect(a.patch.outcome).toBeUndefined();
   });
 
-  it("leaves the card untouched on passthrough and on an already-resolved row", () => {
+  // ADAAAA-8223 B2: an attempt that resolves nothing must still leave a marker,
+  // otherwise a cleared descriptor reads exactly like a never-armed one.
+  it("stamps the passthrough attestation instead of clearing the descriptor silently (B2)", () => {
     const passthrough = confirmDiveAdoption({ outcome: "big_play" }, undefined, meta);
     expect(passthrough.kind).toBe("unchanged");
-    expect(passthrough.patch).toEqual({ pendingConfirmDive: undefined });
+    expect(passthrough.patch).toMatchObject({
+      pendingConfirmDive: undefined,
+      confirmAttestation: {
+        goalConfirmed: "passthrough",
+        corroborated: false,
+        corroborationSource: null,
+        diveLatencyMs: 1234,
+        contextDegraded: ["motion_trajectories"],
+      },
+    });
+    // Clip-facing fields untouched (AC-A6 "row unchanged" = outcome/eventType/clip/provisionalGoal).
+    expect(passthrough.patch.outcome).toBeUndefined();
+    expect(passthrough.patch.eventType).toBeUndefined();
+    expect(passthrough.patch.provisionalGoal).toBeUndefined();
+  });
 
+  it("stamps the attempt on the already-scoring guard arm without rewriting it (B2)", () => {
     const resolved = confirmDiveAdoption(
       { outcome: "scoring_play", eventType: "GOAL" },
       { goalConfirmed: "not_goal", corroborated: false },
@@ -199,6 +216,34 @@ describe("confirmDiveAdoption — the verdict moves the SAME row", () => {
     );
     expect(resolved.kind).toBe("unchanged");
     expect(resolved.patch.outcome).toBeUndefined();
+    expect(resolved.patch.eventType).toBeUndefined();
+    expect(resolved.patch.provisionalGoal).toBeUndefined();
+    expect((resolved.patch.confirmAttestation as any).goalConfirmed).toBe("not_goal");
+  });
+
+  // ADAAAA-8223 B3: never manufacture a provisional marker just to refute it.
+  it("does not refute a row that never carried a provisional marker (B3)", () => {
+    const a = confirmDiveAdoption(
+      { outcome: "big_play", eventType: "BIG_PLAY" },
+      { goalConfirmed: "near_miss", corroborated: false },
+      meta
+    );
+    expect(a.kind).toBe("unchanged");
+    expect(a.reason).toMatch(/no provisional marker/i);
+    expect(a.patch.provisionalGoal).toBeUndefined();
+    expect(a.patch.outcome).toBeUndefined();
+    // The attempt itself stays observable.
+    expect((a.patch.confirmAttestation as any).goalConfirmed).toBe("near_miss");
+  });
+
+  it("does not refute a provisional marker that is no longer in the provisional state (B3)", () => {
+    const a = confirmDiveAdoption(
+      { outcome: "big_play", provisionalGoal: { status: "confirmed", cues: ["asr_goal_call"] } },
+      { goalConfirmed: "not_goal", corroborated: false },
+      meta
+    );
+    expect(a.kind).toBe("unchanged");
+    expect(a.patch.provisionalGoal).toBeUndefined();
   });
 });
 
