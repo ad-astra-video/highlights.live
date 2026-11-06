@@ -10,10 +10,13 @@ import type { JobDetailHighlight } from "../lib/jobDetail";
 // 95e454a3-00eb-4de9-be58-ab3e7634add6: the notable row 84ac3dc7 carries
 // `/clips/95e454a3-…-55.mp4` and rendered as a bare text line.
 //
-// These tests pin the surface half of the fix: a notable row with footage renders
-// the SAME playable card the postable feed uses (`data-detail-lane-clip`), a row
-// with a `clipError` names "Clip unavailable", and the merged lane stays
-// text-only. The node env has no jsdom, so the assertions are on the SSR markup.
+// ADAAAA-8178 (this file's current contract): ADAAAA-8135's compact clip row is
+// replaced by the REAL `HighlightCard` — the same component the postable feed
+// mounts — with one notable badge and no verdict slot / batch checkbox. The
+// fixture below is the same job, so the parity assertion is measured on the row
+// the ticket was filed about. A row with neither `clipUri` nor `clipError` stays
+// a text row, and the merged lane stays text-only. The node env has no jsdom, so
+// assertions are on the SSR markup.
 
 /** react-dom/server separates adjacent text nodes with `<!-- -->` markers;
  * strip them so assertions read the text a user actually sees. */
@@ -74,25 +77,38 @@ function count(html: string, marker: string): number {
   return n;
 }
 
-/** Rows in the notable lane that render NO clip card, i.e. text-only rows. */
-function textOnlyRows(html: string): number {
-  return count(html, 'data-detail-lane-row="notable"') - count(html, 'data-detail-lane-clip="notable"');
+/** Cards the notable lane mounted (`data-detail-highlight` + the notable tag). */
+function notableCards(html: string): number {
+  return count(html, 'data-detail-notable-card="true"');
 }
 
-describe("the notable lane plays the footage it carries (ADAAAA-8135)", () => {
-  it("renders a playable clip card for a notable row that carries a clipUri", () => {
+/** Rows in the notable lane that stayed compact text rows (no footage). */
+function textOnlyRows(html: string): number {
+  return count(html, 'data-detail-lane-row="notable"');
+}
+
+describe("the notable lane renders the postable card (ADAAAA-8178, supersedes 8135's compact row)", () => {
+  it("renders the real highlight card for a notable row that carries a clipUri", () => {
     const html = lane([hl()]);
-    expect(count(html, 'data-detail-lane-clip="notable"')).toBe(1);
-    // The player is mounted on the row (its wait state until the video is near
+    expect(notableCards(html)).toBe(1);
+    expect(count(html, "data-detail-highlight")).toBe(1);
+    // The player is mounted on the card (its wait state until the video is near
     // the viewport — the same `VideoClip` the postable cards use).
     expect(html).toContain("clip loading");
     expect(html).not.toContain("Clip unavailable");
-    // The row still states the moment it covers.
+    // The card states the moment it covers, exactly like a postable card.
+    expect(html).toContain("data-detail-moment-range");
     expect(html).toContain("T+5s");
     expect(html).toContain("T+20s");
+    // ...and it carries the notable badge + the posting surface.
+    expect(html).toContain('data-notable-kind="big_play"');
+    expect(html).toContain("BIG PLAY");
+    expect(html).toContain("data-detail-caption");
+    expect(html).toContain("data-detail-download");
+    expect(html).toContain("data-detail-copy-link");
   });
 
-  it("AC1: the 95e454a3 fixture renders 1 playable notable card and 0 text-only rows carrying a clip", () => {
+  it("AC1: three notable rows with footage render three cards and no compact rows", () => {
     const page = text(renderToString(
       React.createElement(
         "div",
@@ -103,23 +119,29 @@ describe("the notable lane plays the footage it carries (ADAAAA-8135)", () => {
           title: "Notable — not a goal",
           note: "Non-scoring plays (near miss / big play). They stay off the postable goal list.",
           tone: "yellow",
-          highlights: [hl()],
+          highlights: [
+            hl({ id: "n1", start: 5, end: 20 }),
+            hl({ id: "n2", start: 70, end: 85, outcome: "near_miss", eventType: "NEAR_MISS" }),
+            hl({ id: "n3", start: 120, end: 135, clipUri: "/clips/95e454a3-…-121.mp4" }),
+          ],
         })
       )
     ));
-    expect(count(page, 'data-detail-lane-clip="notable"')).toBe(1);
-    expect(count(page, 'data-detail-lane-row="notable"')).toBe(1);
+    expect(notableCards(page)).toBe(3);
+    // One postable card + three notable cards; every notable one is a real card.
+    expect(count(page, "data-detail-highlight")).toBe(4);
     expect(textOnlyRows(page)).toBe(0);
-    // The postable goal keeps its own card (one `data-detail-highlight`), so the
-    // notable card is a second, DISTINCT surface and not a re-presentation.
-    expect(count(page, "data-detail-highlight")).toBe(1);
+    // The lane wrapper is still the QA target it was before.
+    expect(count(page, 'data-detail-lane="notable"')).toBe(1);
+    expect(count(page, "data-detail-notable-badge")).toBe(3);
+    expect(count(page, "data-detail-notable-card-grid")).toBe(1);
   });
 
   it("names 'Clip unavailable' with the stored reason when the row carries a clipError", () => {
     const html = lane([
       hl({ clipUri: "", clipError: "empty recording — the stream carried no frames" }),
     ]);
-    expect(count(html, 'data-detail-lane-clip="notable"')).toBe(1);
+    expect(notableCards(html)).toBe(1);
     expect(html).toContain("Clip unavailable");
     expect(html).toContain("empty recording — the stream carried no frames");
     expect(textOnlyRows(html)).toBe(0);
@@ -127,7 +149,8 @@ describe("the notable lane plays the footage it carries (ADAAAA-8135)", () => {
 
   it("keeps a text row only when the record has neither a clip nor a clip error", () => {
     const html = lane([hl({ clipUri: "", clipError: undefined })]);
-    expect(count(html, 'data-detail-lane-clip="notable"')).toBe(0);
+    expect(notableCards(html)).toBe(0);
+    expect(count(html, "data-detail-highlight")).toBe(0);
     expect(textOnlyRows(html)).toBe(1);
     expect(html).toContain("T+5s");
   });
@@ -141,23 +164,33 @@ describe("the notable lane plays the footage it carries (ADAAAA-8135)", () => {
         highlights: [hl({ duplicateOf: "abcdef123456" })],
       })
     ));
-    expect(count(html, 'data-detail-lane-clip="merged"')).toBe(0);
+    expect(count(html, "data-detail-highlight")).toBe(0);
+    expect(count(html, "data-detail-notable-card")).toBe(0);
+    expect(count(html, 'data-detail-lane-row="merged"')).toBe(1);
     expect(html).toContain("merged into abcdef12");
   });
 
-  it("the customer (non-admin) notable card plays the clip and keeps every internal off the row", () => {
+  it("the customer (non-admin) notable card plays the clip, shows the badge and no internals", () => {
     const html = lane([hl()], false);
-    expect(count(html, 'data-detail-lane-clip="notable"')).toBe(1);
+    expect(notableCards(html)).toBe(1);
     expect(html).toContain("clip loading");
-    for (const internal of ["score 85", "BIG_PLAY", "outcome big_play", "player falls to the ground"]) {
+    expect(html).toContain("BIG PLAY");
+    // Pipeline internals only: the caption editor + title chips are the posting
+    // surface and stay identical to the postable card (PO decision 3), so the
+    // reason may seed a caption there — it never appears as a pipeline field.
+    for (const internal of ["score 85", "BIG_PLAY", "outcome big_play", "data-detail-pipeline"]) {
       expect(html).not.toContain(internal);
     }
+    // ADAAAA-7737's markup guard: the machine kind marker IS an outcome code, so
+    // a customer session gets the badge TEXT only.
+    expect(html).not.toContain("data-notable-kind");
   });
 
-  it("the operator notable card keeps its internals beside the player", () => {
+  it("the operator notable card keeps its internals in the collapsed Pipeline detail", () => {
     const html = lane([hl()]);
-    expect(html).toContain("score 85");
+    expect(html).toContain("data-detail-pipeline");
     expect(html).toContain("BIG_PLAY");
-    expect(html).toContain("outcome big_play");
+    expect(html).toContain(">85<");
+    expect(html).toContain("player falls to the ground");
   });
 });

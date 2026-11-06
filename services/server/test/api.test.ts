@@ -634,6 +634,14 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     expect(ids).not.toContain("hl-contra"); // self-contradicting verdict
     expect(ids).not.toContain("hl-near"); // non-scoring -> notable lane
     expect(detail.notableHighlights.map((h: any) => h.id)).toEqual(["hl-near"]);
+    // ADAAAA-8178: the notable lane renders the postable card, so its Download /
+    // Copy Link need the server-minted export URL for that row id — minted here
+    // per caller, distinct from the public playback URI, and not gated on the
+    // precision gate (the export path verifies the token against the highlight id).
+    const notable = detail.notableHighlights[0];
+    expect(notable.clipUri).toBe("/clips/hl-near.mp4");
+    expect(notable.exportUri).toMatch(/^\/clips\/hl-near\.mp4\?x=/);
+    expect(notable.exportUri).not.toBe(notable.clipUri);
     expect(detail.duplicateHighlights.map((h: any) => [h.id, h.duplicateOf])).toEqual([["hl-weak", "hl-strong"]]);
     // Merged moment exposes the duplicate count; no postable windows overlap.
     const moment = detail.highlights.find((h: any) => h.id === "hl-strong");
