@@ -58,6 +58,11 @@ import {
   type LiveGoalRecall,
 } from "./live-goal-recall";
 import { liveDecideAdmission } from "./live-decide-admission";
+// ADAAAA-8139 (interim step): a demoted goal window whose ASR / description /
+// reaction carries a goal cue but no scoreboard change is surfaced as a
+// PROVISIONAL goal on the same row (still `big_play`, never postable), and the
+// deferred re-attestation clears the marker when the transition is measured.
+import { deriveProvisionalGoal, provisionalGoalReasonSuffix, type ProvisionalGoal } from "./live-provisional-goal";
 import {
   LIVE_FRAME_REREAD_MAX_FRAMES,
   LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN,
@@ -5435,6 +5440,10 @@ export async function acceptVideoDecision(
   /** ADAAAA-8071: the attestation fields the gate read when it demoted, stored
    * on the delivered row so the demotion names its missing attestations. */
   let liveAttestationUsed: LiveGoalAttestationUsed | undefined;
+  /** ADAAAA-8139 (interim step): the provisional-goal marker the demotion seam
+   * derived for this row (only when a cue was present and no score change had
+   * been measured). Persisted on the record and cleared on re-attestation. */
+  let liveProvisionalGoal: ProvisionalGoal | undefined;
   // ADAAAA-7996: the LIVE scoring lane requires a MEASURED attestation. The
   // Stage-2 confirm dive is the only corroboration gate and the live rail runs it
   // OFF (LIVE_DECIDE_CONFIRM=0 in the measured posture), so a window whose whole
@@ -5487,6 +5496,30 @@ export async function acceptVideoDecision(
     // the copy the gate produced for THIS verdict, not re-derive copy at read time.
     scoringLaneDecision = decision;
     liveAttestationUsed = attestationUsed;
+    // ADAAAA-8139 (interim step, CEO ask): the demoted window may still carry a
+    // goal CUE (ASR goal call / celebration description / measured crowd+motion
+    // reaction). Surface the row as a provisional goal so the board can tell a
+    // "goal that has not been confirmed yet" from any other big play. The row's
+    // outcome stays `big_play`, so it is never postable; the ADAAAA-8006 deferred
+    // re-attestation clears this marker when a later score read measures the
+    // transition. No call is added: all three cues are evidence this window
+    // already paid for.
+    liveProvisionalGoal = deriveProvisionalGoal({
+      windowTs: candidate.timestamp,
+      asrTranscript: decision.analysis?.asr?.transcript,
+      description: liveWindowDescription(decision),
+      crowdEnergy: candidate.audio?.peakEnergy,
+      audioKind: candidate.audio?.kind,
+      scoreBoardChanged: attestationUsed.scoreBoardChanged,
+    });
+    if (liveProvisionalGoal) {
+      decision = {
+        ...decision,
+        reason: decision.reason
+          ? `${decision.reason} ${provisionalGoalReasonSuffix(liveProvisionalGoal)}`
+          : provisionalGoalReasonSuffix(liveProvisionalGoal).replace(/^\|\s*/, ""),
+      };
+    }
     decision = downgradeUnattestedLiveGoal(decision, attestationUsed);
     isGoalAccept = false;
   }
@@ -5619,6 +5652,11 @@ export async function acceptVideoDecision(
     // self-contradictory accept. The demoted-row payload still wins when the
     // gate demoted this window.
     attestationUsed: liveAttestationUsed ?? (isGoalAccept ? attestationUsed : undefined),
+    // ADAAAA-8139 (interim step): the row is a celebration (never postable) but
+    // carries a goal cue, so the board can show it as a PROVISIONAL goal until
+    // the deferred re-attestation measures the score change on this same row.
+    // Absent on every scoring row and on rows with no cue.
+    provisionalGoal: liveProvisionalGoal,
     // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
     // produced this clip plus the delivered window length so the delivered clip
     // window is auditable (Acc-3). Values come from the resolved (webui > env)

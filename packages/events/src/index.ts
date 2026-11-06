@@ -1532,6 +1532,27 @@ export const HighlightRecordSchema = z.object({
       need: z.number().int().min(0).optional(),
     })
     .optional(),
+  /** ADAAAA-8139 (interim step, CEO ask 2026-11-06): a LIVE goal accept the
+   * ADAAAA-7996 gate demoted to a celebration while a corroborating cue was
+   * present (a goal call in the window's ASR transcript, a celebration in the
+   * window's description, or a measured crowd/motion reaction) but no scoreboard
+   * change had landed yet. The row is still a `big_play` — this marker only says
+   * the moment is a goal CANDIDATE waiting on a score read, and the ADAAAA-8006
+   * deferred re-attestation CLEARS it when the transition is measured (the row
+   * then becomes the confirmed GOAL). Additive optional: absent on every scoring
+   * row, on rows with no cue, and on the non-live rails. */
+  provisionalGoal: z
+    .object({
+      status: z.literal("provisional"),
+      cues: z
+        .array(z.enum(["asr_goal_call", "frame_celebration", "crowd_reaction"]))
+        .min(1),
+      /** Content instant (seconds from stream start) the window was judged at. */
+      declaredTs: z.number().min(0),
+      /** User-readable explanation of what was seen and what is still missing. */
+      note: z.string(),
+    })
+    .optional(),
   deferredAttestation: z
     .object({
       /** First legible read of the new score (the transition instant). */

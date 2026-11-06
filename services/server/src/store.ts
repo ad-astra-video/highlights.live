@@ -394,7 +394,7 @@ export class Store {
   async attestDeferredGoal(
     id: string,
     patch: Partial<
-      Pick<HighlightRecord, "outcome" | "eventType" | "reason" | "caption" | "cardTitles" | "colour" | "reason_raw" | "deferredAttestation">
+      Pick<HighlightRecord, "outcome" | "eventType" | "reason" | "caption" | "cardTitles" | "colour" | "reason_raw" | "deferredAttestation" | "provisionalGoal">
     >
   ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
