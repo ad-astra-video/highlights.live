@@ -726,7 +726,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // CLIENT streams sampled frames in via POST /jobs/:id/ingest and a recording
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
-  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver; frames?: LiveFrameWriter; contentTs?: number }>();
+  const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver; frames?: LiveFrameWriter; contentTs?: number; analysedTs?: number }>();
   // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
   // job plus whether the job has been stopped. The stop path uses this to
   // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
@@ -1693,7 +1693,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // ADAAAA-6867). Lazily created on the first relayed observation/audio chunk.
   async function ensureMediaRail(
     job: { id: string; ownerId?: string; gameHint?: string; preferLabels?: string[]; cameraId?: string; perceiveSessionId?: string },
-    bj: { rail?: MediaRailObserver; mediaSessionId?: string; frames?: LiveFrameWriter }
+    bj: { rail?: MediaRailObserver; mediaSessionId?: string; frames?: LiveFrameWriter; analysedTs?: number }
   ): Promise<MediaRailObserver | null> {
     if (bj.rail) return bj.rail;
     // Same rollout switch as the live rail's decide-observer.
@@ -1824,6 +1824,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // ADAAAA-8032: the media node's frame cadence is the content clock the
           // live clip cut waits on (the recording is appended in step with it).
           noteBrowserContentTs(job.id, frame.timestamp);
+          // ADAAAA-8121: an ACCEPTED frame is the analysed position (the tap clock
+          // above also moves on strided/tick frames, which are content the
+          // analysis never reached — never a position marker, AC-3).
+          if (Number.isFinite(frame.timestamp) && frame.timestamp > (bj.analysedTs ?? 0)) {
+            bj.analysedTs = frame.timestamp;
+          }
           frames.enqueue({
             seq: frame.seq,
             timestamp: frame.timestamp,
@@ -5057,6 +5063,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         job.status === "done" || job.status === "failed" || job.status === "cancelled"
           ? 0
           : newestObservationTs(store.observationsForJob(job.id)),
+      // ADAAAA-8121: the rail's own consume clock (content ts of the newest
+      // ANALYSED frame), so the position survives even when the observation
+      // window has been decimated. Terminal jobs pass nothing — the indicator is
+      // an in-flight reading only (AC-4).
+      analysedThroughTs:
+        job.status === "done" || job.status === "failed" || job.status === "cancelled"
+          ? null
+          : browserJobs.get(job.id)?.analysedTs ?? null,
     });
     return {
       // ADAAAA-7854: `postableHighlights` / `mergedHighlights` / `rawHighlights`
@@ -5213,7 +5227,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // read-time from the same stored data the sections are rebuilt from.
         // Top-level (not under `job`) so the role filter keeps it: it carries no
         // pipeline/spend internals, only the lag projection.
-        liveProgress: deriveLiveProgress({ job, newestObservationTs: newestObservationTs(obs) }),
+        liveProgress: deriveLiveProgress({
+          job,
+          newestObservationTs: newestObservationTs(obs),
+          // ADAAAA-8121: same consume clock as `GET /jobs/:id`, so the live stage
+          // and the detail payload never disagree about where the analysis is.
+          analysedThroughTs: browserJobs.get(job.id)?.analysedTs ?? null,
+        }),
         // ADAAAA-7750: WHY the window list is empty, when it is. Derived from
         // stored counters only (no decide, no GPU): a dead capture surface, a
         // share still inside the first-window budget, and a run whose windows
