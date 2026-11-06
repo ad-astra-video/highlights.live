@@ -24,6 +24,9 @@ import {
   SECTION_WINDOW_S,
   hasHighlightContent,
   highlightContentCounts,
+  verdictText,
+  verdictCriterionText,
+  dataItemValueText,
   type JobDetailHighlight,
 } from "./jobDetail";
 
@@ -439,5 +442,59 @@ describe("hasHighlightContent (ADAAAA-8034 empty-state gating)", () => {
     });
     expect(counts.postable).toBe(0);
     expect(hasHighlightContent(counts)).toBe(false);
+  });
+});
+
+// ADAAAA-8187: the webapp never validates the decide payload, so a "scalar"
+// field can arrive as an object. `String(object)` is "[object Object]" and a
+// bare object child throws; these helpers are the single formatter boundary.
+describe("verdictText / verdictCriterionText (ADAAAA-8187)", () => {
+  it("keeps the documented scalar wording", () => {
+    expect(verdictText(null)).toBe("—");
+    expect(verdictText(undefined)).toBe("—");
+    expect(verdictText("")).toBe("—");
+    expect(verdictText("confirmed_goal")).toBe("confirmed_goal");
+    expect(verdictText(true)).toBe("yes");
+    expect(verdictText(false)).toBe("no");
+    expect(verdictText(0)).toBe("0");
+    expect(verdictText(92.5)).toBe("92.5");
+  });
+
+  it("summarises an object as compact key: value text, never [object Object]", () => {
+    expect(verdictText({ a: 1, b: null })).toBe("a: 1, b: —");
+    expect(verdictText({})).toBe("—");
+    expect(verdictText({ criteria: { ballInNet: true, crowdErupted: null } })).toBe(
+      "criteria: ballInNet: yes, crowdErupted: —"
+    );
+    expect(verdictText({ a: 1 })).not.toContain("[object Object]");
+  });
+
+  it("joins an array of formatted items", () => {
+    expect(verdictText(["x", 2, true])).toBe("x, 2, yes");
+    expect(verdictText([])).toBe("—");
+    expect(verdictText([{ a: 1 }, null])).toBe("a: 1, —");
+  });
+
+  it("falls back to compact JSON past the nesting limit and for cycles", () => {
+    expect(verdictText({ a: { b: { c: 1 } } })).toBe('a: b: {"c":1}');
+    const cyclic: Record<string, unknown> = { a: 1 };
+    cyclic.self = { deeper: cyclic };
+    expect(verdictText(cyclic)).not.toContain("[object Object]");
+  });
+
+  it("maps the criteria tri-state (wire null = unverifiable)", () => {
+    expect(verdictCriterionText(true)).toBe("seen");
+    expect(verdictCriterionText(false)).toBe("not seen");
+    expect(verdictCriterionText(null)).toBe("unverifiable");
+    expect(verdictCriterionText(undefined)).toBe("unverifiable");
+    expect(verdictCriterionText("partial")).toBe("partial");
+  });
+
+  it("dataItemValueText routes every non-scalar through the same formatter", () => {
+    expect(dataItemValueText(4)).toBe("4");
+    expect(dataItemValueText(true)).toBe("yes");
+    expect(dataItemValueText(null)).toBe("—");
+    expect(dataItemValueText({ a: 1 })).toBe("a: 1");
+    expect(dataItemValueText(["a", "b"])).toBe("a, b");
   });
 });
