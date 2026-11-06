@@ -1412,6 +1412,7 @@ export const HighlightRecordSchema = z.object({
   // none.
   localizeAnchorReason: z
     .enum([
+      "measured_transition",
       "frame_attestation",
       "peak_audio_reaction",
       "peak_audio_far_burst_capped",
@@ -1430,6 +1431,10 @@ export const HighlightRecordSchema = z.object({
   clipWindowBeforeS: z.number().min(0).optional(),
   clipWindowAfterS: z.number().min(0).optional(),
   clipWindowSec: z.number().min(0).optional(),
+  /** ADAAAA-8152 (ACC-2): the localized goal instant's offset inside the
+   * delivered clip (`localizedTs - start`), i.e. the number ACC-2 grades. Persisted
+   * so placement is auditable from the row without re-reading pixels. */
+  clipGoalOffsetSec: z.number().min(0).optional(),
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
