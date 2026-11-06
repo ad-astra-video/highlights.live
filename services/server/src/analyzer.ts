@@ -1147,6 +1147,66 @@ export interface TimelineScoreReading {
 /** ADAAAA-8071: one score-shaped pair in an OCR line (ints <= 99). */
 const OCR_SCORE_PAIR_RE = /(\d{1,3})\s*[-–—]\s*(\d{1,3})/g;
 
+/** ADAAAA-8189: the separator families the scorebug OCR actually produces for
+ * the score pair. The measured live stream (job `348bd511`) glues the pair with
+ * `/` (1450 readings) or `.` (the `1.0` variant) and never with a hyphen — 0 of
+ * 2900 `ocr="…"` readings carried a dash — so the hyphen-only pair regex above
+ * returned `null` for every reading, `scoreReadingsFromTimeline` was empty in
+ * every judged window and the live goal gate demoted every GOAL
+ * (`attestationUsed.scoreReads=0`). A clock is NEVER a score here: every
+ * clock-like string on that job uses a colon (`36:54`, `17:22`, `27:067`,
+ * `12:07`, `0:00`), which no family matches, and the families that share a
+ * separator with a clock (`10/47`, `20/44`, `17.141` — a clock OCR'd with `/` or
+ * `.`) are guarded by {@link OCR_SCORE_PAIR_MAX_GLUED} below. */
+const OCR_SCORE_GLUED_SEPARATORS: ReadonlyArray<{ kind: "slash" | "dot" | "space"; re: RegExp }> = [
+  { kind: "slash", re: /(\d{1,3})\s*\/\s*(\d{1,3})/g },
+  { kind: "dot", re: /(\d{1,3})\.(\d{1,3})/g },
+  { kind: "space", re: /(\d{1,3})[ \t]+(\d{1,3})/g },
+];
+
+/**
+ * ADAAAA-8189: per-side ceiling for the slash / dot / space families. Both sides
+ * of a real scoreboard pair are single digits on the measured fixture, while a
+ * clock that OCR'd with the score's separator always carries a two-digit
+ * component (`10/47`, `20/44`, `17.141`, the garbled `1/50`). Anything above this
+ * is refused, so an unreadable/garbled line stays absent evidence (fail closed)
+ * instead of injecting a phantom score state that would trip the
+ * "at most one distinct transition" clause in {@link scoreboardDeltaFromReadings}.
+ * Hyphen pairs keep perceive's `ints <= 99` bar unchanged.
+ */
+export const OCR_SCORE_PAIR_MAX_GLUED = 9;
+
+/**
+ * ADAAAA-8189: the score pair when the line glues it with `/`, `.` or a single
+ * space (`RMA 1/2 FCB36:54`, `RMA 1.0 FCB 17:22HOTELSK`, `RMA 1 1 FCB 27:067`),
+ * or `undefined`.
+ *
+ * Both sides must be team-adjacent — the pair sits BETWEEN the two
+ * abbreviations — and both values must be single digits. The EARLIEST such pair
+ * wins: the score follows the home abbreviation, while a clock that OCR'd with
+ * the same separator always comes after the away one (`RMA 1.0 FCB 20/47SUPERCO`
+ * yields `1.0`, not `20/47`).
+ */
+function ocrGluedScorePair(text: string): [number, number] | undefined {
+  let best: { index: number; kind: number; pair: [number, number] } | undefined;
+  for (const [kind, { re }] of OCR_SCORE_GLUED_SEPARATORS.entries()) {
+    const scan = new RegExp(re.source, "g");
+    let m: RegExpExecArray | null;
+    while ((m = scan.exec(text)) !== null) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (!Number.isInteger(a) || !Number.isInteger(b)) continue;
+      if (a > OCR_SCORE_PAIR_MAX_GLUED || b > OCR_SCORE_PAIR_MAX_GLUED) continue;
+      const adj = ocrPairTeamAdjacent(text, m.index, m[0].length);
+      if (!(adj.left && adj.right)) continue;
+      if (best === undefined || m.index < best.index || (m.index === best.index && kind < best.kind)) {
+        best = { index: m.index, kind, pair: [a, b] };
+      }
+    }
+  }
+  return best?.pair;
+}
+
 /** ADAAAA-8134: is the pair immediately adjacent to a team-like token on that
  * side? The scorebug always renders the two scores BETWEEN/next to the team
  * abbreviations, so adjacency is the cheapest signal that a pair is the score
@@ -1185,10 +1245,22 @@ function ocrPairTeamAdjacent(text: string, index: number, len: number): { left: 
  * legibility bar itself (ints <= 99, one pair per reading, unreadable => null)
  * is unchanged, so this can only move which pair a line yields — never widen
  * what counts as a score.
+ *
+ * ADAAAA-8189: a hyphen is not the only separator the scorebug OCR emits. On the
+ * measured live job `348bd511` the pair reached the prompt as `RMA 1/2 FCB36:54`
+ * / `RMA 1.0 FCB 17:22HOTELSK` / `RMA 1 1 FCB 27:067` (1450 `/`-glued readings,
+ * 0 dashes), so every reading was unreadable and the window's timeline carried
+ * no score at all. The glued families are read by {@link ocrGluedScorePair}, at
+ * LOWER precedence than a dash pair (a dash pair is the shape perceive's own
+ * tracker parses, and its selection must not move) but higher than a bare,
+ * team-less dash pair. A clock still never parses: `36:54`, `17:22`, `27:067`,
+ * `12:07`, `0:00` are colon-separated, and the glued families require a
+ * single-digit on both sides between two team tokens.
  */
 export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [number, number] | null {
   let leftPick: [number, number] | undefined;
   let rightPick: [number, number] | undefined;
+  let gluedPick: [number, number] | undefined;
   let anyPick: [number, number] | undefined;
   for (const raw of lines ?? []) {
     const text = typeof raw === "string" ? raw.trim() : "";
@@ -1204,8 +1276,9 @@ export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [nu
       else if (adj.right && !rightPick) rightPick = [a, b];
       else if (!adj.left && !adj.right && !anyPick) anyPick = [a, b];
     }
+    if (!gluedPick) gluedPick = ocrGluedScorePair(text);
   }
-  return leftPick ?? rightPick ?? anyPick ?? null;
+  return leftPick ?? rightPick ?? gluedPick ?? anyPick ?? null;
 }
 
 /** ADAAAA-8071: every parseable score reading in a window's perceive timeline,
