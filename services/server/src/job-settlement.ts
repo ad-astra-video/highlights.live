@@ -41,7 +41,12 @@ export interface TerminalAccountingInput {
    * Never pass 0 to mean "unknown". */
   decideCalls: number | null;
   /** ADAAAA-8205: MEASURED confirm dives (decide-service calls), metered in the
-   * same term. Default 0 keeps every existing caller byte-identical. */
+   * same term. Default 0 keeps every existing caller byte-identical.
+   *
+   * ADAAAA-8242: this is only the FALLBACK for a caller with no snapshot. When
+   * `observeMetrics` is supplied its own `confirmCalls` is authoritative (see
+   * {@link billableConfirmCalls}) — the persisted meter is the field a stored-row
+   * read grades, so the cost term must never be built from a second expression. */
   confirmCalls?: number;
   /** Seconds the perceive session was paid for. Omitted/null when unknown. */
   perceiveSessionS?: number | null;
@@ -76,24 +81,67 @@ export function computeCostUsd(decideCalls: number, perceiveSessionS: number, de
   return Number(cost.toFixed(4));
 }
 
+/**
+ * ADAAAA-8242: the ONE source of the confirm term.
+ *
+ * QA leg `0705e2b5` stored `costUsd = 0.2485` — exactly 75 billable calls
+ * (`0.0033 * (73 + 2) + 362.5/3600 * 0.01`) — while its stored `observeMetrics`
+ * carried no confirm key at all, because the three counters were undeclared on
+ * `ObserveMetricsSnapshotSchema` and `JobSchema.parse` (store.patchJob) stripped
+ * them before persistence (added additively by ADAAAA-8219, `7800a11`). The
+ * lesson is structural, not one missing field: a cost term and a meter read from
+ * TWO expressions can disagree about the same dive on one row.
+ *
+ * The snapshot is the field a stored-row read grades, so it is AUTHORITATIVE:
+ * when a caller supplies `observeMetrics`, the billed count comes from that
+ * snapshot and a separately-passed `confirmCalls` cannot out-vote it. Callers
+ * with no snapshot (boot sweep / synchronous stop) may pass the measured count
+ * explicitly. Legacy rows (lane never armed) bill 0 and keep their record.
+ */
+export function billableConfirmCalls(
+  observeMetrics: Job["observeMetrics"] | undefined,
+  explicit?: number
+): number {
+  const fromSnapshot = observeMetrics?.confirmCalls;
+  if (typeof fromSnapshot === "number" && Number.isFinite(fromSnapshot)) {
+    return Math.max(0, Math.trunc(fromSnapshot));
+  }
+  if (typeof explicit === "number" && Number.isFinite(explicit)) {
+    return Math.max(0, Math.trunc(explicit));
+  }
+  return 0;
+}
+
 /** Build the terminal patch: end stamps + accounting, honest about what was
  * measured. Callers merge `extra` for their own reason/label fields. */
 export function buildTerminalAccountingPatch(input: TerminalAccountingInput): Partial<Omit<Job, "id">> {
   const nowMs = input.nowMs ?? Date.now();
   const now = new Date(nowMs).toISOString();
+  // ADAAAA-8242: bill the SAME confirm count the patch persists. The meter block
+  // is stamped onto the snapshot when a caller knew a count the snapshot lost, so
+  // the terminal patch is self-consistent by construction: `costUsd` reconciles
+  // against `observeMetrics.confirmCalls` on the stored row. Only `confirmCalls`
+  // is known in that case (the dive/dropped split belongs to the pass snapshot),
+  // so those stay absent rather than fabricated — the ADAAAA-8223 rule.
+  const confirmCalls = billableConfirmCalls(input.observeMetrics, input.confirmCalls);
+  const observeMetrics = input.observeMetrics
+    ? input.observeMetrics.confirmCalls === undefined && confirmCalls > 0
+      ? { ...input.observeMetrics, confirmCalls }
+      : input.observeMetrics
+    : undefined;
   const patch: Partial<Omit<Job, "id">> = {
     status: input.status,
     endedAt: now,
     finishedAt: now,
     ...(input.status === "done" ? { completedAt: now } : {}),
     ...(input.error ? { error: input.error } : {}),
-    ...(input.observeMetrics ? { observeMetrics: input.observeMetrics } : {}),
+    ...(observeMetrics ? { observeMetrics } : {}),
     ...(input.vodObserveMetrics ? { vodObserveMetrics: input.vodObserveMetrics } : {}),
   };
   const perceiveS = input.perceiveSessionS ?? null;
   if (input.decideCalls !== null && Number.isFinite(input.decideCalls)) {
     const decideCalls = Math.max(0, Math.trunc(input.decideCalls));
-    const cost = computeCostUsd(decideCalls, perceiveS ?? 0, input.decideFee, input.confirmCalls ?? 0);
+    const cost = computeCostUsd(decideCalls, perceiveS ?? 0, input.decideFee, confirmCalls);
     patch.decideCalls = decideCalls;
     if (perceiveS !== null) patch.perceiveSessionS = Number(perceiveS.toFixed(1));
     patch.costUsd = cost;
