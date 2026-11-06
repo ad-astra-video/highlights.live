@@ -17,13 +17,14 @@ describe("LiveStage markup (ADAAAA-7976)", () => {
     });
   }
 
-  function render(v: LiveStageView) {
+  function render(v: LiveStageView, liveProgress?: any) {
     return renderToString(
       React.createElement(LiveStageViewBlock, {
         view: v,
         jobId: "job-1",
         source: v.noPreviewReason === "external" ? "rtmp" : "browser",
         stream: null,
+        liveProgress,
         onStop: () => {},
       }),
     );
@@ -109,5 +110,61 @@ describe("LiveStage markup (ADAAAA-7976)", () => {
   it("renders no capture notice on a healthy share", () => {
     const html = render(view({ ownsCapture: true, hasCaptureStream: true }));
     expect(html).not.toContain("data-live-stage-capture-notice");
+  });
+});
+
+// ADAAAA-8121: the live stage carries the analyse-position readout while the job
+// is live, and nothing at all once it is not (AC-1 / AC-4).
+describe("LiveStage analyse position (ADAAAA-8121)", () => {
+  const progress = {
+    liveEdgeTs: 222,
+    processedThroughTs: 205,
+    lagSec: 17,
+    skippedWindows: 0,
+    state: "behind" as const,
+    updatedAt: "2026-11-06T18:30:00.000Z",
+    analysedPositionTs: 214.5,
+    analysedLagSec: 7.5,
+    strideData: true,
+    strideFramesSeen: 1063,
+    strideFramesSkipped: 708,
+    strideAnalysisFps: 1,
+  };
+
+  function view(over: Partial<Parameters<typeof liveStageView>[0]> = {}): LiveStageView {
+    return liveStageView({
+      jobStatus: "active",
+      jobSource: "browser",
+      createdAt: "2026-11-04T12:00:00Z",
+      now: Date.parse("2026-11-04T12:00:30Z"),
+      ...over,
+    });
+  }
+
+  function render(v: LiveStageView, liveProgress?: any) {
+    return renderToString(
+      React.createElement(LiveStageViewBlock, {
+        view: v,
+        jobId: "job-1",
+        source: "browser",
+        stream: null,
+        liveProgress,
+        onStop: () => {},
+      }),
+    );
+  }
+
+  it("renders the analysed position + content-clock delay for a live job", () => {
+    const html = render(view(), progress);
+    expect(html).toContain("data-analyze-position");
+    expect(html).toContain("Analysing T+3:35 · 8 s behind live");
+    expect(html).toContain("708 frames skipped (stride 1 fps)");
+    // order: the position chip follows the lag chip inside the status row
+    expect(html.indexOf("data-live-progress")).toBeLessThan(html.indexOf("data-analyze-position"));
+  });
+
+  it("renders no position marker for a terminal job (no stale value)", () => {
+    const html = render(view({ jobStatus: "done" }), progress);
+    expect(html).not.toContain("data-analyze-position");
   });
 });

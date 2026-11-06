@@ -5,6 +5,7 @@ import { useLiveCapture } from "../lib/liveCapture";
 import { liveStageView, noPreviewText, type LiveStageView } from "../lib/liveStage";
 import type { JobDetail, LiveProgress } from "../lib/jobDetail";
 import { LiveProgressChip } from "./LiveProgressChip";
+import { AnalyzePositionChip } from "./AnalyzePositionChip";
 
 // ADAAAA-7976: the live stage on the job detail page.
 //
@@ -92,6 +93,10 @@ export function LiveStageViewBlock({
           </span>
           {/* The existing lag readout (ADAAAA-7741): only while the job is live. */}
           {view.inFlight && <LiveProgressChip progress={liveProgress} staleSec={staleSec} />}
+          {/* ADAAAA-8121: where the analysis IS (content position) and its delay
+              vs the live edge — same in-flight-only rule, so a finished job never
+              leaves a frozen position on screen. */}
+          {view.inFlight && <AnalyzePositionChip progress={liveProgress} />}
         </div>
         {view.canStop && (
           <button
