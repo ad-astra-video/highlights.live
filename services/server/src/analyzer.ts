@@ -1159,9 +1159,12 @@ const OCR_SCORE_PAIR_RE = /(\d{1,3})\s*[-–—]\s*(\d{1,3})/g;
  * separator with a clock (`10/47`, `20/44`, `17.141` — a clock OCR'd with `/` or
  * `.`) are guarded by {@link OCR_SCORE_PAIR_MAX_GLUED} below. */
 const OCR_SCORE_GLUED_SEPARATORS: ReadonlyArray<{ kind: "slash" | "dot" | "space"; re: RegExp }> = [
-  { kind: "slash", re: /(\d{1,3})\s*\/\s*(\d{1,3})/g },
-  { kind: "dot", re: /(\d{1,3})\.(\d{1,3})/g },
-  { kind: "space", re: /(\d{1,3})[ \t]+(\d{1,3})/g },
+  // `(?<!\d)` / `(?!\d)`: the pair must be a WHOLE numeric token on both sides,
+  // so a longer digit run (`FCB2110`, a clock glued to a stat) can never be
+  // sliced into a score by a coincidental separator.
+  { kind: "slash", re: /(?<!\d)(\d{1,3})\s*\/\s*(\d{1,3})(?!\d)/g },
+  { kind: "dot", re: /(?<!\d)(\d{1,3})\.(\d{1,3})(?!\d)/g },
+  { kind: "space", re: /(?<!\d)(\d{1,3})[ \t]+(\d{1,3})(?!\d)/g },
 ];
 
 /**
