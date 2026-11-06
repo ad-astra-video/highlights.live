@@ -670,8 +670,8 @@ export function firstAttestedFrameTs(
  * ADAAAA-7996: live highlight-instant localization over the JUDGED window.
  *
  * Order of evidence, strongest first:
- *   1. the window's own legible scoreboard delta — `deltaTs` IS the transition
- *      instant (first frame reading the new score), clamped into the window;
+ *   1. the window's own legible scoreboard delta whose `deltaTs` (the first frame
+ *      reading the new score) lies INSIDE the judged window;
  *   2. ADAAAA-8152: the window's MEASURED transition instant supplied by the
  *      caller (`measuredTs`) — used when the run's one-transition ledger refused
  *      to credit this window, so no delta rides the candidate yet the instant was
@@ -679,6 +679,17 @@ export function firstAttestedFrameTs(
  *   3. the earliest frame in the window carrying any measured goal attestation;
  *   4. the pre-existing trigger / peak-audio path
  *      ({@link localizeHighlightInstantVod}), unchanged.
+ *
+ * ADAAAA-8152 (ACC-2, second pass): a legible delta whose instant is OUTSIDE the
+ * window is NOT evidence about this window's moment. Perceive's score channel is
+ * sticky over its trailing 60 s, so a window can carry a delta measured for an
+ * earlier goal; clamping that instant into the window (the pre-fix behaviour)
+ * pinned `localizedTs` to `lo` and delivered `[goal - 15, goal]` with the play in
+ * the last second of the card, and it also short-circuited step 2 — on QA leg
+ * `22ac6753` both accepted GOAL rows stored `localizedTs == centre - 10 s` with
+ * `anchorReason: "frame_attestation"` although the measured instant was read at
+ * `centre - 0.4 s`. An out-of-window delta now falls through, so the in-window
+ * measured anchor places the clip.
  *
  * Pure: reads already-computed seeds + taps, no inference, no GPU call.
  */
@@ -698,8 +709,17 @@ export function localizeLiveWindowInstant(
   const lo = Number.isFinite(window.lo) ? window.lo : triggerTs;
   const hi = Number.isFinite(window.hi) ? window.hi : triggerTs;
   if (scoreboardDeltaLegible(scoreDelta)) {
-    const ts = Math.min(Math.max((scoreDelta as ScoreboardDeltaEvidence).deltaTs, lo), hi);
-    return { ts, signal: "peak_frame", anchorReason: "frame_attestation", evidenceTs: ts, deltaSec: 0 };
+    const ts = (scoreDelta as ScoreboardDeltaEvidence).deltaTs;
+    // ADAAAA-8152 (ACC-2): only an instant the window actually judged anchors the
+    // clip. An out-of-window instant is the sticky score channel re-publishing an
+    // earlier transition: clamping it to `lo` is exactly the tail-placement defect
+    // (`[goal - 15, goal]`), and it pre-empted the measured anchor below. Falls
+    // through instead, so the stronger in-window measurement can place the clip.
+    if (Number.isFinite(ts) && ts >= lo && ts <= hi) {
+      // The instant IS a measured transition (first frame reading the new score),
+      // so the audit reason names that rather than the frame fallback.
+      return { ts, signal: "peak_frame", anchorReason: "measured_transition", evidenceTs: ts, deltaSec: 0 };
+    }
   }
   if (typeof measuredTs === "number" && Number.isFinite(measuredTs) && measuredTs >= lo && measuredTs <= hi) {
     return { ts: measuredTs, signal: "peak_frame", anchorReason: "measured_transition", evidenceTs: measuredTs, deltaSec: 0 };
@@ -719,6 +739,17 @@ export function localizeLiveWindowInstant(
  * that boundary actually lies inside the judged window. Returns `undefined`
  * (never a guess) otherwise, so localization keeps its previous order.
  *
+ * ADAAAA-8152 (ACC-2, second pass): the read grid can land the boundary a few
+ * tenths of a second PAST `hi` (the accept is decided after the window closes and
+ * the pooled span already carries `SCORE_READ_SUPPORT_TRAIL_S` of post support).
+ * That boundary is accepted when it is time-tied to this window — the PRE side
+ * was read INSIDE the window, both sides carry the legibility bar (`need`
+ * samples, so the score settled), and the step is ONE goal — and it is used
+ * AS-IS rather than clamped to the edge, because clamping is what put the play in
+ * the last second of the card. A boundary further than the trail, or one whose
+ * pre side was never read inside the window (a LATER goal), still returns
+ * `undefined`.
+ *
  * The value is an ANCHOR ONLY: the scoring gate still reads
  * `candidate.scoreBoardDelta` / the attestation flags, so a window whose
  * transition the run's ledger credited elsewhere cannot mint a second GOAL by
@@ -727,19 +758,41 @@ export function localizeLiveWindowInstant(
 export function liveAnchorTs(
   windowTransitionTs: number | undefined,
   pooled: ScoreReadDiagnostics | undefined | null,
-  window: { lo: number; hi: number } | undefined
+  window: { lo: number; hi: number } | undefined,
+  opts: { trailS?: number; needSamples?: number } = {}
 ): number | undefined {
   if (!window) return undefined;
   const { lo, hi } = window;
-  if (typeof windowTransitionTs === "number" && Number.isFinite(windowTransitionTs) &&
-      windowTransitionTs >= lo && windowTransitionTs <= hi) {
-    return windowTransitionTs;
-  }
+  const inWindow = (t: number | null | undefined): t is number =>
+    typeof t === "number" && Number.isFinite(t) && t >= lo && t <= hi;
+  if (inWindow(windowTransitionTs)) return windowTransitionTs;
+  if (inWindow(pooled?.newestTransitionTs)) return pooled!.newestTransitionTs as number;
   const pooledTs = pooled?.newestTransitionTs;
-  if (typeof pooledTs === "number" && Number.isFinite(pooledTs) && pooledTs >= lo && pooledTs <= hi) {
+  const trail = Math.max(0, opts.trailS ?? SCORE_READ_SUPPORT_TRAIL_S);
+  const need = Math.max(1, Math.floor(opts.needSamples ?? pooled?.need ?? SCOREBOARD_MIN_CONSISTENT_READS));
+  if (
+    typeof pooledTs === "number" &&
+    Number.isFinite(pooledTs) &&
+    pooledTs > hi &&
+    pooledTs <= hi + trail &&
+    (pooled?.postSamples ?? 0) >= need &&
+    (pooled?.preSamples ?? 0) >= need &&
+    inWindow(pooled?.newestTransitionPreTs) &&
+    scoreboardTransitionIsSingleGoalStep(pooled?.newestTransition)
+  ) {
     return pooledTs;
   }
   return undefined;
+}
+
+/** ADAAAA-8152: is `"2-1>2-2"` a ONE-goal step? A multi-goal jump is never a
+ * single transition and must not anchor a clip. Unparseable => not a step. */
+export function scoreboardTransitionIsSingleGoalStep(transition: string | null | undefined): boolean {
+  const m = /^(\d{1,3})-(\d{1,3})>(\d{1,3})-(\d{1,3})$/.exec((transition ?? "").trim());
+  if (!m) return false;
+  const [a, b, c, d] = m.slice(1).map((x) => Number(x));
+  const forward = (c - a === 1 && d === b) || (d - b === 1 && c === a);
+  return forward && c >= a && d >= b;
 }
 
 /**
@@ -1342,6 +1395,11 @@ export interface ScoreReadDiagnostics {
    * refused to credit can still anchor its clip on where the goal happened.
    * `null`/absent when the span reads one steady score. */
   newestTransitionTs?: number | null;
+  /** ADAAAA-8152 (ACC-2, second pass): the instant of the LAST PRE read of that
+   * boundary. When the boundary lands just past the judged window's close, this
+   * is what proves the previous score state was read INSIDE the window (so the
+   * boundary is this window's own transition, not a later goal). */
+  newestTransitionPreTs?: number | null;
 }
 
 /**
@@ -1454,6 +1512,7 @@ export function scoreReadDiagnostics(
   out.scoreStates = states.size;
   out.newestTransition = null;
   out.newestTransitionTs = null;
+  out.newestTransitionPreTs = null;
   if (inSpan.length < 2) return out;
   let idx = -1;
   for (let i = inSpan.length - 1; i > 0; i--) {
@@ -1467,6 +1526,7 @@ export function scoreReadDiagnostics(
   const post = inSpan[idx].score;
   out.newestTransition = `${pre[0]}-${pre[1]}>${post[0]}-${post[1]}`;
   out.newestTransitionTs = inSpan[idx].ts;
+  out.newestTransitionPreTs = inSpan[idx - 1].ts;
   let postSamples = 0;
   for (let j = inSpan.length - 1; j >= idx; j--) {
     if (inSpan[j].score[0] !== post[0] || inSpan[j].score[1] !== post[1]) break;
@@ -7278,6 +7338,24 @@ export async function observeAcceptOnly(
     // attest, so the demoted row discloses them (AC-R4).
     scoreReads: pooledScoreReads,
   };
+  // ADAAAA-8152 (ACC-2, second pass): name the anchor decision on the leg's own
+  // log, so the placement is provable without re-reading pixels: the delta the
+  // localization would have clamped, the window's own derived instant, the pooled
+  // span's boundary, and the instant actually used. Goal-shaped live windows
+  // only, so it stays one line per judged goal candidate. Costs nothing (no
+  // decide/perceive call).
+  if (liveRail && liveWindow && isGoalShaped(stage1)) {
+    const deltaTs = windowAttestation.scoreBoardDelta?.deltaTs;
+    const pooledTs = pooledScoreReads?.newestTransitionTs;
+    console.error(
+      `[live-anchor:${cfg.jobId}] window @${payload.centerTs.toFixed(3)}s ` +
+        `[${liveWindow.lo.toFixed(3)}, ${liveWindow.hi.toFixed(3)}] ` +
+        `delta=${deltaTs !== undefined ? deltaTs.toFixed(3) : "-"} ` +
+        `derive=${windowAttestation.scoreTransitionTs !== undefined ? windowAttestation.scoreTransitionTs.toFixed(3) : "-"} ` +
+        `pooled=${typeof pooledTs === "number" ? pooledTs.toFixed(3) : "-"} ` +
+        `-> anchor=${candidate.anchorTs !== undefined ? candidate.anchorTs.toFixed(3) : "none"}`
+    );
+  }
   // ADAAAA-7253 (ACC-3): carry the window's per-frame localization inputs
   // (ts + perceive-derived goal/ball signal + max detection confidence) into
   // the accept path so frame-based localization can center the clip on the
