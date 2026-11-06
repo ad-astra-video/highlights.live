@@ -2493,7 +2493,17 @@ export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGro
   // row's own LEADING clause when it carries its own verb (ADAAAA-8130:
   // `Crowd erupts in celebration as the scoreboard shows a goal for FCB.`). All
   // are extractive; whichever passes the gate order is the row's honest copy.
-  const candidates = claimBearing ? [quiet, ...quietBeatClauses(quiet, src)] : [quiet];
+  //
+  // ADAAAA-8193: the beat clauses are offered for a CLAIM-FREE row too when its
+  // sentence leads with the event ledger (`Scoreboard changes to 1-1 at t=0.0s
+  // and players celebrate.`). Such a row never had a claim to cut, so
+  // `outcomeVerbFor` substituted nothing and the tail beat (`Players celebrate.`)
+  // was never a candidate — the whole 9-word ledger sentence failed the 8-word
+  // quiet budget, and clause 3 emptied a row that carries an honest beat. The
+  // `quiet` shape is still tried FIRST, so a row that already served copy keeps
+  // serving it byte-identically.
+  const candidates = [quiet, ...quietBeatClauses(quiet, src, claimBearing)];
+
   for (const candidate of candidates) {
     const served = serveQuietCandidate(candidate, storedSentence, ctx);
     if (served) return served;
@@ -2516,17 +2526,26 @@ export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGro
  * Candidates are ordered: the tail clauses nearest the substitution first (they
  * carry the window's own outcome verb), then the leading clause.
  */
-function quietBeatClauses(quiet: string, src: string): string[] {
-  const verb = outcomeVerbFor(src);
-  if (!verb) return [];
+function quietBeatClauses(quiet: string, src: string, claimBearing = true): string[] {
   const clauses = splitQuietClauses(quiet);
   if (clauses.length < 2) return [];
+  // ADAAAA-8193: the ONE claim-free shape that owns a beat is a sentence that
+  // LEADS with the event ledger — `Scoreboard changes to 1-1 at t=0.0s and
+  // players celebrate.` No claim was cut, so no outcome verb was substituted;
+  // the tail clauses are scanned on their OWN verb instead. A claim-free
+  // sentence that does not lead with the ledger keeps its single quiet shape
+  // (the ADAAAA-8125 candidate set), so this stays a two-shape fix.
+  const ledgerLead = FRAME_LEDGER.test(clauses[0]);
+  if (!claimBearing && !ledgerLead) return [];
+  const verb = outcomeVerbFor(src);
   const verbRe = new RegExp(`\\b${verb.replace(/\s+/g, "\\s+")}\\b`, "i");
   const out: string[] = [];
   for (let i = clauses.length - 1; i >= 1; i -= 1) {
     // The clause must carry the outcome verb BEFORE the substituted tail is
     // stripped: the tail is the gate's own word, not evidence for this clause.
-    if (!verbRe.test(clauses[i])) continue;
+    // A claim-free row substituted nothing, so any clause that passes
+    // `quietBeatFromClause` (its own verb, no claim/score/ledger) is a beat.
+    if (claimBearing && !verbRe.test(clauses[i])) continue;
     const beat = quietBeatFromClause(clauses[i]);
     if (beat && !out.includes(beat)) out.push(beat);
   }
