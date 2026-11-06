@@ -574,9 +574,22 @@ export function quietShape(text: string, verb?: string): string {
  * …): no independent score-transition evidence…"). They are never copy, and
  * rewriting their words produces nonsense ("shoots-transition"), so the whole
  * tail is removed before any other rule looks at the line.
+ *
+ * ADAAAA-8221: the LIVE scoring lane's refusal tail belongs to the same family
+ * (`| live scoring lane: no measured attestation in this window (…) — delivered
+ * as a celebration, not a GOAL`). It is audit text by ADAAAA-8040/8209's own
+ * contract, but it used to survive `stripInternalTokens`, so a demoted
+ * celebration whose own sentence has no terminal punctuation before the tail
+ * carried the whole evidence paragraph into `wholeStoredSentence` /
+ * `quietStoredCopy` / `outcomeVerbFor`. The tail's own `GOAL`/`celebration`
+ * words also made the claim gate refuse a line it should have kept: on the 188
+ * stored rows that carry this tail (box replay 2026-11-06, 0 GPU) the derived
+ * sentence leaked the paragraph on 8 rows, and the write-seam line was refused
+ * to `""` on 109 rows that now keep their own beat. Quiet copy is byte-identical
+ * on all 188 rows, and a row whose lead already ends a sentence is untouched.
  */
 const INTERNAL_REASON_TAIL =
-  /\s*\|\s*(?:celebration of an already-delivered|no independent|dedupe|suppressed|burst|downgraded|anchor\s)[^|]*/gi;
+  /\s*\|\s*(?:celebration of an already-delivered|no independent|dedupe|suppressed|burst|downgraded|anchor\s|live scoring lane:)[^|]*/gi;
 /** Evidence tags the pipeline appends to a decide reason ("; scoreboard score
  * change confirmed"). Not copy — removed before any other rule runs. */
 const EVIDENCE_TAG =
