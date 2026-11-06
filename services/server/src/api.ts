@@ -38,7 +38,7 @@ import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
-import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeFlushedDuration, probeHasAudio } from "./ffmpeg";
+import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeFlushedDuration, probeHasAudio, centerClipOnEvidence } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
 import { anchorSourceCandidates, samplePlayerAnchor, vodAnchorAtSec } from "./player-anchor";
@@ -920,6 +920,29 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   const LIVE_CLIP_FILE_PROBE_MS = 1_000;
   // `${jobId}:${highlightId}` — one live cut attempt per highlight.
   const liveClipScheduled = new Set<string>();
+  /** ADAAAA-8152: how the delivered file was placed (see
+   * `resolveClipPlacement`). `frame_match` means the anchor picture was located
+   * in the recording itself; `content_clock` means the cut fell back to the
+   * highlight's own timestamps. */
+  interface ClipPlacement {
+    /** Recording-file seconds the delivered window starts at. */
+    cutStart: number;
+    /** Delivered window length (seconds) — the >= 15 s floor applied. */
+    dur: number;
+    method: "frame_match" | "content_clock";
+    /** Content-clock instant the anchor was taken from. */
+    evidenceTs: number | null;
+    /** Recording-file instant that carries the anchor picture. */
+    fileTs: number | null;
+    /** evidenceTs - fileTs, i.e. the measured rail->recording lag. */
+    lagSec: number | null;
+    score: number | null;
+    runnerUp: number | null;
+    clamped: boolean;
+    /** Where the anchor picture actually sits in the DELIVERED file (measured,
+     * not assumed) — `null` on the fallback path. */
+    deliveredOffsetSec: number | null;
+  }
   // Per-job serial chain: cuts for one share never run concurrently (one
   // ffmpeg at a time keeps the CPU cost bounded and the outputs race-free).
   const liveClipChains = new Map<string, Promise<void>>();
@@ -936,46 +959,150 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { start: Math.max(0, h.start), dur: Math.max(h.end - h.start, win.end - win.start) };
   }
 
+  /** ADAAAA-8152: where to cut the recording so the delivered clip CENTERS the
+   * picture the accept rested on.
+   *
+   * The highlight window (`h.start`/`h.end`) lives on the media rail's content
+   * clock; the recording file has its own timeline and there is no shared
+   * origin. Measured on leg `f60932ca` (the 8159 verdict's own files, box
+   * replay): the accepted goal picture sits 1.7-6 s EARLIER in the recording
+   * than its content timestamp says, so a cut on the content instant put the
+   * goal 3.4 s into a 15 s clip (0.23 d) instead of the 0.47 d that ADAAAA-7232
+   * and the row's own `clipGoalOffsetSec` promise. Modelling that skew was the
+   * wrong tool; instead locate the evidence frame the analyzer accepted inside
+   * the recording by pixel match and center on IT. That is footage truth, needs
+   * no clock correlation, and costs one small ffmpeg probe (measured 0.3 s on
+   * the 23 MB / 141 s leg recording; clip assembly stays CPU-only, AC4).
+   *
+   * Falls back to the content-clock cut when the evidence frame is missing or
+   * the match is not unique, and says which path it took on the row
+   * (`clipAnchorMethod`) so the delivered placement is auditable without
+   * re-reading pixels (AC3).
+   */
+  const CLIP_ANCHOR_MAX_SCORE = 0.6; // normalized MSE; identical picture ~0.001
+  const CLIP_ANCHOR_STRONG_SCORE = 0.1; // "the same picture", no second opinion needed
+  const CLIP_ANCHOR_MIN_GAP = 0.5; // best score >1 s away must be clearly worse
   /** Cut ONE browser highlight from `recPath` (the share's recording as it
    * exists right now). Shared by the live scheduler and the stop path so both
    * produce the same file name, window and audio probe. Throws on an ffmpeg
    * failure or an incomplete (truncated) window so the caller can decide. */
   async function cutBrowserHighlightClip(
     jobId: string,
-    h: { start: number; end: number },
+    h: { start: number; end: number; localizedTs?: number },
     recPath: string,
-    cw: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number }
-  ): Promise<{ name: string; uri: string; hasAudio: boolean | null; bytes: number; mode: string; ms: number; seekMs: number | null; encodeMs: number }> {
+    cw: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number },
+    opts: { requireFullWindow?: boolean } = {}
+  ): Promise<{ name: string; uri: string; hasAudio: boolean | null; bytes: number; mode: string; ms: number; seekMs: number | null; encodeMs: number; deliveredSec: number | null; placement: ClipPlacement }> {
     const outDir = path.join(cfg.dataDir, "clips");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(outDir, { recursive: true });
     const name = `${jobId}-${Math.round(h.start * 10)}`;
     const out = path.join(outDir, `${name}.mp4`);
-    const { start, dur } = browserClipSpan(h, cw);
+    const span = browserClipSpan(h, cw);
+    const dur = span.dur;
+    const evidenceTs = Number.isFinite(h.localizedTs as number) ? Number(h.localizedTs) : span.start;
+    const before = Math.max(0, Math.min(dur, evidenceTs - span.start));
+    const framePath = browserEvidenceFramePath(jobId, evidenceTs);
     // The recording's own length — the FOOTAGE THAT HAS BEEN FLUSHED to disk,
     // not the container's declared duration (a growing webm declares none, so
     // `probeDuration` reads null for the whole share; ADAAAA-8113). A clip can
-    // never be longer than the footage that exists, so the completeness check
-    // below is bounded by it (a short 2 s test/share recording is legitimately
-    // shorter than the 15 s window).
+    // never be longer than the footage that exists.
     const srcDur = await probeFlushedDuration(cfg.ffmpegPath, recPath);
     const t0 = Date.now();
-    // ADAAAA-7724: cutClip picks stream-copy when the recording's codecs fit the
-    // mp4 container and re-encodes when they do not (a VP8/VP9+opus webm
-    // recording cannot be copied into mp4). It also removes a failed/empty
-    // output, so a 0-byte clip never lands on disk.
-    const cut = await cutClip(cfg.ffmpegPath, recPath, out, start, dur);
+    // ADAAAA-8152: cut where the PICTURE the accept rested on actually sits in
+    // the recording, then verify it on the delivered file (the seek's keyframe
+    // pre-roll hides there). Falls back to the content-clock window when the
+    // evidence frame is missing/unmatched — and the row says which path ran.
+    let placement: ClipPlacement;
+    let cut;
+    if (framePath) {
+      const centered = await centerClipOnEvidence(cfg.ffmpegPath, recPath, out, framePath, before, dur, {
+        searchStartS: Math.max(0, span.start - 2),
+        searchDurS: dur + 6,
+        maxScore: CLIP_ANCHOR_MAX_SCORE,
+        strongScore: CLIP_ANCHOR_STRONG_SCORE,
+        minGap: CLIP_ANCHOR_MIN_GAP,
+      });
+      if (centered.mode === "frame_match" && centered.cut) {
+        cut = centered.cut;
+        placement = {
+          cutStart: centered.cutStart,
+          dur: centered.dur,
+          method: "frame_match",
+          evidenceTs,
+          fileTs: centered.fileTs,
+          lagSec: centered.fileTs != null ? evidenceTs - centered.fileTs : null,
+          score: centered.score,
+          runnerUp: centered.runnerUp,
+          clamped: centered.clamped,
+          deliveredOffsetSec: centered.deliveredOffset,
+        };
+        console.log(
+          `[live-anchor-file:${jobId}] content ${evidenceTs.toFixed(3)}s -> recording ${Number(centered.fileTs).toFixed(3)}s ` +
+            `(lag ${(evidenceTs - Number(centered.fileTs)).toFixed(3)}s, score ${Number(centered.score).toFixed(4)}, ` +
+            `runner-up ${Number(centered.runnerUp).toFixed(3)}, ${centered.recuts} recut(s)) ` +
+            `cut [${centered.cutStart.toFixed(3)}, ${(centered.cutStart + dur).toFixed(3)}]` +
+            `${centered.clamped ? " clamped-to-0" : ""}, goal at ${centered.deliveredOffset == null ? "?" : centered.deliveredOffset.toFixed(3)}s of ${dur}s`
+        );
+      } else {
+        console.log(
+          `[browser:${jobId}] clip anchor frame at ${evidenceTs.toFixed(3)}s not located in the recording ` +
+            `(score ${Number(centered.score ?? NaN).toFixed(3)}, runner-up ${Number(centered.runnerUp ?? NaN).toFixed(3)}): ` +
+            `cutting on the content clock`
+        );
+        placement = {
+          cutStart: span.start,
+          dur,
+          method: "content_clock",
+          evidenceTs,
+          fileTs: centered.fileTs,
+          lagSec: centered.fileTs != null ? evidenceTs - centered.fileTs : null,
+          score: centered.score,
+          runnerUp: centered.runnerUp,
+          clamped: false,
+          deliveredOffsetSec: null,
+        };
+        cut = await cutClip(cfg.ffmpegPath, recPath, out, span.start, dur);
+      }
+    } else {
+      placement = {
+        cutStart: span.start,
+        dur,
+        method: "content_clock",
+        evidenceTs,
+        fileTs: null,
+        lagSec: null,
+        score: null,
+        runnerUp: null,
+        clamped: false,
+        deliveredOffsetSec: null,
+      };
+      cut = await cutClip(cfg.ffmpegPath, recPath, out, span.start, dur);
+    }
+    const start = placement.cutStart;
     // AC4: a cut from a still-growing recording must never deliver a silently
     // truncated window — verify the clip covers what the recording could give
     // before it can be published as playable. Skipped when the source duration
     // is unprobeable (a streamable webm mid-write).
     const got = await probeDuration(cfg.ffmpegPath, out);
-    const expected = srcDur != null ? Math.min(dur, Math.max(0, srcDur - start)) : null;
+    const available = srcDur != null ? Math.max(0, srcDur - start) : null;
     const ms = Date.now() - t0;
-    if (got != null && expected != null && expected > 0.5 && got + 1.5 < expected) {
+    // ADAAAA-8152 AC2: a LIVE cut must deliver the WHOLE window or not publish.
+    // The old guard accepted `got + 1.5 < expected`, and `expected` was itself
+    // capped at whatever the still-growing recording already held
+    // (`min(dur, srcDur - start)`) — so two stored 15 s windows shipped as
+    // 13.392 s and 13.817 s files on leg `f60932ca` and QA failed AC2 while the
+    // code called the truncation "the available window". A genuinely short
+    // SHARE is still legitimate at stop time (nothing more will ever land),
+    // which is what `requireFullWindow: false` keeps.
+    const expected = available != null ? Math.min(dur, available) : dur;
+    const floor = opts.requireFullWindow ? dur - 0.1 : expected - 0.1;
+    if (got != null && got < Math.max(0.2, floor)) {
       await rm(out, { force: true }).catch(() => {});
       throw new Error(
-        `clip covers ${got.toFixed(1)}s of the ${expected.toFixed(1)}s available window (recording not flushed yet)`
+        `clip covers ${got.toFixed(3)}s of the ${dur.toFixed(3)}s window` +
+          (available != null && available < dur - 0.1 ? ` (recording holds ${available.toFixed(3)}s from the cut start)` : "") +
+          (opts.requireFullWindow ? " — a truncated live clip is not published" : "")
       );
     }
     // ADAAAA-7248: record whether the source recording carried audio so the card
@@ -993,17 +1120,77 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           `seek ${cut.seekMs ?? "?"}ms, encode ${cut.encodeMs}ms)`
       );
     }
-    return { name, uri: `/clips/${name}.mp4`, hasAudio, bytes: cut.bytes, mode: cut.mode, ms, seekMs: cut.seekMs, encodeMs: cut.encodeMs };
+    return { name, uri: `/clips/${name}.mp4`, hasAudio, bytes: cut.bytes, mode: cut.mode, ms, seekMs: cut.seekMs, encodeMs: cut.encodeMs, deliveredSec: got, placement };
+  }
+
+  /** The analyzer's evidence JPEG closest to `ts` (seconds on the content
+   * clock), or null when the frame dir/observation is missing. The browser rail
+   * names frames by their global seq (`frame_%06d.jpg`), which `jobFrameList`
+   * relies on too. */
+  function browserEvidenceFramePath(jobId: string, ts: number): string | null {
+    const dir = jobFrameDir(jobId);
+    if (!dir) return null;
+    let bestSeq: number | null = null;
+    let bestDelta = Infinity;
+    for (const o of store.observationsForJob(jobId)) {
+      const d = Math.abs(Number(o.timestamp) - ts);
+      if (!Number.isFinite(d) || d >= bestDelta) continue;
+      bestDelta = d;
+      bestSeq = Number(o.seq);
+    }
+    // More than 1.5 s away is not the frame the accept rested on.
+    if (bestSeq == null || bestDelta > 1.5) return null;
+    const p = path.join(dir, `frame_${String(Math.max(0, Math.floor(bestSeq))).padStart(6, "0")}.jpg`);
+    return existsSync(p) ? p : null;
+  }
+
+  /** The row fields that record HOW the delivered clip was placed (AC3). */
+  function clipPlacementPatch(rec: { deliveredSec: number | null; placement: ClipPlacement }) {
+    const p = rec.placement;
+    return {
+      clipAnchorMethod: p.method,
+      clipAnchorFileTs: p.fileTs ?? undefined,
+      clipAnchorEvidenceTs: p.evidenceTs ?? undefined,
+      clipAnchorLagSec: p.lagSec ?? undefined,
+      clipAnchorScore: p.score ?? undefined,
+      clipAnchorRunnerUp: p.runnerUp ?? undefined,
+      clipCutStartSec: p.cutStart,
+      clipCutDurSec: p.dur,
+      clipCutClamped: p.clamped,
+      clipDeliveredSec: rec.deliveredSec ?? undefined,
+      clipAnchorDeliveredOffsetSec: p.deliveredOffsetSec ?? undefined,
+      // The MEASURED offset of the accepted picture inside the delivered file —
+      // the number ACC-2 actually grades (clipGoalOffsetSec is the content-clock
+      // intent, which is what the two-clock skew moved).
+    };
   }
 
   /** Track the newest content instant the share has produced, so the live cut
    * knows how much of the recording has been flushed. Updated by the media rail
-   * (every analysed frame) and by the legacy `/ingest` frame path. */
+   * (every analysed frame) and by the legacy `/ingest` frame path.
+   *
+   * ADAAAA-8152: TWO producers write this clock in TWO units — the analyzer's
+   * `observation`/frame paths pass seconds-from-job-start, while the media
+   * node's SSE frames carry UNIX epoch seconds. `Math.max` of both is epoch
+   * forever, so the rail gate compared `1.79e9 >= 23.3` and passed on the very
+   * first tick: the live cut's "wait for the frame the window covers" upper
+   * bound was dead and only the FILE probe was ever honoured (the 8159 leg's
+   * log line shows `rail at 1793937974.9s`). Normalise epoch input onto the
+   * job-relative axis before it is noted, and drop a value that cannot be
+   * mapped rather than poisoning the gate. */
   function noteBrowserContentTs(jobId: string, ts: number) {
     if (!Number.isFinite(ts) || ts < 0) return;
     const bj = browserJobs.get(jobId);
     if (!bj) return;
-    if (!Number.isFinite(bj.contentTs) || ts > (bj.contentTs ?? 0)) bj.contentTs = ts;
+    let rel = ts;
+    if (rel > 1e6) {
+      const startedAt = store.getJob(jobId)?.startedAt;
+      const origin = startedAt ? Date.parse(startedAt) / 1000 : NaN;
+      if (!Number.isFinite(origin)) return; // unmeasurable axis: keep the file probe
+      rel = rel - origin;
+      if (!Number.isFinite(rel) || rel < 0 || rel > 6 * 3600) return;
+    }
+    if (!Number.isFinite(bj.contentTs) || rel > (bj.contentTs ?? 0)) bj.contentTs = rel;
   }
 
   /** Wait until the recording on disk covers `contentEndS` of the share
@@ -1025,9 +1212,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     recPath: string
   ): Promise<"flushed" | "ended" | "timeout"> {
     const deadline = Date.now() + LIVE_CLIP_MAX_WAIT_MS;
-    // Enough flushed footage for the window, allowing the same 1.5 s slack the
-    // rail gate uses (a chunk boundary can land a frame short of the window).
-    const needFileSec = contentEndS - LIVE_CLIP_FLUSH_SEC;
+    // ADAAAA-8152 AC2: the recording FILE must hold the WHOLE window before the
+    // cut is attempted. This used to ask for `contentEndS - 1.5`, i.e. it
+    // deliberately stopped a second and a half short of the window end, and the
+    // cut then shipped whatever bytes existed (13.392 s / 13.817 s for two 15 s
+    // windows on leg `f60932ca`). The file's clock also trails the content
+    // clock, so the shortfall is systematic, not a chunk-boundary accident.
+    const needFileSec = contentEndS;
     let lastProbeAt = 0;
     let notedGap = false;
     for (;;) {
@@ -1046,8 +1237,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             notedGap = true;
             console.log(
               `[browser:${jobId}] live cut waiting for the recording file ` +
-                `(rail at ${Number(bj.contentTs).toFixed(1)}s, file holds ${fileDur.toFixed(1)}s, ` +
-                `need ${needFileSec.toFixed(1)}s for the window)`
+                `(rail at ${Number(bj.contentTs).toFixed(3)}s, file holds ${fileDur.toFixed(3)}s, ` +
+                `need ${needFileSec.toFixed(3)}s for the window)`
             );
           }
         }
@@ -1093,10 +1284,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       let lastErr: any = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const rec = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw);
+          const rec = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw, { requireFullWindow: true });
           await store.patchHighlight(highlightId, {
             clipUri: rec.uri,
             ...(rec.hasAudio != null ? { hasAudio: rec.hasAudio } : {}),
+            ...clipPlacementPatch(rec),
             clipError: undefined as any,
           } as any);
           // AC6 cost evidence: the measured CPU seconds + bytes per live cut.
@@ -1278,6 +1470,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           await store.patchHighlight(h.id, {
             clipUri: rec.uri,
             ...(rec.hasAudio != null ? { hasAudio: rec.hasAudio } : {}),
+            ...clipPlacementPatch(rec),
           });
           // ADAAAA-8032: same `clip` event the live cut emits, so a surface that
           // subscribed late refreshes the card instead of polling for it.

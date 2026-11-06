@@ -1435,6 +1435,38 @@ export const HighlightRecordSchema = z.object({
    * delivered clip (`localizedTs - start`), i.e. the number ACC-2 grades. Persisted
    * so placement is auditable from the row without re-reading pixels. */
   clipGoalOffsetSec: z.number().min(0).optional(),
+  /** ADAAAA-8152 (ACC-2/ACC-3): how the DELIVERED file was actually placed, as
+   * opposed to where the content clock said it should be. The live lane has two
+   * clocks — the media rail's (which `localizedTs` lives on) and the recording
+   * file's own timeline — and on leg `f60932ca` they differed by 1.7-6 s, so a
+   * cut on the content instant put the goal 3.4 s into a 15 s clip. The clip is
+   * now centered on the evidence frame the accept rested on, located inside the
+   * recording by pixel match; these fields record that measurement so the
+   * delivered offset is computable from the row alone. Additive optional. */
+  clipAnchorMethod: z.enum(["frame_match", "content_clock"]).optional(),
+  /** Recording-file instant (seconds) that carries the accepted evidence frame. */
+  clipAnchorFileTs: z.number().min(0).optional(),
+  /** The content-clock instant the anchor was taken from (`localizedTs`). */
+  clipAnchorEvidenceTs: z.number().min(0).optional(),
+  /** `clipAnchorEvidenceTs - clipAnchorFileTs` — the measured rail→file lag. */
+  clipAnchorLagSec: z.number().optional(),
+  /** Normalized MSE at the match (0 = identical picture) and the best score
+   * more than a second away, i.e. the uniqueness margin. */
+  clipAnchorScore: z.number().min(0).optional(),
+  clipAnchorRunnerUp: z.number().min(0).optional(),
+  /** The applied recording-file cut: [clipCutStartSec, +clipCutDurSec]. */
+  clipCutStartSec: z.number().min(0).optional(),
+  clipCutDurSec: z.number().min(0).optional(),
+  /** True when the recording could not hold the whole window at that start
+   * (early share) and the cut was clamped to the recording's beginning. */
+  clipCutClamped: z.boolean().optional(),
+  /** Delivered file length (ffprobe seconds) — the AC2 number, on the row. */
+  clipDeliveredSec: z.number().min(0).optional(),
+  /** Where the accepted picture was MEASURED inside the delivered file (seconds
+   * from its first frame). This is the footprint ACC-2 grades: `clipGoalOffsetSec`
+   * is the content-clock intent, and the rail->recording skew is what moved the
+   * delivered placement away from it. */
+  clipAnchorDeliveredOffsetSec: z.number().min(0).optional(),
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
