@@ -3705,6 +3705,18 @@ export const WINDOW_FACTS_MAX_CHARS = 2400;
  * highlight is accepted per this window in a run, so a start-of-clip burst of
  * confabulated goals cannot flood the accepted list. */
 export const DEFAULT_GOAL_BURST_SUPPRESS_S = 30;
+/** ADAAAA-8146 same-transition dedupe horizon (seconds). A scorebug re-read of
+ * the SAME measured score transition can land well outside the ADAAAA-6610
+ * burst window: live job `9a6b1d8f` shipped ONE `1-1 -> 2-1` goal three times
+ * (37 s and 82 s after the first delivery, every row honestly attested by a
+ * legible forward score read). The burst window only covers a moment; a
+ * re-read of the same transition is a duplicate of the same event at any gap
+ * inside this horizon, which is deliberately wider than a same-moment burst and
+ * still short enough that a later genuine goal (whose transition DIFFERS, since
+ * the score has moved on) is never touched. Applied only when both rows carry a
+ * non-null transition key: shootout conversions keep a fixed aggregate score and
+ * therefore carry no key, so they stay on the ADAAAA-7402/7420 tight window. */
+export const GOAL_SAME_TRANSITION_HORIZON_S = 120;
 
 /**
  * ADAAAA-8140: the evidence behind one goal-burst suppression. The pre-accept
@@ -3725,7 +3737,9 @@ export interface GoalBurstSuppression {
    * goal-shaped accept the attestation gate demoted to a celebration. */
   dedupeAgainstKind: "scoring_goal" | "goal_shaped_celebration";
   /** The window that was applied (30 s for a delivered GOAL, 8 s for a demoted
-   * celebration, or the 8 s same-kick dedup for a corroborated goal). */
+   * celebration, the 8 s same-kick dedup for a corroborated goal, or
+   * `max(goalBurstWindowS, GOAL_SAME_TRANSITION_HORIZON_S)` when the reference
+   * is a delivered GOAL carrying the SAME measured transition — ADAAAA-8146). */
   windowS: number;
   /** Candidate ts minus the delivered row's decide ts (seconds). */
   gapS: number;
@@ -4218,6 +4232,15 @@ export class LiveRunShared {
    * independent corroboration keeps the full 30 s ADAAAA-6610 window, so the
    * confabulated-burst guard is untouched.
    *
+   * ADAAAA-8146 (same-transition horizon): a delivered GOAL also suppresses a
+   * later candidate that re-measured the SAME transition for
+   * `max(goalBurstWindowS, GOAL_SAME_TRANSITION_HORIZON_S)`. A scorebug re-read
+   * 37 s / 82 s after delivery shipped one `1-1 -> 2-1` goal three times on a
+   * live leg, each row honestly attested. The widened horizon requires a
+   * non-null key on BOTH rows, so the null-key shootout path above is unchanged,
+   * and a candidate whose key differs still escalates (a genuinely later goal
+   * has moved the score on).
+   *
    * KEYING NOTE (ADAAAA-7420): key on the AGGREGATE `corroborated` flag, not on
    * `corroborationSource === "scoreboard"`. In the deployed ADAAAA-7402 flow a
    * converted penalty is corroborated via the model's ball-in-net /
@@ -4237,9 +4260,11 @@ export class LiveRunShared {
     const ev = (input.eventType || "").toUpperCase().trim();
     if (ev !== "GOAL" && ev !== "GOL") return undefined;
     const key = input.transitionKey ?? null;
-    // Two references, two bounded windows:
+    // Three references, three bounded windows:
     //  - a DELIVERED scoring GOAL keeps the ADAAAA-6610 window (30 s, or the 8 s
     //    same-kick dedup when corroborated);
+    //  - the same delivered GOAL suppresses a re-read of the SAME measured
+    //    transition out to ADAAAA-8146's wider horizon (120 s by default);
     //  - a goal-shaped accept the attestation gate DEMOTED to a celebration is
     //    only a same-MOMENT reference (the tight 8 s re-read horizon), because a
     //    demotion carries no transition: 3.2 s later is a re-read, 26 s later is
@@ -4250,6 +4275,15 @@ export class LiveRunShared {
     // GOAL highlight per N seconds", so a test/operator that narrows it (e.g. 1 s
     // to isolate the derive path) must not get an 8 s dedupe back.
     const shapedWindow = Math.min(SHOOTOUT_KICK_DEDUP_S, this.goalBurstWindowS);
+    // ADAAAA-8146: a DELIVERED scoring GOAL that measured the SAME transition is
+    // a duplicate of that same event even when the re-read lands outside the
+    // burst window (the measured leg re-read `1-1 -> 2-1` at 37 s and 82 s).
+    // The widened horizon is consulted ONLY when the candidate carries a
+    // transition key, and only ever matches a delivered row carrying the same
+    // key: a null-key candidate (a shootout conversion whose aggregate score is
+    // fixed) keeps the tight ADAAAA-7402/7420 windows untouched, because
+    // deduping null === null at 120 s would swallow distinct conversions.
+    const sameTransitionHorizonS = Math.max(this.goalBurstWindowS, GOAL_SAME_TRANSITION_HORIZON_S);
     let target: (AcceptedGoalEvent & { kind: GoalBurstSuppression["dedupeAgainstKind"] }) | undefined;
     let targetWindow = scoringWindow;
     let gap = Infinity;
@@ -4269,24 +4303,45 @@ export class LiveRunShared {
       target = { ...e, kind: "goal_shaped_celebration" };
       targetWindow = shapedWindow;
     }
-    if (!target) return undefined;
+    let reference = target;
+    let windowS = targetWindow;
+    let gapS = gap;
+    if (key && reference?.transitionKey !== key) {
+      // Widened same-transition pass over DELIVERED scoring GOALs only. A demoted
+      // celebration never measured a transition, so it can never justify a
+      // horizon-wide dedupe (that is the ADAAAA-8140 pre-accept loss path).
+      let wideGap = Infinity;
+      let wide: typeof target;
+      for (const e of this.acceptedGoalEvents) {
+        const at = Number.isFinite(e.candidateTs) ? (e.candidateTs as number) : e.anchorTs;
+        const d = input.ts - at;
+        if (d < 0 || d >= sameTransitionHorizonS || d >= wideGap) continue;
+        if (!e.transitionKey || e.transitionKey !== key) continue;
+        wideGap = d;
+        wide = { ...e, kind: "scoring_goal" };
+      }
+      reference = wide;
+      windowS = sameTransitionHorizonS;
+      gapS = wideGap;
+    }
+    if (!reference) return undefined;
     // Same-transition / same-moment dedupe ONLY. A candidate that measured its
     // own, different forward transition opens a new event -> escalate to the
     // accept lane, where the attestation gate either accepts it as a GOAL or
     // demotes it with `attestationUsed`.
-    const prevKey = target.transitionKey ?? null;
+    const prevKey = reference.transitionKey ?? null;
     if (key && key !== prevKey) return undefined;
     if (key && !prevKey) return undefined;
     this.burstSuppressedSinceGoal++;
     return {
       kind: "goal_burst_same_transition",
-      dedupeAgainstKind: target.kind,
-      windowS: targetWindow,
-      gapS: gap,
+      dedupeAgainstKind: reference.kind,
+      windowS,
+      gapS,
       burstSize: this.burstSuppressedSinceGoal,
-      dedupeAgainstHighlightId: target.highlightId,
-      dedupeAgainstTs: Number.isFinite(target.candidateTs) ? (target.candidateTs as number) : target.anchorTs,
-      dedupeAgainstIdempotencyKey: target.idempotencyKey,
+      dedupeAgainstHighlightId: reference.highlightId,
+      dedupeAgainstTs: Number.isFinite(reference.candidateTs) ? (reference.candidateTs as number) : reference.anchorTs,
+      dedupeAgainstIdempotencyKey: reference.idempotencyKey,
       transitionKey: key ?? prevKey,
     };
   }
