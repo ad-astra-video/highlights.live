@@ -284,6 +284,12 @@ export interface CandidateSignal {
   /** ADAAAA-7844: the measured delta backing `scoreBoardChanged`, when one was
    * measured legibly inside the window. */
   scoreBoardDelta?: ScoreboardDeltaEvidence;
+  /** ADAAAA-8152 (ACC-2): the measured goal instant (first frame reading the
+   * window's new score) when one was read, even if the run's ledger did not
+   * credit the transition to this window. Used ONLY to anchor the delivered clip
+   * (never to attest a goal), so a delivery can centre on the measured moment
+   * without minting a second GOAL for the same transition. */
+  anchorTs?: number;
   /** ADAAAA-8134: on the live rail, the pooled score-read counts behind a window
    * the read-side attestation could not carry (disclosed on the demoted row). */
   scoreReads?: ScoreReadDiagnostics;
@@ -537,6 +543,7 @@ export function assessAudioBurst(
 /** ADAAAA-7845: why the delivered clip sits where it does. Persisted on the
  * highlight so placement is auditable (AC2). */
 export type LocalizeAnchorReason =
+  | "measured_transition"
   | "frame_attestation"
   | "peak_audio_reaction"
   | "peak_audio_far_burst_capped"
@@ -665,8 +672,12 @@ export function firstAttestedFrameTs(
  * Order of evidence, strongest first:
  *   1. the window's own legible scoreboard delta — `deltaTs` IS the transition
  *      instant (first frame reading the new score), clamped into the window;
- *   2. the earliest frame in the window carrying any measured goal attestation;
- *   3. the pre-existing trigger / peak-audio path
+ *   2. ADAAAA-8152: the window's MEASURED transition instant supplied by the
+ *      caller (`measuredTs`) — used when the run's one-transition ledger refused
+ *      to credit this window, so no delta rides the candidate yet the instant was
+ *      still read. This is an anchor only; it never attests a goal;
+ *   3. the earliest frame in the window carrying any measured goal attestation;
+ *   4. the pre-existing trigger / peak-audio path
  *      ({@link localizeHighlightInstantVod}), unchanged.
  *
  * Pure: reads already-computed seeds + taps, no inference, no GPU call.
@@ -678,6 +689,10 @@ export function localizeLiveWindowInstant(
   maxLookaheadS: number,
   window: { lo: number; hi: number },
   scoreDelta?: ScoreboardDeltaEvidence,
+  /** ADAAAA-8152 (ACC-2): the measured transition instant for this window (see
+   * {@link WindowAttestation.scoreTransitionTs}). Anchors the clip even when the
+   * delta was not credited to this window; ignored outside `[lo, hi]`. */
+  measuredTs?: number,
   opts?: { anchorToleranceS?: number; burst?: { minPeakToBaseline?: number; maxSustainedFraction?: number } }
 ): VodLocalization {
   const lo = Number.isFinite(window.lo) ? window.lo : triggerTs;
@@ -686,11 +701,45 @@ export function localizeLiveWindowInstant(
     const ts = Math.min(Math.max((scoreDelta as ScoreboardDeltaEvidence).deltaTs, lo), hi);
     return { ts, signal: "peak_frame", anchorReason: "frame_attestation", evidenceTs: ts, deltaSec: 0 };
   }
+  if (typeof measuredTs === "number" && Number.isFinite(measuredTs) && measuredTs >= lo && measuredTs <= hi) {
+    return { ts: measuredTs, signal: "peak_frame", anchorReason: "measured_transition", evidenceTs: measuredTs, deltaSec: 0 };
+  }
   const attested = firstAttestedFrameTs(frames, lo, hi);
   if (attested !== undefined) {
     return { ts: attested, signal: "peak_frame", anchorReason: "frame_attestation", evidenceTs: attested, deltaSec: 0 };
   }
   return localizeHighlightInstantVod(triggerTs, frames, taps, maxLookaheadS, opts);
+}
+
+/**
+ * ADAAAA-8152 (ACC-2): the instant the delivered LIVE clip should centre on.
+ *
+ * Prefers the window's own measured transition instant (derived from its
+ * perceive timeline), then the pooled read span's newest transition instant when
+ * that boundary actually lies inside the judged window. Returns `undefined`
+ * (never a guess) otherwise, so localization keeps its previous order.
+ *
+ * The value is an ANCHOR ONLY: the scoring gate still reads
+ * `candidate.scoreBoardDelta` / the attestation flags, so a window whose
+ * transition the run's ledger credited elsewhere cannot mint a second GOAL by
+ * carrying this instant.
+ */
+export function liveAnchorTs(
+  windowTransitionTs: number | undefined,
+  pooled: ScoreReadDiagnostics | undefined | null,
+  window: { lo: number; hi: number } | undefined
+): number | undefined {
+  if (!window) return undefined;
+  const { lo, hi } = window;
+  if (typeof windowTransitionTs === "number" && Number.isFinite(windowTransitionTs) &&
+      windowTransitionTs >= lo && windowTransitionTs <= hi) {
+    return windowTransitionTs;
+  }
+  const pooledTs = pooled?.newestTransitionTs;
+  if (typeof pooledTs === "number" && Number.isFinite(pooledTs) && pooledTs >= lo && pooledTs <= hi) {
+    return pooledTs;
+  }
+  return undefined;
 }
 
 /**
@@ -1288,6 +1337,11 @@ export interface ScoreReadDiagnostics {
    * (`"2-2>1-1"`), or `null` when the span reads one steady score. Lets the
    * gate fail closed on a backward transition instead of trusting a claim. */
   newestTransition?: string | null;
+  /** ADAAAA-8152 (ACC-2): the MEASURED instant of that newest boundary (the
+   * first reading of the post side), so a window whose delta the run's ledger
+   * refused to credit can still anchor its clip on where the goal happened.
+   * `null`/absent when the span reads one steady score. */
+  newestTransitionTs?: number | null;
 }
 
 /**
@@ -1399,6 +1453,7 @@ export function scoreReadDiagnostics(
   for (const r of inSpan) states.add(`${r.score[0]}-${r.score[1]}`);
   out.scoreStates = states.size;
   out.newestTransition = null;
+  out.newestTransitionTs = null;
   if (inSpan.length < 2) return out;
   let idx = -1;
   for (let i = inSpan.length - 1; i > 0; i--) {
@@ -1411,6 +1466,7 @@ export function scoreReadDiagnostics(
   const pre = inSpan[idx - 1].score;
   const post = inSpan[idx].score;
   out.newestTransition = `${pre[0]}-${pre[1]}>${post[0]}-${post[1]}`;
+  out.newestTransitionTs = inSpan[idx].ts;
   let postSamples = 0;
   for (let j = inSpan.length - 1; j >= idx; j--) {
     if (inSpan[j].score[0] !== post[0] || inSpan[j].score[1] !== post[1]) break;
@@ -1469,6 +1525,22 @@ export interface WindowAttestation {
   ballOutcome?: string;
   scoreBoardChanged?: boolean;
   scoreBoardDelta?: ScoreboardDeltaEvidence;
+  /**
+   * ADAAAA-8152 (ACC-2): the MEASURED goal instant this window read — the first
+   * frame that reads the new score. Set whenever the window's own timeline (or
+   * the pooled read span) derived a legible transition, INCLUDING when the run's
+   * one-transition ledger refuses to CREDIT it to this window.
+   *
+   * Credit and anchoring are different questions: credit answers "may this
+   * window claim the goal" (one GOAL per transition), anchoring answers "where
+   * did the goal happen" (and every overlapping window that saw the same
+   * transition measured the same instant). Dropping the instant with the credit
+   * left the live clip anchored on the window's FIRST frame, because perceive's
+   * score channel is sticky across the trailing window (see
+   * `ScoreboardTracker.changed`: it reports a transition anywhere in the last
+   * 60 s), which put the goal at the very end of the delivered clip.
+   */
+  scoreTransitionTs?: number;
   /** Set only when the score attestation was credited (audit trail). */
   scoreAttestationSource?: ScoreAttestationSource;
 }
@@ -1516,6 +1588,11 @@ export function deriveWindowAttestation(
       }),
       { minSamples: opts.minSamples }
     );
+    // ADAAAA-8152 (ACC-2): the MEASURED instant is an ANCHOR, not a credit. Keep
+    // it on the attestation even when the one-transition ledger refuses to credit
+    // this window, because the delivered clip must still centre on where the goal
+    // actually happened (credit only decides which window may claim it).
+    if (scoreboardDeltaLegible(derived)) out.scoreTransitionTs = derived!.deltaTs;
     // ADAAAA-8078: one score transition is credited ONCE per run. The derive
     // path now accepts any post side >= minSamples, so every overlapping window
     // covering the boundary would otherwise derive the same delta — and the
@@ -1527,6 +1604,9 @@ export function deriveWindowAttestation(
       out.scoreBoardDelta = derived;
       out.scoreAttestationSource = out.scoreAttestationSource ?? "perceive_timeline";
     }
+  } else if (scoreboardDeltaLegible(out.scoreBoardDelta)) {
+    // A hint-carried (perceive) delta is legible evidence of the same instant.
+    out.scoreTransitionTs = out.scoreBoardDelta!.deltaTs;
   }
   return out;
 }
@@ -5304,7 +5384,13 @@ export async function acceptVideoDecision(
    * before its centre, which is where the accepted evidence actually sits),
    * instead of only forward from the window centre. Absent = VOD behaviour,
    * byte-identical. */
-  liveWindow?: { lo: number; hi: number }
+  liveWindow?: { lo: number; hi: number },
+  /** ADAAAA-8152 (ACC-2): the window's MEASURED goal instant when one was read
+   * (see {@link WindowAttestation.scoreTransitionTs}). Anchors the delivered clip
+   * on the transition frame even when the run's one-transition ledger refused to
+   * credit it to this window. Never attests the goal — the scoring gate keeps
+   * reading `candidate.scoreBoardDelta` / the flags. */
+  measuredTs?: number
 ): Promise<void> {
   // ADAAAA-7255: attach the bounded (t, energy, baseline) audio-gate inspection
   // series (sliced to the decide window around the trigger) to the per-window
@@ -5423,7 +5509,8 @@ export async function acceptVideoDecision(
         run.audioEnergyTaps(),
         cfg.clipAfterS,
         liveWindow,
-        candidate.scoreBoardDelta
+        candidate.scoreBoardDelta,
+        candidate.anchorTs ?? measuredTs
       )
     : localizeHighlightInstantVod(candidate.timestamp, frameSignals, run.audioEnergyTaps(), cfg.clipAfterS);
   const win = clipWindow(loc.ts, cfg.clipBeforeS, cfg.clipAfterS, cfg.clipWindowMinSec ?? 15);
@@ -5665,6 +5752,10 @@ export async function acceptVideoDecision(
     clipWindowBeforeS: cfg.clipBeforeS,
     clipWindowAfterS: cfg.clipAfterS,
     clipWindowSec: win.end - win.start,
+    // ADAAAA-8152 (ACC-2): how far the measured goal instant sits inside the
+    // delivered window, so a grader can read the placement straight off the row
+    // (`(localizedTs - start) / clipWindowSec` = `clipGoalOffsetSec` / 15).
+    clipGoalOffsetSec: Math.round((loc.ts - win.start) * 1000) / 1000,
     // ADAAAA-6874 (Phase 2): deterministic idempotency key so a resumed job that
     // re-decides the same candidate cannot double-persist/double-bill.
     idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),
@@ -7177,6 +7268,12 @@ export async function observeAcceptOnly(
     // ADAAAA-7844: carry the measured delta (if any) so the confirm request can
     // be credited/labelled on a legible, time-tied measurement.
     scoreBoardDelta: windowAttestation.scoreBoardDelta,
+    // ADAAAA-8152 (ACC-2): the measured goal instant for CLIP PLACEMENT. It is
+    // carried even when the one-transition ledger refused to credit this window
+    // (scoreBoardDelta absent) — the instant is a measurement the rail already
+    // paid for, and without it the live clip anchored on the window's sticky
+    // first frame and put the goal at the very end of the card.
+    anchorTs: liveAnchorTs(windowAttestation.scoreTransitionTs, pooledScoreReads, liveWindow),
     // ADAAAA-8134: the read counts behind a window the pooled re-read could not
     // attest, so the demoted row discloses them (AC-R4).
     scoreReads: pooledScoreReads,
@@ -7210,7 +7307,7 @@ export async function observeAcceptOnly(
   const sink: { final?: DecisionResult; grounding?: CaptionGroundingContext } = {};
   let acceptError: unknown = null;
   try {
-    await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, stage1, frameSignals, goalEventTs, sink, liveWindow);
+    await acceptVideoDecision(client, run, cut, cfg, onEvent, { seq: observeEmitSeq(payload.centerTs, cfg.sampleFps ?? cfg.analysisFps ?? OBSERVE_CONTENT_FPS), timestamp: payload.centerTs }, candidate, stage1, frameSignals, goalEventTs, sink, liveWindow, candidate.anchorTs);
   } catch (e) {
     acceptError = e;
   }
