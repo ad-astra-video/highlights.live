@@ -1220,6 +1220,25 @@ export function goalConfirmedLabel(
 }
 
 /**
+ * ADAAAA-8178: the ONE badge a notable-lane card carries. The notable lane is
+ * where the precision gate parks non-postable plays, so the card has to say WHICH
+ * kind of play it is without inventing a second GOAL: a demoted goal window keeps
+ * the customer-safe "GOAL (unconfirmed)" string (ADAAAA-8139), and everything
+ * else is labelled from its own outcome, so a near miss is never read as a big
+ * play. Precedence is deliberate and total: provisional goal wins over outcome.
+ */
+export type NotableBadgeKind = "goal_unconfirmed" | "big_play" | "near_miss";
+
+export function notableBadge(
+  h: Pick<JobDetailHighlight, "provisionalGoal" | "outcome">
+): { kind: NotableBadgeKind; text: string } | null {
+  if (h.provisionalGoal) return { kind: "goal_unconfirmed", text: "GOAL (unconfirmed)" };
+  if (h.outcome === "big_play") return { kind: "big_play", text: "BIG PLAY" };
+  if (h.outcome === "near_miss") return { kind: "near_miss", text: "NEAR MISS" };
+  return null;
+}
+
+/**
  * Lazy auth-fetched frame image as a blob object URL. `<img>` cannot send the
  * Authorization header, so the detail timeline loads each frame by hand (mirrors
  * the FrameDebugger filmstrip). Returns a revocable object URL (the caller must

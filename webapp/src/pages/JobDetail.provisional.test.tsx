@@ -110,8 +110,15 @@ describe("AC — the notable lane (where a demoted goal lives) carries the marke
         admin: true,
       })
     );
-    expect(count(html, "data-detail-lane-clip")).toBe(1);
-    expect(count(html, "data-detail-provisional-goal")).toBe(1);
+    // ADAAAA-8178: the notable lane now renders the real card, where the
+    // provisional string is carried by the single notable badge
+    // (`data-detail-notable-badge`, kind goal_unconfirmed) instead of the
+    // separate `data-detail-provisional-goal` chip — exactly one badge, no
+    // duplicate string in the lane.
+    expect(count(html, 'data-detail-notable-card="true"')).toBe(1);
+    expect(count(html, "data-detail-notable-badge")).toBe(1);
+    expect(count(html, 'data-notable-kind="goal_unconfirmed"')).toBe(1);
+    expect(count(html, "data-detail-provisional-goal")).toBe(0);
     expect(count(html, "GOAL (unconfirmed)")).toBe(1);
     expect(count(html, NOTE)).toBe(1);
   });
