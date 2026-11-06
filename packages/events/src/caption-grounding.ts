@@ -1678,7 +1678,11 @@ export type ServedShapeViolation =
   | "fragment"
   | "verbless"
   /** Contract v8 §3b.2: an immediately repeated verb phrase (`shoots and shoots`). */
-  | "verb-repeat";
+  | "verb-repeat"
+  /** ADAAAA-8209: the model's window-relative `at t=…` audit marker as copy. */
+  | "audit-marker"
+  /** ADAAAA-8209: the quiet §3.3 lead budget (<= 8 words) exceeded. */
+  | "quiet-budget";
 
 /** Comparison form: case, punctuation and whitespace are not content. */
 function normalizeServed(text: string): string {
@@ -1866,6 +1870,53 @@ export function servedShapeViolations(
     }
   }
   return [...new Set(out)];
+}
+
+/**
+ * ADAAAA-8209: the post-conditions a STORED `reason` must cross.
+ *
+ * The quiet candidate gate (`serveQuietCandidate`) has always applied these, but
+ * the PRIMARY store path in `services/server/src/analyzer.ts` applied only
+ * `servedShapeViolations` to its shaped line. The model's window-relative audit
+ * marker and a lead over the quiet budget therefore reached the stored row on
+ * that path:
+ *
+ *     Scoreboard changes from 2-1 to 2-2 at t=-4.0s and t=-3.0s.   (10-word lead)
+ *     Scoreboard changes from 2-2 to 1-1 at t=-3.0s and ball shoots on the left. (14)
+ *
+ * A store-time post-condition is the only place every shape crosses, so the
+ * refusal lives here instead of only inside the quiet gate. Two scopes:
+ *
+ *  - the `at t=` audit marker is refused on EVERY shape (evidence provenance is
+ *    never copy);
+ *  - the quiet lead budget (`QUIET_MAX_WORDS`, measured on the `captionLead`,
+ *    not the whole line) is refused on a LEDGER line that carries the
+ *    `from X to Y` transition — a longer PROSE read with an attribution tail is
+ *    not a ledger line and keeps its copy.
+ */
+export function storedReasonViolations(
+  candidate: string,
+  sources: Array<string | null | undefined> = []
+): ServedShapeViolation[] {
+  const out = (candidate ?? "").trim();
+  if (!out) return ["empty"];
+  const violations = servedShapeViolations(out, sources);
+  // Evidence provenance is never copy, on every path.
+  if (/\bat\s+t=-?[\d.]+\s*s\b/i.test(out)) violations.push("audit-marker");
+  // The quiet §3.3 budget, measured on the LEAD (the same measure the quiet gate
+  // uses), so a folded colour clause does not count against it. Scoped to a
+  // LEDGER line that carries the `from X to Y` transition (the shape this ticket
+  // refuses): a 10-12-word prose line with an attribution tail is not a ledger
+  // line and keeps its copy (`Scoreboard changes to 2-1 and commentary confirms
+  // the shot on the left.` stays stored byte-identically).
+  if (
+    wordCount(captionLead(out)) > QUIET_MAX_WORDS &&
+    FRAME_LEDGER.test(out) &&
+    /\bfrom\s+(?:the\s+)?(?:score\s*(?:of|is)?\s*)?\d+\s*[-–:]\s*\d+\s+to\s+/i.test(out)
+  ) {
+    violations.push("quiet-budget");
+  }
+  return [...new Set(violations)];
 }
 
 /** The whole FIRST sentence of a stored line (never a cut of it). */
@@ -2509,7 +2560,7 @@ export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGro
   // the net`) is unmeasured — the row's own corroborated score line is the copy.
   // Offered LAST, so every row that already has a beat keeps it byte-identically.
   const beats = quietBeatClauses(quiet, src, claimBearing);
-  const ledger = ledgerScoreLines(quiet, ctx);
+  const ledger = ledgerScoreLines(quiet, ctx, storedSentence);
   const candidates = [quiet, ...beats, ...ledger];
 
   for (const candidate of candidates) {
@@ -2575,6 +2626,33 @@ function splitQuietClauses(text: string): string[] {
 }
 
 /**
+ * ADAAAA-8209: the event FRAME clause of a stored sentence, independent of how
+ * many connector clauses the sentence has.
+ *
+ * A provenance/attribution phrase is COMMA-appended, not connector-opened:
+ *
+ *     Scoreboard changes from 2-2 to 1-1 at t=-3.0s, confirmed by ball in net at t=-2.0s.
+ *
+ * is ONE clause for `splitQuietClauses`, so the ledger reader used to bail on
+ * `clauses.length < 2` before it ever saw the `from X to Y` transition. The
+ * frame is the leading clause up to the first comma/semicolon; the provenance
+ * tail is never part of the copy (and never a beat, see `PROVENANCE_CLAUSE`).
+ */
+function ledgerFrameOf(text: string): string {
+  const lead = splitQuietClauses(text)[0] ?? "";
+  const head = lead.split(/\s*[,;]\s*/)[0] ?? "";
+  // The model's own PARENTHETICAL speculation (`(likely a goal/reset)`) is
+  // commentary, never copy: a frame whose claim annotation was cut by
+  // `quietShape` leaves an unclosed `(likely a …` — drop the parenthetical (or
+  // the truncated remainder of one) so the ledger words are the row's frame.
+  return head
+    .replace(/\s*\([^)]*\)/g, "")
+    .replace(/\s*\(.*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
  * ADAAAA-8130: ONE clause as a beat candidate, or `""` when it is not a beat.
  *
  * `quietShape` appends the window's outcome verb after the determiner a claim
@@ -2604,6 +2682,12 @@ function quietBeatFromClause(clauseText: string): string {
   // The event LEDGER is never a beat: a scoreboard/graphic line (`The scoreboard
   // updates from 1-1 to 2-1`) reports the frame the model read, not the play.
   if (FRAME_LEDGER.test(out)) return "";
+  // ADAAAA-8209: a PROVENANCE clause is the model citing its own evidence
+  // (`confirmed by ball in net at t=-2.0s`, `ASR confirms a goal for Real
+  // Madrid`, any clause carrying the `at t=` audit marker), never a beat. Without
+  // this a comma/connector split would offer `Confirmed by ball in shoots.` before
+  // the ledger candidate and ship mangled attribution as copy.
+  if (PROVENANCE_CLAUSE.test(out)) return "";
   // The clause the claim was cut OUT of is the event FRAME, not the beat: a
   // display verb that outlived its claim object (`the scoreboard shows a goal
   // for FCB` -> `the scoreboard shows`) reports the claim, it does not beat it.
@@ -2650,12 +2734,18 @@ function quietBeatFromClause(clauseText: string): string {
  * Offered AFTER the beat clauses, so a row that has an honest beat keeps it
  * (row 1 of this ticket still serves `Players celebrate.`).
  */
-function ledgerScoreLines(quiet: string, ctx?: CaptionGroundingContext): string[] {
+function ledgerScoreLines(quiet: string, ctx?: CaptionGroundingContext, storedSentence = ""): string[] {
   const prompt = typeof ctx?.promptText === "string" ? ctx.promptText : "";
   if (!prompt) return [];
-  const clauses = splitQuietClauses(quiet);
-  if (clauses.length < 2) return [];
-  const frame = clauses[0] ?? "";
+  // ADAAAA-8209: the FRAME is the leading clause, and a provenance tail is
+  // comma-appended rather than opened by an `as/while/when/and/but` connector:
+  //   `Scoreboard changes from 2-2 to 1-1 at t=-3.0s, confirmed by ball in net at t=-2.0s.`
+  // `splitQuietClauses` returns that as ONE clause, and the old `clauses.length <
+  // 2` bail refused the row before it ever read the transition. The frame is
+  // taken up to the first comma/semicolon instead, so the ledger line does not
+  // depend on the sentence having a connector clause.
+  const frame = ledgerFrameOf(quiet);
+  if (!frame) return [];
   // The CLOCK form (`Scoreboard reads 22:19`) is not a score change.
   if (!FRAME_LEDGER.test(frame)) return [];
   // `from X to Y` — both ends of the transition, in the row's own words.
@@ -2668,9 +2758,12 @@ function ledgerScoreLines(quiet: string, ctx?: CaptionGroundingContext): string[
   if (!pre || !post || pre === post) return [];
   // The row must cite WHEN the change was read (`at t=-5.0s`): that marker is the
   // model's own measured instant inside the window, which is what tells a read
-  // transition from a prose restatement of the score. The marker is dropped from
+  // transition from a prose restatement of the score. The marker may ride ANY
+  // clause of the ROW'S OWN sentence (ADAAAA-8209: `… and crowd erupts at
+  // t=-5.0s`), so the test reads the stored sentence as well as the quiet shape —
+  // `quietShape` can drop the clause the marker rode. The marker is dropped from
   // the copy (audit provenance is never served).
-  if (!/\bat\s+t=-?[\d.]+\s*s\b/i.test(frame)) return [];
+  if (!/\bat\s+t=-?[\d.]+\s*s\b/i.test(`${quiet} ${storedSentence}`)) return [];
   // Both ends MEASURED in this window: the pre score was read before the change
   // and the post score after it (the delayed-board shape). A prompt carrying only
   // the post score is a static read and earns no copy.
@@ -2699,6 +2792,15 @@ const LEDGER_VERB = /\b(?:changes?|updates?|changes?|becomes?|goes?|moves?|reads
 /** Display verbs whose object is a claim the gate cut: the frame, not a beat. */
 const FRAME_DISPLAY_VERB =
   /\b(?:shows?|showed|displays?|displayed|reads?|announces?|announced|reports?|reported|indicates?|indicated|confirms?|confirmed|reveals?|revealed)\b/i;
+
+/**
+ * ADAAAA-8209: a provenance/attribution clause — the model citing its own
+ * evidence, or a clause carrying the window-relative audit marker. Never copy,
+ * never a beat: `confirmed by ball in net at t=-2.0s`, `ASR confirms a goal for
+ * Real Madrid`, `commentary confirms the shot`, `… and crowd erupts at t=-5.0s`.
+ */
+const PROVENANCE_CLAUSE =
+  /\b(?:confirmed|confirms)\b|\b(?:asr|commentary|commentator|replay)\s+(?:confirms?|confirmed)\b|\bat\s+t=-?[\d.]+\s*s\b/i;
 
 /**
  * ADAAAA-8130: the event LEDGER — a scoreboard/graphic/clock line or a raw
@@ -2738,8 +2840,10 @@ function serveQuietCandidate(
   out = restoreTerminalPunctuation((out ?? "").trim());
   if (!out) return "";
   // The post-condition the gated line already crosses (`reasonClean`): 0
-  // served-shape violations against THIS row's own stored sentence.
-  if (servedShapeViolations(out, sources).length > 0) return "";
+  // served-shape violations against THIS row's own stored sentence, plus the
+  // store-time post-conditions (no `at t=` audit marker, lead within the quiet
+  // budget) that ADAAAA-8209 moved into `storedReasonViolations`.
+  if (storedReasonViolations(out, sources).length > 0) return "";
   // … and the copy gates it must be a FIXED POINT of (AC2): re-running the gate
   // order returns the same string, so no read or re-emit can derive another.
   const claimed = gateGoalClaims(out, ctx);
@@ -2768,6 +2872,12 @@ function serveQuietCandidate(
   // evidence provenance, never copy — a line that keeps it reads as a log row
   // (`Scoreboard changes at t=-5.0s.`). Refused here so no shape can serve one.
   if (/\bat\s+t=-?[\d.]+\s*s\b/i.test(out)) return "";
+  // ADAAAA-8209: an attribution/provenance line (`Commentary confirms Real
+  // Madrid shoots.`) is the model citing evidence, never the row's beat; and a
+  // parenthetical (`(likely a goal/reset)`, `(implied shot)`) is model
+  // speculation, never copy — an unbalanced `(` is a truncation of one.
+  if (PROVENANCE_CLAUSE.test(out)) return "";
+  if (/\(/.test(out)) return "";
   // A quote is an OCR label the model quoted, never copy
   // (`… the stadium displays 'GOAL' …` reduced to `displays '`).
   if (/['"‘’“”]/.test(out)) return "";

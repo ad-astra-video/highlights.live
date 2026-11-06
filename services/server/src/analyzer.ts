@@ -14,7 +14,7 @@ import {
   quietShape,
   quietStoredCopy,
   restoreTerminalPunctuation,
-  servedShapeViolations,
+  storedReasonViolations,
   storedCardSurface,
   stripInternalTokens,
   wholeStoredSentence,
@@ -5551,9 +5551,15 @@ export function storedSurfaceFor(
   // the stripped stored sentence, the line is still honest copy — serve it
   // closed rather than leaving a goal row with no text at all.
   const shapedReason = restoreTerminalPunctuation((gatedReason ?? "").trim());
+  // ADAAAA-8209: the store-time post-condition is `storedReasonViolations`, not
+  // `servedShapeViolations` alone. The primary store path used to pass the model's
+  // window-relative audit marker and a lead over the quiet budget straight into
+  // `reason` (`Scoreboard changes from 2-1 to 2-2 at t=-4.0s and t=-3.0s.`), which
+  // the quiet candidate gate would have refused. Refusing here drops the row to
+  // the quiet copy below instead of storing an audit row.
   const reasonClean =
     !!shapedReason &&
-    servedShapeViolations(shapedReason, [wholeStoredSentence(rawSurface)].filter(Boolean)).length === 0;
+    storedReasonViolations(shapedReason, [wholeStoredSentence(rawSurface)].filter(Boolean)).length === 0;
   // ADAAAA-8125 (ADAAAA-8124 product ruling, clause 1): a refused card on a
   // NON-EMPTY but shape-unclean gated line used to store NO copy at all (22 of 61
   // accepted rows on the post-deploy sweep). Copy is owed by the row, so the quiet
