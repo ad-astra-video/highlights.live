@@ -83,7 +83,9 @@ describe("localizeLiveWindowInstant (ADAAAA-7996)", () => {
     const loc = localizeLiveWindowInstant(111, TRAILING_WINDOW, [], 15, { lo: 101, hi: 111 }, DELTA);
     expect(loc.ts).toBe(103);
     expect(loc.signal).toBe("peak_frame");
-    expect(loc.anchorReason).toBe("frame_attestation");
+    // ADAAAA-8152 (ACC-2): the delta's instant IS a measured transition, so the
+    // audit reason says so (the frame fallback keeps "frame_attestation").
+    expect(loc.anchorReason).toBe("measured_transition");
     expect(loc.deltaSec).toBe(0);
     // The defect: the old path returned the window centre (111 => +12.1 s off
     // the 100 s goal). The transition instant is 8 s EARLIER.
@@ -98,7 +100,10 @@ describe("localizeLiveWindowInstant (ADAAAA-7996)", () => {
 
   it("clamps a delta instant into the judged window", () => {
     const outOfWindow: ScoreboardDeltaEvidence = { ...DELTA, preTs: 90, postTs: 98, deltaTs: 98 };
-    expect(localizeLiveWindowInstant(111, TRAILING_WINDOW, [], 15, { lo: 101, hi: 111 }, outOfWindow).ts).toBe(101);
+    // ADAAAA-8152 (ACC-2, second pass): an out-of-window delta instant is NOT
+    // clamped to the window edge any more (that clamp delivered `[goal-15, goal]`
+    // on the live leg); it falls through to the frame fallback.
+    expect(localizeLiveWindowInstant(111, TRAILING_WINDOW, [], 15, { lo: 101, hi: 111 }, outOfWindow).ts).toBe(103);
   });
 
   it("keeps the pre-existing trigger/peak-audio path when nothing is attested", () => {
@@ -251,10 +256,41 @@ describe("localizeLiveWindowInstant measured anchor (ADAAAA-8152)", () => {
     expect(loc.ts).toBe(58.363);
   });
 
-  it("still prefers a credited delta and keeps the audit reason", () => {
+  it("still prefers a credited delta and names the measured instant", () => {
     const credited: ScoreboardDeltaEvidence = { ...DELTA, preTs: 66.263, postTs: 66.663, deltaTs: 66.663 };
     const loc = localizeLiveWindowInstant(68.363, STICKY_FRAMES, [], 8, WINDOW_2, credited);
     expect(loc.ts).toBe(66.663);
+    // The anchor IS a measured transition instant, so the audit reason says so.
+    expect(loc.anchorReason).toBe("measured_transition");
+  });
+
+  // ADAAAA-8152 (ACC-2, second pass). QA leg 22ac6753 stored, on BOTH accepted
+  // GOAL rows: `localizedTs == centre - 10 s`, `anchorReason "frame_attestation"`,
+  // `localizeAnchorDeltaSec 0` — while the window's own pooled reads had the
+  // transition at `centre - 0.4 s`. Mechanism reproduced on the box: a legible
+  // delta carried the EARLIER goal's instant (perceive's score channel is sticky
+  // over 60 s), the clamp pinned the anchor to `lo`, and the clamp pre-empted the
+  // in-window measured anchor.
+  it("does not let an out-of-window sticky delta pin the clip to the window start", () => {
+    const earlierGoal: ScoreboardDeltaEvidence = {
+      pre: [1, 1], post: [2, 1], preTs: 6.71, postTs: 7.31, deltaTs: 7.31, preSamples: 10, postSamples: 10,
+    };
+    const loc = localizeLiveWindowInstant(68.363, STICKY_FRAMES, [], 8, WINDOW_2, earlierGoal, MEASURED_TS);
+    expect(loc.ts).toBe(MEASURED_TS);
+    expect(loc.anchorReason).toBe("measured_transition");
+    // 15 s default clip (7/8): the play must land in the middle third.
+    const win = clipWindow(loc.ts, 7, 8, 15);
+    expect(loc.ts - win.start).toBeGreaterThanOrEqual(5);
+    expect(loc.ts - win.start).toBeLessThanOrEqual(10);
+    expect(win.end - loc.ts).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps the frame fallback when the only delta is out of window and no anchor exists", () => {
+    const earlierGoal: ScoreboardDeltaEvidence = {
+      pre: [1, 1], post: [2, 1], preTs: 6.71, postTs: 7.31, deltaTs: 7.31, preSamples: 10, postSamples: 10,
+    };
+    const loc = localizeLiveWindowInstant(68.363, STICKY_FRAMES, [], 8, WINDOW_2, earlierGoal);
+    expect(loc.ts).toBe(58.363);
     expect(loc.anchorReason).toBe("frame_attestation");
   });
 });
@@ -274,6 +310,42 @@ describe("liveAnchorTs (ADAAAA-8152)", () => {
     expect(liveAnchorTs(undefined, pooled, WINDOW_2)).toBeUndefined();
     expect(liveAnchorTs(120, undefined, WINDOW_2)).toBeUndefined();
     expect(liveAnchorTs(undefined, undefined, undefined)).toBeUndefined();
+  });
+
+  // ADAAAA-8152 (ACC-2, second pass): the 2 fps read grid can land the boundary a
+  // few tenths past the window close. It is accepted only when it is time-tied to
+  // THIS window (PRE side read inside it), settled, and a one-goal step — and used
+  // as-is, never clamped to the edge.
+  const trailing = (over: Record<string, unknown> = {}) => ({
+    scoreReads: 46,
+    preSamples: 40,
+    postSamples: 3,
+    need: 2,
+    scoreStates: 2,
+    newestTransition: "2-1>2-2",
+    newestTransitionTs: 68.9,
+    newestTransitionPreTs: 68.0,
+    ...over,
+  });
+
+  it("accepts a boundary just past the close that is time-tied to this window", () => {
+    expect(liveAnchorTs(undefined, trailing(), WINDOW_2)).toBe(68.9);
+  });
+
+  it("rejects a boundary past the close whose PRE side was never read in the window", () => {
+    expect(liveAnchorTs(undefined, trailing({ newestTransitionPreTs: 40.0 }), WINDOW_2)).toBeUndefined();
+  });
+
+  it("rejects a boundary past the close that is not a one-goal step", () => {
+    expect(liveAnchorTs(undefined, trailing({ newestTransition: "1-1>3-1" }), WINDOW_2)).toBeUndefined();
+  });
+
+  it("rejects a boundary past the close with an unsettled post side", () => {
+    expect(liveAnchorTs(undefined, trailing({ postSamples: 1 }), WINDOW_2)).toBeUndefined();
+  });
+
+  it("rejects a boundary further past the close than the read-support trail", () => {
+    expect(liveAnchorTs(undefined, trailing({ newestTransitionTs: 76.0, newestTransitionPreTs: 70.0 }), WINDOW_2)).toBeUndefined();
   });
 });
 

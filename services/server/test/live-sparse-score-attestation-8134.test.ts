@@ -173,6 +173,10 @@ describe("scoreReadDiagnostics — the demoted row's read counts (AC-R4)", () =>
       need: 2,
       scoreStates: 2,
       newestTransition: "1-1>2-1",
+      // ADAAAA-8152 (ACC-2): the boundary's instant + its PRE read, so a window
+      // whose delta the ledger refused to credit can still anchor its clip.
+      newestTransitionTs: 105,
+      newestTransitionPreTs: 101,
     });
   });
 
@@ -184,6 +188,8 @@ describe("scoreReadDiagnostics — the demoted row's read counts (AC-R4)", () =>
       need: 2,
       scoreStates: 0,
       newestTransition: null,
+      newestTransitionTs: null,
+      newestTransitionPreTs: null,
     });
     expect(scoreReadDiagnostics([read(101, [1, 1]), read(103, [1, 1])], { lo: 100, hi: 107 })).toEqual({
       scoreReads: 2,
@@ -192,6 +198,8 @@ describe("scoreReadDiagnostics — the demoted row's read counts (AC-R4)", () =>
       need: 2,
       scoreStates: 1,
       newestTransition: null,
+      newestTransitionTs: null,
+      newestTransitionPreTs: null,
     });
   });
 
