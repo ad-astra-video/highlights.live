@@ -3671,7 +3671,7 @@ export function buildLiveObserveMetrics(
     ...(delivered ? { deliveredLatency: delivered } : {}),
     // ADAAAA-8205: the async confirm lane's meter. `confirmCalls` is the decide
     // meter's confirm term (costUsd = decideFee * (decideCalls + confirmCalls) +
-    // perceive), `confirmDiveCount` the dives that produced a verdict, and
+    // perceive), `confirmDiveCount` the dives that actually issued that call, and
     // `confirmDropped` the dives dropped fail-closed (busy pool / budget /
     // timeout / transport / parse). Absent when the lane never ran.
     ...(confirm
@@ -4476,7 +4476,8 @@ export class LiveRunShared {
   readonly confirmBudget = new ConfirmDiveBudget();
   /** Confirm calls this run made — metered like a decide call. */
   private confirmDiveCallCount = 0;
-  /** Dives that produced a verdict (attempted and settled, ok or not). */
+  /** Dives that issued a confirm call (the billable count; a pre-flight drop
+   *  that never reached the model is NOT counted here — AC-A4). */
   private confirmDiveRunCount = 0;
   /** Dives DROPPED (busy pool, budget, timeout, transport, parse). */
   private confirmDiveDroppedCount = 0;
