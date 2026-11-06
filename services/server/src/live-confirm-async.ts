@@ -293,7 +293,12 @@ export interface ConfirmDiveAdoption {
  * `refuted: true`, and the card says the deep dive did not confirm it.
  *
  * Passthrough (`goalConfirmed` null) or an already-resolved row -> the card is
- * untouched; only the pending descriptor is cleared.
+ * untouched (outcome / eventType / clip / provisionalGoal), and the descriptor
+ * is cleared. Both arms still stamp `confirmAttestation`: ADAAAA-8223 B2, an
+ * attempted dive that leaves no marker is indistinguishable from a descriptor
+ * that was never armed, so "the key is gone" would keep grading as N/A forever.
+ * A refutation with no provisional marker to refute is likewise unchanged
+ * (ADAAAA-8223 B3) instead of inventing a cue/timestamp on the row.
  */
 export function confirmDiveAdoption(
   row: { outcome?: string; eventType?: string; provisionalGoal?: Record<string, unknown> },
@@ -312,17 +317,21 @@ export function confirmDiveAdoption(
   };
   // A row that already left the provisional lane (e.g. a later scoreboard read
   // re-attested it first) is not rewritten by a late dive: one verdict move.
+  // The attestation still lands so the attempt is observable (B2).
   if (row.outcome === "scoring_play") {
     return {
       kind: "unchanged",
-      patch: { pendingConfirmDive: undefined },
+      patch: { confirmAttestation: attestation, pendingConfirmDive: undefined },
       reason: "row already in the scoring lane — the dive does not rewrite it",
     };
   }
   if (goalConfirmed === null) {
     return {
       kind: "unchanged",
-      patch: { pendingConfirmDive: undefined },
+      // B2: a passthrough is an ATTEMPT that produced no verdict. Stamp the
+      // attestation (`goalConfirmed: "passthrough"`) so a cleared descriptor is
+      // never misread as "never armed"; clip-facing fields stay untouched.
+      patch: { confirmAttestation: attestation, pendingConfirmDive: undefined },
       reason: "passthrough (no structured verdict) — row unchanged",
     };
   }
@@ -339,15 +348,25 @@ export function confirmDiveAdoption(
       reason: `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"})`,
     };
   }
+  // B3: refute only a row that actually carries a provisional marker. A
+  // celebration that never derived one must not gain a fabricated cue/declTs —
+  // that would render a false "GOAL (unconfirmed)" badge on the board.
+  // (Check placed after the promote arm so a corroborated confirmation keeps
+  // its promotion regardless of marker state.)
+  if (row.provisionalGoal?.status !== "provisional") {
+    return {
+      kind: "unchanged",
+      patch: { confirmAttestation: attestation, pendingConfirmDive: undefined },
+      reason: "no provisional marker — refutation not applicable",
+    };
+  }
   // Refuted: near_miss / not_goal, or a confirmation with no corroboration.
   const prev = row.provisionalGoal;
   const note =
     goalConfirmed === "confirmed_goal"
       ? "The deep dive described a goal but could not corroborate it, so this moment is still unconfirmed."
       : "The deep dive did not confirm this goal, so this moment stays unconfirmed.";
-  const provisional = prev
-    ? { ...prev, status: "provisional", refuted: true, note }
-    : { status: "provisional", cues: ["asr_goal_call"], declaredTs: 0, note, refuted: true };
+  const provisional = { ...prev, status: "provisional", refuted: true, note };
   return {
     kind: "refuted",
     patch: {
