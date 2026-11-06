@@ -3,8 +3,8 @@ import { mkdtempSync, readdirSync, rmSync, existsSync, readFileSync, statSync, w
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { buildTestApp } from "./helpers";
-import { probeDuration, probeFlushedDuration } from "../src/ffmpeg";
+import { buildTestApp, fakePipeline } from "./helpers";
+import { locateImageInSource, probeDuration, probeFlushedDuration } from "../src/ffmpeg";
 
 // ADAAAA-8032: the browser (screen-share) rail used to persist every highlight
 // with `clipUri: ""` and cut ALL clips at `POST /jobs/:id/stop`, so every card
@@ -21,6 +21,36 @@ const videoPath = path.join(tmp, "rec-20s.mp4");
 // the whole file. That is the condition under which the old live-cut guard was
 // blind: `expected` collapsed to whatever bytes existed.
 let liveWebm: Buffer;
+/** ADAAAA-8152: footage where every frame is VISUALLY unique at 64x64, so the
+ * evidence-frame locator's match is unambiguous. `testsrc` repeats its pattern
+ * every few seconds, which would let the locator settle on a look-alike. */
+let distinctWebm: Buffer;
+function distinctFootage(seconds = 20, fps = 10, w = 320, h = 180): Buffer {
+  const frames = seconds * fps;
+  const buf = Buffer.alloc(frames * w * h);
+  const COLS = 8;
+  const ROWS = 6;
+  const bw = Math.floor(w / COLS);
+  const bh = Math.floor(h / ROWS);
+  let seed = 0x8152;
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let f = 0; f < frames; f++) {
+    const base = f * w * h;
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        const v = Math.floor(rnd() * 256);
+        for (let y = row * bh; y < (row + 1) * bh; y++) {
+          const off = base + y * w + col * bw;
+          buf.fill(v, off, off + bw);
+        }
+      }
+    }
+  }
+  return buf;
+}
 
 beforeAll(() => {
   execFileSync("ffmpeg", [
@@ -43,6 +73,16 @@ beforeAll(() => {
       "-f", "webm", "-",
     ],
     { maxBuffer: 64 * 1024 * 1024 }
+  );
+  distinctWebm = execFileSync(
+    "ffmpeg",
+    [
+      "-y", "-v", "error",
+      "-f", "rawvideo", "-pix_fmt", "gray", "-s", "320x180", "-r", "10", "-i", "-",
+      "-c:v", "libvpx-vp9", "-b:v", "400k", "-deadline", "realtime", "-cpu-used", "8",
+      "-f", "webm", "-",
+    ],
+    { input: distinctFootage(24), maxBuffer: 64 * 1024 * 1024 }
   );
 });
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -446,5 +486,95 @@ describe("browser rail: the clip is cut DURING the share (ADAAAA-8032)", () => {
 
     await app.close();
     await stopOnly.app.close();
+  }, 60_000);
+
+  it("centers the delivered clip on the accepted evidence frame and records it on the row (ADAAAA-8152)", async () => {
+    // The QA 8159 failure in one test: the highlight's content-clock instant said
+    // 12 s while the picture the accept rested on sits at 8 s in the recording.
+    // Cutting on the clock put the goal 3.4 s into a 15 s clip (0.23 d); the
+    // fix locates the picture in the recording and centers on it.
+    const adapter = fakePipeline();
+    const inner = adapter.analyze.bind(adapter);
+    adapter.analyze = async (...a: any[]) => {
+      const r: any = await inner(...a);
+      // The candidate/observation happen at the SKEWED content instant.
+      r.observation.timestamp = 12;
+      if (r.candidate) r.candidate.timestamp = 12;
+      return r;
+    };
+    const { app, cfg, store, db } = await buildTestApp({}, { adapter });
+    const token = await register(app, "lc7@test.dev", "password123");
+    // The production window on leg `f60932ca`: 7 s before / 8 s after.
+    await db.setClipWindowSettings({ clipBeforeS: 7, clipAfterS: 8 });
+    const jobId = await startBrowserJob(app, token);
+    const mime = "video/webm;codecs=vp9";
+    // The window this test asserts against is the production one — prove it
+    // resolved, so a defaults change cannot silently re-point the assertions.
+    const cw = await db.getClipWindowSettings();
+    expect(cw?.clipBeforeS).toBe(7);
+    expect(cw?.clipAfterS).toBe(8);
+    const fixturePath = path.join(tmp, "distinct-20s.webm");
+    writeFileSync(fixturePath, distinctWebm);
+    await postRecordingChunk(app, token, jobId, distinctWebm, mime);
+
+    // The analyzer's evidence JPEG for that instant — the picture at 8 s of the
+    // same footage (the rail would have written it to the job's frame dir).
+    const evJpeg = path.join(tmp, "ev-8s.jpg");
+    // `-ss` AFTER `-i`: the fixture was written through a pipe, so it carries no
+    // cues and an input seek would land on frame 0.
+    execFileSync("ffmpeg", ["-y", "-v", "error", "-i", fixturePath, "-ss", "8", "-frames:v", "1", "-q:v", "2", evJpeg]);
+    const frameDir = path.join(cfg.dataDir, "live", jobId, "frames");
+    execFileSync("mkdir", ["-p", frameDir]);
+    writeFileSync(path.join(frameDir, "frame_000001.jpg"), readFileSync(evJpeg));
+    await store.recordObservation(jobId, { seq: 1, timestamp: 12, tracks: [] } as any);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { seq: 1, timestamp: 12, image: readFileSync(evJpeg).toString("base64") },
+    });
+    expect(accepted.statusCode).toBe(200);
+    const highlightId = accepted.json().highlight?.id as string;
+    expect(highlightId).toBeTruthy();
+
+    // Production row shape (leg `f60932ca`): `start`/`end` are the 15 s window
+    // and `localizedTs` is the instant inside it the clip centers on (15.311 in
+    // a window of [8.311, 23.311]). Here the instant says 12 s while the
+    // picture it names sits at 8 s of the recording — the QA 8159 skew.
+    await store.patchHighlight(highlightId, { start: 5, end: 20, localizedTs: 12 } as any);
+    // Advance the content clock past the window end so the live cut runs.
+    await ingest(app, token, jobId, 2, 22);
+
+
+    let uri = "";
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20_000 && !uri) {
+      uri = await clipUriFor(app, token, jobId);
+      if (!uri) await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(uri).toMatch(/^\/clips\/.+\.mp4$/);
+
+    const row = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } }))
+      .json()
+      .highlights.find((h: any) => h.id === highlightId);
+    // AC3: the placement is auditable from the row alone.
+    expect(row.clipAnchorMethod).toBe("frame_match");
+    expect(Math.abs(row.clipAnchorFileTs - 8)).toBeLessThan(0.5);
+    expect(row.clipAnchorLagSec).toBeGreaterThan(3);
+    // AC2: the delivered file is the full window, recorded on the row.
+    expect(row.clipDeliveredSec).toBeGreaterThanOrEqual(15);
+    // AC1: the goal sits in the middle third, measured on the DELIVERED file.
+    expect(row.clipAnchorDeliveredOffsetSec).toBeGreaterThanOrEqual(5);
+    expect(row.clipAnchorDeliveredOffsetSec).toBeLessThanOrEqual(10);
+
+    // Independent footage check: locate the picture in the file the customer gets.
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(uri));
+    const inFile = await locateImageInSource(cfg.ffmpegPath, clipFile, evJpeg, 0, 15);
+    expect(inFile).not.toBeNull();
+    const offset = (inFile as any).fileTs - (inFile as any).firstTs;
+    expect(offset).toBeGreaterThanOrEqual(5);
+    expect(offset).toBeLessThanOrEqual(10);
+    await app.close();
   }, 60_000);
 });
