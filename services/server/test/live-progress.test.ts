@@ -142,8 +142,11 @@ describe("deriveLiveProgress terminal state (ADAAAA-7741 AC6)", () => {
     });
     const p = deriveLiveProgress({ job, nowMs: T0 + 120_000 });
     expect(p.skippedWindows).toBe(4); // persisted exact counter wins as the floor
+    // ADAAAA-8121: `strideData: false` is the honest degrade for a record whose
+    // consume block is absent — it says "no stride data" instead of a position.
+    expect(p.strideData).toBe(false);
     expect(Object.keys(p).sort()).toEqual(
-      ["lagSec", "liveEdgeTs", "processedThroughTs", "skippedWindows", "state", "updatedAt"].sort()
+      ["lagSec", "liveEdgeTs", "processedThroughTs", "skippedWindows", "state", "strideData", "updatedAt"].sort()
     );
   });
 

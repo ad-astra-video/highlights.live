@@ -54,6 +54,7 @@ import {
 } from "../lib/jobDetail";
 import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
+import { AnalyzePositionChip } from "../components/AnalyzePositionChip";
 import { ResumeAction, ResumeTrail, type ResumeActionState } from "../components/ResumeTrail";
 import { CaptureNotice } from "../components/CaptureNotice";
 import { LiveStage } from "../components/LiveStage";
@@ -2615,6 +2616,9 @@ export function JobDetail() {
               {isJobInFlight(detail.job.status) && (
                 <LiveProgressChip progress={liveProgress} staleSec={lightHealth.staleSec} />
               )}
+              {/* ADAAAA-8121: the analysed content position and its delay vs the
+                  live edge, on the same in-flight-only rule. */}
+              {isJobInFlight(detail.job.status) && <AnalyzePositionChip progress={liveProgress} />}
               {/* ADAAAA-7700: WHY the job failed, as its own attributed chip. */}
               <FailureReasonChip reason={detail.job.failureReason} />
               {/* ADAAAA-7907 (AC8): "resumed from T+12:30 · attempt 2 of 3" on a
