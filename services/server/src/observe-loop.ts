@@ -361,6 +361,26 @@ function uniqueSortedTs(ts: number[]): number[] {
 }
 
 /**
+ * ADAAAA-8102 (funded leg `b8fb4aa4`): resolve the window's timed observation
+ * set onto the CONTENT grid — keep the earliest ts per `1/fps` bucket. The
+ * stride spends banked credit in a burst after a relay fast-forward, so three
+ * frames inside one content second must not become three timeline records (a
+ * 7 s span then read 10 records; AC-8101-5 grades 7-9).
+ */
+function bucketedSortedTs(ts: number[], fps: number): number[] {
+  if (!(fps > 0)) return uniqueSortedTs(ts);
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const t of [...ts].sort((a, b) => a - b)) {
+    const bucket = Math.floor(t * fps);
+    if (seen.has(bucket)) continue;
+    seen.add(bucket);
+    out.push(t);
+  }
+  return out;
+}
+
+/**
  * Assemble ONE rolling PAST decide window for a live stream.
  *
  * Unlike {@link assembleObserveWindow} (a symmetric window around a center), a
@@ -377,7 +397,16 @@ function uniqueSortedTs(ts: number[]): number[] {
 export function assembleLiveWindow(
   frames: { ts: number; imageB64: string; seq?: number }[],
   nowTs: number,
-  opts: { windowS?: number; maxFrames?: number; fps?: number; observedTs?: number[]; anchorTs?: number } = {}
+  opts: {
+    windowS?: number;
+    maxFrames?: number;
+    fps?: number;
+    observedTs?: number[];
+    anchorTs?: number;
+    /** ADAAAA-8102: resolve the timed observation set onto `1/observationFps`
+     *  (one record per content tick). Absent = every distinct ts. */
+    observationFps?: number;
+  } = {}
 ): ObserveWindow {
   const windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
   // ADAAAA-8074: the image budget is consulted HERE, in the selection step every
@@ -457,7 +486,11 @@ export function assembleLiveWindow(
   // arm the runner fast-forwards, so the delivered frames are a ~10x subsample
   // of what the media node published — sourcing the observation set from them
   // alone collapsed `timelineRecords` back onto `imageCount`.
-  const observedFrames = uniqueSortedTs([...inWindow.map((f) => f.ts), ...ticksInWindow]).map((ts) => ({ ts }));
+  const observedFrames = (
+    opts.observationFps && opts.observationFps > 0
+      ? bucketedSortedTs([...inWindow.map((f) => f.ts), ...ticksInWindow], opts.observationFps)
+      : uniqueSortedTs([...inWindow.map((f) => f.ts), ...ticksInWindow])
+  ).map((ts) => ({ ts }));
   return {
     centerTs: nowTs,
     frames: items,
@@ -595,6 +628,10 @@ export class LiveObserver {
   private readonly windowS: number;
   private readonly maxFrames: number;
   private readonly fps: number;
+  /** ADAAAA-8102: the content consume rate when the caller has one — the grid
+   *  the window's timed observation set resolves onto. Null = every distinct
+   *  frame/tick ts (the shipped behaviour, unchanged). */
+  private readonly observationFps: number | null = null;
   private readonly signalGate: boolean;
   private readonly signalGateOpts: SignalGateOptions;
   /** Budget threshold for an early trigger-anchored fire (ADAAAA-7658). */
@@ -793,11 +830,18 @@ export class LiveObserver {
      *  lane is unavailable (no ASR endpoint / empty clip) — the decide pass then
      *  transcribes inline, exactly as before. Live rail only. */
     prefetchAsr?: (payload: ObserveDecidePayload) => Promise<AsrPrefetchResult | null> | null;
+    /** ADAAAA-8102: the CONTENT consume rate, when the caller has one. The
+     *  window's timed observation set resolves onto `1/observationFps`, so a
+     *  post-gap credit burst cannot stack two records inside one content tick
+     *  (funded leg `b8fb4aa4` read 10 records in a 7 s span). Absent = the set
+     *  is every distinct frame/tick timestamp, byte-identical to shipped. */
+    observationFps?: number;
   } = {}) {
     this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
     this.maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
     this.fps = opts.fps ?? OBSERVE_CONTENT_FPS;
+    this.observationFps = opts.observationFps !== undefined && Number(opts.observationFps) > 0 ? Number(opts.observationFps) : null;
     this.signalGate = opts.signalGate ?? false;
     this.signalGateOpts = opts.signalGateOpts ?? {};
     this.onDecide = opts.onDecide ?? null;
@@ -1255,6 +1299,9 @@ export class LiveObserver {
       windowS: this.windowS,
       maxFrames: this.maxFrames,
       fps: this.fps,
+      // ADAAAA-8102: a rail running a content consume rate resolves the timed
+      // observation set onto that grid (one record per content tick).
+      ...(this.observationFps ? { observationFps: this.observationFps } : {}),
       // ADAAAA-8069: the RTC arm's published-frame clock joins the observation set.
       observedTs: this.observationTs,
       // ADAAAA-8074: anchor the image selection on the trigger this window is
