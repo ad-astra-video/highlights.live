@@ -674,6 +674,22 @@ export const ObserveMetricsSnapshotSchema = z.object({
         .max(200),
     })
     .optional(),
+  // ADAAAA-8219 (follow-up to 8205): the async confirm dive METER. The analyzer
+  // has always stamped these three on the live pass (`buildLiveObserveMetrics`:
+  // `confirmCalls` = the decide meter's confirm term, so
+  // `costUsd = decideFee * (decideCalls + confirmCalls) + perceive`;
+  // `confirmDiveCount` = dives that produced a verdict; `confirmDropped` = dives
+  // dropped fail-closed on busy pool / budget / timeout / transport / parse).
+  // They were absent from this schema, so `JobSchema.parse` (store.patchJob)
+  // stripped them before persistence: a job whose `costUsd` provably billed the
+  // confirm term stored NO "confirm" substring, which is exactly the
+  // ADAAAA-7691 trap above. Additive optional: absent on older rows and on a run
+  // whose confirm lane never ran, so 8205 AC-A4 (`confirmCalls`,
+  // `confirmDiveCount`, rate = `confirmCalls / decideCalls`) and AC-A6
+  // (`confirmDropped`) are readable off a stored row.
+  confirmCalls: z.number().int().min(0).optional(),
+  confirmDiveCount: z.number().int().min(0).optional(),
+  confirmDropped: z.number().int().min(0).optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 

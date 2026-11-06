@@ -671,3 +671,78 @@ describe("ObserveMetricsSnapshot trigger ledger (ADAAAA-7723)", () => {
     ).toThrow();
   });
 });
+
+// ADAAAA-8219 (follow-up to 8205): the async confirm dive meter must SURVIVE
+// persistence. The analyzer stamps `confirmCalls` / `confirmDiveCount` /
+// `confirmDropped` from `buildLiveObserveMetrics`, but they were undeclared on
+// `ObserveMetricsSnapshotSchema`, so `JobSchema.parse` (store.patchJob) stripped
+// them: a live job whose `costUsd` provably billed the confirm term
+// (`0.0033 x (decideCalls 73 + confirmCalls 2) + perceive`) stored a row with no
+// "confirm" substring at all. Same defect class as ADAAAA-7691's `triggerFires`.
+describe("ObserveMetricsSnapshot async confirm meter (ADAAAA-8219)", () => {
+  const base = {
+    decideCalls: 73,
+    accepted: 1,
+    maxFrames: 30,
+    meanE2eMs: 5602,
+    maxE2eMs: 9000,
+    meanCadenceMs: 5000,
+    maxCadenceMs: 6000,
+    triggerFires: 2,
+    cadenceFires: 71,
+  };
+
+  it("keeps confirmCalls / confirmDiveCount / confirmDropped through JobSchema.parse", () => {
+    const job = JobSchema.parse({
+      id: "j-8219",
+      status: "done",
+      createdAt: new Date().toISOString(),
+      source: "rtmp",
+      observeMetrics: { ...base, confirmCalls: 2, confirmDiveCount: 2, confirmDropped: 0 },
+    });
+    const m = job.observeMetrics!;
+    expect(m.confirmCalls).toBe(2);
+    expect(m.confirmDiveCount).toBe(2);
+    expect(m.confirmDropped).toBe(0);
+    // the persisted row is what QA reads: prove the keys survive SERIALIZATION,
+    // i.e. the fix is about the stored record, not just the in-memory builder
+    const stored = JSON.stringify(job.observeMetrics);
+    expect(stored).toContain("confirmCalls");
+    expect(stored).toContain("confirmDiveCount");
+    expect(stored).toContain("confirmDropped");
+    // 8205 AC-A4: the confirm RATE is derivable from the stored row alone
+    expect(m.confirmCalls! / m.decideCalls).toBeCloseTo(2 / 73, 10);
+    // the 8205 cost identity the meter exists to explain, from the stored row
+    const decideFee = 0.0033;
+    expect(decideFee * (m.decideCalls + m.confirmCalls!)).toBeCloseTo(0.2475, 10);
+  });
+
+  it("leaves the meter absent on rows written before the lane existed", () => {
+    const job = JobSchema.parse({
+      id: "j-8219-legacy",
+      status: "done",
+      createdAt: new Date().toISOString(),
+      source: "rtmp",
+      observeMetrics: base,
+    });
+    const m = job.observeMetrics!;
+    expect(m.confirmCalls).toBeUndefined();
+    expect(m.confirmDiveCount).toBeUndefined();
+    expect(m.confirmDropped).toBeUndefined();
+    expect(JSON.stringify(job.observeMetrics)).not.toContain("confirm");
+  });
+
+  it("rejects a negative or fractional confirm counter", () => {
+    for (const bad of [-1, 1.5]) {
+      expect(() =>
+        JobSchema.parse({
+          id: "j-8219-bad",
+          status: "done",
+          createdAt: new Date().toISOString(),
+          source: "rtmp",
+          observeMetrics: { ...base, confirmDropped: bad },
+        })
+      ).toThrow();
+    }
+  });
+});
