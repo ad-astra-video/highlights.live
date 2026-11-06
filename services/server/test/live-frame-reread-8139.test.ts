@@ -376,3 +376,46 @@ describe("rereadDemotedWindowsFromPersistedFrames — the recall path (ADAAAA-81
     expect(parsed).toEqual([{ ts: 20, score: [2, 1] }]);
   });
 });
+
+// ADAAAA-8139 regression: the production wiring must resolve an OCR base on the
+// ORCHESTRATOR posture too. The box sets `PERCEIVE_RUNNER_URL` (perceive:8080)
+// and deliberately leaves `PERCEIVE_URL` unset (that flag switches the whole
+// pipeline to the direct/no-orchestrator path), so keying the probe on
+// `perceiveUrl` alone made `buildLiveFrameReread` return `undefined` and the
+// re-read never fired on the deployed build — two graded legs, 0
+// `[live-frame-reread]` lines (verified 2026-11-06).
+describe("buildLiveFrameReread — OCR base resolution (ADAAAA-8139)", () => {
+  const store = { observationsForJob: () => [{ seq: 0, timestamp: 1 }] };
+  const base = { dataDir: "/data", liveFrameReread: true } as any;
+
+  it("uses PERCEIVE_RUNNER_URL when PERCEIVE_URL is unset (the box posture)", async () => {
+    const { buildLiveFrameReread } = await import("../src/api.js");
+    const wiring = buildLiveFrameReread({
+      cfg: { ...base, perceiveRunnerUrl: "http://perceive:8080" },
+      jobId: "job-8139",
+      store,
+    });
+    expect(wiring).toBeTruthy();
+    // The probe POSTs `<base>/app/scoreboard`; an unreachable base fails closed.
+    expect(typeof wiring!.io.ocrFrame).toBe("function");
+    expect(wiring!.io.maxOcrCallsPerRun ?? undefined).toBeUndefined();
+  });
+
+  it("still returns undefined when neither endpoint is configured", async () => {
+    const { buildLiveFrameReread } = await import("../src/api.js");
+    expect(
+      buildLiveFrameReread({ cfg: { ...base }, jobId: "job-8139", store })
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when the rail flag is off", async () => {
+    const { buildLiveFrameReread } = await import("../src/api.js");
+    expect(
+      buildLiveFrameReread({
+        cfg: { ...base, liveFrameReread: false, perceiveRunnerUrl: "http://perceive:8080" },
+        jobId: "job-8139",
+        store,
+      })
+    ).toBeUndefined();
+  });
+});

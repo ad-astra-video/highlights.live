@@ -6388,6 +6388,13 @@ export interface LiveAnalyzerConfigDeps {
  *
  * Returns `undefined` when the rail is off or no perceive endpoint is configured
  * (absent OCR would only burn disk reads), which restores the 8134 pooled path.
+ *
+ * The OCR base falls back to `PERCEIVE_RUNNER_URL` (`perceive:8080`): the box
+ * runs the orchestrator posture, so `PERCEIVE_URL` — which switches the whole
+ * pipeline to the direct/no-orchestrator path — is deliberately unset there.
+ * Keying the probe on `perceiveUrl` alone made the re-read `undefined` on the
+ * deployed posture and it never fired (ADAAAA-8139, verified 2026-11-06: two
+ * graded legs on the fixture produced 0 `[live-frame-reread]` lines).
  */
 export function buildLiveFrameReread(deps: {
   cfg: ServerConfig;
@@ -6395,7 +6402,8 @@ export function buildLiveFrameReread(deps: {
   store: Pick<Store, "observationsForJob">;
   sessionId?: string;
 }): AnalyzerConfig["liveFrameReread"] {
-  if (!deps.cfg.liveFrameReread || !deps.cfg.perceiveUrl) return undefined;
+  const ocrBase = deps.cfg.perceiveUrl ?? deps.cfg.perceiveRunnerUrl;
+  if (!deps.cfg.liveFrameReread || !ocrBase) return undefined;
   return {
     io: {
       framesInSpan: (lo: number, hi: number) =>
