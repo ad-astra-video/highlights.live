@@ -398,4 +398,19 @@ describe("buildPostableHighlights (ADAAAA-8199 celebration absorption)", () => {
     expect(reversed.highlights.map((h) => h.id)).toEqual(forward.highlights.map((h) => h.id));
     expect(reversed.duplicates.map((h) => h.id).sort()).toEqual(forward.duplicates.map((h) => h.id).sort());
   });
+
+  it("drops the provisional marker from an absorbed celebration (AC6) without mutating the stored row", () => {
+    const rows = measuredLeg();
+    const out = buildPostableHighlights(rows);
+    // The surviving GOAL cards speak for the transition: no "GOAL (unconfirmed)".
+    for (const h of out.highlights) expect(h.provisionalGoal).toBeUndefined();
+    // Neither does the merged-lane copy of the celebration it absorbed.
+    for (const d of out.duplicates) {
+      expect(d.provisionalGoal).toBeUndefined();
+      expect(d.duplicateOf).toBeTruthy();
+    }
+    // The persisted rows keep their marker — the projection is what clears it.
+    const stored = rows.find((r) => r.id === "ff95095e");
+    expect(stored?.provisionalGoal?.status).toBe("provisional");
+  });
 });

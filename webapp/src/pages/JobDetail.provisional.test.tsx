@@ -151,3 +151,27 @@ describe("AC — the notable lane (where a demoted goal lives) carries the marke
     expect(count(html, "data-detail-provisional-goal")).toBe(0);
   });
 });
+
+describe("AC6 — a merged duplicate never prints the unconfirmed marker", () => {
+  // ADAAAA-8199: the absorbed celebration is a duplicate of a CONFIRMED goal, so
+  // its transition is resolved. Printing "GOAL (unconfirmed)" on the merged lane
+  // would re-open the CEO's original symptom on the same page.
+  for (const admin of [true, false]) {
+    it(`merged lane (admin=${admin}) renders neither the chip nor the label`, () => {
+      const html = renderToString(
+        React.createElement(SecondaryHighlightLane, {
+          title: "Merged into a highlight",
+          note: "Overlapping clips folded into the moment above.",
+          lane: "merged",
+          highlights: [hl({ provisionalGoal: provisional(), duplicateOf: "goal-1" })],
+          admin,
+        })
+      );
+      expect(count(html, "data-detail-provisional-goal")).toBe(0);
+      expect(count(html, "GOAL (unconfirmed)")).toBe(0);
+      // The merged row itself still renders (the transition is auditable).
+      expect(count(html, "data-detail-lane-row")).toBe(1);
+      expect(count(html, "→")).toBe(1);
+    });
+  }
+});
