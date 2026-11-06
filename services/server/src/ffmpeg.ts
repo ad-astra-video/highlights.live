@@ -412,6 +412,328 @@ export async function centerClipOnEvidence(
   };
 }
 
+/**
+ * ADAAAA-8152 (ACC-2, fourth pass): locate the SCORE TRANSITION INSTANT inside
+ * the recording itself, by watching the scorebug's own pixels.
+ *
+ * Why this exists — measured on QA leg `a5de612a` (verdict ADAAAA-8160, build
+ * `3895ed0`): the analyzer's content clock does NOT carry the goal picture.
+ * Frame-by-frame on that leg's stored observation JPEGs:
+ *
+ * - clip A: observation 9.643 s reads `18:06 RMA 1-1`, observation 9.982 s reads
+ *   `18:13 RMA 2-1` — one 2 fps sample apart — while the leg's own
+ *   `capture.webm` shows the score flip at recording 7.75 s. The accepted
+ *   evidence frame is therefore already ~2.2 s PAST the transition in footage.
+ * - clip B: 27 consecutive observation frames (65.96 s → 72.18 s) all read
+ *   `22:12 RMA 2-1` — the rail kept re-emitting a STALE pre-score picture while
+ *   the recording advanced through `22:13` (2-2 at 66.0 s) to `22:17`. The
+ *   accept's localized instant (74.284 s) is the first frame whose OCR text
+ *   PARSED (`22:25 RMA 2-2`); the first picture showing 2-2 is 8.3 s earlier.
+ *
+ * So no clock model, and no content-side instant, can center the card: the
+ * content stream simply has no sample of the moment. The footage does. This
+ * probe finds it without OCR, without a model call and without a clock:
+ *
+ * 1. read the top `bandHeightFrac` of the recording at `fps` as raw gray;
+ * 2. in the evidence (post-score) picture's band, take the BRIGHT connected
+ *    components — the scorebug digits, team tokens, clock;
+ * 3. per component, count how many times its pixels change across the scan.
+ *    A score digit flips EXACTLY ONCE; the clock flips repeatedly; team names
+ *    never flip; the moving background flips constantly;
+ * 4. the instant shared by the heaviest set of once-flipping components is the
+ *    score transition — the first frame showing the new score, which is the
+ *    instant ACC-2 grades;
+ * 5. confirm the flipped glyphs actually match the evidence picture (else the
+ *    change was some other graphic and the probe fails closed).
+ *
+ * Cost: one ffmpeg decode of a 25 %-tall band at 4 fps (~60 small frames) plus
+ * a pixel pass. CPU only — no decide/perceive call, no clip debit (AC4).
+ */
+export interface ScoreFlipProbe {
+  /** Recording instant of the FIRST frame showing the post-transition score. */
+  fileTs: number;
+  /** Absolute pts of the probe's first sampled frame. */
+  firstTs: number;
+  /** Bright digit pixels that changed at that instant (audit). */
+  changedPx: number;
+  /** Once-flipping components that carried the change (a score is 1-3 glyphs). */
+  digits: number;
+  /** Normalized band the probe read, `[x0, y0, x1, y1]`. */
+  band: [number, number, number, number];
+  /** Heaviest change instant more than half a second away (the margin). */
+  runnerUpTs: number | null;
+  runnerUpPx: number;
+  /** Frames the probe decoded. */
+  frames: number;
+  searchStart: number;
+  searchDur: number;
+}
+
+/** Brightness of a scorebug glyph in a gray band. Broadcast bugs are white-ish
+ * on a saturated plate, so this is deliberately high: it excludes the plate,
+ * the pitch and most advertising. */
+const SCORE_FLIP_BRIGHT = 170;
+/** Per-pixel gray delta that counts as "this glyph changed". JPEG noise on a
+ * static overlay stays far below it (measured < 12). */
+const SCORE_FLIP_PIXEL_DELTA = 45;
+/** Minimum changed mass for a candidate transition. A single narrow digit
+ * (`1`) is ~15 bright px on a 640x360 recording; a two-glyph score is 30-60. */
+const SCORE_FLIP_MIN_PX = 10;
+/** A component smaller than this is codec noise, not a glyph. */
+const SCORE_FLIP_MIN_COMPONENT = 6;
+
+async function readBandFrames(
+  ffmpegPath: string,
+  inputArgs: string[],
+  filter: string,
+  width: number,
+  height: number
+): Promise<{ frames: Uint8Array[]; ts: number[] } | null> {
+  let stdout: Buffer = Buffer.alloc(0);
+  let stderr = "";
+  try {
+    const res = await exec(
+      ffmpegPath,
+      ["-hide_banner", "-nostdin", "-loglevel", "info", ...inputArgs, "-an", "-vf", filter, "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+      { encoding: "buffer", maxBuffer: 256 * 1024 * 1024 } as any
+    );
+    stdout = res.stdout as Buffer;
+    stderr = String(res.stderr ?? "");
+  } catch (e: any) {
+    // A recording still mid-append may end a cluster short: keep what decoded.
+    stdout = (e?.stdout as Buffer) ?? Buffer.alloc(0);
+    stderr = String(e?.stderr ?? "");
+    if (!stdout.length) return null;
+  }
+  const frameBytes = width * height;
+  const count = Math.floor(stdout.length / frameBytes);
+  if (!count) return null;
+  const frames: Uint8Array[] = new Array(count);
+  for (let i = 0; i < count; i++) frames[i] = stdout.subarray(i * frameBytes, (i + 1) * frameBytes);
+  const ts: number[] = [];
+  const re = /pts_time:(-?[0-9.]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stderr))) ts.push(parseFloat(m[1]));
+  return { frames, ts };
+}
+
+/** 8-connected components of `mask`, largest first. Bounded by the band size
+ * (a 640x90 band is 57 600 px), so a plain flood fill is enough. */
+function brightComponents(mask: Uint8Array, width: number, height: number): number[][] {
+  const seen = new Uint8Array(mask.length);
+  const out: number[][] = [];
+  for (let start = 0; start < mask.length; start++) {
+    if (!mask[start] || seen[start]) continue;
+    const stack = [start];
+    seen[start] = 1;
+    const px: number[] = [];
+    while (stack.length) {
+      const p = stack.pop() as number;
+      px.push(p);
+      const y = Math.floor(p / width);
+      const x = p - y * width;
+      for (let dy = -1; dy <= 1; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= height) continue;
+        for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= width) continue;
+          const q = ny * width + nx;
+          if (mask[q] && !seen[q]) {
+            seen[q] = 1;
+            stack.push(q);
+          }
+        }
+      }
+    }
+    out.push(px);
+  }
+  out.sort((a, b) => b.length - a.length);
+  return out;
+}
+
+export async function locateScoreboardFlip(
+  ffmpegPath: string,
+  source: string,
+  evidenceImagePath: string,
+  opts: { anchorFileTs: number; maxLookbackS?: number; fps?: number; bandHeightFrac?: number }
+): Promise<ScoreFlipProbe | null> {
+  const maxLookback = Math.max(1, opts.maxLookbackS ?? 14);
+  const fps = Math.max(2, opts.fps ?? 4);
+  const bandFrac = Math.min(0.5, Math.max(0.08, opts.bandHeightFrac ?? 0.25));
+  const anchor = opts.anchorFileTs;
+  if (!Number.isFinite(anchor) || anchor <= 0) return null;
+  const searchStart = Math.max(0, anchor - maxLookback);
+  const searchDur = Math.min(maxLookback, anchor) + 0.75;
+  if (searchDur < 1.5) return null;
+  const size = await probeVideoSize(ffmpegPath, source).catch(() => null);
+  const width = Number(size?.width);
+  const srcHeight = Number(size?.height);
+  if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(srcHeight) || srcHeight <= 0) return null;
+  const bandH = Math.max(8, Math.floor(srcHeight * bandFrac));
+  const band: [number, number, number, number] = [0, 0, 1, bandFrac];
+  const strip = await readBandFrames(
+    ffmpegPath,
+    ["-copyts", "-ss", String(searchStart), "-t", String(searchDur), "-i", source],
+    `fps=${fps},crop=${width}:${bandH}:0:0,format=gray,showinfo`,
+    width,
+    bandH
+  );
+  if (!strip || strip.frames.length < 5) return null;
+  const ev = await readBandFrames(
+    ffmpegPath,
+    ["-i", evidenceImagePath],
+    `crop=iw:floor(ih*${bandFrac}):0:0,scale=${width}:${bandH}:flags=bilinear,format=gray`,
+    width,
+    bandH
+  );
+  if (!ev || !ev.frames.length) return null;
+  const post = ev.frames[0];
+  const mask = new Uint8Array(post.length);
+  for (let i = 0; i < post.length; i++) mask[i] = post[i] >= SCORE_FLIP_BRIGHT ? 1 : 0;
+  const components = brightComponents(mask, width, bandH).filter((c) => c.length >= SCORE_FLIP_MIN_COMPONENT);
+  if (!components.length) return null;
+  const frames = strip.frames;
+  // change[pair][pixel] -> the glyph changed between frame `pair` and `pair+1`.
+  const events: number[][] = components.map(() => []);
+  const delta = new Uint8Array(frames[0].length);
+  for (let k = 0; k + 1 < frames.length; k++) {
+    const a = frames[k];
+    const b = frames[k + 1];
+    for (let i = 0; i < a.length; i++) delta[i] = Math.abs(a[i] - b[i]) > SCORE_FLIP_PIXEL_DELTA ? 1 : 0;
+    for (let c = 0; c < components.length; c++) {
+      let touched = false;
+      for (const p of components[c]) {
+        if (delta[p]) {
+          touched = true;
+          break;
+        }
+      }
+      if (touched) events[c].push(k);
+    }
+  }
+  // A score glyph flips exactly ONCE. Count contiguous runs so a two-frame
+  // transition (decoder edge) still reads as one event.
+  const runs = (list: number[]): number[][] => {
+    const out: number[][] = [];
+    for (const k of list) {
+      const last = out[out.length - 1];
+      if (last && k - last[last.length - 1] <= 1) last.push(k);
+      else out.push([k]);
+    }
+    return out;
+  };
+  const candidates = new Map<number, { px: number; digits: number; pixels: number[] }>();
+  const digitMaxH = Math.max(4, Math.floor(bandH * 0.8));
+  for (let c = 0; c < components.length; c++) {
+    const comp = components[c];
+    if (comp.length > width * bandH * 0.02) continue; // a wall of bright pixels is not a glyph
+    const ys = comp.map((p) => Math.floor(p / width));
+    const xs = comp.map((p) => p - Math.floor(p / width) * width);
+    const h = Math.max(...ys) - Math.min(...ys) + 1;
+    const w = Math.max(...xs) - Math.min(...xs) + 1;
+    // A glyph is at least 3x5 px at broadcast scale. A thinner sliver is a
+    // letter fragment or a 1-px overlay jitter, and it flips exactly once when
+    // the bug shifts — measured on leg `a5de612a`, where a 2x11 sliver of the
+    // home token changed once at a fixture cut and out-massed the real score.
+    if (h < 5 || w < 3 || comp.length < 10) continue;
+    if (h > digitMaxH || w > width * 0.25) continue;
+    const evs = runs(events[c]);
+    if (evs.length !== 1) continue; // clock (many) / team token (none) / background (many)
+    const pair = evs[0][evs[0].length - 1];
+    const changeFrame = pair + 1; // first frame showing the new glyph
+    if (changeFrame >= frames.length) continue;
+    // A real score glyph SUBSTITUTION repaints a large share of the glyph (a
+    // `1`->`2` flips ~50 % of its pixels at a mean delta of ~60 gray levels).
+    // A token that merely re-renders or shifts at a fixture cut touches a few
+    // edge pixels: measured 0.05 fraction / 14 mean delta on the same leg.
+    let flipped = 0;
+    let sumDelta = 0;
+    for (const p of comp) {
+      const d = Math.abs(frames[pair][p] - frames[changeFrame][p]);
+      if (d > SCORE_FLIP_PIXEL_DELTA) flipped++;
+      sumDelta += d;
+    }
+    if (flipped / comp.length < 0.25 || sumDelta / comp.length < 30) continue;
+    const cur = candidates.get(changeFrame) ?? { px: 0, digits: 0, pixels: [] };
+    cur.px += comp.length;
+    cur.digits += 1;
+    cur.pixels.push(...comp.slice(0, 400));
+    candidates.set(changeFrame, cur);
+  }
+  if (!candidates.size) return null;
+  const ranked = [...candidates.entries()].sort((a, b) => b[1].px - a[1].px);
+  const [bestIdx, best] = ranked[0];
+  if (best.px < SCORE_FLIP_MIN_PX) return null;
+  // Fail closed when two equally heavy transitions sit within one second: the
+  // probe can no longer tell which glyph is the score.
+  const near = ranked.find(([i, v]) => i !== bestIdx && Math.abs(i - bestIdx) / fps <= 1 && v.px > best.px * 0.5);
+  const runner = ranked.find(([i]) => Math.abs(i - bestIdx) / fps > 0.5);
+  // The flipped glyphs must agree with the evidence (post-score) picture, so a
+  // subtitle or a graphic swap cannot pass as a score transition.
+  let mismatch = 0;
+  for (const p of best.pixels) mismatch += Math.abs(frames[bestIdx][p] - post[p]);
+  const meanMismatch = best.pixels.length ? mismatch / best.pixels.length : Infinity;
+  if (near || meanMismatch > 70) return null;
+  const ts = strip.ts[bestIdx];
+  if (!Number.isFinite(ts)) return null;
+  if (ts > anchor + 0.3) return null; // the flip must not post-date the accepted picture
+  return {
+    fileTs: ts,
+    firstTs: Number.isFinite(strip.ts[0]) ? strip.ts[0] : searchStart,
+    changedPx: best.px,
+    digits: best.digits,
+    band,
+    runnerUpTs: runner ? (Number.isFinite(strip.ts[runner[0]]) ? strip.ts[runner[0]] : null) : null,
+    runnerUpPx: runner ? runner[1].px : 0,
+    frames: frames.length,
+    searchStart,
+    searchDur,
+  };
+}
+
+/** ADAAAA-8152: cut `source` so `anchorTs` (a recording instant) sits `beforeS`
+ * into a `durS` window, then re-measure it on the delivered file and re-cut
+ * once when the input seek's keyframe pre-roll moved it. Same shape as
+ * {@link centerClipOnEvidence}, but the instant comes from a footage probe
+ * (`locateScoreboardFlip`) rather than a picture match, so the verification is
+ * supplied by the caller. */
+export async function cutCenteredOnInstant(
+  ffmpegPath: string,
+  source: string,
+  outPath: string,
+  anchorTs: number,
+  beforeS: number,
+  durS: number,
+  opts: { recutTolSec?: number; measureOffset?: (filePath: string) => Promise<number | null> }
+): Promise<{
+  cutStart: number;
+  dur: number;
+  clamped: boolean;
+  recuts: number;
+  cut: ClipCutResult;
+  deliveredOffset: number | null;
+}> {
+  const recutTol = opts.recutTolSec ?? 0.6;
+  const wanted = anchorTs - beforeS;
+  const clamped = wanted < 0;
+  let cutStart = Math.max(0, wanted);
+  let cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS);
+  let deliveredOffset = opts.measureOffset ? await opts.measureOffset(outPath).catch(() => null) : null;
+  let recuts = 0;
+  if (deliveredOffset != null && Math.abs(deliveredOffset - beforeS) > recutTol && recuts < 1) {
+    const corrected = Math.max(0, cutStart + (deliveredOffset - beforeS));
+    if (Math.abs(corrected - cutStart) > 0.01) {
+      cutStart = corrected;
+      cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS);
+      recuts += 1;
+      const again = opts.measureOffset ? await opts.measureOffset(outPath).catch(() => null) : null;
+      if (again != null) deliveredOffset = again;
+    }
+  }
+  return { cutStart, dur: durS, clamped, recuts, cut, deliveredOffset };
+}
+
 /** Where the picture sits inside `filePath`, measured from the file's own first
  * frame (a player starts there regardless of the container's `start_time`). */
 async function measureOffsetInFile(

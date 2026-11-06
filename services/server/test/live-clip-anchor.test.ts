@@ -14,8 +14,10 @@ import path from "node:path";
 import {
   bestFrameMatch,
   centerClipOnEvidence,
+  cutCenteredOnInstant,
   cutClip,
   locateImageInSource,
+  locateScoreboardFlip,
   normalizeGray,
   probeDuration,
 } from "../src/ffmpeg";
@@ -206,4 +208,164 @@ describe("clip placement (ACC-2 footage proof)", () => {
     // failure (measured 3.6 s) in one test.
     expect((inClip as any).fileTs - (inClip as any).firstTs).toBeLessThan(5);
   }, 40_000);
+});
+
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8152 (fourth pass): the ACCEPTED PICTURE IS NOT THE GOAL INSTANT.
+ *
+ * QA verdict ADAAAA-8160 measured it on leg `a5de612a`: the recording's score
+ * flip sits 2.2 s (clip A) and 8.3 s (clip B) BEFORE the evidence frame the
+ * accept rested on, because the media rail re-emits a stale pre-score picture
+ * across the transition (clip B's 27 consecutive observation frames from
+ * 65.96 s to 72.18 s all read `22:12 RMA 2-1` while the recording showed 2-2).
+ * Centering on the picture therefore ships the play at 2-4 s of a 15 s card.
+ *
+ * These tests pin the footage probe that replaces it: find the frame where the
+ * scorebug's DIGIT changes (once) inside the recording, and center on that.
+ * ------------------------------------------------------------------------- */
+const SC_SECONDS = 24;
+const SC_FPS = 10;
+const SC_W = 320;
+const SC_H = 180;
+/** Where the score digits flip in the fixture recording. */
+const SC_FLIP_AT = 12.0;
+/** Where the content clock's evidence picture is taken: 6 s AFTER the flip,
+ * which is the shape QA 8160 measured on the real leg. */
+const SC_PICTURE_AT = 18.0;
+const scoreVideo = path.join(tmp, "score-rec.webm");
+const scoreEvidence = path.join(tmp, "score-evidence.jpg");
+
+/** A recording with a scorebug in the top band. Every frame's background is a
+ * fresh random block grid (so a picture is unique and no background component
+ * is stable), plus: a dark plate, three static team glyphs, a static home
+ * digit, an away digit that WIDENS at `SC_FLIP_AT` (a real glyph substitution),
+ * and four clock glyphs that toggle every 0.5 s (many changes — the probe must
+ * not mistake them for the score). */
+function makeScoreFootage(): Buffer {
+  const frames = SC_SECONDS * SC_FPS;
+  const buf = Buffer.alloc(frames * SC_W * SC_H);
+  const COLS = 8;
+  const ROWS = 6;
+  const bw = Math.floor(SC_W / COLS);
+  const bh = Math.floor(SC_H / ROWS);
+  const flipFrame = Math.round(SC_FLIP_AT * SC_FPS);
+  for (let f = 0; f < frames; f++) {
+    const base = f * SC_W * SC_H;
+    const rnd = mulberry32(0x51f0 + f * 104729);
+    for (let row = 0; row < ROWS; row++) {
+      for (let col = 0; col < COLS; col++) {
+        const v = Math.floor(rnd() * 256);
+        for (let y = row * bh; y < (row + 1) * bh; y++) {
+          const off = base + y * SC_W + col * bw;
+          buf.fill(v, off, off + bw);
+        }
+      }
+    }
+    const rect = (x0: number, y0: number, x1: number, y1: number, v: number) => {
+      for (let y = y0; y < y1; y++) {
+        const off = base + y * SC_W;
+        buf.fill(v, off + x0, off + x1);
+      }
+    };
+    rect(8, 8, 170, 44, 40); // plate
+    for (const x of [14, 22, 30]) rect(x, 20, x + 4, 28, 255); // static team token
+    rect(60, 20, 63, 28, 255); // static home digit
+    // away digit: narrow before the goal, full width after it
+    if (f >= flipFrame) rect(74, 20, 79, 28, 255);
+    else rect(74, 20, 77, 28, 255);
+    const shift = Math.floor(f / 5) % 2; // clock: toggles every 0.5 s
+    for (const x of [100, 110, 120, 130]) rect(x + shift, 20, x + shift + 5, 28, 255);
+  }
+  return buf;
+}
+
+describe("locateScoreboardFlip (ACC-2 footage instant)", () => {
+  beforeAll(() => {
+    if (!hasFfmpeg) return;
+    execFileSync(
+      "ffmpeg",
+      [
+        "-y", "-v", "error",
+        "-f", "rawvideo", "-pix_fmt", "gray", "-s", `${SC_W}x${SC_H}`, "-r", String(SC_FPS), "-i", "-",
+        "-c:v", "libvpx-vp9", "-b:v", "400k", "-deadline", "realtime", "-cpu-used", "8",
+        "-pix_fmt", "yuv420p", scoreVideo,
+      ],
+      { input: makeScoreFootage(), maxBuffer: 32 * 1024 * 1024 }
+    );
+    execFileSync("ffmpeg", [
+      "-y", "-v", "error", "-ss", String(SC_PICTURE_AT), "-i", scoreVideo,
+      "-frames:v", "1", "-q:v", "2", scoreEvidence,
+    ]);
+  }, 120_000);
+
+  it("finds the score flip in the recording, 6 s BEFORE the accepted picture", async () => {
+    if (!hasFfmpeg) return;
+    const flip = await locateScoreboardFlip("ffmpeg", scoreVideo, scoreEvidence, {
+      anchorFileTs: SC_PICTURE_AT,
+      maxLookbackS: 14,
+    });
+    expect(flip).not.toBeNull();
+    // The instant ACC-2 grades: the first frame showing the new score.
+    expect(Math.abs((flip as any).fileTs - SC_FLIP_AT)).toBeLessThan(0.3);
+    expect((flip as any).digits).toBeGreaterThanOrEqual(1);
+    expect((flip as any).changedPx).toBeGreaterThanOrEqual(10);
+    // The clock glyphs (four, toggling every 0.5 s) must not win: their change
+    // instants are all over the scan, so the winner has no near competitor.
+    expect((flip as any).runnerUpTs === null || Math.abs((flip as any).runnerUpTs - SC_FLIP_AT) > 1).toBe(true);
+  }, 60_000);
+
+  it("fails closed on a recording with no scorebug (the random-block fixture)", async () => {
+    if (!hasFfmpeg) return;
+    const flip = await locateScoreboardFlip("ffmpeg", video, evidence, {
+      anchorFileTs: PICTURE_AT,
+      maxLookbackS: 8,
+    });
+    expect(flip).toBeNull();
+  }, 60_000);
+
+  it("centers the delivered clip on the flip and measures the delivered offset (AC1/AC3)", async () => {
+    if (!hasFfmpeg) return;
+    const flip = await locateScoreboardFlip("ffmpeg", scoreVideo, scoreEvidence, {
+      anchorFileTs: SC_PICTURE_AT,
+      maxLookbackS: 14,
+    });
+    expect(flip).not.toBeNull();
+    const out = path.join(tmp, "score-delivered.mp4");
+    const recut = await cutCenteredOnInstant("ffmpeg", scoreVideo, out, (flip as any).fileTs, BEFORE, WINDOW, {
+      recutTolSec: 0.6,
+      measureOffset: async (file) => {
+        const again = await locateScoreboardFlip("ffmpeg", file, scoreEvidence, {
+          anchorFileTs: BEFORE + 0.5,
+          maxLookbackS: Math.min(WINDOW, BEFORE + 1.5),
+        });
+        return again ? again.fileTs - again.firstTs : null;
+      },
+    });
+    // AC1: the flip sits 7 s into a 15 s card = 0.467 d, inside [d/3, 2d/3].
+    expect(recut.deliveredOffset).not.toBeNull();
+    expect(Math.abs((recut.deliveredOffset as number) - BEFORE)).toBeLessThan(0.6);
+    // AC2: the delivered file is the whole window.
+    const dur = await probeDuration("ffmpeg", out);
+    expect(dur as number).toBeGreaterThanOrEqual(15.0);
+    // AC3: the placement is recomputable from the cut start + the flip instant.
+    expect(Math.abs(recut.cutStart + BEFORE - ((flip as any).fileTs))).toBeLessThan(0.6);
+  }, 120_000);
+
+  it("centering on the ACCEPTED PICTURE puts the goal outside the middle third (the QA 8160 failure)", async () => {
+    if (!hasFfmpeg) return;
+    // The pre-fix path: cut around the evidence picture (6 s after the flip).
+    const out = path.join(tmp, "score-picture-centered.mp4");
+    const centered = await centerClipOnEvidence("ffmpeg", scoreVideo, out, scoreEvidence, BEFORE, WINDOW, {
+      searchStartS: Math.max(0, SC_PICTURE_AT - BEFORE - 2),
+      searchDurS: WINDOW + 6,
+    });
+    expect(centered.mode).toBe("frame_match");
+    // The goal instant in that file, read from the footage: the flip lands
+    // BEFORE the card's lower bound (0.4 s in), which is exactly the 0/2 QA saw.
+    const inClip = await locateScoreboardFlip("ffmpeg", out, scoreEvidence, {
+      anchorFileTs: Math.min(WINDOW, BEFORE + 1.5),
+      maxLookbackS: Math.min(WINDOW, BEFORE + 1.5),
+    });
+    expect(inClip === null || (inClip as any).fileTs - (inClip as any).firstTs < 5).toBe(true);
+  }, 120_000);
 });
