@@ -1112,6 +1112,19 @@ export function HighlightCard({
           >
             {durationS}s
           </span>
+          {/* ADAAAA-8139 (interim step): a demoted goal window whose ASR / frame /
+              crowd cue said "goal" before the scoreboard change landed. It is a
+              LABEL on a celebration, never a postable GOAL — the marker clears
+              in place when the deferred re-attestation confirms the score. */}
+          {h.provisionalGoal && (
+            <span
+              className="rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
+              data-detail-provisional-goal
+              title={admin ? h.provisionalGoal.note : undefined}
+            >
+              GOAL (unconfirmed)
+            </span>
+          )}
           {selectable && onToggleSelect && (
             <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-mut" data-detail-select-label>
               <input
@@ -1278,6 +1291,18 @@ function LaneRowFacts({
       <span className="font-bold text-ink">
         T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
       </span>
+      {/* ADAAAA-8139 (interim step): the notable lane is where a demoted goal
+          lives, so the provisional marker belongs on this row too — the customer
+          row gains a label only, no cue names, score or outcome code. */}
+      {h.provisionalGoal && (
+        <span
+          className="ml-2 rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
+          data-detail-provisional-goal
+          title={admin ? h.provisionalGoal.note : undefined}
+        >
+          GOAL (unconfirmed)
+        </span>
+      )}
       {admin && <span className="ml-2">· score {Math.round(h.score)}</span>}
       {admin && h.eventType && <span className="ml-2">· {h.eventType}</span>}
       {admin && h.outcome && <span className="ml-2">· outcome {h.outcome}</span>}
