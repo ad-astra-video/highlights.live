@@ -317,6 +317,9 @@ export class LiveIngest {
         outPath: out,
         contentStart: win.start,
         dur: cutDur,
+        // The ROW promises `needDur`; a cut that lands shorter than that is
+        // re-cut exactly instead of shipping a short card (ADAAAA-8170).
+        minDur: needDur,
         evidenceTs: ts,
         evidenceFramePath,
         tag: `live-ingest:${this.jobId}`,
