@@ -496,7 +496,17 @@ export async function attestDeferredGoalHighlight(
   const rec = deps.store.getHighlight(upgrade.highlightId);
   if (!rec) return null;
   if (rec.outcome === "scoring_play") return rec;
-  if (!upgrade.reason || !upgrade.reason.trim()) {
+  // ADAAAA-8212: the RESOLVING verdict's copy wins when the promotion seam could
+  // derive it (the accepting window's own surface, or the entry's claim re-gated
+  // under the measured corroboration). The entry's surface is the fallback: it was
+  // gated for a verdict the copy gate had to certify WITHOUT a measured score
+  // change, so on its own it can leave a confirmed GOAL explaining itself as a
+  // quiet shot line. Either way the copy moves as ONE set (reason + caption +
+  // cardTitles + colour + reason_raw) — never a mixed surface.
+  const copy =
+    upgrade.resolvedSurface?.reason?.trim() ? upgrade.resolvedSurface : undefined;
+  const reasonText = copy?.reason ?? upgrade.reason;
+  if (!reasonText || !reasonText.trim()) {
     console.error(
       `[live-goal-gate-upgrade:${upgrade.jobId}] no scoring-lane reason for ${upgrade.highlightId} — row stays a celebration`
     );
@@ -505,13 +515,18 @@ export async function attestDeferredGoalHighlight(
   const attested = await deps.store.attestDeferredGoal(rec.id, {
     outcome: "scoring_play",
     eventType: "GOAL",
-    reason: upgrade.reason,
+    reason: reasonText,
     // Additive optional: the celebration-derived surface must not survive on a
     // GOAL row. Cleared here so the page re-derives copy from the restored reason.
-    caption: upgrade.caption,
-    cardTitles: upgrade.cardTitles,
-    colour: upgrade.colour,
-    reason_raw: upgrade.reasonRaw,
+    caption: copy ? copy.caption : upgrade.caption,
+    cardTitles: copy ? copy.cardTitles : upgrade.cardTitles,
+    colour: copy ? copy.colour : upgrade.colour,
+    reason_raw: copy ? copy.reason_raw : upgrade.reasonRaw,
+    // ADAAAA-8212: the MEASURED attestation that resolved the transition replaces
+    // the pre-promotion acceptance (which described the window that measured no
+    // score change). Only spread when the seam produced one, so a promotion that
+    // carries no measurement never deletes the demoted row's disclosure.
+    ...(upgrade.attestationUsed ? { attestationUsed: upgrade.attestationUsed } : {}),
     // ADAAAA-8139 (interim step): the row just entered the scoring lane, so the
     // provisional marker it carried as a celebration must not survive on the
     // confirmed GOAL. Absent (undefined) on rows the gate never marked.

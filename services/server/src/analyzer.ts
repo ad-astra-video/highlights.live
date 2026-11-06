@@ -952,6 +952,17 @@ export interface DeferredGoalAttestation {
   scoreReads?: ScoreReadDiagnostics;
 }
 
+/** ADAAAA-8212: the copy a scored verdict produced at the write seam — the shape
+ * `storedSurfaceFor` returns, named so the deferred-promotion seam can carry a
+ * RESOLVING verdict's copy instead of re-deriving (or keeping) pre-visibility. */
+export interface StoredSurfaceFields {
+  reason?: string;
+  colour?: ColourSignal;
+  caption?: string;
+  cardTitles?: string[];
+  reason_raw?: string;
+}
+
 /** ADAAAA-8006: the re-emit handed to the caller's persist hook. */
 export interface DeferredGoalAttestationUpgrade extends DeferredGoalAttestation {
   /** The transition instant the later read measured (first read of the new score). */
@@ -962,6 +973,20 @@ export interface DeferredGoalAttestationUpgrade extends DeferredGoalAttestation 
   delta: ScoreboardDeltaEvidence;
   /** The lookahead bound that was applied (audit). */
   lookaheadS: number;
+  /** ADAAAA-8212: the copy the RESOLVING verdict produced — the accepting
+   * window's own write-seam surface, or the entry's scoring-lane claim re-gated
+   * under the measured corroboration. Present only when a seam could derive it;
+   * absent keeps the pre-downgrade surface the entry carries (the ADAAAA-8006
+   * contract). A promoted GOAL must never serve copy gated for the celebration
+   * verdict, so this REPLACES the entry's `reason`/`caption`/`cardTitles`/
+   * `colour`/`reasonRaw` as one set — never a subset (a row must never pair a
+   * scoring sentence with a celebration card). */
+  resolvedSurface?: StoredSurfaceFields;
+  /** ADAAAA-8212: the MEASURED attestation that resolved the transition,
+   * replacing the pre-promotion acceptance — which describes the window that did
+   * NOT measure the score change (`postSamples: 0`, `scoreBoardChanged: false`)
+   * and therefore attests nothing about the goal the row now claims. */
+  attestationUsed?: LiveGoalAttestationUsed;
 }
 
 /** ADAAAA-8006: is this delta a SINGLE goal step (exactly one side +1)?
@@ -5478,7 +5503,7 @@ function withAudioSeries(
 export function storedSurfaceFor(
   decision: DecisionResult,
   grounding: CaptionGroundingContext | undefined
-): { reason?: string; colour?: ColourSignal; caption?: string; cardTitles?: string[]; reason_raw?: string } {
+): StoredSurfaceFields {
   const gatedReasonRaw = grounding ? groundCaption(decision.reason ?? "", grounding) : decision.reason;
   let gatedReason = gatedReasonRaw;
   if ((!gatedReason || !gatedReason.trim()) && grounding) {
@@ -5920,6 +5945,19 @@ export async function acceptVideoDecision(
       readAt: candidate.timestamp,
     });
     if (promoted) {
+      // ADAAAA-8212: the resolve is THIS accept's measured verdict, so its
+      // write-seam surface + measured attestation replace the provisional entry's
+      // pre-downgrade ones. The entry's copy was gated for a window that had NOT
+      // measured the score change (no corroboration, so the copy gate could only
+      // certify a quiet shot line), which is how a confirmed GOAL card kept
+      // explaining itself as "Ball shoots in midfield." while `reason_raw` and
+      // `deferredAttestation` held the goal evidence. Row id/clip/instant are
+      // still preserved — only the lane AND the copy it must serve change.
+      const promotedFull: DeferredGoalAttestationUpgrade = {
+        ...promoted,
+        ...(surface.reason ? { resolvedSurface: surface } : {}),
+        attestationUsed,
+      };
       console.error(
         `[live-goal-gate-upgrade:${cfg.jobId}] promoting ${promoted.highlightId} IN PLACE for GOAL ` +
           `@${promoted.anchorTs}s (judged window [${promoted.lo}, ${promoted.hi}], transition ` +
@@ -5927,7 +5965,7 @@ export async function acceptVideoDecision(
           `for the same transition`
       );
       try {
-        cfg.onDeferredGoalAttested?.(promoted);
+        cfg.onDeferredGoalAttested?.(promotedFull);
       } catch (e: any) {
         console.error(`[live-goal-gate-upgrade:${cfg.jobId}] persist hook failed:`, String(e?.message || e));
       }
@@ -7317,7 +7355,16 @@ export function captionGroundingForWindow(
 export function applyDeferredGoalAttestations(
   run: Pick<LiveRunShared, "resolveDeferredGoalAttestation">,
   cfg: Pick<AnalyzerConfig, "jobId" | "onDeferredGoalAttested">,
-  input: { readAt: number; delta?: ScoreboardDeltaEvidence | null }
+  input: {
+    readAt: number;
+    delta?: ScoreboardDeltaEvidence | null;
+    /** ADAAAA-8212: derive the copy the RESOLVING verdict will serve, from the
+     * seam's own window state (grounding + frames). Callers that hold that state
+     * (the observe/accept path) pass this; a seam that does not (the bounded
+     * persisted-frame re-read) leaves the entry's pre-downgrade surface in place
+     * and still refreshes the measured attestation. */
+    deriveSurface?: (up: DeferredGoalAttestationUpgrade) => StoredSurfaceFields | undefined;
+  }
 ): number {
   const upgrades = run.resolveDeferredGoalAttestation({ readAt: input.readAt, delta: input.delta ?? null });
   for (const up of upgrades) {
@@ -7336,13 +7383,102 @@ export function applyDeferredGoalAttestations(
         `${timing} (carried by the later window read at ${up.readAt}s, lookahead ${up.lookaheadS} s): ` +
         `${up.delta.pre.join("-")} -> ${up.delta.post.join("-")}`
     );
+    // ADAAAA-8212: the resolved row must carry the resolving MEASUREMENT and copy
+    // gated for it, not the pre-promotion acceptance (postSamples 0 — it attests
+    // nothing) nor the pre-downgrade quiet line the copy gate had to certify when
+    // no score change had been measured. Re-gating is a pure derivation over
+    // evidence this pass already paid for: no decide, no OCR, no GPU-second.
+    let resolvedSurface: StoredSurfaceFields | undefined;
     try {
-      cfg.onDeferredGoalAttested?.(up);
+      resolvedSurface = input.deriveSurface?.(up);
+    } catch (e: any) {
+      console.error(`[live-goal-gate-upgrade:${cfg.jobId}] resolved-copy derivation failed:`, String(e?.message || e));
+    }
+    const resolved: DeferredGoalAttestationUpgrade = {
+      ...up,
+      attestationUsed: attestationUsedForDeferredResolution(up),
+      ...(resolvedSurface ? { resolvedSurface } : {}),
+    };
+    try {
+      cfg.onDeferredGoalAttested?.(resolved);
     } catch (e: any) {
       console.error(`[live-goal-gate-upgrade:${cfg.jobId}] persist hook failed:`, String(e?.message || e));
     }
   }
   return upgrades.length;
+}
+
+/** ADAAAA-8212: the MEASURED attestation a deferred resolution stamps on the
+ * resolved row.
+ *
+ * The demoted row's `attestationUsed` described the window that did NOT measure
+ * the score change — `scoreBoardChanged: false, postSamples: 0` — so a confirmed
+ * GOAL row named an acceptance that attests nothing about the goal it claims.
+ * The resolving read IS a measurement of a single-goal step (`scoreboardDeltaLegible`
+ * + `scoreboardDeltaSingleGoalStep` both hold by construction), so the row
+ * discloses that instead. Only what the read measured is claimed: no ball-line /
+ * net outcome is invented (`goalCrossed` stays false, `ballOutcome` null), and the
+ * Stage-2 confirm dive did not run (`corroborated` false) — the delta is the
+ * attestation, and `deferredAttestation` names its exact instant and read.
+ */
+export function attestationUsedForDeferredResolution(
+  upgrade: Pick<DeferredGoalAttestationUpgrade, "delta" | "scoreReads">
+): LiveGoalAttestationUsed {
+  const d = upgrade.delta;
+  const need = Math.max(1, Math.floor(upgrade.scoreReads?.need ?? SCOREBOARD_MIN_CONSISTENT_READS));
+  return {
+    scoreBoardChanged: true,
+    goalCrossed: false,
+    ballOutcome: null,
+    corroborated: false,
+    goalConfirmed: null,
+    // The resolving delta's own counts (already >= `need` per side on every
+    // legible read); the entry's pooled count only widens the disclosure.
+    scoreReads: Math.max(upgrade.scoreReads?.scoreReads ?? 0, d.preSamples + d.postSamples),
+    preSamples: d.preSamples,
+    postSamples: d.postSamples,
+    need,
+    transitionKey: `${d.pre.join("-")}>${d.post.join("-")}`,
+  };
+}
+
+/** ADAAAA-8212: re-gate the deferred entry's own scoring-lane CLAIM under the
+ * corroboration the resolving read measured, so a promoted GOAL serves a
+ * goal-described line instead of the quiet shot line the copy gate could only
+ * certify while the score change was unmeasured.
+ *
+ * Same gate, same source sentence, one different input: `corroborated` is now
+ * true because a score transition WAS measured (the delta attests it), and the
+ * §3.4 absence evidence carries the score channel only (`goalCrossed` null — no
+ * ball-line read happened, so none is claimed). Fails closed: when the gate
+ * refuses a served line the entry's copy stands (a row must never lose copy to a
+ * re-derivation), and without grounding (VOD / legacy rails) nothing changes.
+ */
+export function resolvedDeferredGoalSurface(input: {
+  upgrade: Pick<DeferredGoalAttestationUpgrade, "reason" | "reasonRaw" | "readAt">;
+  run: Pick<LiveRunShared, "seriesWindow" | "ballPosition" | "highlights">;
+  cfg: Pick<
+    AnalyzerConfig,
+    "captionGrounding" | "preWindowS" | "postWindowS" | "sampleFps" | "analysisFps" | "getRunningSummary"
+  >;
+  frames?: readonly { ts: number; seq?: number }[];
+}): StoredSurfaceFields | undefined {
+  const claim = (input.upgrade.reasonRaw ?? input.upgrade.reason ?? "").trim();
+  if (!claim || !input.cfg.captionGrounding) return undefined;
+  const grounding = captionGroundingForWindow(
+    { outcome: "scoring_play", eventType: "GOAL", reason: claim },
+    input.run,
+    input.upgrade.readAt,
+    input.cfg,
+    true,
+    input.frames,
+    { ballOutcome: null, goalCrossed: null }
+  );
+  const surface = storedSurfaceFor(
+    { isHighlight: true, score: 0, eventType: "GOAL", outcome: "scoring_play", reason: claim },
+    grounding
+  );
+  return surface.reason ? surface : undefined;
 }
 
 /** ADAAAA-8139: the bounded persisted-frame re-read configuration.
@@ -7630,7 +7766,14 @@ export async function observeAcceptOnly(
           trailS: LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S,
           deltaRange: { lo: liveWindow.lo, hi: liveWindow.hi + LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S },
         });
-    applyDeferredGoalAttestations(run, cfg, { readAt: payload.centerTs, delta: deferredDelta });
+    applyDeferredGoalAttestations(run, cfg, {
+      readAt: payload.centerTs,
+      delta: deferredDelta,
+      // ADAAAA-8212: this window holds the state the resolving copy is gated
+      // against (grounding + its own frames), so the promoted row serves a
+      // goal-described line instead of the pre-downgrade quiet one.
+      deriveSurface: (up) => resolvedDeferredGoalSurface({ upgrade: up, run, cfg, frames: frameSignals }),
+    });
     // ADAAAA-8139: the free re-read has had its chance. If a demoted window is
     // still pending and its 20 s lookahead has closed, spend its ONE bounded
     // persisted-frame re-read pass (score-bug OCR only — no decide, no perceive
