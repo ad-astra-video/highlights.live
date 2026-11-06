@@ -20,7 +20,6 @@ import {
   LiveRunShared,
   applyDeferredGoalAttestations,
   attestationUsedForDeferredResolution,
-  resolvedDeferredGoalSurface,
   type DeferredGoalAttestationUpgrade,
   type LiveGoalAttestationUsed,
   type StoredSurfaceFields,
@@ -223,11 +222,10 @@ describe("promoted GOAL copy + attestation (ADAAAA-8212)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The deferred (ADAAAA-8006) lane resolves on a later window's scoreboard read,
-// so it has no accepting verdict to borrow copy from: it must re-gate the
-// entry's own scoring-lane CLAIM under the corroboration the read measured, and
-// stamp the measured attestation. Without that, a resolved GOAL keeps both the
-// pre-downgrade quiet line and the acceptance that measured nothing.
+// The deferred (ADAAAA-8006) lane resolves on a later window's scoreboard read
+// and has no accepting verdict, so copy stays the entry's gated surface (the copy
+// contract owns servability). What it must refresh is the MEASUREMENT: a resolved
+// GOAL otherwise keeps the demoted acceptance that measured nothing.
 // ---------------------------------------------------------------------------
 
 const DEFERRED_DELTA = {
@@ -256,53 +254,7 @@ function deferredEntry() {
   };
 }
 
-const GROUNDING_RUN = {
-  seriesWindow: () => [],
-  ballPosition: () => [0.5, 0.5] as [number, number],
-  highlights: [],
-};
-const GROUNDING_CFG = {
-  captionGrounding: true,
-  preWindowS: 10,
-  postWindowS: 5,
-  sampleFps: 1,
-  analysisFps: 1,
-  getRunningSummary: () => "",
-};
-
-describe("deferred-lane resolution copy + attestation (ADAAAA-8212)", () => {
-  it("re-gates the entry's own goal claim under the measured corroboration", () => {
-    const surface = resolvedDeferredGoalSurface({
-      upgrade: { reason: CELEBRATION_COPY, reasonRaw: DEFERRED_ENTRY_RAW, readAt: 165 },
-      run: GROUNDING_RUN,
-      cfg: GROUNDING_CFG,
-    });
-    expect(surface).toBeDefined();
-    // The goal claim survives the gate now that a score transition was measured:
-    // the served line describes the goal, not the quiet shot shape the gate could
-    // only certify while the change was unmeasured.
-    expect(surface!.reason).toContain("enters net");
-    expect(surface!.reason).not.toBe(CELEBRATION_COPY);
-    expect(surface!.reason).not.toBe("Ball shoots in midfield");
-  });
-
-  it("fails closed: no grounding (VOD/legacy) or no claim leaves the entry copy alone", () => {
-    expect(
-      resolvedDeferredGoalSurface({
-        upgrade: { reason: CELEBRATION_COPY, reasonRaw: DEFERRED_ENTRY_RAW, readAt: 165 },
-        run: GROUNDING_RUN,
-        cfg: { ...GROUNDING_CFG, captionGrounding: false },
-      })
-    ).toBeUndefined();
-    expect(
-      resolvedDeferredGoalSurface({
-        upgrade: { reason: undefined, reasonRaw: undefined, readAt: 165 },
-        run: GROUNDING_RUN,
-        cfg: GROUNDING_CFG,
-      })
-    ).toBeUndefined();
-  });
-
+describe("deferred-lane resolution attestation (ADAAAA-8212)", () => {
   it("stamps the measured attestation on the resolving read (never invents a channel)", () => {
     const used = attestationUsedForDeferredResolution({
       delta: DEFERRED_DELTA,
@@ -327,7 +279,7 @@ describe("deferred-lane resolution copy + attestation (ADAAAA-8212)", () => {
     expect(used.corroborated).toBe(false);
   });
 
-  it("hands the persist hook the resolved copy and the measured attestation", async () => {
+  it("hands the persist hook the measured attestation and keeps the entry's gated copy", async () => {
     const store = new Store(null);
     await store.addHighlight({
       id: "hl-8212",
@@ -359,43 +311,23 @@ describe("deferred-lane resolution copy + attestation (ADAAAA-8212)", () => {
           void attestDeferredGoalHighlight({ store } as unknown as LiveHighlightPersistence, up);
         },
       },
-      {
-        readAt: 162,
-        delta: DEFERRED_DELTA,
-        deriveSurface: (up) =>
-          resolvedDeferredGoalSurface({ upgrade: up, run: GROUNDING_RUN, cfg: GROUNDING_CFG }),
-      }
+      { readAt: 162, delta: DEFERRED_DELTA }
     );
     spy.mockRestore();
     await new Promise((r) => setTimeout(r, 0));
 
     expect(count).toBe(1);
     expect(seen).toHaveLength(1);
-    expect(seen[0].resolvedSurface).toBeDefined();
+    // No accepting verdict exists on this lane, and the copy contract
+    // (ADAAAA-8027/8125/8209) owns servability: the seam does not re-derive copy.
+    expect(seen[0].resolvedSurface).toBeUndefined();
     expect(seen[0].attestationUsed).toMatchObject({ scoreBoardChanged: true, postSamples: 2 });
     const row = store.getHighlight("hl-8212")!;
     expect(row.outcome).toBe("scoring_play");
-    expect(row.reason).not.toBe(CELEBRATION_COPY);
-    expect(row.reason).toContain("enters net");
+    expect(row.reason).toBe(CELEBRATION_COPY);
+    // The measurement the row discloses is the resolving one, not the demoted
+    // acceptance that measured nothing.
     expect(row.attestationUsed).toMatchObject({ scoreBoardChanged: true, postSamples: 2, preSamples: 4 });
     expect(row.deferredAttestation).toMatchObject({ deltaTs: 158.667, readAt: 162, pre: [2, 1], post: [2, 2] });
   });
-
-  it("refreshes the attestation even when the seam cannot derive copy (no window state)", () => {
-    const run = new LiveRunShared();
-    run.noteDeferredGoalAttestation(deferredEntry());
-    const seen: DeferredGoalAttestationUpgrade[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    applyDeferredGoalAttestations(
-      run,
-      { jobId: JOB, onDeferredGoalAttested: (up) => seen.push(up) },
-      { readAt: 162, delta: DEFERRED_DELTA }
-    );
-    spy.mockRestore();
-    expect(seen).toHaveLength(1);
-    expect(seen[0].resolvedSurface).toBeUndefined();
-    expect(seen[0].attestationUsed).toMatchObject({ scoreBoardChanged: true, postSamples: 2 });
-  });
 });
-
-const DEFERRED_ENTRY_RAW = "Ball enters net at t=0.0s, confirmed by ASR 'gol' and crowd eruption.";
