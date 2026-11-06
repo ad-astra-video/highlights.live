@@ -4987,6 +4987,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       exportUri: exportUriForHighlight(h, user.id),
       ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
     }));
+    // ADAAAA-8178: a notable row is rendered by the SAME card the postable feed
+    // uses, so its Download / Copy Link must work too. The export token is minted
+    // per caller for EVERY row (the /clips/* export path verifies the token
+    // against the highlight id and marks it; it has no postability gate), so a
+    // notable clip downloads and marks exactly like a postable one.
+    const notableHighlights = postable.notable.map((h) => ({
+      ...h,
+      exportUri: exportUriForHighlight(h, user.id),
+    }));
 
     // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
     // narratives) derived from STORED data only. Zero decide calls / GPU
@@ -5021,7 +5030,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             : 0,
         },
         highlights: postableHighlights,
-        notableHighlights: postable.notable,
+        notableHighlights,
         duplicateHighlights: postable.duplicates,
         traces,
         sections: sectionList,
@@ -5104,6 +5113,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         ...h,
         exportUri: exportUriForHighlight(h, user.id),
       }));
+      // ADAAAA-8178: the delta stream carries the notable cards' export URLs too,
+      // so an open live page does not lose Download / Copy Link on the notable
+      // lane when it appends windows (same per-caller minting as above).
+      const notableHighlights = postable.notable.map((h) => ({
+        ...h,
+        exportUri: exportUriForHighlight(h, user.id),
+      }));
       const summaryLadder = buildSummaryLadder({
         summaryLog: job.summaryLog,
         highlights: postable.highlights,
@@ -5123,7 +5139,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // when it appends windows.
         job: { ...job, ...countsFromPostable(postable) },
         highlights: postableHighlights,
-        notableHighlights: postable.notable,
+        notableHighlights,
         duplicateHighlights: postable.duplicates,
         maxTraces: maxTracesForSource(job.source),
         summaryLadder,

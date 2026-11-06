@@ -37,8 +37,11 @@ describe("per-job highlight card mounts the clip player (ADAAAA-6948)", () => {
     // 'clip loading…' state instead of being absent entirely.
     expect(html).toContain("clip loading");
     // Review controls are preserved (no regression to accept/reject).
-    expect(html).toContain("Accept");
+    // ADAAAA-7910 removed the Accept slot: `accepted` is the server default, so
+    // the ONE verdict slot is Reject here (postable rows keep it).
+    expect(html).toContain("data-detail-reject");
     expect(html).toContain("Reject");
+    expect(html).not.toContain("data-detail-accept");
   });
 
   it("shows 'Clip unavailable' failure state when clipError is set (ADAAAA-6522)", () => {
@@ -55,7 +58,14 @@ describe("per-job highlight card mounts the clip player (ADAAAA-6948)", () => {
     const html = renderToString(
       React.createElement(HighlightCard, { highlight: hl({ clipUri: "" }), onDecision: () => {} })
     );
-    expect(html).toContain("clip processing");
+    // ADAAAA-8032: the card passes `waitingSinceMs` from the row's createdAt, so
+    // the wait state NAMES its progress ("cutting clip… Ns") instead of the bare
+    // "clip processing…". The intent this test pins — never a silent blank
+    // player — is unchanged; a legacy row with no createdAt still gets the bare
+    // placeholder (asserted on the component directly below).
+    expect(html).toMatch(/(cutting clip…|still cutting…) \d+s/);
+    const legacy = renderToString(React.createElement(VideoClip, { src: "", lazy: false }));
+    expect(legacy).toContain("clip processing");
   });
 
   it("keeps the verdict slot stateful: Reject on accepted, Undo reject on rejected (ADAAAA-7910)", () => {
@@ -99,7 +109,10 @@ describe("per-job highlight card mounts the clip player (ADAAAA-6948)", () => {
       React.createElement(HighlightCard, { highlight: hl({ status: "rejected" }), onDecision: () => {} })
     );
     expect(html).toContain("data-detail-rejected");
-    expect(html).toContain("Rejected");
+    // The card names the recover path in customer-safe prose; the bare heading
+    // word "Rejected" was replaced by that hint (ADAAAA-7881/7915), so assert
+    // the hint itself instead of the old label.
+    expect(html).toContain("Undo reject restores this clip within its recover window.");
     // Recovery lives in slot 3 now; Accept itself is gone (ADAAAA-7910).
     expect(html).toContain("data-detail-restore");
     expect(html).not.toContain("data-detail-accept");

@@ -50,6 +50,7 @@ import {
   type LiveCapture,
   summaryEntryTimestamp,
   type MergedMomentGroup,
+  notableBadge,
 } from "../lib/jobDetail";
 import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
@@ -881,18 +882,24 @@ export function HighlightActionRow({
   onDecision,
   pendingStatus = null,
   exportLocked = false,
+  showVerdict = true,
 }: {
   highlight: JobDetailHighlight;
   /** ADAAAA-7896: the server-minted export URL (not the public clip URI). */
   downloadUrl: string;
   copied?: "idle" | "copied" | "failed";
   onCopy: () => void;
-  onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
+  onDecision?: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
   pendingStatus?: "accepted" | "rejected" | null;
   /** ADAAAA-7896: the clip already left the app (downloaded / link copied), so
    * an owner can no longer reject it. The SERVER is authoritative (409
    * `clip_exported`); this only makes the lock visible before the click. */
   exportLocked?: boolean;
+  /** ADAAAA-8178: a NOTABLE-lane row is non-postable by the precision gate
+   * (`services/server/src/highlight-postable.ts`), so it drops the verdict slot
+   * entirely — a Reject/Approve control there would imply it can be published.
+   * Download and Copy Link stay: the clip is real and inspectable. */
+  showVerdict?: boolean;
 }) {
   const verdict = verdictAction(h.status);
   const busyVerdict = pendingStatus === verdict.next;
@@ -957,35 +964,38 @@ export function HighlightActionRow({
           {copyLabel}
         </span>
       </button>
-      {/* 3 — the non-default verdict: Reject / Undo reject / Approve. */}
-      <button
-        type="button"
-        className={`detail-action${verdict.tone === "pink" ? " detail-action-pink" : " detail-action-green"}`}
-        disabled={busyVerdict || (verdict.next === "rejected" && exportLocked)}
-        aria-label={verdict.label}
-        title={
-          verdict.next === "rejected" && exportLocked
-            ? "This clip was already downloaded or its link copied, so it can no longer be rejected"
-            : undefined
-        }
-        onClick={() => onDecision(h, verdict.next)}
-        data-detail-action
-        {...{ [verdict.marker]: true }}
-        data-export-locked={verdict.next === "rejected" && exportLocked ? "true" : undefined}
-      >
-        {busyVerdict ? (
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
-        ) : verdict.marker === "data-detail-reject" ? (
-          <X className="h-4 w-4 shrink-0" aria-hidden />
-        ) : verdict.marker === "data-detail-restore" ? (
-          <Undo2 className="h-4 w-4 shrink-0" aria-hidden />
-        ) : (
-          <Check className="h-4 w-4 shrink-0" aria-hidden />
-        )}
-        <span className="detail-action-label" data-detail-label>
-          {verdict.label}
-        </span>
-      </button>
+      {/* 3 — the non-default verdict: Reject / Undo reject / Approve. Absent on a
+          notable card (ADAAAA-8178): those rows are non-postable by the gate. */}
+      {showVerdict && onDecision && (
+        <button
+          type="button"
+          className={`detail-action${verdict.tone === "pink" ? " detail-action-pink" : " detail-action-green"}`}
+          disabled={busyVerdict || (verdict.next === "rejected" && exportLocked)}
+          aria-label={verdict.label}
+          title={
+            verdict.next === "rejected" && exportLocked
+              ? "This clip was already downloaded or its link copied, so it can no longer be rejected"
+              : undefined
+          }
+          onClick={() => onDecision(h, verdict.next)}
+          data-detail-action
+          {...{ [verdict.marker]: true }}
+          data-export-locked={verdict.next === "rejected" && exportLocked ? "true" : undefined}
+        >
+          {busyVerdict ? (
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+          ) : verdict.marker === "data-detail-reject" ? (
+            <X className="h-4 w-4 shrink-0" aria-hidden />
+          ) : verdict.marker === "data-detail-restore" ? (
+            <Undo2 className="h-4 w-4 shrink-0" aria-hidden />
+          ) : (
+            <Check className="h-4 w-4 shrink-0" aria-hidden />
+          )}
+          <span className="detail-action-label" data-detail-label>
+            {verdict.label}
+          </span>
+        </button>
+      )}
     </div>
   );
 }
@@ -1002,7 +1012,7 @@ export function HighlightActionRow({
  */
 export interface HighlightCardProps {
   highlight: JobDetailHighlight;
-  onDecision: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
+  onDecision?: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
   /** Which review action is currently in-flight for this card (drives the
    * per-control loading state; disables both controls while pending). */
   pendingStatus?: "accepted" | "rejected" | null;
@@ -1027,6 +1037,16 @@ export interface HighlightCardProps {
    *  no trigger and no outcome reason. Defaults to the operator surface for
    *  direct component renders; the page always passes the session role. */
   admin?: boolean;
+  /** ADAAAA-8178: this card is a row of the NOTABLE lane (non-postable by the
+   *  precision gate). It renders the SAME card — the parity the ticket asks for —
+   *  with exactly three differences, all driven here:
+   *   - the metadata row carries ONE notable badge (see `notableBadge`),
+   *     `data-detail-notable-badge` + `data-notable-kind`;
+   *   - no verdict slot (Reject/Approve would imply the clip can be published);
+   *   - no batch checkbox (batch export covers postable ids only).
+   *  Download / Copy Link, the caption editor and the title chips stay. The root
+   *  keeps `data-detail-highlight` and gains `data-detail-notable-card`. */
+  notable?: boolean;
 }
 
 export function HighlightCard({
@@ -1041,6 +1061,7 @@ export function HighlightCard({
   admin = true,
   summaryLog,
   fastRail = false,
+  notable = false,
 }: HighlightCardProps) {
   // ADAAAA-7622: one click must yield either a file or a clipboard URL, with
   // no DevTools in the happy path. `download` on a same-origin anchor saves
@@ -1062,6 +1083,10 @@ export function HighlightCard({
   const grounding = highlightGrounding(h, summaryLog, fastRail);
   const titles = postTitles(h, summaryLog, grounding);
   const shownCaption = localCaption ?? (caption || suggestCaption(h, summaryLog, grounding));
+  // ADAAAA-8178: the notable lane's ONE badge (provisional goal > big play >
+  // near miss). `null` on a notable row whose outcome is neither, in which case
+  // the card simply carries no badge rather than inventing a label.
+  const notableBadgeInfo = notable ? notableBadge(h) : null;
   const durationS = Math.max(0, Math.round(h.end - h.start));
   function setCaption(value: string) {
     setLocalCaption(value);
@@ -1081,8 +1106,15 @@ export function HighlightCard({
     setTitleCopy({ title, ok });
     setTimeout(() => setTitleCopy(null), 1800);
   }
+  // ADAAAA-8178: the notable lane mounts THIS card (not a copy), so the lane is
+  // a first-class QA target while `data-detail-highlight` keeps the postable
+  // feed's contract intact.
   return (
-    <div className="card card-hover min-w-0 overflow-hidden" data-detail-highlight>
+    <div
+      className="card card-hover min-w-0 overflow-hidden"
+      data-detail-highlight
+      {...(notable ? { "data-detail-notable-card": true } : {})}
+    >
       <VideoClip
         src={h.clipUri}
         label={admin ? h.eventType : undefined}
@@ -1115,8 +1147,10 @@ export function HighlightCard({
           {/* ADAAAA-8139 (interim step): a demoted goal window whose ASR / frame /
               crowd cue said "goal" before the scoreboard change landed. It is a
               LABEL on a celebration, never a postable GOAL — the marker clears
-              in place when the deferred re-attestation confirms the score. */}
-          {h.provisionalGoal && (
+              in place when the deferred re-attestation confirms the score.
+              ADAAAA-8178: on a NOTABLE card this marker is folded into the single
+              notable badge below, so the lane never prints the same string twice. */}
+          {h.provisionalGoal && !notable && (
             <span
               className="rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
               data-detail-provisional-goal
@@ -1125,7 +1159,24 @@ export function HighlightCard({
               GOAL (unconfirmed)
             </span>
           )}
-          {selectable && onToggleSelect && (
+          {/* ADAAAA-8178: the notable lane's ONE badge — same yellow pill as the
+              provisional marker above. Precedence: provisional goal >
+              BIG PLAY > NEAR MISS. Customer text only: the cue note (which names
+              ASR/frame/crowd cues) stays admin-only, and so does the machine
+              `data-notable-kind` marker — its values ARE outcome codes
+              (`near_miss`), and ADAAAA-7737's markup guard forbids those tokens
+              in a customer session. The badge TEXT is the customer surface. */}
+          {notableBadgeInfo && (
+            <span
+              className="rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
+              data-detail-notable-badge
+              data-notable-kind={admin ? notableBadgeInfo.kind : undefined}
+              title={admin && h.provisionalGoal ? h.provisionalGoal.note : undefined}
+            >
+              {notableBadgeInfo.text}
+            </span>
+          )}
+          {selectable && !notable && onToggleSelect && (
             <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-mut" data-detail-select-label>
               <input
                 type="checkbox"
@@ -1194,6 +1245,7 @@ export function HighlightCard({
           onCopy={copyLink}
           onDecision={onDecision}
           pendingStatus={pendingStatus}
+          showVerdict={!notable}
           // ADAAAA-7896: an owner loses Reject once the clip was exported; an
           // operator keeps it (they download clips to inspect them).
           exportLocked={!!h.exportedAt && !admin}
@@ -1325,11 +1377,14 @@ function LaneRowFacts({
  * highlight (the bug ADAAAA-7621 closed).
  *
  * ADAAAA-8135: the NOTABLE lane is different — a row that carries footage gets a
- * playable clip card (`data-detail-lane-clip`), because a detected play the
- * scoring lane demoted must stay inspectable ("detected → notable → no clip" was
- * the reported experience). Only a row with neither `clipUri` nor `clipError`
- * stays a text row, and a row with a `clipError` names its reason through the
- * shared VideoClip failure state ("Clip unavailable").
+ * playable clip card, because a detected play the scoring lane demoted must stay
+ * inspectable ("detected → notable → no clip" was the reported experience).
+ * ADAAAA-8178 supersedes that compact row with the real `HighlightCard`: a notable
+ * row with footage now renders the SAME card the postable feed uses (badge +
+ * Download + Copy Link + caption), minus the verdict slot and the batch checkbox.
+ * Only a row with neither `clipUri` nor `clipError` stays a text row, and a row
+ * with a `clipError` names its reason through the shared VideoClip failure state
+ * ("Clip unavailable").
  */
 export function SecondaryHighlightLane({
   title,
@@ -1338,6 +1393,10 @@ export function SecondaryHighlightLane({
   tone = "mut",
   lane,
   admin = true,
+  captionOf,
+  onCaptionChange,
+  summaryLog,
+  fastRail = false,
 }: {
   title: string;
   note: string;
@@ -1348,30 +1407,52 @@ export function SecondaryHighlightLane({
   /** Operator session? A customer row (ADAAAA-7737) is the time range only —
    *  no score, no event taxonomy, no outcome code, no reason. */
   admin?: boolean;
+  /** ADAAAA-8178: the page's caption state, so a notable card's caption editor
+   *  is the SAME editor (and the same value) the postable cards use. */
+  captionOf?: (h: JobDetailHighlight) => string;
+  onCaptionChange?: (h: JobDetailHighlight, value: string) => void;
+  /** ADAAAA-7881/7958: the summary log the notable card's suggested caption and
+   *  title chips derive from — identical inputs to the postable card. */
+  summaryLog?: SummaryLogEntry[];
+  fastRail?: boolean;
 }) {
   if (highlights.length === 0) return null;
+  // ADAAAA-8178: a NOTABLE row that carries footage (or a named clip failure)
+  // now renders the SAME `HighlightCard` the postable feed uses, with a badge —
+  // the lane is no longer a compact-row surface for those rows. A row with
+  // neither `clipUri` nor `clipError` stays a text row: the card's empty-src
+  // state says "clip processing…", which would be a lie for a row that will
+  // never get a clip. The merged lane stays text-only (its footage lives in the
+  // moment it was folded into — the bug ADAAAA-7621 closed).
+  const notableCards =
+    lane === "notable" ? highlights.filter((h) => !!(h.clipUri || h.clipError)) : [];
+  const textRows = highlights.filter((h) => !notableCards.includes(h));
   return (
     <div className="mt-6" data-detail-lane={lane}>
       <h4 className={`text-sm font-bold ${tone === "yellow" ? "text-yellow" : "text-mut"}`}>{title}</h4>
       <div className="mt-1 text-xs text-mut">{note}</div>
-      <ul className="mt-2 space-y-1">
-        {highlights.map((h) =>
-          // ADAAAA-8135: a notable row with footage (or a named clip failure)
-          // renders the SAME player the postable cards use, so the demoted play
-          // is watchable where it now lives.
-          lane === "notable" && (h.clipUri || h.clipError) ? (
-            <li
+      {notableCards.length > 0 && (
+        <div
+          className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3"
+          data-detail-notable-card-grid
+        >
+          {notableCards.map((h) => (
+            <HighlightCard
               key={h.id}
-              className="min-w-0 overflow-hidden rounded-lg border border-mut/30 bg-mut/10"
-              data-detail-lane-row={lane}
-              data-detail-lane-clip={lane}
-            >
-              <VideoClip src={h.clipUri || ""} label={admin ? h.eventType : undefined} error={h.clipError} />
-              <div className="flex flex-wrap items-center gap-2 px-2 py-1 text-xs text-mut">
-                <LaneRowFacts h={h} admin={admin} lane={lane} />
-              </div>
-            </li>
-          ) : (
+              highlight={h}
+              notable
+              caption={captionOf?.(h) ?? ""}
+              onCaptionChange={onCaptionChange}
+              summaryLog={summaryLog}
+              fastRail={fastRail}
+              admin={admin}
+            />
+          ))}
+        </div>
+      )}
+      {textRows.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {textRows.map((h) => (
             <li
               key={h.id}
               className="rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
@@ -1379,9 +1460,9 @@ export function SecondaryHighlightLane({
             >
               <LaneRowFacts h={h} admin={admin} lane={lane} />
             </li>
-          )
-        )}
-      </ul>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -2652,6 +2733,13 @@ export function JobDetail() {
             tone="yellow"
             highlights={detail.notableHighlights ?? []}
             admin={admin}
+            // ADAAAA-8178: a notable card is the postable card, so it takes the
+            // same caption state + summary-log inputs (and the same fast-rail
+            // corroboration rule) as the cards above.
+            captionOf={captionOf}
+            onCaptionChange={setHighlightCaption}
+            summaryLog={detail.job.summaryLog}
+            fastRail={detail.job.source !== "file"}
           />
 
           {/* ADAAAA-7915 (increment 3): the clips this viewer rejected stay on
