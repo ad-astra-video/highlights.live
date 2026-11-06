@@ -705,7 +705,19 @@ export async function cutCenteredOnInstant(
   anchorTs: number,
   beforeS: number,
   durS: number,
-  opts: { recutTolSec?: number; measureOffset?: (filePath: string) => Promise<number | null> }
+  opts: {
+    recutTolSec?: number;
+    measureOffset?: (filePath: string) => Promise<number | null>;
+    /** ADAAAA-8170: use a frame-accurate re-encode instead of a stream copy.
+     * A copy cut trims on the recording's keyframe grid, so on a long-GOP
+     * session the window can land seconds away from where it was asked and the
+     * corrective copy re-cut cannot express the difference (it snaps again).
+     * Opt-in: the browser rail keeps its copy path. */
+    exactTrim?: boolean;
+    /** Demux pre-roll for an `exactTrim` cut (default
+     * {@link CLIP_EXACT_TRIM_PREROLL_S}). */
+    preRollS?: number;
+  }
 ): Promise<{
   cutStart: number;
   dur: number;
@@ -718,14 +730,18 @@ export async function cutCenteredOnInstant(
   const wanted = anchorTs - beforeS;
   const clamped = wanted < 0;
   let cutStart = Math.max(0, wanted);
-  let cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS);
+  const cutOpts =
+    opts.exactTrim === true
+      ? { forceReencode: true, exactTrim: true, preRollS: opts.preRollS ?? CLIP_EXACT_TRIM_PREROLL_S }
+      : undefined;
+  let cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS, cutOpts);
   let deliveredOffset = opts.measureOffset ? await opts.measureOffset(outPath).catch(() => null) : null;
   let recuts = 0;
   if (deliveredOffset != null && Math.abs(deliveredOffset - beforeS) > recutTol && recuts < 1) {
     const corrected = Math.max(0, cutStart + (deliveredOffset - beforeS));
     if (Math.abs(corrected - cutStart) > 0.01) {
       cutStart = corrected;
-      cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS);
+      cut = await cutClip(ffmpegPath, source, outPath, cutStart, durS, cutOpts);
       recuts += 1;
       const again = opts.measureOffset ? await opts.measureOffset(outPath).catch(() => null) : null;
       if (again != null) deliveredOffset = again;
@@ -1220,13 +1236,20 @@ export function buildClipArgs(opts: {
   durationS: number;
   mode: "copy" | "reencode";
   kind: "mp4" | "webm";
+  /** ADAAAA-8170: trim this many seconds further with an OUTPUT-side `-ss`
+   * after the demux seek. `startS` then only has to land at or before the
+   * wanted instant (cheap skip of the recording's head); the output seek
+   * decodes and discards frames, which is frame-accurate even for a cue-less
+   * MPEG-TS recording where an input seek snaps to the next keyframe. */
+  exactTrimS?: number;
 }): string[] {
-  const args: string[] = [
-    "-y",
-    "-ss", String(Math.max(0, opts.startS)),
-    "-t", String(opts.durationS),
-    "-i", opts.source,
-  ];
+  const args: string[] = ["-y", "-ss", String(Math.max(0, opts.startS))];
+  if (opts.exactTrimS == null) args.push("-t", String(opts.durationS));
+  args.push("-i", opts.source);
+  if (opts.exactTrimS != null) {
+    // The output seek preserves the span: `-t` counts from the trimmed start.
+    args.push("-ss", String(Math.max(0, opts.exactTrimS)), "-t", String(opts.durationS));
+  }
   if (opts.mode === "copy") {
     args.push("-c", "copy", "-avoid_negative_ts", "make_zero");
   } else {
@@ -1276,6 +1299,45 @@ export interface ClipCutResult {
   encodeMs: number;
 }
 
+/** ADAAAA-8170: how much of the recording the exact trim's demux seek may skip
+ * before the frame-accurate output seek takes over. It only has to land at or
+ * before the wanted instant; 12 s covers a 4 s GOP (a 250-frame veryfast
+ * session at 60 fps) with margin and keeps the corrective re-encode decoding
+ * ~12 s instead of the whole recording. */
+export const CLIP_EXACT_TRIM_PREROLL_S = 12;
+
+/** The pts of the file's FIRST video frame — the origin of its own timeline.
+ * A stream-COPY cut keeps the source's pts (a 15 s card can start at 5.5 s),
+ * while a re-encode rebases the file to ~0. The delivered-offset measurement
+ * has to subtract this origin before it can compare a position inside the card
+ * with the intended offset, so it must never assume either mode. Falls back to
+ * the container's `start_time` when no packet is reported. */
+export async function firstPacketTs(ffmpegPath: string, source: string): Promise<number | null> {
+  const ffprobe = ffmpegPath.replace(/ffmpeg([^/]*)$/, "ffprobe$1") || "ffprobe";
+  try {
+    const { stdout } = await exec(ffprobe, [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "packet=pts_time",
+      "-of", "csv=p=0",
+      "-read_intervals", "%+#1",
+      source,
+    ]);
+    // csv=p=0 emits ",<pts>" when another field leads; take the last numeric.
+    const values = stdout.trim().split("\n")[0].split(",").map((v) => parseFloat(v)).filter((v) => Number.isFinite(v));
+    if (values.length) return values[values.length - 1];
+  } catch {
+    /* a cue-less / mid-append file may not answer; try the container below */
+  }
+  try {
+    const { stdout } = await exec(ffprobe, ["-v", "error", "-show_entries", "format=start_time", "-of", "csv=p=0", source]);
+    const v = parseFloat(stdout.trim());
+    return Number.isFinite(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Cut `[startS, startS + durationS]` of `source` to `outPath`.
  *
@@ -1292,19 +1354,41 @@ export async function cutClip(
   source: string,
   outPath: string,
   startS: number,
-  durationS: number
+  durationS: number,
+  opts: {
+    /** Re-encode even when the source could be stream-copied. */
+    forceReencode?: boolean;
+    /** ADAAAA-8170: frame-accurate trim (`preRollS` demux skip + output-side
+     * seek). A stream COPY can only trim on keyframes; this makes the start
+     * land exactly where it was asked, at the cost of one encode. */
+    exactTrim?: boolean;
+    /** Head of the recording the demux seek may skip for `exactTrim`. */
+    preRollS?: number;
+  } = {}
 ): Promise<ClipCutResult> {
   const { mkdir, rm, stat } = await import("node:fs/promises");
   await mkdir(path.dirname(outPath), { recursive: true });
   const sourceFormat = await probeMediaFormat(ffmpegPath, source);
   const kind = containerKind(outPath);
-  const mode: ClipCutResult["mode"] = canStreamCopy(sourceFormat, outPath) ? "copy" : "reencode";
+  const mode: ClipCutResult["mode"] =
+    opts.forceReencode || !canStreamCopy(sourceFormat, outPath) ? "reencode" : "copy";
   // Split the cost before spending it (ADAAAA-8106 AC2): a re-encode's seek
   // (demux into the growing recording) is measured separately from the encode
   // so one log line can say which half is slow. A copy-mode cut has no encode
   // worth separating, so it skips the probe and reports null.
   const seekMs = mode === "reencode" ? await probeSeekCost(ffmpegPath, source, startS, durationS) : null;
-  const args = buildClipArgs({ source, outPath, startS, durationS, mode, kind: kind ?? "mp4" });
+  const preRoll = opts.exactTrim && mode === "reencode" ? Math.max(0, opts.preRollS ?? CLIP_EXACT_TRIM_PREROLL_S) : 0;
+  const demuxStart = Math.max(0, startS - preRoll);
+  const exactTrimS = opts.exactTrim && mode === "reencode" ? Math.max(0, startS - demuxStart) : undefined;
+  const args = buildClipArgs({
+    source,
+    outPath,
+    startS: demuxStart,
+    durationS,
+    mode,
+    kind: kind ?? "mp4",
+    ...(exactTrimS == null ? {} : { exactTrimS }),
+  });
   const encodeT0 = Date.now();
   try {
     await runFfmpeg(ffmpegPath, args);

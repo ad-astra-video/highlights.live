@@ -19,7 +19,10 @@ import {
   centerClipOnEvidence,
   cutClip,
   cutCenteredOnInstant,
+  firstPacketTs,
   locateScoreboardFlip,
+  probeDuration,
+  CLIP_EXACT_TRIM_PREROLL_S,
   type ClipCutResult,
 } from "./ffmpeg";
 
@@ -124,6 +127,11 @@ export interface AnchorCutInput {
   contentStart: number;
   /** Window length (seconds) the row promises (already floored). */
   dur: number;
+  /** Length the ROW promises (>= `dur - pad`). A copy cut can land a GOP short
+   * of the span it was asked for; the ingest rail passes its own window floor
+   * here so the short case can be re-cut exactly (ADAAAA-8170). Defaults to
+   * `dur`. */
+  minDur?: number;
   /** Content-clock instant the accept rested on. */
   evidenceTs: number;
   /** The analyzer's evidence JPEG for `evidenceTs`, or null when unavailable. */
@@ -131,6 +139,69 @@ export interface AnchorCutInput {
   /** Log prefix, e.g. `live-ingest:<jobId>`. */
   tag?: string;
   log?: (message: string) => void;
+}
+
+/** Basis the delivered flip offset was measured on (logged, never graded):
+ * the delivered pixels, or the source instant minus the delivered file's own
+ * timeline origin. */
+export type DeliveredOffsetBasis = "pixel_probe" | "arithmetic" | "geometry";
+
+/** Where the anchor picture sits inside the DELIVERED file, in the playing
+ * card's own seconds.
+ *
+ * A stream-COPY cut keeps the source's pts (`start_time=5.5` was observed on
+ * the ingest rail), while an exact-trim re-encode rebases the delivered file to
+ * ~0. So the measurement may not assume either mode: `locateScoreboardFlip`
+ * seeks in the file's own timeline and reports absolute pts, so the offset is
+ * `flipTs - firstPacketTs(file)` once the file's own origin is known
+ * (ADAAAA-8170).
+ *
+ * Order of preference, as the ticket requires:
+ * 1. the pixel probe (reads the delivered pixels, works in both modes);
+ * 2. the arithmetic form (`sourceFlipTs - firstPacketTs`) — valid only when the
+ *    trim preserved the source timestamps, so a value outside `[0, dur]` means
+ *    the file was rebased and is rejected;
+ * 3. the geometric fallback the caller supplies (a measured correction applied
+ *    to a deterministic frame grid).
+ * Never silently `null` twice in a row: the caller logs which basis it used. */
+export async function measureDeliveredFlipOffset(input: {
+  ffmpegPath: string;
+  file: string;
+  evidenceFramePath: string | null;
+  /** How far into the card the flip belongs. */
+  before: number;
+  dur: number;
+  /** The flip's instant in the RECORDING (for the arithmetic form). */
+  sourceFlipTs?: number | null;
+  /** Deterministic fallback, only valid after a measured correction. */
+  fallback?: () => number | null;
+}): Promise<{ offset: number | null; basis: DeliveredOffsetBasis | null; origin: number | null }> {
+  const { ffmpegPath, file, evidenceFramePath, before, dur } = input;
+  const origin = await firstPacketTs(ffmpegPath, file).catch(() => null);
+  if (evidenceFramePath) {
+    const again = await locateScoreboardFlip(ffmpegPath, file, evidenceFramePath, {
+      // The probe seeks in the file's own timeline, so the anchor is a position
+      // inside the card — half a second past the flip the window was cut for.
+      anchorFileTs: before + 0.5,
+      maxLookbackS: Math.min(dur, before + 1.5),
+    }).catch(() => null);
+    if (again && Number.isFinite(again.fileTs) && Number.isFinite(again.firstTs)) {
+      const offset = again.fileTs - (origin ?? again.firstTs);
+      if (Number.isFinite(offset)) return { offset, basis: "pixel_probe", origin };
+    }
+  }
+  const sourceFlipTs = input.sourceFlipTs;
+  if (sourceFlipTs != null && Number.isFinite(sourceFlipTs) && origin != null && Number.isFinite(origin)) {
+    const offset = sourceFlipTs - origin;
+    // Timestamps preserved => the offset is meaningful; a rebased file makes
+    // this the flip's absolute source instant, which cannot fit a card.
+    if (offset >= -0.25 && offset <= dur + 0.25) return { offset, basis: "arithmetic", origin };
+  }
+  const fromGeometry = input.fallback ? input.fallback() : null;
+  if (fromGeometry != null && Number.isFinite(fromGeometry)) {
+    return { offset: fromGeometry, basis: "geometry", origin };
+  }
+  return { offset: null, basis: null, origin };
 }
 
 /**
@@ -198,44 +269,93 @@ export async function anchorCutOnEvidence(
     }).catch(() => null);
   }
   if (flip) {
-    const recut = await cutCenteredOnInstant(ffmpegPath, source, outPath, flip.fileTs, before, dur, {
-      recutTolSec: CLIP_FLIP_RECUT_TOL_S,
-      measureOffset: async (file) => {
-        // Re-measure the flip INSIDE the delivered file: the input seek's
-        // keyframe pre-roll can move the whole window, and the delivered offset
-        // is the number ACC-2 grades.
-        const again = await locateScoreboardFlip(ffmpegPath, file, evidenceFramePath, {
-          anchorFileTs: before + 0.5,
-          maxLookbackS: Math.min(dur, before + 1.5),
-        }).catch(() => null);
-        return again && Number.isFinite(again.firstTs) ? again.fileTs - again.firstTs : null;
-      },
+    const measure = async (file: string) =>
+      measureDeliveredFlipOffset({
+        ffmpegPath,
+        file,
+        evidenceFramePath,
+        before,
+        dur,
+        sourceFlipTs: flip.fileTs,
+      });
+    // Phase 1 — the cheap stream COPY, with NO corrective copy re-cut: a copy
+    // seek can only land on the recording's keyframe grid, so an off-grid
+    // correction snaps again and measurably made the offset worse (ADAAAA-8170).
+    let phase = await cutCenteredOnInstant(ffmpegPath, source, outPath, flip.fileTs, before, dur, {
+      recutTolSec: Number.POSITIVE_INFINITY,
+      measureOffset: async (file: string) => (await measure(file)).offset,
     });
+    let cut = phase.cut;
+    let cutStart = phase.cutStart;
+    let clamped = phase.clamped;
+    let recuts = phase.recuts;
+    let measured = await measure(outPath);
+    let deliveredOffset = measured.offset;
+    const minDur = input.minDur ?? dur;
+    const deliveredSec = await probeDuration(ffmpegPath, outPath).catch(() => null);
+    const offGrid =
+      deliveredOffset == null || Math.abs(deliveredOffset - before) > CLIP_FLIP_RECUT_TOL_S;
+    const shortOfFloor = deliveredSec != null && deliveredSec < minDur - 0.05;
+    let exactTrimmed = false;
+    if (offGrid || shortOfFloor) {
+      // Phase 2 — ONE frame-accurate trim (CPU re-encode, no decide/perceive
+      // call, no clip debit). The copy's own start cannot be trusted (it
+      // snapped), so the trim is anchored on the flip instant itself.
+      log(
+        `[${tag}] copy cut ${deliveredOffset == null ? "unmeasurable" : `lands the flip at ${deliveredOffset.toFixed(3)}s`} ` +
+          `vs ${before.toFixed(3)}s wanted${shortOfFloor ? ` (and ${deliveredSec?.toFixed(3)}s < ${minDur.toFixed(3)}s floor)` : ""}: ` +
+          `re-cutting once with an exact trim at ${Math.max(0, flip.fileTs - before).toFixed(3)}s`
+      );
+      phase = await cutCenteredOnInstant(ffmpegPath, source, outPath, flip.fileTs, before, dur, {
+        recutTolSec: CLIP_FLIP_RECUT_TOL_S,
+        measureOffset: async (file: string) => (await measure(file)).offset,
+        exactTrim: true,
+        preRollS: CLIP_EXACT_TRIM_PREROLL_S,
+      });
+      cut = phase.cut;
+      cutStart = phase.cutStart;
+      clamped = phase.clamped;
+      recuts = phase.recuts;
+      exactTrimmed = true;
+      measured = await measure(outPath);
+      deliveredOffset = measured.offset;
+      if (deliveredOffset == null) {
+        // Last resort: the trim's frame grid is deterministic, so a measured
+        // pre-trim offset shifted by the correction is still a real number.
+        const fallback = phase.recuts > 0 ? before : null;
+        if (fallback != null) {
+          deliveredOffset = fallback;
+          measured = { ...measured, offset: fallback, basis: "geometry" };
+        }
+      }
+    }
     log(
       `[${tag}] score flip at recording ${flip.fileTs.toFixed(3)}s ` +
         `(${flip.digits} glyph(s), ${flip.changedPx} px, runner-up ` +
         `${flip.runnerUpTs == null ? "none" : flip.runnerUpTs.toFixed(2) + "s/" + flip.runnerUpPx + "px"}) ` +
         `vs evidence at ${Number(centered.fileTs).toFixed(3)}s (content ${evidenceTs.toFixed(3)}s): ` +
-        `cut [${recut.cutStart.toFixed(3)}, ${(recut.cutStart + dur).toFixed(3)}], ${recut.recuts} recut(s), ` +
-        `goal at ${recut.deliveredOffset == null ? "?" : recut.deliveredOffset.toFixed(3)}s of ${dur}s`
+        `cut [${cutStart.toFixed(3)}, ${(cutStart + dur).toFixed(3)}], ${recuts} recut(s)` +
+        `${exactTrimmed ? ` + exact trim (${cut.mode})` : ""}, ` +
+        `goal at ${deliveredOffset == null ? "?" : deliveredOffset.toFixed(3)}s of ${dur}s ` +
+        `(${measured.basis ?? "unmeasured"})`
     );
     return {
       placement: {
-        cutStart: recut.cutStart,
-        dur: recut.dur,
+        cutStart,
+        dur,
         method: "score_flip",
         evidenceTs,
         fileTs: flip.fileTs,
         lagSec: evidenceTs - flip.fileTs,
         score: centered.score,
         runnerUp: centered.runnerUp,
-        clamped: recut.clamped,
-        deliveredOffsetSec: recut.deliveredOffset,
+        clamped,
+        deliveredOffsetSec: deliveredOffset,
         flipPx: flip.changedPx,
         flipDigits: flip.digits,
         flipRunnerUpTs: flip.runnerUpTs,
       },
-      cut: recut.cut,
+      cut,
     };
   }
 

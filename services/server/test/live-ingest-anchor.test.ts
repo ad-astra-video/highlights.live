@@ -21,7 +21,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LiveIngest } from "../src/live";
-import { locateScoreboardFlip, probeDuration } from "../src/ffmpeg";
+import { firstPacketTs, locateScoreboardFlip, probeDuration } from "../src/ffmpeg";
+import { CLIP_FLIP_RECUT_TOL_S } from "../src/clip-anchor";
 
 const hasFfmpeg = (() => {
   try {
@@ -110,6 +111,7 @@ function frameDirFor(jobId: string): string {
 let footage: Buffer;
 let fullSession: string;
 let shortSession: string;
+let longGopSession: string;
 
 function cfg() {
   return {
@@ -139,6 +141,42 @@ function writeSession(file: string, seconds: number) {
   );
 }
 
+/** ADAAAA-8170: the rail's real session is MPEG-TS h264 from `-preset
+ * veryfast`, i.e. a ~250-frame GOP (≈4 s at 60 fps). Here that is `-g FPS*6`
+ * (6 s). A stream-COPY cut can only trim on that grid, so the delivered window
+ * lands up to a GOP away from where it was asked — the shape that put goal 2 of
+ * leg `b2dae80f` at 0.285 d. */
+function writeLongGopSession(file: string, seconds: number) {
+  const frames = seconds * FPS;
+  execFileSync(
+    "ffmpeg",
+    [
+      "-y", "-v", "error",
+      "-f", "rawvideo", "-pix_fmt", "gray", "-s", `${W}x${H}`, "-r", String(FPS),
+      "-i", "-",
+      "-frames:v", String(frames),
+      "-c:v", "libx264", "-preset", "veryfast", "-g", String(FPS * 6), "-pix_fmt", "yuv420p",
+      "-f", "mpegts",
+      file,
+    ],
+    { input: footage.subarray(0, frames * W * H), maxBuffer: 64 * 1024 * 1024 }
+  );
+}
+
+/** The flip's position inside a DELIVERED file, measured the same mode-aware
+ * way the rail measures it (a copy cut keeps the source pts, an exact-trim
+ * re-encode is rebased to ~0) so the assertion cannot accidentally pass on one
+ * mode's timeline (ADAAAA-8170). */
+async function deliveredFlipOffset(file: string, evidence: string): Promise<number | null> {
+  const origin = await firstPacketTs("ffmpeg", file);
+  const probe = await locateScoreboardFlip("ffmpeg", file, evidence, {
+    anchorFileTs: BEFORE + 0.5,
+    maxLookbackS: Math.min(WINDOW, BEFORE + 1.5),
+  });
+  if (!probe || origin == null) return null;
+  return probe.fileTs - origin;
+}
+
 /** Write the rail's sampled frame JPEGs (1 s cadence, `frame_%06d.jpg`, numbered
  * from 1 exactly like the live ffmpeg segmenter). */
 function writeFrames(jobId: string) {
@@ -163,8 +201,10 @@ beforeAll(() => {
   footage = makeScoreFootage();
   fullSession = path.join(tmp, "full.ts");
   shortSession = path.join(tmp, "short.ts");
+  longGopSession = path.join(tmp, "long-gop.ts");
   writeSession(fullSession, SECONDS);
   writeSession(shortSession, 10);
+  writeLongGopSession(longGopSession, SECONDS);
 }, 180_000);
 
 afterAll(() => {
@@ -223,6 +263,42 @@ describe("LiveIngest.cut (ADAAAA-8168 ingest rail)", () => {
     expect(clip.clipAudit?.clipDeliveredSec as number).toBeGreaterThanOrEqual(15.0);
     expect(Math.abs((clip.clipAudit?.clipAnchorDeliveredOffsetSec as number) - flipOffset)).toBeLessThan(0.7);
   }, 180_000);
+
+  it("re-cuts a stream-COPY snap exactly so the flip sits at clipBeforeS (long GOP)", async () => {
+    if (!hasFfmpeg) return;
+    const jobId = "anchor-longgop";
+    const sess = sessionPathFor(jobId);
+    mkdirSync(path.dirname(sess), { recursive: true });
+    execFileSync("cp", [longGopSession, sess]);
+    writeFrames(jobId);
+    const ing = new LiveIngest(cfg(), jobId, { kind: "file-sim", url: "x", sampleInterval: 1 });
+    ing.running = true;
+
+    const clip = await ing.cut(PICTURE_AT);
+    const evidence = path.join(frameDirFor(jobId), "frame_000019.jpg");
+    const out = path.join(dataDir, "clips", `${clip.clipId}.mp4`);
+    expect(existsSync(out)).toBe(true);
+
+    // The session's GOP is 6 s, so a `-c copy` cut lands on that grid. The fix
+    // escalates ONCE to a frame-accurate trim; the delivered flip must come
+    // back to the offset the row promises, not to wherever the keyframe fell.
+    const delivered = (await probeDuration("ffmpeg", out)) as number;
+    expect(delivered).toBeGreaterThanOrEqual(15.0);
+    const offset = await deliveredFlipOffset(out, evidence);
+    expect(offset).not.toBeNull();
+    expect(Math.abs((offset as number) - BEFORE)).toBeLessThanOrEqual(CLIP_FLIP_RECUT_TOL_S);
+    // ... and the goal is inside the middle third of the card the AC grades.
+    expect(offset as number).toBeGreaterThanOrEqual(WINDOW / 3);
+    expect(offset as number).toBeLessThanOrEqual((2 * WINDOW) / 3);
+
+    // AC3 audit: the row still says HOW it was placed, and the delivered offset
+    // is a NUMBER measured on the delivered file (never undefined when the flip
+    // was located), agreeing with the file itself.
+    expect(clip.clipAudit?.clipAnchorMethod).toBe("score_flip");
+    expect(typeof clip.clipAudit?.clipAnchorDeliveredOffsetSec).toBe("number");
+    expect(clip.clipAudit?.clipDeliveredSec as number).toBeGreaterThanOrEqual(15.0);
+    expect(Math.abs((clip.clipAudit?.clipAnchorDeliveredOffsetSec as number) - (offset as number))).toBeLessThan(0.7);
+  }, 240_000);
 
   it("refuses to publish a window the recorder has not flushed", async () => {
     if (!hasFfmpeg) return;
