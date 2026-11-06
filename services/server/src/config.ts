@@ -268,6 +268,11 @@ export interface ServerConfig {
    * cap). Default off so the deployed candidate-gated live baseline is unchanged
    * until the observer pass is validated. `LIVE_OBSERVE_LOOP`. */
   liveObserveLoop: boolean;
+  /** ADAAAA-8139: enable the bounded persisted-frame re-read of a demoted LIVE
+   * goal window (score-bug OCR only, <= 8 OCR calls per leg, no decide call and
+   * no Livepeer debit). On by default; `LIVE_FRAME_REREAD=0` disables it, which
+   * leaves the ADAAAA-8134 pooled re-read as the only path (byte-identical). */
+  liveFrameReread: boolean;
   /** ADAAAA-7676: wall-clock lag budget (seconds) for the LIVE observe pass.
    * Once a frame's content time is further behind wall time than this, the pass
    * DROPS the stale frames/windows (counted as `observeMetrics
@@ -893,6 +898,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // with LIVE_OBSERVE_LOOP=1 (default off; the candidate-gated live baseline
     // stays the behavior until the observer pass is validated).
     liveObserveLoop: env.LIVE_OBSERVE_LOOP === "1",
+    // ADAAAA-8139: bounded persisted-frame re-read for a demoted goal window.
+    // On by default (it is the only lever that recovers a goal the sampled read
+    // rate missed); `LIVE_FRAME_REREAD=0` restores the 8134 pooled-only path.
+    liveFrameReread: env.LIVE_FRAME_REREAD !== "0",
     // ADAAAA-7676: bound the live observe lag against the wall clock. Once the
     // content clock falls further behind wall time than this budget, stale
     // frames/windows are dropped (counted on the job) instead of decided late.

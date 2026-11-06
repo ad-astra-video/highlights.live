@@ -81,6 +81,7 @@ from .scoreboard_vision import (
     enabled as scoreboard_vision_enabled,
     vision_scoreboard,
 )
+from .scoreboard_probe import probe_scoreboard_ocr
 from .tracking_plan import (
     PLAN_VERSION,
     SAFE_DEFAULT_ROLE,
@@ -429,6 +430,21 @@ class EvidenceRequest(BaseModel):
     windowS: float | None = None
     startTs: float | None = None
     endTs: float | None = None
+
+
+class ScoreboardProbeRequest(BaseModel):
+    """Single-frame score-bug OCR probe (ADAAAA-8139).
+
+    Used by the server's bounded persisted-frame re-read of a demoted goal
+    window: the frame bytes are already on disk, so the only work is ONE
+    score-bug crop `<OCR>` pass. ``roi`` optionally pins the crop (normalized
+    ``[x0, y0, x1, y1]``); without it the session's cached ROI is used, then the
+    operator's ``PERCEIVE_SCOREBOARD_ROI``, then the documented top-band prior.
+    Never a whole-frame OCR: a crop miss is absent evidence, not a wider read.
+    """
+
+    image: str = ""
+    roi: list[float] | None = None
 
 
 class MatchContextRequest(BaseModel):
@@ -2133,6 +2149,26 @@ def create_app() -> FastAPI:
             state.stream_id = req.stream_id
         cand, series, whistle = process_audio(state, req.seq, req.timestamp, req.samples)
         return {"candidate": cand, "series": series, "whistle": whistle}
+
+    @router.post("/scoreboard")
+    async def scoreboard_probe(
+        req: ScoreboardProbeRequest,
+        livepeer_session_id: str | None = Header(default=None),
+        x_session_id: str | None = Header(default=None),
+    ):
+        """ADAAAA-8139: one score-bug crop OCR on an already-captured frame.
+
+        The server's persisted-frame re-read of a demoted goal window calls this
+        once per frame. Cost posture: ONE `<OCR>` crop inference and nothing
+        else — no detection, no SAM, no tracker mutation, no decide call, no
+        Livepeer debit. A bad image / missing detector / OCR failure returns an
+        empty ``ocr`` list with a ``reason`` (absent evidence, never fabricated,
+        never a 500 into the rail). The raw lines are returned so the server's
+        own `parseOcrScoreLine` stays the single owner of "what is a score".
+        """
+        sid = _read_session_id(livepeer_session_id, x_session_id)
+        state = registry.get(sid) if sid else None
+        return probe_scoreboard_ocr(req.image, roi=req.roi, state=state)
 
     @router.get("/events")
     async def events(
