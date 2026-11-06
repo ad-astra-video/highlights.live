@@ -72,6 +72,12 @@ import {
   type FrameRereadIo,
 } from "./live-frame-reread";
 import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger";
+import {
+  ConfirmDiveBudget,
+  LIVE_CONFIRM_MAX_DIVES_PER_300S,
+  confirmDiveKey,
+  type PendingConfirmDive,
+} from "./live-confirm-async";
 import type { TriggerFamilyLatency } from "./observe-loop";
 // ADAAAA-8081: the live ASR side lane (fire-time prefetch) + the observer's
 // non-enumerable payload key that carries its promise to the decide builder.
@@ -3203,6 +3209,20 @@ export interface AnalyzerConfig {
    * debit. Bounded by {@link LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN}. Unset =>
    * the rail keeps the ADAAAA-8134 pooled re-read only (byte-identical). */
   liveFrameReread?: LiveFrameRereadConfig;
+  /** ADAAAA-8205: run the Stage-2 confirm dive OFF the accept path. When armed
+   * (LIVE_CONFIRM_ASYNC, default on for the live rail) and `confirmEnabled`, the
+   * accept persists the provisional row exactly as the `LIVE_DECIDE_CONFIRM=0`
+   * baseline does, hands the caller a {@link PendingConfirmDive}, and never
+   * awaits `confirmReconcile` — so the delivered latency is unchanged and a
+   * failed dive cannot rewrite the row. Unset / false keeps the inline dive
+   * (VOD and the legacy posture, byte-identical). */
+  liveConfirmAsync?: boolean;
+  /** ADAAAA-8205: per-stream dives allowed in any 300 s content window. */
+  liveConfirmMaxDivesPer300S?: number;
+  /** ADAAAA-8205: receives the pending-dive descriptor when async is armed. The
+   * caller runs it off the accept path (fire-and-forget) and writes the verdict
+   * back on the SAME row. Best-effort: a throwing hook never fails the accept. */
+  onConfirmDivePending?: (descriptor: PendingConfirmDive) => void;
   /**
    * ADAAAA-7948 (Inc 3): ground every FAST caption before it is persisted —
    * gate goal claims on the window's own verdict, replace names the window's
@@ -3462,6 +3482,15 @@ export interface LiveObserveMetricsSnapshot {
    *  `acceptMs` / `persistAckMs` naming where the seconds went. Additive
    *  optional: absent when no highlight was delivered (and on older records). */
   deliveredLatency?: LiveDeliveredLatencySnapshot;
+  /** ADAAAA-8205: confirm calls the async lane made — the decide meter's confirm
+   *  term (`costUsd = decideFee * (decideCalls + confirmCalls) + perceive`).
+   *  Absent when the lane never ran. */
+  confirmCalls?: number;
+  /** ADAAAA-8205: dives that produced a verdict (<= 8 per 300 s per stream). */
+  confirmDiveCount?: number;
+  /** ADAAAA-8205: dives dropped fail-closed (busy pool / budget / timeout /
+   *  transport / parse) — every one leaves its card unchanged. */
+  confirmDropped?: number;
 }
 
 /** ADAAAA-7774: the LIVE observe pass's ingest -> analysis stride evidence. */
@@ -3565,7 +3594,8 @@ export function liveLagReserveS(maxE2eMs: number, meanE2eMs: number, budgetS: nu
  * pass (absent for a pass that ran no stride). */
 export function buildLiveObserveMetrics(
   obs: LiveObserver,
-  stride?: LivePerceiveStrideSnapshot
+  stride?: LivePerceiveStrideSnapshot,
+  confirm?: { calls: number; dives: number; dropped: number }
 ): LiveObserveMetricsSnapshot {
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
@@ -3633,6 +3663,14 @@ export function buildLiveObserveMetrics(
     // per delivered highlight, so the AC is readable off the record with no
     // `[live-lag]` + `[ingest-gap]` log join. Absent until a row is delivered.
     ...(delivered ? { deliveredLatency: delivered } : {}),
+    // ADAAAA-8205: the async confirm lane's meter. `confirmCalls` is the decide
+    // meter's confirm term (costUsd = decideFee * (decideCalls + confirmCalls) +
+    // perceive), `confirmDiveCount` the dives that produced a verdict, and
+    // `confirmDropped` the dives dropped fail-closed (busy pool / budget /
+    // timeout / transport / parse). Absent when the lane never ran.
+    ...(confirm
+      ? { confirmCalls: confirm.calls, confirmDiveCount: confirm.dives, confirmDropped: confirm.dropped }
+      : {}),
   };
 }
 
@@ -4423,6 +4461,73 @@ export class LiveRunShared {
     const add = Math.max(0, Math.floor(Number(n) || 0));
     if (add > 0) this.frameRereadOcrCallCount += add;
   }
+  // --- ADAAAA-8205: the LIVE async confirm lane ------------------------------
+  /** Pending dives (one per published provisional row), bounded. */
+  private pendingConfirmDiveEntries: PendingConfirmDive[] = [];
+  /** Dive keys already attempted this run (one dive per distinct goal). */
+  private confirmDiveAttempts = new Set<string>();
+  /** Sliding per-stream dive budget (<= 8 per 300 s by default). */
+  readonly confirmBudget = new ConfirmDiveBudget();
+  /** Confirm calls this run made — metered like a decide call. */
+  private confirmDiveCallCount = 0;
+  /** Dives that produced a verdict (attempted and settled, ok or not). */
+  private confirmDiveRunCount = 0;
+  /** Dives DROPPED (busy pool, budget, timeout, transport, parse). */
+  private confirmDiveDroppedCount = 0;
+
+  /** ADAAAA-8205: hold a published provisional row's dive descriptor. */
+  notePendingConfirmDive(entry: PendingConfirmDive): void {
+    if (!entry?.highlightId || !Number.isFinite(entry.goalEventTs)) return;
+    // One descriptor per row: a re-produced window updates instead of stacking.
+    const key = confirmDiveKey(entry);
+    this.pendingConfirmDiveEntries = this.pendingConfirmDiveEntries.filter((e) => confirmDiveKey(e) !== key);
+    this.pendingConfirmDiveEntries.push(entry);
+    if (this.pendingConfirmDiveEntries.length > 16) this.pendingConfirmDiveEntries.shift();
+  }
+  /** ADAAAA-8205: the dives this run still holds (read-only snapshot). */
+  pendingConfirmDives(): readonly PendingConfirmDive[] {
+    return [...this.pendingConfirmDiveEntries];
+  }
+  /** ADAAAA-8205: dive keys already attempted. */
+  confirmDiveAttempted(): ReadonlySet<string> {
+    return this.confirmDiveAttempts;
+  }
+  /** ADAAAA-8205: mark one dive as attempted (before the call, never retried). */
+  noteConfirmDiveAttempt(key: string): void {
+    if (key) this.confirmDiveAttempts.add(key);
+  }
+  /** ADAAAA-8205: forget a settled/dropped dive (the row no longer waits). */
+  dropPendingConfirmDive(key: string): void {
+    if (!key) return;
+    this.pendingConfirmDiveEntries = this.pendingConfirmDiveEntries.filter((e) => confirmDiveKey(e) !== key);
+  }
+  /** ADAAAA-8205: count one dropped dive + name why (audit/metrics). */
+  noteConfirmDiveDropped(_reason: string): void {
+    this.confirmDiveDroppedCount++;
+  }
+  /** ADAAAA-8205: count one settled dive (a confirm call was made). */
+  noteConfirmDiveDone(_ok: boolean, _latencyMs: number): void {
+    this.confirmDiveRunCount++;
+    this.confirmDiveCallCount++;
+    this.confirmMetrics.totalRuns++;
+  }
+  /** ADAAAA-8205: confirm calls this run made (the cost meter's confirm term). */
+  confirmDiveCalls(): number {
+    return this.confirmDiveCallCount;
+  }
+  /** ADAAAA-8205: dives that produced a verdict. */
+  confirmDiveCount(): number {
+    return this.confirmDiveRunCount;
+  }
+  /** ADAAAA-8205: dives dropped without moving the row. */
+  confirmDiveDropped(): number {
+    return this.confirmDiveDroppedCount;
+  }
+  /** ADAAAA-8205: the configured default budget for this run. */
+  confirmDiveMaxPer300s(): number {
+    return LIVE_CONFIRM_MAX_DIVES_PER_300S;
+  }
+
   /** ADAAAA-8006: resolve ONE demoted row against a later window's scoreboard
    * read. Returns the re-emit to apply, or `[]` when nothing matches.
    *
@@ -5627,20 +5732,36 @@ export async function acceptVideoDecision(
   // analysis so the request-inspection view renders the energy-vs-baseline
   // graph. Best-effort: absent analysis / no series leaves it unchanged.
   const stageAnalysis = withAudioSeries(stage1.analysis, run, candidate.timestamp, cfg);
+  // ADAAAA-8205: the LIVE async confirm lane. Armed => the Stage-2 dive runs OFF
+  // this path over the row's persisted artifacts, so the accept never awaits it:
+  // the row publishes exactly as the `LIVE_DECIDE_CONFIRM=0` baseline (its
+  // provisional marker kept), delivered latency is unchanged (AC-A1), and a
+  // failed dive can never rewrite the row to `near_miss` (AC-A7). Unarmed / VOD
+  // keeps the inline dive byte-identical.
+  const asyncConfirmArmed =
+    cfg.liveConfirmAsync === true &&
+    cfg.liveObserveLoop === true &&
+    cfg.decideWindowN === undefined &&
+    shouldRunConfirm(cfg, candidate, stage1);
+  const confirmOutcome = asyncConfirmArmed
+    ? { decision: stage1, confirmRan: false, confirm: undefined as ConfirmDecision | undefined }
+    : await confirmReconcile(client, run, cfg, stage1, candidate, goalEventTs);
   // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
   // candidate whose Stage-1 read is a scoring_play accept, run the decide
   // /confirm deep frame dive and adopt the reconciled verdict in its place.
   // Strict no-op when the trigger doesn't fire or the flag (confirmEnabled) is
   // off; the Stage-1 verdict is kept on passthrough / transport failure.
-  const { decision: confirmReconciled, confirmRan, confirm } = await confirmReconcile(client, run, cfg, stage1, candidate, goalEventTs);
+  const { decision: confirmReconciled, confirmRan, confirm } = confirmOutcome;
   // ADAAAA-7185: accepted == corroborated. When the Stage-2 gate is live and it
   // RAN for this un-attested goal but could not corroborate it (passthrough or
   // transport failure left goalConfirmed null), the Stage-1 visual read is NOT
   // sufficient — downgrade to a near-miss so no un-corroborated GOAL is accepted
   // as final. (A structured confirmed_goal without corroboration is already
   // downgraded to near_miss by the decide-side gate.)
+  // ADAAAA-8205: never on the async lane — the dive has not run yet, and the
+  // provisional row must publish untouched until its verdict lands.
   let decision = confirmReconciled;
-  if (cfg.confirmEnabled && confirmRan && !(confirm && confirm.goalConfirmed)) {
+  if (cfg.confirmEnabled && !asyncConfirmArmed && confirmRan && !(confirm && confirm.goalConfirmed)) {
     decision = downgradeUncorroborated(stage1);
   }
   // ADAAAA-6798 Inc 2: derive the trigger provenance ONCE from the candidate
@@ -6024,6 +6145,37 @@ export async function acceptVideoDecision(
   }
   const { clipUri } = clip;
 
+  // ADAAAA-8205: the async lane's descriptor, persisted WITH the row. Only a
+  // row that did NOT reach the scoring lane needs a dive (a measured accept is
+  // already attested), and only the live rail has a judged window to attribute
+  // the verdict to.
+  const pendingConfirmDive: PendingConfirmDive | undefined =
+    asyncConfirmArmed && liveWindow && decision.outcome !== "scoring_play"
+      ? {
+          highlightId: "", // filled in once the row id exists (below)
+          jobId: cfg.jobId ?? "",
+          goalEventTs: Number.isFinite(goalEventTs as number) ? (goalEventTs as number) : candidate.timestamp,
+          window: { lo: liveWindow.lo, hi: liveWindow.hi },
+          stage1: {
+            eventType: decision.eventType ?? candidate.eventType,
+            outcome: decision.outcome,
+            reason: decision.reason,
+          },
+          analysis: {
+            transcript: stageAnalysis?.asr?.transcript,
+            audioLevels: (stageAnalysis?.audioSeries ?? [])
+              .map((p) => (Number.isFinite(p?.energy) ? p.energy : NaN))
+              .filter((v) => Number.isFinite(v)),
+          },
+          signals: {
+            ballOutcome: candidate.ballOutcome,
+            goalCrossed: candidate.goalCrossed,
+            scoreBoardChanged: candidate.scoreBoardChanged,
+          },
+          queuedAt: candidate.timestamp,
+        }
+      : undefined;
+
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
@@ -6059,6 +6211,11 @@ export async function acceptVideoDecision(
     // the deferred re-attestation measures the score change on this same row.
     // Absent on every scoring row and on rows with no cue.
     provisionalGoal: liveProvisionalGoal,
+    // ADAAAA-8205: the pending Stage-2 dive this row publishes with. The dive
+    // runs off the accept path once the judged window's lookahead closes, and
+    // its verdict moves THIS row in place (never an insert). Absent on every
+    // scoring row, the VOD rail, and the unarmed posture.
+    pendingConfirmDive: pendingConfirmDive ? { ...pendingConfirmDive, highlightId: "" } : undefined,
     // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
     // produced this clip plus the delivered window length so the delivered clip
     // window is auditable (Acc-3). Values come from the resolved (webui > env)
@@ -6152,6 +6309,20 @@ export async function acceptVideoDecision(
       // for its one OCR pass) from a demotion the OCR cannot fix.
       scoreReads: candidate.scoreReads,
     });
+  }
+  // ADAAAA-8205: publish the dive descriptor now that the row exists. The dive
+  // itself runs OFF this path (the hook is fire-and-forget in the live rails):
+  // nothing here awaits a confirm call, so the accept's delivered latency stays
+  // on the `LIVE_DECIDE_CONFIRM=0` baseline and a slow dive cannot stall the
+  // frame loop. Best-effort: a throwing hook never fails the accept.
+  if (pendingConfirmDive) {
+    const descriptor: PendingConfirmDive = { ...pendingConfirmDive, highlightId: rec.id };
+    run.notePendingConfirmDive(descriptor);
+    try {
+      cfg.onConfirmDivePending?.(descriptor);
+    } catch (e: any) {
+      console.error(`[live-confirm:${cfg.jobId}] pending-dive hook failed:`, String(e?.message || e));
+    }
   }
   // ADAAAA-7865: record the delivered SCORING goal's event coverage. Only a
   // scoring accept becomes an event — a downgraded celebration must never make a
@@ -9215,6 +9386,10 @@ export async function analyzeJob(
             perceiveHotCalls,
             analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
             perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
+          }, {
+            calls: run.confirmDiveCalls(),
+            dives: run.confirmDiveCount(),
+            dropped: run.confirmDiveDropped(),
           }),
         }
       : {}),

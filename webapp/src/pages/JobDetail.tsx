@@ -1176,6 +1176,15 @@ export function HighlightCard({
               {notableBadgeInfo.text}
             </span>
           )}
+          {/* ADAAAA-8205: the async Stage-2 dive read this moment and did not
+              confirm it. The badge stays (the moment is still provisional) and
+              the card says so, so a refuted row cannot read as a confirmed goal
+              and cannot silently lose the label the CEO is watching. */}
+          {(h.provisionalGoal as any)?.refuted && (
+            <span className="text-xs text-mut" data-detail-provisional-refuted>
+              Deep dive did not confirm this goal.
+            </span>
+          )}
           {selectable && !notable && onToggleSelect && (
             <label className="ml-auto flex cursor-pointer items-center gap-1 text-xs text-mut" data-detail-select-label>
               <input
@@ -1356,6 +1365,14 @@ function LaneRowFacts({
           title={admin ? h.provisionalGoal.note : undefined}
         >
           GOAL (unconfirmed)
+        </span>
+      )}
+      {/* ADAAAA-8205: the refuted marker is customer copy, not a cue name — the
+          deep dive saw the moment and did not confirm it. The provisional
+          label above is kept (AC-A7). */}
+      {(h.provisionalGoal as any)?.refuted && lane === "notable" && (
+        <span className="ml-2 text-xs text-mut" data-detail-provisional-refuted>
+          Deep dive did not confirm this goal.
         </span>
       )}
       {admin && <span className="ml-2">· score {Math.round(h.score)}</span>}

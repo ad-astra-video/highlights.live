@@ -40,6 +40,9 @@ export interface TerminalAccountingInput {
   /** MEASURED decide invocations, or `null` when the count was never recorded.
    * Never pass 0 to mean "unknown". */
   decideCalls: number | null;
+  /** ADAAAA-8205: MEASURED confirm dives (decide-service calls), metered in the
+   * same term. Default 0 keeps every existing caller byte-identical. */
+  confirmCalls?: number;
   /** Seconds the perceive session was paid for. Omitted/null when unknown. */
   perceiveSessionS?: number | null;
   nowMs?: number;
@@ -65,8 +68,11 @@ export function accruedSecondsSince(iso: string | undefined, nowMs: number): num
 
 /** List cost of `decideCalls` decide invocations plus `perceiveSessionS` of
  * paid perceive session, rounded to the 4dp the record stores. */
-export function computeCostUsd(decideCalls: number, perceiveSessionS: number, decideFee: number): number {
-  const cost = decideFee * Math.max(0, decideCalls) + (Math.max(0, perceiveSessionS) / 3600) * PERCEIVE_PER_HOUR_USD;
+export function computeCostUsd(decideCalls: number, perceiveSessionS: number, decideFee: number, confirmCalls = 0): number {
+  // ADAAAA-8205: confirm dives are decide-service calls, so they are metered in
+  // the same term: `decideFee * (decideCalls + confirmCalls) + perceive`.
+  const billableCalls = Math.max(0, decideCalls) + Math.max(0, confirmCalls);
+  const cost = decideFee * billableCalls + (Math.max(0, perceiveSessionS) / 3600) * PERCEIVE_PER_HOUR_USD;
   return Number(cost.toFixed(4));
 }
 
@@ -87,7 +93,7 @@ export function buildTerminalAccountingPatch(input: TerminalAccountingInput): Pa
   const perceiveS = input.perceiveSessionS ?? null;
   if (input.decideCalls !== null && Number.isFinite(input.decideCalls)) {
     const decideCalls = Math.max(0, Math.trunc(input.decideCalls));
-    const cost = computeCostUsd(decideCalls, perceiveS ?? 0, input.decideFee);
+    const cost = computeCostUsd(decideCalls, perceiveS ?? 0, input.decideFee, input.confirmCalls ?? 0);
     patch.decideCalls = decideCalls;
     if (perceiveS !== null) patch.perceiveSessionS = Number(perceiveS.toFixed(1));
     patch.costUsd = cost;

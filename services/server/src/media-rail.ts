@@ -751,7 +751,14 @@ export class MediaRailObserver {
   /** The job-visible observe snapshot (decideCalls / latency / anchored vs
    *  cadence fires), read at share end. */
   observeMetrics(): LiveObserveMetricsSnapshot {
-    const metrics = buildLiveObserveMetrics(this.live);
+    // ADAAAA-8205: the async confirm lane's meter rides the run, exactly like the
+    // analyzer pass's snapshot, so a media-rail share's `costUsd` is derivable
+    // from its record (decideFee * (decideCalls + confirmCalls) + perceive).
+    const metrics = buildLiveObserveMetrics(this.live, undefined, {
+      calls: this.run.confirmDiveCalls(),
+      dives: this.run.confirmDiveCount(),
+      dropped: this.run.confirmDiveDropped(),
+    });
     // ADAAAA-8102: prove the consume rate from the JOB RECORD, not from
     // `printenv`. Before this the media rail published no `perceive` block at all
     // (it was documented as "absent when the pass ran no stride — e.g. the

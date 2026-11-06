@@ -35,6 +35,14 @@ import { audioTriggerFromCandidate, audioTriggerFromWhistle } from "./audio-trig
 import { MediaRailObserver } from "./media-rail";
 import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
 import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
+import {
+  LIVE_CONFIRM_LOOKAHEAD_S,
+  confirmDiveAdoption,
+  runDueConfirmDives,
+  type ConfirmDiveIo,
+  type ConfirmDiveResult,
+  type PendingConfirmDive,
+} from "./live-confirm-async";
 import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
@@ -549,6 +557,49 @@ export async function attestDeferredGoalHighlight(
     console.error(`[live-goal-gate-upgrade:${upgrade.jobId}] delivered-ack hook failed:`, String(e?.message || e));
   }
   return attested;
+}
+
+/**
+ * ADAAAA-8205: move an already-persisted row to the lane its async Stage-2 dive
+ * earned — the SAME promote-in-place writer ADAAAA-8199 built
+ * (`store.attestDeferredGoal`), never an insert.
+ *
+ * No billing, no quota, no funnel: the clip was charged as a moment when it
+ * landed, and a verdict move changes which lane the moment's row sits in, not
+ * how many moments the customer bought (AC-A2 / AC-A8). A refuted dive keeps the
+ * row and its clip and only stamps `provisionalGoal.refuted` (AC-A7).
+ */
+export async function attestConfirmDiveHighlight(
+  deps: LiveHighlightPersistence,
+  highlightId: string,
+  result: ConfirmDiveResult,
+  meta: { diveAt: string; onDelivered?: (triggerTs: number, deliveredAtMs: number, highlightId: string) => void }
+): Promise<{ kind: "promoted" | "refuted" | "unchanged"; rec: HighlightRecord } | null> {
+  const row = deps.store.getHighlight(highlightId);
+  if (!row) {
+    console.error(`[live-confirm] row ${highlightId} is gone — dive verdict dropped`);
+    return null;
+  }
+  const adoption = confirmDiveAdoption(row as any, result.verdict, {
+    diveAt: meta.diveAt,
+    diveLatencyMs: result.latencyMs,
+    contextDegraded: result.context.contextDegraded,
+  });
+  const rec = await deps.store.attestDeferredGoal(highlightId, adoption.patch as any);
+  if (adoption.kind === "promoted") {
+    // The promotion makes a scoring-lane row readable on the delivered surface,
+    // exactly like the deferred re-attestation's delivered ack (ADAAAA-8024).
+    try {
+      meta.onDelivered?.(rec.trigger?.timestamp ?? row.trigger?.timestamp ?? 0, Date.now(), rec.id);
+    } catch (e: any) {
+      console.error(`[live-confirm] delivered-ack hook failed:`, String(e?.message || e));
+    }
+  }
+  console.error(
+    `[live-confirm:${rec.jobId}] ${rec.id} ${adoption.kind}: ${adoption.reason} ` +
+      `(goal @${(result.context.frames.length ? "dived" : "no-frames")}, degraded=${result.context.contextDegraded.join(",")})`
+  );
+  return { kind: adoption.kind, rec };
 }
 
 /** Remove a deleted job's on-disk artifacts (ADAAAA-6838). Best-effort: every
@@ -1516,7 +1567,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // media node's own session clock, the same seconds the share is
             // billed on. Feeds the month-to-date ceiling basis.
             liveWatchMinutes: Number((railStats.sessionSeconds / 60).toFixed(3)),
-            costUsd: Number((cfg.decideFee * railMetrics.decideCalls + (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD).toFixed(4)),
+            costUsd: Number(
+              (
+                cfg.decideFee * (railMetrics.decideCalls + (railMetrics.confirmCalls ?? 0)) +
+                (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD
+              ).toFixed(4)
+            ),
           })
           .catch((e: any) => console.error(`[media-rail:${jobId}] metrics persist failed:`, e?.message || e));
       } else if (bj.rail) {
@@ -1674,6 +1730,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // (score-bug OCR only; <= 8 OCR calls/leg, no decide call, no Livepeer
       // debit). Unset when the rail is off or perceive is unreachable.
       liveFrameReread: buildLiveFrameReread({ cfg, jobId: job.id, store, sessionId: job.perceiveSessionId }),
+      // ADAAAA-8205: the async Stage-2 confirm lane's hand-off (runs post-window,
+      // off this accept path, on a per-share serial chain).
+      onConfirmDivePending: asyncConfirmDiveHook(job.id, adapter, () => shared, () => shared.delivery),
     });
     // Clips are cut from the browser recording at share end (finishBrowserJob
     // cuts every highlight that has no clipUri yet): the recording is still
@@ -1872,6 +1931,93 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         );
     };
   }
+  // ADAAAA-8205: the async confirm lane's off-path runner.
+  //
+  // The accept seam has already persisted the provisional row and handed us its
+  // descriptor; this runs the dive AFTER the judged window's lookahead closes (so
+  // the persisted frames + stage-1 analysis are final), on a per-job serial chain
+  // (one dive in flight per stream), and writes the verdict back on the SAME row.
+  // Every failure is a drop: the card is never touched and the run counts it.
+  let confirmDivesInFlight = 0;
+  const confirmDiveChains = new Map<string, Promise<void>>();
+  function asyncConfirmDiveHook(
+    jobId: string,
+    client: PipelineClient,
+    runOf: () => LiveRunShared,
+    deliveryOf: () => LiveDeliveryTracker | null | undefined
+  ) {
+    return (descriptor: PendingConfirmDive) => {
+      const io: ConfirmDiveIo = {
+        framesInSpan: (lo: number, hi: number) =>
+          (store.observationsForJob(jobId) ?? [])
+            .filter((o) => Number.isFinite(o.timestamp) && o.timestamp >= lo && o.timestamp <= hi)
+            .map((o) => ({ seq: o.seq, ts: o.timestamp })),
+        loadFrame: diskFrameLoader(cfg.dataDir, jobId),
+        confirm: (req) => client.confirm(req as any, { jobId }),
+        gameHint: cfg.gameHintDefault,
+      };
+      // The descriptor queued at the accept's own content instant (the judged
+      // window's close), so the wait is the lookahead the deferred lanes already
+      // apply. Bounded: a stalled stream cannot park the chain forever.
+      const waitMs = Math.max(
+        0,
+        (descriptor.window.hi + LIVE_CONFIRM_LOOKAHEAD_S - descriptor.queuedAt) * 1000
+      );
+      const prev = confirmDiveChains.get(jobId) ?? Promise.resolve();
+      const task = prev
+        .then(async () => {
+          if (waitMs > 0) await new Promise((r) => setTimeout(r, Math.min(waitMs, 25_000)));
+          const run = runOf();
+          if (!run) return;
+          confirmDivesInFlight++;
+          try {
+            await runDueConfirmDives({
+              run,
+              io,
+              // The dive is due at the descriptor's own window close + lookahead.
+              nowTs: descriptor.window.hi + LIVE_CONFIRM_LOOKAHEAD_S,
+              jobId,
+              maxDivesPer300s: cfg.liveConfirmMaxDivesPer300S,
+              reuseWindowS: cfg.decideConfirmLiveReuseWindowS,
+              // Saturated decide pool: DROP, never queue (AC-A6). `concurrency`
+              // is the box's decide width; anything at/above it refuses this dive.
+              busy: () =>
+                confirmDivesInFlight > Math.max(1, cfg.decideConcurrency ?? 2)
+                  ? `inflight=${confirmDivesInFlight}`
+                  : null,
+              adopt: async (entry, result) => {
+                const written = await attestConfirmDiveHighlight(
+                  { store, cfg, billing, entitlements, db },
+                  entry.highlightId,
+                  result,
+                  {
+                    diveAt: new Date().toISOString(),
+                    onDelivered: (triggerTs, atMs, highlightId) =>
+                      deliveryOf()?.notePersisted(triggerTs, atMs, highlightId),
+                  }
+                );
+                if (written && written.kind !== "unchanged") {
+                  emitJobEvent(jobId, {
+                    seq: 0,
+                    timestamp: entry.goalEventTs,
+                    type: "highlightAttested",
+                    highlight: written.rec,
+                  });
+                }
+                return written?.kind ?? "unchanged";
+              },
+            });
+          } finally {
+            confirmDivesInFlight = Math.max(0, confirmDivesInFlight - 1);
+          }
+        })
+        .catch((e: any) => console.error(`[live-confirm:${jobId}] dive chain failed:`, String(e?.message || e)))
+        .finally(() => {
+          if (confirmDiveChains.get(jobId) === task) confirmDiveChains.delete(jobId);
+        });
+      confirmDiveChains.set(jobId, task);
+    };
+  }
   // Shared analyze hook: fans to SSE subscribers AND persists observations so
   // the frame debugger can overlay boxes on any past frame (VOD + live).
   function jobEventHook(jobId: string) {
@@ -1992,6 +2138,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         onDeferredGoalAttested: deferredGoalAttestationHook(job.id, () => shared.delivery),
         // ADAAAA-8139: bounded persisted-frame re-read of a demoted goal window.
         liveFrameReread: buildLiveFrameReread({ cfg, jobId: job.id, store, sessionId: job.perceiveSessionId }),
+      // ADAAAA-8205: the async Stage-2 confirm lane's hand-off (runs post-window,
+      // off this accept path, on a per-share serial chain).
+      onConfirmDivePending: asyncConfirmDiveHook(job.id, adapter, () => shared, () => shared.delivery),
       });
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -2112,7 +2261,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // decide path a live job has; absent => 0 recorded calls).
       const perceiveSessionS = (Date.now() - t0) / 1000;
       const liveDecideCalls = outcome.observeMetrics?.decideCalls ?? 0;
-      const liveCostUsd = cfg.decideFee * liveDecideCalls + (perceiveSessionS / 3600) * PERCEIVE_PER_HOUR_USD;
+      // ADAAAA-8205: confirm dives are decide-service calls and are metered in
+      // the same term: decideFee * (decideCalls + confirmCalls) + perceive.
+      const liveConfirmCalls = outcome.observeMetrics?.confirmCalls ?? 0;
+      const liveCostUsd = computeCostUsd(liveDecideCalls, perceiveSessionS, cfg.decideFee, liveConfirmCalls);
       // ADAAAA-8061: a pass stopped mid-stream settles as `cancelled` with the
       // spend it actually incurred. The stop path flips `slot.stopped` (and
       // stamps `stopRequestedAt`) so the frame loop unwinds HERE — the pass used
@@ -2130,6 +2282,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             status: "cancelled",
             decideFee: cfg.decideFee,
             decideCalls: stoppedDecideCalls,
+            confirmCalls: outcome.observeMetrics?.confirmCalls ?? 0,
             perceiveSessionS,
             observeMetrics: outcome.observeMetrics,
             error: "stopped (cancelled via API)",
@@ -2142,7 +2295,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             },
           })
         );
-        const stoppedCostUsd = computeCostUsd(stoppedDecideCalls, perceiveSessionS, cfg.decideFee);
+        const stoppedCostUsd = computeCostUsd(
+          stoppedDecideCalls,
+          perceiveSessionS,
+          cfg.decideFee,
+          outcome.observeMetrics?.confirmCalls ?? 0
+        );
         console.log(
           `[live:${job.id}] stopped mid-pass: decideCalls=${stoppedDecideCalls} perceiveSessionS=${perceiveSessionS.toFixed(1)} costUsd=${stoppedCostUsd}`
         );
@@ -6689,6 +6847,8 @@ export interface LiveAnalyzerConfigDeps {
   onDeferredGoalAttested?: AnalyzerConfig["onDeferredGoalAttested"];
   /** ADAAAA-8139: bounded persisted-frame re-read of a demoted goal window. */
   liveFrameReread?: AnalyzerConfig["liveFrameReread"];
+  /** ADAAAA-8205: the async confirm lane's pending-dive handoff. */
+  onConfirmDivePending?: AnalyzerConfig["onConfirmDivePending"];
 }
 
 /**
@@ -6742,6 +6902,7 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     onRunningSummary,
     onDeferredGoalAttested,
     liveFrameReread,
+    onConfirmDivePending,
   } = deps;
   return {
     jobId: job.id,
@@ -6880,6 +7041,14 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // LiveRunShared.confirmedGoalNear). Deliberately smaller than the goal burst
     // window so a nearby distinct goal keeps its own dive.
     confirmReuseWindowS: cfg.decideConfirmLiveReuseWindowS,
+    // ADAAAA-8205: the accept path does NOT await the dive on the live rail. The
+    // provisional row publishes as the `LIVE_DECIDE_CONFIRM=0` baseline, and the
+    // descriptor runs post-window off the accept path (see
+    // live-confirm-async.ts). VOD keeps the inline dive: only this builder arms
+    // the lane, and it requires `liveObserveLoop`.
+    liveConfirmAsync: cfg.liveConfirmAsync,
+    liveConfirmMaxDivesPer300S: cfg.liveConfirmMaxDivesPer300S,
+    onConfirmDivePending,
   };
 }
 
