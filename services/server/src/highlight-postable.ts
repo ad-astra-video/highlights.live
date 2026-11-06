@@ -235,7 +235,12 @@ function absorbGoalCelebrations(
     }
     owner.duplicateCount = (owner.duplicateCount ?? 0) + 1;
     owner.mergedIds = [...(owner.mergedIds ?? []), h.id];
-    duplicates.push({ ...h, duplicateOf: owner.id });
+    // ADAAAA-8199 AC6: the transition this celebration belonged to now HAS a
+    // confirmed GOAL, so its provisional marker is resolved — the duplicate copy
+    // must not keep "GOAL (unconfirmed)" on the merged lane (the surviving GOAL
+    // card is the only row that speaks for the transition). The STORED row keeps
+    // its marker: the persisted audit trail is not mutated here.
+    duplicates.push({ ...h, provisionalGoal: undefined, duplicateOf: owner.id });
     absorbed += 1;
   }
   return { notable: kept, duplicates, absorbed };

@@ -1345,8 +1345,11 @@ function LaneRowFacts({
       </span>
       {/* ADAAAA-8139 (interim step): the notable lane is where a demoted goal
           lives, so the provisional marker belongs on this row too — the customer
-          row gains a label only, no cue names, score or outcome code. */}
-      {h.provisionalGoal && (
+          row gains a label only, no cue names, score or outcome code.
+          ADAAAA-8199 AC6: NEVER on the merged lane. A merged row is a duplicate
+          whose transition already has a confirmed GOAL, so "GOAL (unconfirmed)"
+          there would re-open the exact symptom this ticket closes. */}
+      {h.provisionalGoal && lane === "notable" && (
         <span
           className="ml-2 rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
           data-detail-provisional-goal
