@@ -22,6 +22,7 @@ from app.match_context import (
     _KIT_COLOR_NAMES,
     _KIT_PRIORS,
     _SOCCER_KIT_PRIORS,
+    _color_family,
     _generic_name_key,
     _levenshtein_le,
     apply_monotonic_guard,
@@ -1165,9 +1166,18 @@ def test_kit_prior_never_invents_a_colour():
 
 def test_kit_prior_only_adds_never_overrides_a_measured_channel():
     # AC-P3: differential sweep, prior disabled vs enabled.
+    # ADAAAA-8076 scoped exception (PO ruling on card 14540071): the ONE case
+    # where enabling the prior changes a measured attribution is a score-bug
+    # swatch reading that CONTRADICTS the curated primary for that same team.
+    # That reading may not publish; the side is then either honestly unresolved
+    # or resolved by the prior from an observed cluster in the curated family.
+    # Every other side must be identical with the prior on and off — the
+    # exception is scoped to a contradicting swatch, not to the prior overriding
+    # a measured channel generally.
     rng = random.Random(7859)
     vocab = sorted(_KIT_COLOR_NAMES)
     diffs = 0
+    vetoes = 0
     for _ in range(1200):
         colors = [rng.choice(vocab) for _ in range(rng.randint(1, 2))]
         clusters = _mk_clusters(colors)
@@ -1183,13 +1193,102 @@ def test_kit_prior_only_adds_never_overrides_a_measured_channel():
         off, off_ambiguous = associate_kits(teams, clusters, scorebug_swatches=swatches)
         status: dict = {}
         on, on_ambiguous = associate_kits(teams, clusters, scorebug_swatches=swatches, kit_prior=_SOCCER_KIT_PRIORS, status=status)
+        vetoed = {v["side"] for v in status.get("kitSwatchVetoed") or []}
+        names = {str(t["side"]): str(t["name"]) for t in teams}
         for side, kit in off.items():
+            if side in vetoed:
+                vetoes += 1
+                # the contradicting reading itself must not survive
+                assert on.get(side) != kit
+                if side in on:
+                    curated = _SOCCER_KIT_PRIORS[names[side]][0]
+                    assert _color_family(on[side][0]["primary"]) == _color_family(curated)
+                continue
             assert on[side] == kit
         # disabling the prior reproduces the shipped behaviour exactly
         assert off_ambiguous is on_ambiguous or on_ambiguous is True
         if set(on) != set(off):
             diffs += 1
     assert diffs > 0  # the channel does add attributions where the record was empty
+    assert vetoes > 0  # the scoped exception is exercised by this sweep
+
+
+def test_contradicting_swatch_does_not_publish_and_the_prior_resolves_white():
+    # ADAAAA-8076, measured on served record 5cb96d29 (90 % fold): the pass
+    # carries only Spain, its score-bug half stably reads "red" (a scoreboard
+    # graphic) and the observed clusters are red + white. Shipped behaviour
+    # handed the red cluster to the away side — a WRONG kit on the record.
+    # With the scoped exception the red reading is withheld, the side stays
+    # unresolved, and the curated prior links the observed white.
+    clusters = cluster_kit_colors(kit_samples([RED, WHITE]))
+    swatches = [{"side": "away", "rgb": RED, "color": "red"}]
+    away_only = [{"name": "Spain", "side": "away"}]
+    # Before: the swatch decides, red publishes for a white-shirted side.
+    shipped, _ = associate_kits(away_only, clusters, scorebug_swatches=swatches)
+    assert shipped["away"] == [{"primary": "red"}]
+    # After: the contradicting reading may not publish; the prior resolves white.
+    status: dict = {}
+    kits, _ambiguous = associate_kits(
+        away_only,
+        clusters,
+        scorebug_swatches=swatches,
+        kit_prior=_SOCCER_KIT_PRIORS,
+        status=status,
+    )
+    assert kits["away"] == [{"primary": "white"}]
+    assert status["kitSwatchVetoed"] == [{"side": "away", "swatch": "red", "curated": "white"}]
+    assert status["kitPriorUsed"] == ["away"]
+    assert status["kitPriorConflict"] == []
+
+
+def test_swatch_in_the_curated_family_is_not_vetoed():
+    # The exception is family-level: a dark red shirt reading "maroon" against a
+    # curated "red" is agreement, not a contradiction, and must publish as read.
+    clusters = _mk_clusters(["maroon", "white"])
+    status: dict = {}
+    kits, _ambiguous = associate_kits(
+        [{"name": "Portugal", "side": "home"}],
+        clusters,
+        scorebug_swatches=[{"side": "home", "rgb": _PALETTE_RGB["maroon"], "color": "maroon"}],
+        kit_prior=_SOCCER_KIT_PRIORS,
+        status=status,
+    )
+    assert kits["home"] == [{"primary": "maroon"}]
+    assert "kitSwatchVetoed" not in status
+    assert status["kitPriorUsed"] == []
+
+
+def test_swatch_of_a_team_without_a_curated_prior_is_never_vetoed():
+    # Only a team the curated table seeds can contradict it. An unlisted club
+    # keeps the shipped swatch behaviour (no silent narrowing of the channel).
+    clusters = _mk_clusters(["red", "white"])
+    kits, _ambiguous = associate_kits(
+        [{"name": "Liverpool", "side": "home"}],
+        clusters,
+        scorebug_swatches=[{"side": "home", "rgb": RED, "color": "red"}],
+        kit_prior=_SOCCER_KIT_PRIORS,
+    )
+    assert kits["home"] == [{"primary": "red"}]
+
+
+def test_vetoed_swatch_falls_through_to_commentary_before_the_prior():
+    # A measured channel still beats the prior after a veto: the contradicting
+    # swatch is withheld, the ASR phrase names the shirt, and that phrase decides
+    # the side (the prior is left with nothing to do).
+    clusters = _mk_clusters(["red", "white"])
+    mentions = scan_commentary("Spain are wearing white today.", "soccer")
+    status: dict = {}
+    kits, _ambiguous = associate_kits(
+        [{"name": "Spain", "side": "away"}],
+        clusters,
+        scorebug_swatches=[{"side": "away", "rgb": RED, "color": "red"}],
+        commentary=mentions,
+        kit_prior=_SOCCER_KIT_PRIORS,
+        status=status,
+    )
+    assert kits["away"] == [{"primary": "white"}]
+    assert status["kitPriorUsed"] == []
+    assert [v["side"] for v in status["kitSwatchVetoed"]] == ["away"]
 
 
 def test_kit_prior_does_not_redecide_a_swatch_attributed_side():
