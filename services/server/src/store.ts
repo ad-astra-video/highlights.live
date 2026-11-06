@@ -394,7 +394,27 @@ export class Store {
   async attestDeferredGoal(
     id: string,
     patch: Partial<
-      Pick<HighlightRecord, "outcome" | "eventType" | "reason" | "caption" | "cardTitles" | "colour" | "reason_raw" | "deferredAttestation" | "provisionalGoal" | "attestationUsed">
+      Pick<
+        HighlightRecord,
+        | "outcome"
+        | "eventType"
+        | "reason"
+        | "caption"
+        | "cardTitles"
+        | "colour"
+        | "reason_raw"
+        | "deferredAttestation"
+        | "provisionalGoal"
+        // ADAAAA-8212: the promoted row serves the resolving verdict's measured
+        // attestation instead of the pre-promotion acceptance.
+        | "attestationUsed"
+        // ADAAAA-8205: the async confirm lane moves the SAME row through this
+        // one verdict-move writer (promotion, refutation, and the descriptor
+        // clear) — a second write path for the same operation is what the
+        // parent explicitly forbids.
+        | "confirmAttestation"
+        | "pendingConfirmDive"
+      >
     >
   ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);

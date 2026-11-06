@@ -336,6 +336,16 @@ export interface ServerConfig {
    * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
    * Default true; `LIVE_DECIDE_CONFIRM=0` skips the dive on live only. */
   liveDecideConfirm: boolean;
+  /** ADAAAA-8205: run the Stage-2 confirm dive OFF the live accept path
+   * (`LIVE_CONFIRM_ASYNC`, default on). The provisional row publishes exactly
+   * as the `LIVE_DECIDE_CONFIRM=0` baseline, the dive runs post-window over the
+   * row's persisted artifacts, and its verdict moves the SAME row. `0` restores
+   * the inline awaited dive (the pre-8205 posture); `LIVE_DECIDE_CONFIRM` stays
+   * the master opt-in, so an off master gate is still a strict no-op. */
+  liveConfirmAsync: boolean;
+  /** ADAAAA-8205: dives allowed per 300 s of stream (`LIVE_CONFIRM_MAX_DIVES_PER_300S`,
+   * default 8 — the parent envelope's <= $0.318/h/stream dive term). */
+  liveConfirmMaxDivesPer300S: number;
   /** ADAAAA-7781: ask the decide service for the COMPACT verdict contract on the
    * LIVE pass (short prose fields, no evidenceAttested list, 400-token cap).
    * Live decide throughput is decode-bound at ~150 output tok/s for the box's
@@ -943,6 +953,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",
+    // ADAAAA-8205: the async lane is ON by default (the live accept path must not
+    // pay the dive); `LIVE_CONFIRM_ASYNC=0` restores the inline awaited dive and
+    // is a strict no-op when the master gate is off.
+    liveConfirmAsync: env.LIVE_CONFIRM_ASYNC !== "0",
+    // ADAAAA-8205: the parent envelope's per-stream dive budget.
+    liveConfirmMaxDivesPer300S: positiveNumberOrUndefined(env.LIVE_CONFIRM_MAX_DIVES_PER_300S) ?? 8,
     // ADAAAA-7781: the COMPACT live verdict contract (decode-bound throughput —
     // see AnalyzerConfig.liveDecideCompact). Opt-in: unset keeps the full
     // contract byte-identical for both rails.

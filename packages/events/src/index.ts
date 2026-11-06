@@ -1600,6 +1600,54 @@ export const HighlightRecordSchema = z.object({
       declaredTs: z.number().min(0),
       /** User-readable explanation of what was seen and what is still missing. */
       note: z.string(),
+      /** ADAAAA-8205: the async Stage-2 dive read this moment and did NOT
+       * confirm it. The row keeps `status: "provisional"` (the badge the CEO
+       * sees is never removed) and the card says the deep dive did not confirm.
+       * Additive optional — absent on rows the dive promoted or never reached. */
+      refuted: z.boolean().optional(),
+    })
+    .optional(),
+  /** ADAAAA-8205: the LIVE async confirm lane's pending dive, persisted with the
+   * provisional row so the dive can run post-window on persisted artifacts and
+   * move THIS row in place. Cleared when the dive settles (promoted, refuted or
+   * dropped). Additive optional — absent on every scoring row, the VOD rail and
+   * the unarmed posture. */
+  pendingConfirmDive: z
+    .object({
+      highlightId: z.string(),
+      jobId: z.string(),
+      goalEventTs: z.number(),
+      window: z.object({ lo: z.number(), hi: z.number() }),
+      stage1: z.object({
+        eventType: z.string().optional(),
+        outcome: z.string().optional(),
+        reason: z.string().optional(),
+      }),
+      analysis: z.object({
+        transcript: z.string().optional(),
+        audioLevels: z.array(z.number()).optional(),
+      }),
+      signals: z.object({
+        ballOutcome: z.string().optional(),
+        goalCrossed: z.boolean().optional(),
+        scoreBoardChanged: z.boolean().optional(),
+      }),
+      queuedAt: z.number(),
+    })
+    .optional(),
+  /** ADAAAA-8205: what the async Stage-2 dive measured when it moved the row.
+   * `goalConfirmed` / `corroborated` / `corroborationSource` are the verdict,
+   * `diveAt` / `diveLatencyMs` prove it ran post-window, and `contextDegraded`
+   * names every signal the persisted artifacts could not reconstruct (a missing
+   * signal is never credited). Additive optional. */
+  confirmAttestation: z
+    .object({
+      goalConfirmed: z.string(),
+      corroborated: z.boolean(),
+      corroborationSource: z.string().nullable(),
+      diveAt: z.string(),
+      diveLatencyMs: z.number().min(0),
+      contextDegraded: z.array(z.string()),
     })
     .optional(),
   deferredAttestation: z

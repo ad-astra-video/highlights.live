@@ -49,6 +49,10 @@ function liveCfg(env: Record<string, string> = {}) {
     DECIDE_URL: "http://d",
     LIVE_OBSERVE_LOOP: "1",
     DECIDE_CONFIRM_ENABLED: "1",
+    // ADAAAA-8205: this suite pins the INLINE dive lane (the LIVE_CONFIRM_ASYNC=0
+    // posture, still supported). The async lane's own ACs live in
+    // live-confirm-async-8205.test.ts.
+    LIVE_CONFIRM_ASYNC: "0",
     ...env,
   });
   return buildLiveAnalyzerConfig({
@@ -275,5 +279,29 @@ describe("live exactly-once recall guard (ADAAAA-7663)", () => {
     const third = await confirmReconcile(client, shared, cfg, ACCEPTED_GOAL as any, { eventType: "GOAL", timestamp: 40 });
     expect(confirmCalls).toHaveLength(2);
     expect(third).toBe(second);
+  });
+});
+
+describe("ADAAAA-8205 config posture — the async lane is on by default, bounded", () => {
+  it("arms the lane from LIVE_CONFIRM_ASYNC (default on) and carries the 8/300 s budget", () => {
+    const cfg = loadConfig({ LIVE_OBSERVE_LOOP: "1", DECIDE_CONFIRM_ENABLED: "1" });
+    const armed = buildLiveAnalyzerConfig({
+      cfg,
+      job: { id: "job-confirm-async-default", gameHint: "soccer" },
+      clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
+    });
+    expect(armed.liveConfirmAsync).toBe(true);
+    expect(armed.liveConfirmMaxDivesPer300S).toBe(8);
+    expect(armed.confirmEnabled).toBe(true);
+    expect(loadConfig({ LIVE_CONFIRM_ASYNC: "0" }).liveConfirmAsync).toBe(false);
+    expect(loadConfig({ LIVE_CONFIRM_MAX_DIVES_PER_300S: "3" }).liveConfirmMaxDivesPer300S).toBe(3);
+    // The master gate still owns the dive: async armed does NOT imply a dive
+    // when DECIDE_CONFIRM_ENABLED / LIVE_DECIDE_CONFIRM are off.
+    const off = buildLiveAnalyzerConfig({
+      cfg: loadConfig({ LIVE_OBSERVE_LOOP: "1", DECIDE_CONFIRM_ENABLED: "0" }),
+      job: { id: "job-confirm-async-off", gameHint: "soccer" },
+      clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
+    });
+    expect(off.confirmEnabled).toBe(false);
   });
 });

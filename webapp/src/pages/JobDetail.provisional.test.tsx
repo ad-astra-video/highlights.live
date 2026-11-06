@@ -175,3 +175,40 @@ describe("AC6 — a merged duplicate never prints the unconfirmed marker", () =>
     });
   }
 });
+
+// ADAAAA-8205: the async Stage-2 dive ran AFTER the row published and did not
+// confirm it. The provisional badge must survive (AC-A7) and the card must SAY
+// the deep dive did not confirm — otherwise a refuted moment reads as a goal.
+describe("AC-A7 — a refuted dive keeps the badge and says so", () => {
+  const refuted = (): NonNullable<JobDetailHighlight["provisionalGoal"]> =>
+    ({ ...provisional(), refuted: true }) as unknown as NonNullable<JobDetailHighlight["provisionalGoal"]>;
+
+  for (const admin of [true, false]) {
+    it(`HighlightCard (admin=${admin}) keeps GOAL (unconfirmed) and adds the refuted line`, () => {
+      const html = renderToString(
+        React.createElement(HighlightCard, {
+          highlight: hl({ provisionalGoal: refuted() }),
+          onDecision: () => {},
+          admin,
+        })
+      );
+      // The badge the CEO is watching is NOT removed.
+      expect(count(html, "GOAL (unconfirmed)")).toBe(1);
+      expect(count(html, "data-detail-provisional-refuted")).toBe(1);
+      expect(count(html, "Deep dive did not confirm this goal.")).toBe(1);
+      // Still never a postable GOAL label.
+      expect(count(html, ">GOAL<")).toBe(0);
+    });
+  }
+
+  it("an unrefuted provisional row carries no refuted line", () => {
+    const html = renderToString(
+      React.createElement(HighlightCard, {
+        highlight: hl({ provisionalGoal: provisional() }),
+        onDecision: () => {},
+        admin: false,
+      })
+    );
+    expect(count(html, "data-detail-provisional-refuted")).toBe(0);
+  });
+});
