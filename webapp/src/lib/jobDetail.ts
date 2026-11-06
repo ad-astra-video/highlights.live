@@ -503,6 +503,23 @@ export interface LiveProgress {
   /** `unknown` before the first decided window and on a terminal job. */
   state: "caught_up" | "behind" | "unknown";
   updatedAt: string;
+  /** ADAAAA-8121: content ts of the newest ANALYSED frame — where the analysis
+   * is inside the live stream, read from the job's own consume evidence. Absent
+   * when no position is known (never a fabricated 0). */
+  analysedPositionTs?: number;
+  /** ADAAAA-8121: `liveEdgeTs - analysedPositionTs` on the content clock, so the
+   * value is unchanged by a 1 fps -> 2 fps consume rate. */
+  analysedLagSec?: number;
+  /** ADAAAA-8121: frames the ingest delivered (count). */
+  strideFramesSeen?: number;
+  /** ADAAAA-8121: frames the stride SKIPPED — a COUNT, never a position marker. */
+  strideFramesSkipped?: number;
+  /** ADAAAA-8121: resolved content consume rate. */
+  strideAnalysisFps?: number;
+  /** ADAAAA-8121: `false` when the record carries no consume/stride evidence
+   * (the knob was unset on that run) — the indicator degrades to "no stride
+   * data" instead of inventing a position. */
+  strideData?: boolean;
 }
 
 /**

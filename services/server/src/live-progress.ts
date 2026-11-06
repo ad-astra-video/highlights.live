@@ -62,6 +62,42 @@ export interface LiveProgress {
   state: "caught_up" | "behind" | "unknown";
   /** Wall clock this projection was derived at. */
   updatedAt: string;
+  /** ADAAAA-8121: content ts of the newest frame the run ANALYSED — where the
+   * analysis currently is inside the live stream. Sourced from the job's own
+   * consume evidence (in-memory observation rows / the rail's consume clock
+   * while in flight, `observeMetrics.perceive.analysedThroughTs` on a stored
+   * record), never a client estimate and never the wall clock. Omitted when no
+   * analysed position is known (AC-4: no invented zero). */
+  analysedPositionTs?: number;
+  /** ADAAAA-8121: `liveEdgeTs - analysedPositionTs` on the CONTENT clock,
+   * clamped >= 0. Both endpoints are content timestamps, so a 1 fps -> 2 fps
+   * consume rate change leaves the number untouched. */
+  analysedLagSec?: number;
+  /** ADAAAA-8121: frames the ingest delivered (`perceive.framesSeen`). Count. */
+  strideFramesSeen?: number;
+  /** ADAAAA-8121: frames the stride SKIPPED (`perceive.framesStrided`). A COUNT
+   * only — a strided window is content the analysis never reached, so it is
+   * never a position marker on the track (AC-3). */
+  strideFramesSkipped?: number;
+  /** ADAAAA-8121: the resolved content consume rate (`perceive.analysisFps`). */
+  strideAnalysisFps?: number;
+  /** ADAAAA-8121: `false` when the record carries NO consume/stride evidence
+   * (`observeMetrics.perceive` absent — the content-fps knob was unset on that
+   * run). The indicator then degrades to "no stride data" instead of inventing a
+   * position (AC-6). */
+  strideData?: boolean;
+}
+
+/** ADAAAA-8121: the consume/stride evidence a record may carry. Read
+ * server-side only — the counts are surfaced as counts and the timestamps are
+ * content-clock positions; nothing else from `observeMetrics` is re-exported. */
+export interface LiveConsumeEvidence {
+  framesSeen?: number;
+  framesAnalyzed?: number;
+  framesStrided?: number;
+  analysisFps?: number;
+  analysedThroughTs?: number;
+  tapThroughTs?: number;
 }
 
 export interface LiveProgressInput {
@@ -70,11 +106,19 @@ export interface LiveProgressInput {
     Pick<Job, "status" | "source" | "startedAt" | "finishedAt" | "completedAt" | "createdAt" | "summaryLog">
   > & {
     /** Read server-side only to honour the exact skip count a COMPLETED run
-     * recorded; never surfaced as `observeMetrics`. */
-    observeMetrics?: { skippedStaleWindows?: number; supplySkippedWindows?: number } | null;
+     * recorded; never surfaced as `observeMetrics`. ADAAAA-8121 also reads the
+     * `perceive` consume block from here (positions + counts). */
+    observeMetrics?:
+      | { skippedStaleWindows?: number; supplySkippedWindows?: number; perceive?: LiveConsumeEvidence | null }
+      | null;
   };
   /** Content ts of the newest persisted observation for this job, if any. */
   newestObservationTs?: number | null;
+  /** ADAAAA-8121: the rail's live consume clock (content ts of the newest
+   * ANALYSED frame) for an in-flight job. Used when the observation set is not
+   * at hand (e.g. a resumed process) and, with `newestObservationTs`, keeps the
+   * position sourced from the job's own consume evidence. */
+  analysedThroughTs?: number | null;
   /** Injected reference time (ms) so the derivation is unit-testable. */
   nowMs?: number;
   /** Override the decide cadence (defaults to LIVE_PROGRESS_CADENCE_S). */
@@ -227,10 +271,32 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
     : nowMs;
   const elapsedS = anchorMs !== null ? Math.max(0, (edgeWallMs - anchorMs) / 1000) : 0;
   const observationS = Math.max(0, finiteNumber(input.newestObservationTs) ?? 0);
+  // ADAAAA-8121: the consume evidence on the record, read for the POSITION and
+  // the COUNTS only. `perceive` absent = the content-fps knob was unset on that
+  // run, and the indicator must say "no stride data" rather than invent one.
+  const perceive = job.observeMetrics?.perceive ?? null;
+  const consumeTs = Math.max(0, finiteNumber(input.analysedThroughTs) ?? 0);
+  const storedAnalysedTs = Math.max(0, finiteNumber(perceive?.analysedThroughTs) ?? 0);
+  const tapTs = Math.max(0, finiteNumber(perceive?.tapThroughTs) ?? 0);
+  // ADAAAA-8121: the analysed POSITION — the newest content instant this run
+  // actually analysed. Three server-side sources, all content clock: the stored
+  // observation rows, the live rail clock, and the persisted consume clock on a
+  // stored record. A strided frame is never among them (the rails only advance
+  // the analysed clock on CONSUMED frames), so a skipped window can never read
+  // as a position (AC-3).
+  const analysedPositionTs = Math.max(observationS, consumeTs, storedAnalysedTs);
   // Clamp to the newest decided window so a clock skew can never produce a
   // negative lag (a "behind live -4 s" reading would be worse than none).
-  const liveEdgeTs = Math.max(elapsedS, observationS, processedThroughTs);
+  // ADAAAA-8121: the tap's own content clock (`tapThroughTs`) is a third live
+  // edge source — the newest DELIVERED frame, strided frames included, so the
+  // edge stays ahead of a strided analysed position.
+  const liveEdgeTs = Math.max(elapsedS, observationS, processedThroughTs, tapTs);
   const lagSec = Math.max(0, round3(liveEdgeTs - processedThroughTs));
+  // ADAAAA-8121 (AC-2): the delay of the ANALYSED position, on the content
+  // clock: both terms are content timestamps, so the value is identical at 1 fps
+  // and 2 fps for the same content position. No frame count enters the number.
+  const analysedLagSec =
+    analysedPositionTs > 0 ? Math.max(0, round3(liveEdgeTs - analysedPositionTs)) : undefined;
 
   // In flight the summary-log gaps are the only customer-safe skip evidence. At
   // completion the run's own exact counter takes over as a floor — still only
@@ -267,5 +333,25 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
     skippedWindows,
     state: terminal ? "unknown" : state,
     updatedAt: new Date(nowMs).toISOString(),
+    // ADAAAA-8121: present only when the position is actually known, so a
+    // customer surface never renders a fabricated 0 (AC-4).
+    ...(analysedPositionTs > 0 ? { analysedPositionTs: round3(analysedPositionTs) } : {}),
+    ...(analysedLagSec !== undefined ? { analysedLagSec } : {}),
+    // ADAAAA-8121: the stride counts ride the record's own consume block. They
+    // are COUNTS; no position or window marker is derived from them (AC-3).
+    ...(perceive
+      ? {
+          strideData: true,
+          ...(finiteNumber(perceive.framesSeen) !== null
+            ? { strideFramesSeen: Math.max(0, Math.round(perceive.framesSeen as number)) }
+            : {}),
+          ...(finiteNumber(perceive.framesStrided) !== null
+            ? { strideFramesSkipped: Math.max(0, Math.round(perceive.framesStrided as number)) }
+            : {}),
+          ...(finiteNumber(perceive.analysisFps) !== null
+            ? { strideAnalysisFps: Math.max(0, perceive.analysisFps as number) }
+            : {}),
+        }
+      : { strideData: false }),
   };
 }
