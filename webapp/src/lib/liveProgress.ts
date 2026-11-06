@@ -131,3 +131,47 @@ export function liveProgressChipLabel(progress?: LiveProgress | null, staleSec =
     skipped === 0 ? "" : ` · ${skipped} window${skipped === 1 ? "" : "s"} skipped past the ${LIVE_PROGRESS_BUDGET_S} s budget`;
   return `${head}${skippedClause}${staleClause}`;
 }
+
+/**
+ * ADAAAA-8121: a content-clock position as `T+3:42` (or `T+42s` under a minute).
+ *
+ * The position is content seconds read off the job record, never a wall clock
+ * and never a client-side estimate, so the label is the same on every reader.
+ */
+export function formatAnalysePosition(ts: number): string {
+  const total = Math.max(0, Math.round(Number(ts) || 0));
+  if (total < 60) return `T+${total}s`;
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `T+${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * ADAAAA-8121: the live analyse-position readout, or `null` when there is
+ * nothing honest to show.
+ *
+ * - position + delay: `Analysing T+3:42 · 8 s behind live`
+ * - stride count:     `… · 708 frames skipped (stride 1 fps)`
+ * - knob unset:       `Analysing T+3:42 · 8 s behind live · no stride data`
+ *
+ * The stride number is a COUNT of frames the consume rate skipped. A skipped
+ * window is content the analysis never reached, so it is never rendered as a
+ * position or as "analysed" (AC-3) — the readout names the analysed position
+ * only and the skipped frames beside it as a total.
+ *
+ * Terminal jobs and a job with no decided window yet have no live edge, so they
+ * render nothing at all (AC-4): no zero, no stale last value.
+ */
+export function analysePositionLabel(progress?: LiveProgress | null): string | null {
+  if (!progress || progress.state === "unknown") return null;
+  const position = Number(progress.analysedPositionTs);
+  if (!Number.isFinite(position) || position <= 0) return null;
+  const lag = Math.max(0, Math.round(Number(progress.analysedLagSec) || 0));
+  const head = `Analysing ${formatAnalysePosition(position)} · ${lag} s behind live`;
+  if (progress.strideData === false) return `${head} · no stride data`;
+  const skipped = Math.max(0, Math.round(Number(progress.strideFramesSkipped) || 0));
+  if (skipped === 0) return `${head} · no frames skipped`;
+  const fps = Number(progress.strideAnalysisFps);
+  const rate = Number.isFinite(fps) && fps > 0 ? ` (stride ${fps} fps)` : "";
+  return `${head} · ${skipped} frame${skipped === 1 ? "" : "s"} skipped${rate}`;
+}

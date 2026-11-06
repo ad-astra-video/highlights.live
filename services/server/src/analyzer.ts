@@ -3531,6 +3531,12 @@ export interface LivePerceiveStrideSnapshot {
    *  `framesStrided` is decide work not spent, not GPU saved. Stated rather than
    *  implied, because the same block grades both rails. */
   perceiveSource?: "server" | "media_node";
+  /** ADAAAA-8121: content ts (seconds) of the newest frame this pass ANALYSED —
+   *  the position the live indicator names. Strided frames never move it. */
+  analysedThroughTs?: number;
+  /** ADAAAA-8121: content ts (seconds) of the newest frame the ingest DELIVERED,
+   *  strided frames included — the live edge the delay is measured against. */
+  tapThroughTs?: number;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -8951,6 +8957,11 @@ export async function analyzeJob(
   let strideCreditTs: number | null = null;
   let framesSeen = 0;
   let framesStrided = 0;
+  // ADAAAA-8121: the consume clock in content seconds — the newest frame the
+  // pass DELIVERED (tap edge) and the newest one it CONSUMED (analysed
+  // position). Strided frames move only the tap edge.
+  let lastSeenTs = 0;
+  let lastConsumedTs = 0;
   let perceiveSkipped = 0;
   let perceiveBudgetSkipped = 0;
   let perceiveHotCalls = 0;
@@ -8967,6 +8978,9 @@ export async function analyzeJob(
       // accounting at all.
       if (slotRef?.isStopped?.()) break;
       framesSeen++;
+      // ADAAAA-8121: this frame reached the tap, so it moves the live edge's
+      // content clock even if the lag budget or the stride drops it below.
+      if (frame.timestamp > lastSeenTs) lastSeenTs = frame.timestamp;
       // ADAAAA-7676: drop stale content instead of deciding it late. Measured
       // against the wall clock since the stream's first frame, minus one decide
       // E2E already observed: the number that matters is the lag when the RESULT
@@ -9020,6 +9034,9 @@ export async function analyzeJob(
         strideCredit -= 1;
       }
       framesAnalyzed++;
+      // ADAAAA-8121: this frame is the analysed position — a strided frame never
+      // reaches here, so the clock names only content the analysis actually saw.
+      if (frame.timestamp > lastConsumedTs) lastConsumedTs = frame.timestamp;
       onProgress?.(framesAnalyzed);
       run.addFrame(frame.seq, frame.timestamp, frame.imageB64);
       let res!: ObservationResult;
@@ -9377,6 +9394,12 @@ export async function analyzeJob(
             perceiveHotCalls,
             analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
             perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
+            // ADAAAA-8121: the consume clock both live indicators read, in
+            // content seconds. Persisted so a stored record answers "where did
+            // the analysis get to and how far ahead was the tap" without the
+            // in-memory observation set.
+            ...(lastConsumedTs > 0 ? { analysedThroughTs: Number(lastConsumedTs.toFixed(3)) } : {}),
+            ...(lastSeenTs > 0 ? { tapThroughTs: Number(lastSeenTs.toFixed(3)) } : {}),
           }, {
             calls: run.confirmDiveCalls(),
             dives: run.confirmDiveCount(),
