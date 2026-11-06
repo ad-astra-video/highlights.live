@@ -19,18 +19,46 @@
 #   qa-drive-8035.sh --sid <mediaSessionId> [--seconds 300] [--log /state/drive-<sid>.log]
 #                    [--ivf /state/kids300.vp8.ivf] [--audio-src /state/kids300_7935.mp4]
 #                    [--audio-port 5621] [--fps 30] [--no-wait]
+#                    [--evidence-dir <host dir>]
 #   qa-drive-8035.sh --ps       # list recorded drivers (sid, pid, alive)
 #   qa-drive-8035.sh --sweep    # SIGTERM+SIGKILL every recorded driver
+#   qa-drive-8035.sh --boot-only [--sid <sid>] [--evidence-dir <dir>]
+#                               # capture this boot's identity into <dir>/boot.txt
+#                               # and exit: no leg, no session, no frames
+#   qa-drive-8035.sh --evidence-end --sid <sid> [--evidence-dir <dir>]
+#                               # append the leg-end re-read of StartedAt + the
+#                               # boot line to that leg's boot.txt
+#
+# Boot evidence (ADAAAA-8163): every leg now records, BEFORE the drive starts,
+# the server's `[boot] live decide window: N s span / M ms cadence` line,
+# `docker inspect <server> .State.StartedAt`, the inspect `LogPath` and the five
+# LIVE_OBSERVE_* env values, into <evidence-dir>/boot.txt (plus a durable
+# boot-<sid>.txt). Both strings otherwise live only in the SERVER container's
+# json.log, which docker deletes when a peer recreate replaces that container
+# (ADAAAA-8145: boot 00:46:58Z, replaced 01:07:24Z, so AC1/AC6 graded
+# `not_captured`). <evidence-dir> defaults to the host dir the media container
+# mounts at /state — the same dir the driver's own STREAM_DONE/DRIVE_EXIT log
+# (drive-<sid>.log) lands in — and can be overridden with --evidence-dir or
+# $EVIDENCE_DIR. A foreground leg appends the leg-end re-read on exit; a
+# `--no-wait` leg emits it when the launcher runs --evidence-end at leg end.
+# This is additive: the drive path, its output lines and its knobs are unchanged
+# and nothing here starts a session or sends a frame.
 #
 # Exit codes: 0 replay finished and the driver is gone; 7 driver survived the
 # window and had to be killed; 2 usage/launch error.
 set -u
 
 CONTAINER="${CONTAINER:-highlights-media}"
+# ADAAAA-8163: the server whose boot line + StartedAt AC1/AC6 grade.
+SERVER="${SERVER_CONTAINER:-highlights-server}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DRIVER="${DRIVER:-$HERE/../services/media/drive-8035.mjs}"
 CTR_DIR="/app/services/media"
 MEDIA_BASE="${MEDIA_BASE:-http://127.0.0.1:4070}"
+# ADAAAA-8163: where the leg's boot evidence goes. Empty = derive it (see
+# evidence_dir): the host dir the media container mounts at /state, otherwise
+# a /tmp fallback. Overridable with --evidence-dir or $EVIDENCE_DIR.
+EVIDENCE_DIR="${EVIDENCE_DIR:-}"
 
 SID=""
 SECONDS_REPLAY=300
@@ -43,7 +71,8 @@ WAIT=1
 MODE="run"
 
 usage() {
-  sed -n '20,30p' "$0"
+  # Marker-based so a doc edit above cannot silently truncate the help text.
+  sed -n '/^# Usage:/,/^# Exit codes:/p' "$0"
 }
 
 while [ $# -gt 0 ]; do
@@ -58,6 +87,9 @@ while [ $# -gt 0 ]; do
     --no-wait) WAIT=0; shift ;;
     --ps) MODE="ps"; shift ;;
     --sweep) MODE="sweep"; shift ;;
+    --boot-only) MODE="boot"; shift ;;
+    --evidence-end) MODE="evidend"; shift ;;
+    --evidence-dir) EVIDENCE_DIR="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "qa-drive: unknown argument '$1'" >&2; exit 2 ;;
   esac
@@ -65,6 +97,117 @@ done
 
 ctr_exec() { docker exec "$CONTAINER" sh -c "$1"; }
 alive() { ctr_exec "kill -0 $1" >/dev/null 2>&1; }
+
+# --- ADAAAA-8163: per-leg boot evidence --------------------------------------
+# AC1 grades `[boot] live decide window: N s span / M ms cadence` and AC6 grades
+# `State.StartedAt`. Both strings live only in the SERVER container's json.log,
+# and docker deletes that file when the container is removed/recreated, so any
+# peer launcher that recreates `server` after a leg erases the leg's own boot
+# identity (ADAAAA-8145). Capture it while that boot is alive.
+BOOT_KEYS="LIVE_OBSERVE_WINDOW_S LIVE_OBSERVE_CADENCE_S LIVE_OBSERVE_MAX_FRAMES LIVE_OBSERVE_IN_FLIGHT LIVE_OBSERVE_CONTENT_FPS"
+BOOT_PATTERN='[boot] live decide window'
+EVID_ACTIVE=0
+EVID_FILE=""
+
+server_started() { docker inspect "$SERVER" --format '{{.State.StartedAt}}' 2>/dev/null | tr -d '\r\n'; }
+server_logpath() { docker inspect "$SERVER" --format '{{.LogPath}}' 2>/dev/null | tr -d '\r\n'; }
+server_boot_line() { docker logs "$SERVER" 2>&1 | grep -F "$BOOT_PATTERN" | tail -n 1 | tr -d '\r'; }
+
+# The host dir the media container mounts at /state: the dir the driver's own
+# drive-<sid>.log (STREAM_DONE/DRIVE_EXIT) is written into. A recreate replaces
+# the container, not this bind mount, which is what makes boot.txt durable.
+state_host_dir() {
+  docker inspect "$CONTAINER" --format '{{range .Mounts}}{{if eq .Destination "/state"}}{{.Source}}{{end}}{{end}}' 2>/dev/null | tr -d '\r\n'
+}
+
+evidence_dir() {
+  if [ -n "$EVIDENCE_DIR" ]; then printf '%s' "$EVIDENCE_DIR"; return 0; fi
+  local d
+  d="$(state_host_dir)"
+  [ -n "$d" ] || d="${TMPDIR:-/tmp}/hl-leg-evidence"
+  printf '%s' "$d"
+}
+
+# The five LIVE_OBSERVE_* values, name-complete: an unset key prints `<unset>`
+# (a blank line would read as "not captured" and the shipped CONTENT_FPS default
+# is deliberately unset in docker/.env). `printenv KEY...` prints bare VALUES
+# with no names, so ask for the whole environment and filter — parsing the keyed
+# form silently wrote `<unset>` for five keys the server did resolve.
+boot_env_lines() {
+  local pairs k v
+  pairs="$(docker exec "$SERVER" printenv 2>/dev/null | tr -d '\r')" || true
+  for k in $BOOT_KEYS; do
+    v="$(printf '%s\n' "$pairs" | sed -n "s/^$k=//p" | head -n 1)"
+    printf 'ENV %s=%s\n' "$k" "${v:-<unset>}"
+  done
+}
+
+# evidence_write_start [sid]: write <evidence-dir>/boot.txt (+ boot-<sid>.txt).
+evidence_write_start() {
+  local sid="${1:-}" dir f tmp line started logpath
+  dir="$(evidence_dir)"
+  mkdir -p "$dir" || { echo "qa-drive: cannot create evidence dir $dir" >&2; return 1; }
+  f="$dir/boot.txt"
+  tmp="$f.$$.tmp"
+  line="$(server_boot_line)"
+  started="$(server_started)"
+  logpath="$(server_logpath)"
+  {
+    echo "# ADAAAA-8163 per-leg boot evidence (AC1 boot line + AC6 StartedAt)."
+    echo "# Captured BEFORE the leg, while the boot that serves it is still alive:"
+    echo "# a later container recreate deletes the removed container's json.log."
+    echo "PHASE=start"
+    echo "SID=${sid:-<none>}"
+    echo "CAPTURED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "SERVER_CONTAINER=$SERVER"
+    echo "SERVER_STARTED_AT=${started:-<missing>}"
+    echo "SERVER_JSON_LOG=${logpath:-<missing>}"
+    echo "BOOT_LINE=${line:-<missing>}"
+    boot_env_lines
+    echo "# ENV <key>=<unset> means the key is absent from the container, i.e. the"
+    echo "# shipped default is in force; it is a captured value, not a gap."
+  } > "$tmp" && mv "$tmp" "$f" || { echo "qa-drive: cannot write $f" >&2; return 1; }
+  # boot.txt is the name the ticket asks for, but the next leg on this box
+  # overwrites it, so keep a per-sid copy too.
+  [ -n "$sid" ] && cp "$f" "$dir/boot-$sid.txt" 2>/dev/null
+  EVID_FILE="$f"
+  printf 'qa-drive: boot evidence sid=%s file=%s started_at=%s boot_line=%s\n' \
+    "${sid:-<none>}" "$f" "${started:-<missing>}" "${line:-<missing>}"
+  return 0
+}
+
+# evidence_write_end [sid]: append the leg-end re-read to the same boot.txt and
+# say whether it is still the same boot (SAME_BOOT). Idempotent: a repeated call
+# replaces the previous end block instead of stacking one.
+evidence_write_end() {
+  local sid="${1:-}" dir f start_started start_line now_started now_line same
+  dir="$(evidence_dir)"
+  f="$dir/boot.txt"
+  [ -s "$f" ] || { echo "qa-drive: no boot evidence at $f to finish" >&2; return 1; }
+  start_started="$(sed -n 's/^SERVER_STARTED_AT=//p' "$f" | head -n 1)"
+  start_line="$(sed -n 's/^BOOT_LINE=//p' "$f" | head -n 1)"
+  now_started="$(server_started)"
+  now_line="$(server_boot_line)"
+  [ -n "$now_line" ] || now_line="<missing>"
+  if [ -n "$start_started" ] && [ "$start_started" = "$now_started" ]; then same=yes; else same=no; fi
+  grep -q '^PHASE=end$' "$f" 2>/dev/null && sed -i '/^PHASE=end$/,$d' "$f"
+  {
+    echo "PHASE=end"
+    echo "END_CAPTURED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "END_SERVER_STARTED_AT=${now_started:-<missing>}"
+    echo "END_BOOT_LINE=$now_line"
+    echo "SAME_BOOT=$same"
+  } >> "$f" || { echo "qa-drive: cannot append to $f" >&2; return 1; }
+  [ -n "$sid" ] && cp "$f" "$dir/boot-$sid.txt" 2>/dev/null
+  printf 'qa-drive: boot evidence end sid=%s file=%s same_boot=%s started_at=%s boot_line=%s\n' \
+    "${sid:-<none>}" "$f" "$same" "${now_started:-<missing>}" "$now_line"
+  # A recreate after the leg is exactly the case this guardrail exists for; say
+  # it plainly instead of leaving the reader to diff two timestamps.
+  if [ "$same" = no ]; then
+    echo "qa-drive: boot changed during leg sid=${sid:-<none>} start_started=${start_started:-<missing>} start_boot_line=${start_line:-<missing>}"
+  fi
+  return 0
+}
 
 # All pid files this launcher family has written, as "sid:pid" lines.
 recorded() {
@@ -103,6 +246,21 @@ EOF
   exit 0
 fi
 
+if [ "$MODE" = "boot" ]; then
+  # Dry run: write this boot's evidence, print it, and exit. No session, no
+  # frames, no leg — the acceptance run for ADAAAA-8163.
+  evidence_write_start "${SID:-}" || exit 2
+  [ -n "$EVID_FILE" ] && cat "$EVID_FILE"
+  exit 0
+fi
+
+if [ "$MODE" = "evidend" ]; then
+  # Leg end for a `--no-wait` leg: re-read StartedAt + the boot line into the
+  # leg's own boot.txt (the foreground path does this from cleanup).
+  evidence_write_end "${SID:-}" || exit 2
+  exit 0
+fi
+
 if [ -z "$SID" ]; then
   echo "qa-drive: --sid is required" >&2
   usage >&2
@@ -110,6 +268,12 @@ if [ -z "$SID" ]; then
 fi
 [ -n "$LOG" ] || LOG="/state/drive-$SID.log"
 PIDFILE="/state/drive-$SID.pid"
+
+# ADAAAA-8163: capture the leg's boot identity before anything here can launch
+# (a peer recreate after this point cannot erase it). Additive: a capture
+# failure is reported but never blocks the drive.
+evidence_write_start "$SID" || true
+EVID_ACTIVE=1
 
 # 1. Ship the canonical driver into the container (survives container recreate).
 if [ -f "$DRIVER" ]; then
@@ -137,6 +301,13 @@ cleanup() {
     fi
   fi
   ctr_exec "rm -f $PIDFILE" >/dev/null 2>&1 || true
+  # ADAAAA-8163: leg end. Re-read StartedAt + the boot line into the same
+  # boot.txt and grade SAME_BOOT, so a recreate that lands during the leg is
+  # visible in the evidence instead of inferred later. Never changes the exit
+  # path: a capture failure only prints.
+  if [ "$EVID_ACTIVE" = 1 ]; then
+    evidence_write_end "$SID" || true
+  fi
 }
 trap cleanup EXIT INT TERM HUP
 
@@ -154,7 +325,12 @@ done
 [ -n "$PID" ] || { echo "qa-drive: driver pid file never appeared ($PIDFILE)" >&2; exit 2; }
 echo "qa-drive: started sid=$SID pid=$PID seconds=$SECONDS_REPLAY log=$LOG"
 
-[ "$WAIT" = 1 ] || exit 0
+[ "$WAIT" = 1 ] || {
+  # ADAAAA-8163: a detached leg finishes after this launcher exits, so the
+  # leg-end evidence re-read (SAME_BOOT) is the leg script's call.
+  echo "qa-drive: detached leg; at leg end run $0 --evidence-end --sid $SID${EVIDENCE_DIR:+ --evidence-dir $EVIDENCE_DIR}"
+  exit 0
+}
 
 # 3. Wait for the driver to leave on its own; the trap is the backstop.
 DEADLINE=$(( $(date +%s) + SECONDS_REPLAY + 120 ))
