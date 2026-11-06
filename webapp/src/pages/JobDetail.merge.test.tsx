@@ -83,7 +83,7 @@ describe("dedupe/precision lanes are rendered (ADAAAA-7621)", () => {
     expect(html).toContain("score 71");
   });
 
-  it("lists notable non-scoring clips in their own lane, never as a goal card", () => {
+  it("lists notable non-scoring clips in their own lane, as the real card with a badge", () => {
     const html = text(renderToString(
       React.createElement(SecondaryHighlightLane, {
         lane: "notable",
@@ -104,13 +104,26 @@ describe("dedupe/precision lanes are rendered (ADAAAA-7621)", () => {
       })
     ));
     expect(html).toContain('data-detail-lane="notable"');
-    expect(html).toContain("outcome near_miss");
+    // ADAAAA-8178: this supersedes ADAAAA-7621 for the NOTABLE lane only — the
+    // notable row with footage now renders the SAME `HighlightCard` the postable
+    // feed uses, tagged `data-detail-notable-card` and carrying ONE notable badge
+    // (here NEAR MISS, because outcome=near_miss). The earlier ban on
+    // `data-detail-highlight` inside this lane is what the ticket lifts; the
+    // merged-lane ban above still holds and is asserted in its own test.
+    expect(html).toContain("data-detail-highlight");
+    expect(html).toContain("data-detail-notable-card");
+    expect(html).toContain("data-detail-notable-badge");
+    expect(html).toContain('data-notable-kind="near_miss"');
+    expect(html).toContain("NEAR MISS");
+    // The operator card still explains the row (score / event type / reason live
+    // in its collapsed Pipeline detail), so the lane loses no diagnostic value.
+    expect(html).toContain("data-detail-pipeline");
+    expect(html).toContain(">60<");
     expect(html).toContain("ball does not enter the net");
-    // ADAAAA-8135: the row carries footage, so the lane mounts the clip player
-    // (`data-detail-lane-clip`) — but never as a SECOND postable highlight card
-    // (`data-detail-highlight`), which is what ADAAAA-7621 forbade.
-    expect(html).toContain('data-detail-lane-clip="notable"');
-    expect(html).not.toContain("data-detail-highlight");
+    // A notable row is non-postable, so its card has no verdict slot at all.
+    expect(html).not.toContain("data-detail-reject");
+    expect(html).not.toContain("data-detail-approve");
+    expect(html).not.toContain("data-detail-restore");
   });
 
   it("renders nothing for an empty lane (pre-gate payloads stay unchanged)", () => {
