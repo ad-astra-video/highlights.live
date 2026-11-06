@@ -319,6 +319,13 @@ export class MediaRailObserver {
    *  0.93 fps, outside AC-8101-2's 280-320 / 300 s). */
   private strideCredit = 1;
   private strideCreditTs: number | null = null;
+  /** ADAAAA-8102 (leg `b8fb4aa4`): the content-clock bucket the observation set
+   *  last took a record from. The stride above recovers banked credit in a
+   *  burst after a relay gap, so a 7 s span could take 10 records (measured:
+   *  3 gap-free spans read 10 on the funded 1 fps leg, AC-8101-5 wants 7-9).
+   *  The CONSUMED/analysed frames are unchanged — only the window's timed
+   *  observation set is bucketed, at most one record per `1/contentFps`. */
+  private lastObsBucket: number | null = null;
   /** ADAAAA-8102: stride evidence — frames the ingest offered vs frames the
    *  content clock skipped. Published as `observeMetrics.perceive`. */
   private framesSeen = 0;
@@ -381,6 +388,10 @@ export class MediaRailObserver {
       // images. Unset keeps the caller's ingest `fps` — byte-identical to the
       // shipped rail — and `<= 0` (documented stride opt-out) keeps it too.
       fps: this.contentFps > 0 ? this.contentFps : opts.fps ?? OBSERVE_CONTENT_FPS,
+      // ADAAAA-8102 (leg `b8fb4aa4`): with a content rate the window's timed
+      // observation set resolves onto that grid, so a post-gap credit burst
+      // cannot stack two records inside one content tick (10 records/7 s span).
+      ...(this.contentFps > 0 ? { observationFps: this.contentFps } : {}),
       signalGate: opts.signalGate ?? false,
       signalGateOpts: opts.signalGateOpts,
       decideKeepRatio: opts.decideKeepRatio,
@@ -541,7 +552,17 @@ export class MediaRailObserver {
     // therefore joins the observation set here, so the 1 fps cell reads ~7
     // records per 7 s span (AC-8101-5). Without this the set was the published
     // tick clock alone (~2/s) and read 20 records/span on funded leg 977294d7.
-    if (this.contentFps > 0) this.live.recordObservation(ts);
+    // Bucketed on the content clock: after a relay gap the stride spends banked
+    // credit in a burst, and one record per consumed frame put 10 records in a
+    // 7 s span (leg b8fb4aa4); the burst still analyses, it just cannot stack
+    // records inside `1/contentFps`.
+    if (this.contentFps > 0) {
+      const obsBucket = Math.floor(ts * this.contentFps);
+      if (obsBucket !== this.lastObsBucket) {
+        this.lastObsBucket = obsBucket;
+        this.live.recordObservation(ts);
+      }
+    }
     // `seq` rides the recorded frame so the decide window can name the frame
     // files it actually saw (the analysis refs persisted on the decide note).
     this.live.record(ts, frameB64, seedFromObservation(ts, obs), seq);

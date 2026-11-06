@@ -289,3 +289,54 @@ describe("the boot readout names the content consume rate (ADAAAA-8102 Step 4)",
     );
   });
 });
+
+describe("a post-gap credit burst cannot stack timeline records (leg b8fb4aa4, AC-8101-5)", () => {
+  /** The funded 1 fps leg (`b8fb4aa4`) read 10 records in three gap-free 7 s
+   *  spans: the relay fast-forwards across a 4.5-4.7 s gap, the stride then
+   *  spends banked credit in a burst, and every consumed frame joined the timed
+   *  observation set — so two seconds of records landed inside one content
+   *  second. The burst must still be ANALYSED; only the record set is bucketed. */
+  it("takes one record per content second while still consuming the burst", async () => {
+    const T0 = Date.now() / 1000;
+    const decided: any[] = [];
+    const rail = new MediaRailObserver({
+      jobId: "job-8102-burst",
+      fps: 3,
+      contentFps: 1,
+      windowS: 7,
+      cadenceS: 5,
+      maxFrames: 4,
+      onDecide: async (payload) => {
+        decided.push(payload);
+        return false;
+      },
+    });
+    const ts: number[] = [];
+    for (let t = 0; t < 20; t += 1 / 2.6) ts.push(T0 + t);
+    const gapEnd = 24.6;
+    // the relay's fast-forward: three frames delivered inside 0.2 s after a gap
+    ts.push(T0 + gapEnd + 0.02, T0 + gapEnd + 0.09, T0 + gapEnd + 0.17);
+    for (let t = gapEnd + 1; t < 40; t += 1 / 2.6) ts.push(T0 + t);
+    for (const t of ts) {
+      rail.onObservation({ timestamp: t, tracks: [], objects: [], ocr: [] } as any, "a");
+      await new Promise((r) => setImmediate(r));
+    }
+    await rail.finish();
+
+    const perSpan = decided.slice(2).map((p: any) => (p.observations ?? []).length);
+    expect(perSpan.length).toBeGreaterThanOrEqual(3);
+    // The clause: 7-9 records at a 7 s span, never a burst-inflated 10.
+    expect(Math.max(...perSpan)).toBeLessThanOrEqual(9);
+    // One record per content second, whatever the ingest did inside it: no two
+    // records may share a content second INSIDE one window (windows overlap, so
+    // the same record legitimately appears in consecutive spans).
+    for (const p of decided) {
+      const buckets = (p.observations ?? []).map((o: any) => Math.floor(Number(o.ts)));
+      for (let i = 1; i < buckets.length; i++) {
+        expect(buckets[i]).toBeGreaterThan(buckets[i - 1]);
+      }
+    }
+    // The burst frames were still analysed (consumption is NOT throttled).
+    expect(rail.stats().frames).toBeGreaterThanOrEqual(38);
+  });
+});

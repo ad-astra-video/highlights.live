@@ -29,7 +29,10 @@ Design (parent plan ``ADAAAA-7849`` §3, Stages 0-5):
   and a curated per-team kit-colour prior last (``_SOCCER_KIT_PRIORS``, the
   additive channel of ADAAAA-7866). The prior is only an attribution KEY: a
   published colour is always the observed cluster's own colour, and it never
-  overrides a measured channel.
+  overrides a measured channel. One scoped exception (ADAAAA-8076): a score-bug
+  swatch reading that CONTRADICTS the curated primary for that same team may not
+  publish — the side stays unresolved and the prior may then link it to an
+  already-observed cluster.
   Away kits in the same colour report ``ambiguous: true`` rather than a wrong
   colour.
 - **Stage 4 — confidence fold + monotonic guard**: source weights are
@@ -2787,6 +2790,32 @@ def _resolve_kit_prior(
     return picks, miss, conflict
 
 
+def _swatch_contradicts_curated_primary(swatch_color: str, primary: str) -> bool:
+    """True when a score-bug swatch reading contradicts a curated primary.
+
+    Scoped precedence exception (ADAAAA-8076, PO ruling on card `14540071`): a
+    score-bug swatch reading that names a DIFFERENT colour family than the
+    curated primary for that same team may not publish. The side then stays
+    honestly unresolved and the curated prior may link it to an already-observed
+    cluster (ADAAAA-7981's honest-miss shape).
+
+    The comparison is deliberately coarse — family, not shade — because the
+    prior is an attribution KEY, not a shade authority: a swatch reading
+    "maroon" against a curated "red" is agreement, not a contradiction. A token
+    outside :data:`_KIT_COLOR_FAMILIES` is not comparable, so it never vetoes
+    (the shipped name-first/distance path still decides it).
+    """
+    if not swatch_color or not primary:
+        return False
+    if _norm(swatch_color) == _norm(primary):
+        return False
+    sw_family = _color_family(swatch_color)
+    prior_family = _color_family(primary)
+    if sw_family == "unknown" or prior_family == "unknown":
+        return False
+    return sw_family != prior_family
+
+
 def associate_kits(
     teams: Sequence[Mapping[str, Any]],
     clusters: Sequence[KitCluster],
@@ -2811,10 +2840,19 @@ def associate_kits(
     runs LAST, only on sides neither measured channel decided, and it publishes
     the cluster's own colour — never a colour of its own.
 
+    Scoped precedence exception (ADAAAA-8076): when the swatch channel's stable
+    reading CONTRADICTS the curated primary for that same team
+    (:func:`_swatch_contradicts_curated_primary`), the swatch may not publish —
+    the side is left unresolved, falls through to commentary, and the curated
+    prior may link the already-observed cluster. Sides whose swatch agrees with
+    the prior are untouched, so the prior still never overrides a measured
+    channel it does not contradict.
+
     ``status`` is an optional out-dict that receives ``kitPriorUsed``,
     ``kitPriorMiss`` and ``kitPriorConflict`` (side strings) so the caller can
-    surface the channel in ``evidenceStatus``. It is only touched when
-    ``kit_prior`` is given.
+    surface the channel in ``evidenceStatus``, plus ``kitSwatchVetoed``
+    (``[{side, swatch, curated}]``) when a reading was withheld. It is only
+    touched when ``kit_prior`` is given.
 
     A kit colour is only PUBLISHED from a cluster that carries run-level
     evidence (:func:`_cluster_meets_publish_floor`: >=
@@ -2866,6 +2904,7 @@ def associate_kits(
         swatch_by_side = {}
 
     unresolved: list[dict[str, str]] = []
+    swatch_vetoed: list[dict[str, str]] = []
     for team in teams:
         side = str(team.get("side") or "unknown")
         name = str(team.get("name") or "")
@@ -2880,13 +2919,26 @@ def associate_kits(
             # a saturated red than the dark red kit centroid does), which is how
             # fe0e3efc published "orange" for Portugal while the bug said red.
             swatch_name = _norm(sw.get("color") or name_color(rgb))
-            named = [i for i, c in enumerate(clusters) if _norm(c.primary) == swatch_name and i not in used]
-            if named:
-                chosen = max(named, key=lambda i: (clusters[i].count, -i))
+            # Scoped precedence exception (ADAAAA-8076): a score-bug swatch that
+            # CONTRADICTS the curated primary for this same team may not publish.
+            # Measured on the served record 5cb96d29: Spain's stable 90 % swatch
+            # half read "red" (a scoreboard graphic) while Spain wears white, so
+            # the red cluster was handed to the away side and the observed white
+            # went unused. Veto only the contradicting reading — the side then
+            # falls through to commentary and, last, to the curated prior.
+            prior_entry = kit_prior.get(name) if kit_prior is not None else None
+            if prior_entry and prior_entry[0] and _swatch_contradicts_curated_primary(swatch_name, prior_entry[0]):
+                swatch_vetoed.append(
+                    {"side": side, "swatch": swatch_name, "curated": _norm(prior_entry[0])}
+                )
             else:
-                ranked = sorted(range(len(clusters)), key=lambda i: _dist(rgb, clusters[i].rgb))
-                if ranked and _dist(rgb, clusters[ranked[0]].rgb) <= 120.0:
-                    chosen = ranked[0]
+                named = [i for i, c in enumerate(clusters) if _norm(c.primary) == swatch_name and i not in used]
+                if named:
+                    chosen = max(named, key=lambda i: (clusters[i].count, -i))
+                else:
+                    ranked = sorted(range(len(clusters)), key=lambda i: _dist(rgb, clusters[i].rgb))
+                    if ranked and _dist(rgb, clusters[ranked[0]].rgb) <= 120.0:
+                        chosen = ranked[0]
         if chosen is None and commentary:
             for mention in commentary:
                 if mention.kit_color and mention.name == name:
@@ -2926,6 +2978,10 @@ def associate_kits(
         status["kitPriorUsed"] = prior_used
         status["kitPriorMiss"] = prior_miss
         status["kitPriorConflict"] = prior_conflict
+    if swatch_vetoed and status is not None:
+        # Inspectability: name the reading that was withheld, so a record that
+        # publishes white for a side whose swatch said red explains itself.
+        status["kitSwatchVetoed"] = swatch_vetoed
     # No positional fallback: a colour is attached to a team only when an
     # evidence channel links them (swatch, commentary phrase, or the curated
     # prior). Measured on the cited job, assigning the leftover cluster to the
