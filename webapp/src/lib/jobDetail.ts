@@ -34,7 +34,10 @@ export interface TrackObservation {
 export interface AnalysisDataItem {
   type: string;
   label: string;
-  value?: string | number | boolean | null;
+  /** The client never validates the wire, so this is `unknown` on purpose: a
+   *  non-scalar value must be formatted (never `String()`-ed) and must never
+   *  reach React as a bare child (ADAAAA-8187). */
+  value?: unknown;
 }
 export interface AnalysisMediaRef {
   seq: number;
@@ -1107,14 +1110,83 @@ export function frameUriFor(ref: { seq: number; uri?: string }, jobId: string): 
 }
 
 /**
- * Human text for an analysis data item's value (null/undefined → "—", boolean →
- * yes/no, numbers as-is, strings verbatim). The UI renders each item's value as
- * a plain string so a malformed / absent value degrades to "—", never a crash.
+ * Human text for an OPAQUE wire value — the decide `verdict` rationale, an
+ * attested-evidence entry, or a data item's value. The webapp does not validate
+ * these payloads, so the value may be a scalar OR an object/array.
+ *
+ * `String({...})` is `"[object Object]"` (ADAAAA-8186/8187): it silently loses
+ * the whole object, and a bare object as a React child throws and blanks the
+ * panel. This formatter never coerces an object through `String`:
+ *   • null / undefined / ""            → "—"
+ *   • boolean → yes/no, number → as-is, string → verbatim
+ *   • array   → the formatted items joined with ", "
+ *   • object  → a compact `key: value` summary (one nesting level deep); a
+ *               value it cannot walk (cycle, throwing getter, too deep) falls
+ *               back to compact JSON — never "[object Object]".
+ */
+export function verdictText(value: unknown): string {
+  return opaqueText(value, 0);
+}
+
+/** Depth at which an opaque object stops nesting and renders as JSON. */
+const OPAQUE_MAX_DEPTH = 2;
+
+function opaqueText(value: unknown, depth: number): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value === "" ? "—" : value;
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "bigint") return String(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "—";
+    return value.map((item) => opaqueText(item, depth + 1)).join(", ");
+  }
+  if (typeof value === "object") {
+    if (depth >= OPAQUE_MAX_DEPTH) return opaqueJson(value);
+    let entries: [string, unknown][];
+    try {
+      entries = Object.entries(value as Record<string, unknown>);
+    } catch {
+      return opaqueJson(value);
+    }
+    if (entries.length === 0) return "—";
+    return entries.map(([key, item]) => `${key}: ${opaqueText(item, depth + 1)}`).join(", ");
+  }
+  // symbol / function: a last resort that can still never be an object.
+  return String(value);
+}
+
+function opaqueJson(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? "—" : json;
+  } catch {
+    return "—";
+  }
+}
+
+/**
+ * Human text for an analysis data item's value. Scalars keep the documented
+ * wording (null/undefined → "—", boolean → yes/no, numbers as-is, strings
+ * verbatim); an unvalidated non-scalar value goes through the same opaque-value
+ * formatter so it can never print "[object Object]" or crash the row.
  */
 export function dataItemValueText(value: unknown): string {
-  if (value === null || value === undefined) return "—";
-  if (typeof value === "boolean") return value ? "yes" : "no";
-  return String(value);
+  return verdictText(value);
+}
+
+/**
+ * The tri-state wording for one goal criterion on the I1 `Verdict` rationale.
+ * The wire is strict: `true` = seen, `false` = plainly contradicted (not seen),
+ * `null`/absent = unverifiable (`VerdictCriteria` docstring, decide
+ * `services/decide/app/__init__.py`). An out-of-contract value is formatted
+ * rather than coerced.
+ */
+export function verdictCriterionText(value: unknown): string {
+  if (value === true) return "seen";
+  if (value === false) return "not seen";
+  if (value === null || value === undefined) return "unverifiable";
+  return verdictText(value);
 }
 
 /** A parsed audio-energy level curve for one analysis data item (ADAAAA-7932). */

@@ -30,6 +30,8 @@ import {
   frameUriFor,
   goalConfirmedLabel,
   parseAudioLevelCurve,
+  verdictCriterionText,
+  verdictText,
   type AnalysisDataItem,
   type AnalysisMediaRef,
   type AudioLevelCurve,
@@ -522,15 +524,72 @@ function Field({ label, children, mono }: { label: string; children: React.React
   );
 }
 
+/** The four goal criteria the decide layer asks the model to verify (I1). */
+const VERDICT_CRITERIA: { key: string; label: string }[] = [
+  { key: "ballCrossedLineBetweenPosts", label: "ball crossed line between posts" },
+  { key: "ballInNet", label: "ball in net" },
+  { key: "scoreboardChanged", label: "scoreboard changed" },
+  { key: "crowdErupted", label: "crowd erupted" },
+];
+
+/** True when a wire verdict is the I1 rationale OBJECT (not a legacy scalar). */
+function isRationaleVerdict(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * ADAAAA-8187: the I1 `Verdict` rationale is an OBJECT on the wire
+ * (`{hypothesis, independentlyObserved, criteria, contradictedBy}` — decide
+ * `services/decide/app/__init__.py`), even though the contract keeps `verdict`
+ * opaque on purpose. Flattening it with `String()` printed "[object Object]"
+ * and lost the whole rationale, so render one row per field instead: absent
+ * fields read "—", and each criterion reads seen / not seen / unverifiable
+ * (wire `null` is "unverifiable" per the `VerdictCriteria` docstring).
+ */
+function VerdictDetail({ verdict }: { verdict: Record<string, unknown> }) {
+  if (Object.keys(verdict).length === 0) {
+    return (
+      <div className="mt-1 rounded-md border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut" data-response-verdict-detail>
+        —
+      </div>
+    );
+  }
+  const criteria = verdict.criteria;
+  const criteriaObject =
+    typeof criteria === "object" && criteria !== null && !Array.isArray(criteria)
+      ? (criteria as Record<string, unknown>)
+      : null;
+  const criteriaText = criteriaObject
+    ? VERDICT_CRITERIA.map(
+        ({ key, label }) => `${label}: ${verdictCriterionText(criteriaObject[key])}`
+      ).join(" · ")
+    : verdictText(criteria);
+  return (
+    <div
+      className="mt-1 grid gap-x-4 gap-y-2 rounded-md border border-mut/30 bg-mut/10 p-2 sm:grid-cols-2"
+      data-response-verdict-detail
+    >
+      <Field label="Hypothesis">{verdictText(verdict.hypothesis)}</Field>
+      <Field label="Independently observed">{verdictText(verdict.independentlyObserved)}</Field>
+      <Field label="Criteria">{criteriaText}</Field>
+      <Field label="Contradicted by">{verdictText(verdict.contradictedBy)}</Field>
+    </div>
+  );
+}
+
 /** The full decide LLM response (score / outcome / reason + reasoning, verdict,
  *  attested evidence, audio context). Rendered read-only; unknown fields
- *  degrade to a safe JSON dump, never a crash. */
+ *  degrade to a safe formatted dump, never a crash. */
 function ResponseBlock({ a }: { a: WindowAnalysis }) {
   const r = a.response;
   if (!r) {
     return <div className="mt-2 text-xs text-mut" data-response="none">No response captured for this window.</div>;
   }
-  const verdict = r.verdict !== undefined && r.verdict !== null ? String(r.verdict) : "—";
+  // ADAAAA-8187: `verdict` may be the I1 rationale OBJECT. Keep the chip a short
+  // marker and render the rationale rows below it; a legacy scalar keeps its
+  // exact wording ("verdict: confirmed_goal", "verdict: —").
+  const verdictObject = isRationaleVerdict(r.verdict) ? r.verdict : null;
+  const verdictLabel = verdictObject ? "rationale" : verdictText(r.verdict);
   const audioCtx = r.audioContext !== undefined && r.audioContext !== null ? JSON.stringify(r.audioContext) : null;
   return (
     <div className="mt-2 rounded-md border border-neon/30 bg-neon/5 p-3" data-response>
@@ -551,11 +610,12 @@ function ResponseBlock({ a }: { a: WindowAnalysis }) {
           </span>
         )}
         <span className="rounded-full border border-purple/40 px-2 py-0.5 text-xs font-bold text-purple" data-response-verdict>
-          verdict: {verdict}
+          {`verdict: ${verdictLabel}`}
         </span>
         {r.eventType && <span className="text-xs text-mut">{r.eventType}</span>}
         {r.source && <span className="ml-auto font-mono text-[10px] text-mut">source: {r.source}</span>}
       </div>
+      {verdictObject && <VerdictDetail verdict={verdictObject} />}
       {r.reason && <div className="mb-1 text-sm text-slate-ink" data-response-reason>{r.reason}</div>}
       {r.reasoning && (
         <div className="mb-1" data-response-reasoning>
@@ -569,7 +629,7 @@ function ResponseBlock({ a }: { a: WindowAnalysis }) {
           <ul className="mt-0.5 flex flex-wrap gap-1">
             {r.evidenceAttested.map((e, i) => (
               <li key={i} className="rounded-full border border-mut/30 bg-mut/10 px-2 py-0.5 font-mono text-[11px] text-slate-ink">
-                {e}
+                {verdictText(e)}
               </li>
             ))}
           </ul>

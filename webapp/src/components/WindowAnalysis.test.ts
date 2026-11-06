@@ -376,3 +376,123 @@ describe("audio_level graph keyboard + readout contract (ADAAAA-7937 AC4, AC7)",
     expect(html).toContain(">0.46<");
   });
 });
+
+// ADAAAA-8187 (child of ADAAAA-8186): the decide layer returns the I1 `Verdict`
+// rationale as an OBJECT on the wire (`{hypothesis, independentlyObserved,
+// criteria, contradictedBy}`), while the contract keeps `verdict` opaque. The
+// panel used to print `String(r.verdict)` → "verdict: [object Object]" and lose
+// the whole rationale. These tests pin the formatted rendering, the legacy
+// scalar wording, and the opaque-value sweep.
+describe("WindowAnalysisPanel verdict rationale formatting (ADAAAA-8187)", () => {
+  const rationale = {
+    hypothesis: "shot from the left channel",
+    independentlyObserved: "ball crossed the line between the posts",
+    criteria: {
+      ballCrossedLineBetweenPosts: true,
+      ballInNet: true,
+      scoreboardChanged: false,
+      crowdErupted: null,
+    },
+    contradictedBy: "none",
+  };
+  const withRationale: WindowAnalysis = {
+    ...analysis,
+    response: { ...analysis.response!, verdict: rationale },
+  };
+
+  it("AC1: renders the rationale fields and criteria tri-states, never [object Object]", () => {
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: withRationale, jobId: "abc" })
+    );
+    expect(html).not.toContain("[object Object]");
+    // The chip stays a short, non-lossy marker; the rationale renders below it.
+    expect(html).toContain("data-response-verdict");
+    expect(html).toContain("verdict: rationale");
+    expect(html).toContain("data-response-verdict-detail");
+    // Every field of the rationale is visible.
+    expect(html).toContain("Hypothesis");
+    expect(html).toContain("shot from the left channel");
+    expect(html).toContain("Independently observed");
+    expect(html).toContain("ball crossed the line between the posts");
+    expect(html).toContain("Contradicted by");
+    expect(html).toContain("none");
+    // The four criteria as seen / not seen / unverifiable (wire null).
+    expect(html).toContain("ball crossed line between posts: seen");
+    expect(html).toContain("ball in net: seen");
+    expect(html).toContain("scoreboard changed: not seen");
+    expect(html).toContain("crowd erupted: unverifiable");
+  });
+
+  it("AC2: a legacy scalar verdict keeps its exact wording and no detail block", () => {
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc" })
+    );
+    expect(html).toContain("verdict: confirmed_goal");
+    expect(html).not.toContain("data-response-verdict-detail");
+    expect(html).not.toContain("[object Object]");
+  });
+
+  it("AC2: a null and an absent verdict both read 'verdict: —'", () => {
+    const nullVerdict: WindowAnalysis = {
+      ...analysis,
+      response: { ...analysis.response!, verdict: null },
+    };
+    const nullHtml = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: nullVerdict, jobId: "abc" })
+    );
+    expect(nullHtml).toContain("verdict: —");
+    expect(nullHtml).not.toContain("data-response-verdict-detail");
+
+    const absentVerdict: WindowAnalysis = { ...analysis, response: { ...analysis.response! } };
+    delete absentVerdict.response!.verdict;
+    const absentHtml = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: absentVerdict, jobId: "abc" })
+    );
+    expect(absentHtml).toContain("verdict: —");
+    expect(absentHtml).not.toContain("data-response-verdict-detail");
+  });
+
+  it("renders '—' for every absent rationale field and for an empty object", () => {
+    const sparse: WindowAnalysis = {
+      ...analysis,
+      response: { ...analysis.response!, verdict: {} },
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: sparse, jobId: "abc" })
+    );
+    expect(html).toContain("data-response-verdict-detail");
+    expect(html).not.toContain("[object Object]");
+  });
+
+  it("AC3: a non-scalar data-item value renders readable text, not [object Object]", () => {
+    const drifted: WindowAnalysis = {
+      ...analysis,
+      dataItems: [
+        ...analysis.dataItems,
+        { type: "drift", label: "Drifted item", value: { a: 1 } },
+      ],
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: drifted, jobId: "abc" })
+    );
+    expect(html).toContain('data-data-item="drift"');
+    expect(html).toContain("a: 1");
+    expect(html).not.toContain("[object Object]");
+  });
+
+  it("AC3: a non-scalar attested-evidence entry renders readable text, not [object Object]", () => {
+    const withObjectEvidence: WindowAnalysis = {
+      ...analysis,
+      response: {
+        ...analysis.response!,
+        evidenceAttested: ["frame_0", { artifact: "scorebug" }] as unknown as string[],
+      },
+    };
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis: withObjectEvidence, jobId: "abc" })
+    );
+    expect(html).toContain("frame_0");
+    expect(html).toContain("artifact: scorebug");
+    expect(html).not.toContain("[object Object]");
+  });
+});
