@@ -5914,7 +5914,7 @@ export async function acceptVideoDecision(
   // transition, one postable row, on both orderings (AC4 — this is the
   // celebration-then-confirm path the deferred lane could not win, because the
   // accept had already stamped its transition onto the delivered-GOAL ledger).
-  if (isGoalAccept && liveWindow && candidateTransitionKey) {
+  if (isGoalAccept && liveWindow && candidateTransitionKey && cfg.onDeferredGoalAttested) {
     const promoted = run.promoteDeferredGoalForAccept({
       delta: candidate.scoreBoardDelta,
       readAt: candidate.timestamp,
