@@ -63,3 +63,43 @@ describe("decide router upstreams (ADAAAA-8083)", () => {
     expect(conf).toMatch(/location\s+=\s+\/nginx-health/);
   });
 });
+
+// ADAAAA-8088: the decide runner's health probe must hit the router-local
+// endpoint, not the proxied `/health`. go-livepeer (v0.9.2,
+// `ai/runner/live_runner.go`) probes every static runner on a 5 s ticker with a
+// 3 s timeout and, on a SINGLE failed probe, sets `Status = "unavailable"` and
+// releases every session on that runner. `health_url` is relative to
+// `runner_url` (staticRunnerHealthURL joins them), so with `runner_url =
+// http://decide-router:8081` a `/health` probe is proxied into the decide pool
+// and pays any upstream connect/inference stall. `/nginx-health` answers inside
+// nginx (`return 200`), so a worker stall can no longer fail the probe. This
+// suite pins both the config value and the non-proxying endpoint.
+const readRunners = (rel: string) =>
+  JSON.parse(readFileSync(repoFile(rel), "utf8")) as {
+    runners: Array<{ label: string; runner_url: string; health_url: string }>;
+  };
+
+function decideRunner(rel: string) {
+  const runner = readRunners(rel).runners.find((r) => r.label === "highlights-decide");
+  expect(runner, `${rel}: highlights-decide runner missing`).toBeTruthy();
+  return runner!;
+}
+
+describe("decide runner health probe (ADAAAA-8088)", () => {
+  for (const rel of ["docker/runners.json", "docker/runners.template.json"]) {
+    it(`${rel}: decide health_url is the router-local /nginx-health`, () => {
+      const runner = decideRunner(rel);
+      expect(runner.runner_url).toBe("http://decide-router:8081");
+      expect(runner.health_url).toBe("/nginx-health");
+    });
+  }
+
+  it("the health endpoint answers inside nginx and never proxies", () => {
+    const start = conf.indexOf("location = /nginx-health");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = conf.indexOf("\n    }", start);
+    const block = conf.slice(start, end);
+    expect(block).toMatch(/return\s+200/);
+    expect(block).not.toMatch(/proxy_pass/);
+  });
+});
