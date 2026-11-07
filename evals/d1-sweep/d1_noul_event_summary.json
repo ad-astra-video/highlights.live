@@ -1,0 +1,119 @@
+{
+  "arm": "noul_event",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 1194.3,
+    "p95": 1237.7,
+    "max": 1245.6
+  },
+  "auc_candidate": 0.4899,
+  "gate": [
+    "goal_scored",
+    "crowd_celebration"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.92,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.36,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 24,
+      "positivesKept": "19/22",
+      "precisionProjection": 0.792
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.96,
+      "temp": 0.75,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.08,
+      "temp": 0.25,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 24,
+      "positivesKept": "19/22",
+      "precisionProjection": 0.792
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "crowd_celebration": {
+      "posMean": 0.631,
+      "negMean": 0.626,
+      "min": 0.202,
+      "max": 0.912
+    },
+    "goal_scored": {
+      "posMean": 0.425,
+      "negMean": 0.365,
+      "min": 0.189,
+      "max": 0.72
+    }
+  },
+  "wallSeconds": 58.6
+}

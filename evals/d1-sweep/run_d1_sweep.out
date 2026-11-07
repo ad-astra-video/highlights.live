@@ -1,0 +1,507 @@
++ BIN=/home/brad/llama-build/llama.cpp/build/bin/llama-server
++ MODEL=/home/brad/models/d1-omni/d1-Omni-2B-Q8_0.gguf
++ MMPROJ=/home/brad/models/d1-omni/mmproj-d1-Omni-2B-Q8_0.gguf
++ PORT=8110
++ pkill -f 'llama-server.*8110'
++ sleep 1
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader
++ SRV_PID=2611534
++ echo 'server pid 2611534'
+server pid 2611534
++ setsid nohup /home/brad/llama-build/llama.cpp/build/bin/llama-server -m /home/brad/models/d1-omni/d1-Omni-2B-Q8_0.gguf --mmproj /home/brad/models/d1-omni/mmproj-d1-Omni-2B-Q8_0.gguf --host 127.0.0.1 --port 8110 -ngl 0 --no-mmproj-offload -t 16 --ctx-size 8192 -b 8192 -ub 8192
+++ seq 1 240
++ for i in $(seq 1 240)
++ sleep 1
++ curl -sf http://127.0.0.1:8110/health
++ echo 'server ready after 1s'
+server ready after 1s
++ break
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader
+++ awk '{print int($1/1024)}'
++++ pgrep -f 'llama-server.*8110'
++++ head -1
+++ ps -o rss= -p 2611534
++ SRV_RSS=2174
++ echo 'server RSS 2174 MB'
+server RSS 2174 MB
++ python3 -u /tmp/d1_sweep.py --server http://127.0.0.1:8110 --out-dir /tmp/d1sweep
++ tee /tmp/d1_sweep.log
+warmup done
+noul_base [10/49] gate=0.3477568838748461 1867.6ms err=
+noul_base [20/49] gate=0.4961104461694241 1874.6ms err=
+noul_base [30/49] gate=0.8543767360689373 1876.9ms err=
+noul_base [40/49] gate=0.24993512781235358 1891.6ms err=
+noul_base [49/49] gate=0.3154455492920738 1880.4ms err=
+=== noul_base summary ===
+{
+  "arm": "noul_base",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 1851.9,
+    "p95": 1927.9,
+    "max": 2277.6
+  },
+  "auc_candidate": 0.5657,
+  "gate": [
+    "crowd_eruption",
+    "whistle"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.88,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.3,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 25,
+      "positivesKept": "20/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.98,
+      "temp": 0.5,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.04,
+      "temp": 0.25,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 25,
+      "positivesKept": "20/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "commentary_excited": {
+      "posMean": 0.438,
+      "negMean": 0.266,
+      "min": 0.16,
+      "max": 0.875
+    },
+    "crowd_eruption": {
+      "posMean": 0.547,
+      "negMean": 0.534,
+      "min": 0.143,
+      "max": 0.905
+    },
+    "whistle": {
+      "posMean": 0.358,
+      "negMean": 0.18,
+      "min": 0.098,
+      "max": 0.667
+    }
+  },
+  "wallSeconds": 93.4
+}
+noul_event [10/49] gate=0.3251973112338648 1184.2ms err=
+noul_event [20/49] gate=0.6908480099160046 1160.9ms err=
+noul_event [30/49] gate=0.883977160871558 1195.1ms err=
+noul_event [40/49] gate=0.2854195652357242 1203.6ms err=
+noul_event [49/49] gate=0.4340985987462969 1194.3ms err=
+=== noul_event summary ===
+{
+  "arm": "noul_event",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 1194.3,
+    "p95": 1237.7,
+    "max": 1245.6
+  },
+  "auc_candidate": 0.4899,
+  "gate": [
+    "goal_scored",
+    "crowd_celebration"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.92,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.36,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 24,
+      "positivesKept": "19/22",
+      "precisionProjection": 0.792
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.96,
+      "temp": 0.75,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.08,
+      "temp": 0.25,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 24,
+      "positivesKept": "19/22",
+      "precisionProjection": 0.792
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "crowd_celebration": {
+      "posMean": 0.631,
+      "negMean": 0.626,
+      "min": 0.202,
+      "max": 0.912
+    },
+    "goal_scored": {
+      "posMean": 0.425,
+      "negMean": 0.365,
+      "min": 0.189,
+      "max": 0.72
+    }
+  },
+  "wallSeconds": 58.6
+}
+choice_goal [10/49] gate=0.03193605967737174 915.6ms err=
+choice_goal [20/49] gate=0.12108932727668764 936.8ms err=
+choice_goal [30/49] gate=0.6372480093419385 915.3ms err=
+choice_goal [40/49] gate=0.019822012378885825 917.5ms err=
+choice_goal [49/49] gate=0.059742105573997804 944.7ms err=
+=== choice_goal summary ===
+{
+  "arm": "choice_goal",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 934.8,
+    "p95": 965.1,
+    "max": 969.8
+  },
+  "auc_candidate": 0.6515,
+  "gate": [
+    "outcome.goal_celebration"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.64,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "1/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 3,
+      "positivesKept": "3/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.04,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.9,
+      "temp": 0.25,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "2/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-02"
+      ],
+      "candidatesKept": 4,
+      "positivesKept": "4/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.02,
+      "temp": 0.75,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "outcome.goal_celebration": {
+      "posMean": 0.373,
+      "negMean": 0.261,
+      "min": 0.014,
+      "max": 0.886
+    },
+    "outcome.off_target_or_warmup": {
+      "posMean": 0.3,
+      "negMean": 0.335,
+      "min": 0.057,
+      "max": 0.567
+    },
+    "outcome.routine_play": {
+      "posMean": 0.328,
+      "negMean": 0.404,
+      "min": 0.057,
+      "max": 0.584
+    }
+  },
+  "wallSeconds": 45.9
+}
+score_crowd [10/49] gate=0.0 853.4ms err=
+score_crowd [20/49] gate=0.0 872.2ms err=
+score_crowd [30/49] gate=2.0 860.6ms err=
+score_crowd [40/49] gate=0.0 869.3ms err=
+score_crowd [49/49] gate=0.0 857.7ms err=
+=== score_crowd summary ===
+{
+  "arm": "score_crowd",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 858.3,
+    "p95": 889.3,
+    "max": 918.7
+  },
+  "auc_candidate": 0.4495,
+  "gate": [
+    "crowd_level.score"
+  ],
+  "thresholdSweep": {
+    "steps": 40,
+    "best": {
+      "threshold": 0.05,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "5/6",
+      "posClipsLost": [
+        "soc-goal-02"
+      ],
+      "candidatesKept": 16,
+      "positivesKept": "11/22",
+      "precisionProjection": 0.688
+    },
+    "best_safe": null,
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "crowd_level.p0": {
+      "posMean": 0.421,
+      "negMean": 0.524,
+      "min": 0.033,
+      "max": 0.925
+    },
+    "crowd_level.p1": {
+      "posMean": 0.139,
+      "negMean": 0.046,
+      "min": 0.035,
+      "max": 0.342
+    },
+    "crowd_level.p2": {
+      "posMean": 0.44,
+      "negMean": 0.43,
+      "min": 0.032,
+      "max": 0.924
+    },
+    "crowd_level.score": {
+      "posMean": 0.938,
+      "negMean": 1.118,
+      "min": 0.0,
+      "max": 2.0
+    }
+  },
+  "wallSeconds": 42.2
+}
+DONE
++ RC=0
++ echo 'sweep rc=0'
+sweep rc=0
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader
++ pkill -f 'llama-server.*8110'
++ sleep 2
++ echo 'GPU before:'
+GPU before:
++ cat /tmp/d1_run_gpu_before.txt
+22336 MiB
+6764 MiB
++ echo 'GPU during:'
+GPU during:
++ cat /tmp/d1_run_gpu_during.txt
+22336 MiB
+6764 MiB
++ echo 'GPU after:'
+GPU after:
++ cat /tmp/d1_run_gpu_after.txt
+22336 MiB
+6764 MiB
++ echo LAUNCH_EXIT=0
+LAUNCH_EXIT=0

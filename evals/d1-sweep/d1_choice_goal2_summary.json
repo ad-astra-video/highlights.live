@@ -1,0 +1,116 @@
+{
+  "arm": "choice_goal2",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 751.5,
+    "p95": 776.7,
+    "max": 789.3
+  },
+  "auc_candidate": 0.6717,
+  "gate": [
+    "outcome2.goal_celebration"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.6,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "1/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 3,
+      "positivesKept": "3/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.06,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.82,
+      "temp": 0.25,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "1/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 3,
+      "positivesKept": "3/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.04,
+      "temp": 0.75,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "outcome2.goal_celebration": {
+      "posMean": 0.356,
+      "negMean": 0.25,
+      "min": 0.041,
+      "max": 0.897
+    },
+    "outcome2.no_goal": {
+      "posMean": 0.644,
+      "negMean": 0.75,
+      "min": 0.103,
+      "max": 0.959
+    }
+  },
+  "wallSeconds": 36.9
+}

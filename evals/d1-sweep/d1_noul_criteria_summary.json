@@ -1,0 +1,115 @@
+{
+  "arm": "noul_criteria",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 1154.3,
+    "p95": 1190.2,
+    "max": 1196.4
+  },
+  "auc_candidate": 0.6515,
+  "gate": [
+    "goal_eruption",
+    "whistle"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.66,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "2/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-02"
+      ],
+      "candidatesKept": 4,
+      "positivesKept": "4/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.22,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 25,
+      "positivesKept": "20/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.92,
+      "temp": 0.25,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "2/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-02"
+      ],
+      "candidatesKept": 4,
+      "positivesKept": "4/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.06,
+      "temp": 0.25,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 20,
+      "positivesKept": "16/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "goal_eruption": {
+      "posMean": 0.457,
+      "negMean": 0.387,
+      "min": 0.122,
+      "max": 0.871
+    },
+    "whistle": {
+      "posMean": 0.348,
+      "negMean": 0.176,
+      "min": 0.103,
+      "max": 0.683
+    }
+  },
+  "wallSeconds": 56.6
+}

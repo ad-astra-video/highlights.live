@@ -1,0 +1,297 @@
++ BIN=/home/brad/llama-build/llama.cpp/build/bin/llama-server
++ MODEL=/home/brad/models/d1-omni/d1-Omni-2B-Q8_0.gguf
++ MMPROJ=/home/brad/models/d1-omni/mmproj-d1-Omni-2B-Q8_0.gguf
++ PORT=8111
++ ARMS=noul_criteria,choice_goal2
++ pkill -f 'llama-server.*8111'
++ sleep 1
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader
++ SRV_PID=2622694
++ echo 'server pid 2622694'
+server pid 2622694
++ setsid nohup /home/brad/llama-build/llama.cpp/build/bin/llama-server -m /home/brad/models/d1-omni/d1-Omni-2B-Q8_0.gguf --mmproj /home/brad/models/d1-omni/mmproj-d1-Omni-2B-Q8_0.gguf --host 127.0.0.1 --port 8111 -ngl 0 --no-mmproj-offload -t 16 --ctx-size 8192 -b 8192 -ub 8192
+++ seq 1 240
++ for i in $(seq 1 240)
++ sleep 1
++ curl -sf http://127.0.0.1:8111/health
++ echo 'server ready after 1s'
+server ready after 1s
++ break
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader
+++ awk '{print int($1/1024)}'
++++ pgrep -f 'llama-server.*8111'
++++ head -1
+++ ps -o rss= -p 2622694
++ SRV_RSS=2174
++ echo 'server RSS 2174 MB'
+server RSS 2174 MB
++ python3 -u /tmp/d1_sweep.py --server http://127.0.0.1:8111 --out-dir /tmp/d1sweep --arms noul_criteria,choice_goal2
++ tee /tmp/d1_sweep2.log
+warmup done
+noul_criteria [10/49] gate=0.3134213552488385 1152.6ms err=
+noul_criteria [20/49] gate=0.385481997423333 1160.1ms err=
+noul_criteria [30/49] gate=0.7094770339768458 1156.1ms err=
+noul_criteria [40/49] gate=0.21892131301146533 1152.3ms err=
+noul_criteria [49/49] gate=0.2657157381559545 1170.2ms err=
+=== noul_criteria summary ===
+{
+  "arm": "noul_criteria",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 1154.3,
+    "p95": 1190.2,
+    "max": 1196.4
+  },
+  "auc_candidate": 0.6515,
+  "gate": [
+    "goal_eruption",
+    "whistle"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.66,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "2/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-02"
+      ],
+      "candidatesKept": 4,
+      "positivesKept": "4/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.22,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 25,
+      "positivesKept": "20/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.92,
+      "temp": 0.25,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "2/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-02"
+      ],
+      "candidatesKept": 4,
+      "positivesKept": "4/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.06,
+      "temp": 0.25,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 20,
+      "positivesKept": "16/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "goal_eruption": {
+      "posMean": 0.457,
+      "negMean": 0.387,
+      "min": 0.122,
+      "max": 0.871
+    },
+    "whistle": {
+      "posMean": 0.348,
+      "negMean": 0.176,
+      "min": 0.103,
+      "max": 0.683
+    }
+  },
+  "wallSeconds": 56.6
+}
+choice_goal2 [10/49] gate=0.06484101976967109 765.0ms err=
+choice_goal2 [20/49] gate=0.16215808958990832 751.2ms err=
+choice_goal2 [30/49] gate=0.5514226299276513 755.3ms err=
+choice_goal2 [40/49] gate=0.05574642599261497 737.0ms err=
+choice_goal2 [49/49] gate=0.06981348600194286 753.1ms err=
+=== choice_goal2 summary ===
+{
+  "arm": "choice_goal2",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 751.5,
+    "p95": 776.7,
+    "max": 789.3
+  },
+  "auc_candidate": 0.6717,
+  "gate": [
+    "outcome2.goal_celebration"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.6,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "1/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 3,
+      "positivesKept": "3/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.06,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.82,
+      "temp": 0.25,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "1/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 3,
+      "positivesKept": "3/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.04,
+      "temp": 0.75,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "outcome2.goal_celebration": {
+      "posMean": 0.356,
+      "negMean": 0.25,
+      "min": 0.041,
+      "max": 0.897
+    },
+    "outcome2.no_goal": {
+      "posMean": 0.644,
+      "negMean": 0.75,
+      "min": 0.103,
+      "max": 0.959
+    }
+  },
+  "wallSeconds": 36.9
+}
+DONE
++ RC=0
++ echo 'sweep rc=0'
+sweep rc=0
++ nvidia-smi --query-gpu=memory.used --format=csv,noheader
++ pkill -f 'llama-server.*8111'
++ sleep 2
++ echo 'GPU before:'
+GPU before:
++ cat /tmp/d1_run2_gpu_before.txt
+22336 MiB
+6764 MiB
++ echo 'GPU during:'
+GPU during:
++ cat /tmp/d1_run2_gpu_during.txt
+22336 MiB
+6764 MiB
++ echo 'GPU after:'
+GPU after:
++ cat /tmp/d1_run2_gpu_after.txt
+22336 MiB
+6764 MiB
++ echo LAUNCH2_EXIT=0
+LAUNCH2_EXIT=0
