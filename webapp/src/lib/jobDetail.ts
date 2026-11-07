@@ -295,7 +295,7 @@ export interface JobDetailAlternative {
   jobId: string;
   highlightId: string;
   relation: "alternative_of";
-  /** Always `celebration` — never `GOAL`. */
+  /** `celebration` or (ADAAAA-8321) `replay` — never `GOAL`. */
   eventType: string;
   /** Non-scoring verdict class (`big_play` / `near_miss`), never `scoring_play`. */
   outcome?: string;
@@ -309,6 +309,12 @@ export interface JobDetailAlternative {
   clipError?: string;
   dedupeKey?: string;
   createdAt: string;
+  /** ADAAAA-8321: set on a replay alternative — the moment it repeats. */
+  replayOf?: string;
+  /** ADAAAA-8321: the detector's measured evidence behind the attach. */
+  replayEvidence?: { kind: string; matches: number; compared: number; gapS: number };
+  /** ADAAAA-8321: the stored replay window this alternative came from. */
+  sourceHighlightId?: string;
 }
 
 export interface JobDetailHighlight {
@@ -336,6 +342,10 @@ export interface JobDetailHighlight {
   /** ADAAAA-7984: the celebration/replay clips delivered as alternatives OF this
    * highlight (grouped by the payload). Absent when none were delivered. */
   alternatives?: JobDetailAlternative[];
+  /** ADAAAA-8321 (AC6): the alternative clip this moment SERVES. Absent = its
+   * own original cut. The payload's `clipUri` already resolves the pick, so the
+   * card, download and post all serve the chosen footage. */
+  clipChoice?: { alternativeId: string; clipUri: string; start: number; end: number; chosenAt: string };
   // ADAAAA-7248: whether the source this highlight's clip was cut from carried
   // an audio stream. `false` => silent clip (source had no audio track); the
   // card shows an explicit "no audio captured" state. Absent when unknown.

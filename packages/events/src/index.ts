@@ -1438,6 +1438,42 @@ export const HighlightTriggerSchema = z.object({
 });
 export type HighlightTrigger = z.infer<typeof HighlightTriggerSchema>;
 
+/** ADAAAA-8321 (Inc 1): what the replay detector measured when it decided a
+ * window repeats an earlier moment. Persisted on the replay record so the
+ * attach is auditable from the row alone (the falsifier the spec asks for:
+ * how many fingerprints matched, out of how many compared, at what gap). */
+export const ReplayEvidenceSchema = z.object({
+  /** `footage_match` = perceptual-hash set match (the only signal Inc 1
+   * produces). `audio_match` is reserved for corroboration; audio is never the
+   * sole signal. */
+  kind: z.enum(["footage_match", "audio_match"]),
+  /** Fingerprints in the new window that matched a ledger fingerprint. */
+  matches: z.number().int().min(0),
+  /** Fingerprints compared (the new window's set size). */
+  compared: z.number().int().min(0),
+  /** Seconds between the replay's anchor and the moment it repeats. */
+  gapS: z.number().min(0),
+});
+export type ReplayEvidence = z.infer<typeof ReplayEvidenceSchema>;
+
+/** ADAAAA-8321 (AC6): the alternative clip a moment serves instead of its own
+ * original cut. The chosen clip is already cut when the alternative was
+ * delivered (celebration delivery or the replay's own row), so a pick is a
+ * POINTER swap: no re-cut, no GPU, no new row. Absent on a record = serve the
+ * original. */
+export const ClipChoiceSchema = z.object({
+  /** The delivered alternative (celebration or replay) being served. */
+  alternativeId: z.string(),
+  /** The served clip's web path (`/clips/<file>.mp4`). */
+  clipUri: z.string(),
+  /** The served clip's own window (content seconds) — display only; the
+   * moment's `start`/`end` stay authoritative for counts and the summary. */
+  start: z.number(),
+  end: z.number(),
+  chosenAt: z.string(),
+});
+export type ClipChoice = z.infer<typeof ClipChoiceSchema>;
+
 export const HighlightRecordSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -1451,6 +1487,21 @@ export const HighlightRecordSchema = z.object({
   clipUri: z.string(),
   start: z.number(),
   end: z.number(),
+  // ADAAAA-8321 (Inc 1): a REPLAY window — footage that repeats a moment this
+  // job already decided. `replayOf` names that moment; the record is delivered
+  // as an ALTERNATIVE of it and is never a highlight of its own (the read side
+  // drops it from `highlights` / `notableHighlights` and the summary ladder).
+  // Additive optional: every existing row carries neither field and their
+  // meaning is unchanged.
+  replayOf: z.string().optional(),
+  replayEvidence: ReplayEvidenceSchema.optional(),
+  // ADAAAA-8321 (Inc 1) AC6: the clip the moment SERVES. Absent (the default)
+  // means its own original cut; when the operator picks an alternative (the
+  // replay, or a celebration) the chosen window's already-cut clip is served by
+  // every surface (card, download, export, post). `start`/`end` above stay the
+  // moment's own window, so the pick never moves the moment, never changes the
+  // summary ladder and never re-opens the quota/billing math.
+  clipChoice: ClipChoiceSchema.optional(),
   // ADAAAA-7232: the deterministic localized highlight instant (seconds from
   // stream start) the delivered clip is centered on, plus the signal that
   // produced it ("peak_frame" | "peak_audio" | "trigger"). Additive optional —
@@ -1778,6 +1829,9 @@ export type HighlightRecord = z.infer<typeof HighlightRecordSchema>;
 // `postableHighlights`, `notScoringHighlights` or `notableHighlights`.
 /** The one event label a celebration alternative may carry. Never "GOAL". */
 export const CELEBRATION_ALTERNATIVE_EVENT_TYPE = "celebration" as const;
+/** ADAAAA-8321: a replay window delivered as an alternative of the moment it
+ * repeats. Never a highlight, never "GOAL". */
+export const REPLAY_ALTERNATIVE_EVENT_TYPE = "replay" as const;
 /** The explicit alternative relation a surface groups on. */
 export const HIGHLIGHT_ALTERNATIVE_RELATION = "alternative_of" as const;
 /** Hard cap per owning highlight (board decision: "2 per goal cap makes sense"). */
@@ -1792,11 +1846,20 @@ export const HighlightAlternativeSchema = z.object({
   highlightId: z.string(),
   /** Explicit alternative relation so a surface groups instead of listing. */
   relation: z.literal(HIGHLIGHT_ALTERNATIVE_RELATION),
-  /** ADAAAA-7984 §3: `celebration` (new non-scoring value) — never `GOAL`. */
-  eventType: z.literal(CELEBRATION_ALTERNATIVE_EVENT_TYPE),
-  /** Never `scoring_play`: the alternative inherits the celebration window's
-   * non-scoring verdict class (`big_play` / `near_miss`). */
-  outcome: z.enum(["big_play", "near_miss"]),
+  /** ADAAAA-7984 §3: `celebration` (new non-scoring value) — never `GOAL`.
+   * ADAAAA-8321 adds `replay`: a footage repeat of the owning moment. */
+  eventType: z.enum([CELEBRATION_ALTERNATIVE_EVENT_TYPE, REPLAY_ALTERNATIVE_EVENT_TYPE]),
+  /** Never `scoring_play` for a celebration: it inherits the celebration
+   * window's non-scoring verdict class (`big_play` / `near_miss`). A replay may
+   * repeat a scoring moment, so it carries the repeated record's own outcome. */
+  outcome: z.enum(["big_play", "near_miss", "scoring_play"]),
+  /** ADAAAA-8321: the moment this replay repeats (null for a celebration). */
+  replayOf: z.string().optional(),
+  /** ADAAAA-8321: the detector's measurement behind the attach. */
+  replayEvidence: ReplayEvidenceSchema.optional(),
+  /** ADAAAA-8321: the stored replay window this alternative was derived from;
+   * `id` equals it. Absent for a celebration alternative. */
+  sourceHighlightId: z.string().optional(),
   /** The decide window anchor (content seconds) this alternative was cut for;
    * half of the idempotency key (owning highlight id + window anchor). */
   windowAnchorTs: z.number().min(0),
@@ -2320,8 +2383,13 @@ export const JobDetailSchema = z.object({
    * instead of rendering them as separate highlight cards. */
   highlights: z.array(HighlightWithAlternativesSchema).default([]),
   /** ADAAAA-7621: "notable, not a goal" lane — non-rejected near_miss /
-   * big_play clips, which are never postable as a GOAL. */
+   * big_play clips, which are never postable as a GOAL.
+   * ADAAAA-8321: never carries a record whose `replayOf` is set — an attached
+   * replay is delivered under its owner's `alternatives`, not as a card. */
   notableHighlights: z.array(HighlightRecordSchema).default([]),
+  /** ADAAAA-8321: how many replay windows this job attached as alternatives.
+   * Additive optional; absent on payloads that predate the detector. */
+  replaysAttached: z.number().int().min(0).optional(),
   /** ADAAAA-7621: overlapping clips merged out of `highlights`, each carrying
    * `duplicateOf` = the id of the moment that owns the footage. */
   duplicateHighlights: z.array(HighlightRecordSchema).default([]),
