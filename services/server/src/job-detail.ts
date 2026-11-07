@@ -3,6 +3,7 @@
 // (no duplicate frame seq across sections) and decide-note attachment can be
 // asserted directly in unit tests.
 import type { JobCandidate, JobTrace, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
+import { deriveConfirmation, type WindowConfirmation } from "./confirmation-lane";
 import type { StoredObservation } from "./store";
 
 /** Fixed section length (s). Section index = floor(timestamp / SECTION_WINDOW). */
@@ -35,6 +36,12 @@ export interface Section {
     // decide note. Additive optional — absent on legacy notes without a capture.
     analysis?: WindowAnalysis;
     confirm?: ConfirmRecord;
+    // ADAAAA-8287: which lane confirmed this window (see confirmation-lane.ts).
+    // The row-level half (`lane` + `label` + the cited measurement) rides the
+    // DEFAULT payload so a board reader can tell lane 1 from lane 2 without
+    // opening the inspector; the inspector half (`flags` / `dive`) is stripped by
+    // `stripWindowInspection()` exactly like `analysis` / `confirm`.
+    confirmation?: WindowConfirmation;
   }[];
 }
 
@@ -134,6 +141,10 @@ export function buildSections(
       // fed + returned for this window. Absent on legacy candidates.
       analysis: c.analysis,
       confirm: c.confirm,
+      // ADAAAA-8287: derive the acceptance lane from the stored row so the row
+      // body can state it (a lane-1 accept leaves no confirm block, so the empty
+      // panel used to be the only signal). Pure derivation over stored fields.
+      confirmation: deriveConfirmation(c),
     });
   }
   const list = [...sections.values()].sort((a, b) => a.index - b.index);
@@ -226,6 +237,10 @@ export function attachWindowAudioUris(
  * with `analysis` and `confirm` omitted from every decide note: frames,
  * timestamps, note kind/status/reason, highlights, ladder, capture and maxTraces
  * are untouched, and the stored JobCandidate is never mutated.
+ *
+ * ADAAAA-8287: the note's derived `confirmation` keeps its row-level half
+ * (`lane` / `label` / `measurement` / `detail`) — that sentence IS the row label
+ * — while the inspector half (`flags` / `flagsSource` / `dive`) is dropped.
  */
 export function stripWindowInspection(sections: Section[]): Section[] {
   return sections.map((s) => ({
@@ -234,6 +249,18 @@ export function stripWindowInspection(sections: Section[]): Section[] {
       const out: Section["decideNotes"][number] = { ...n };
       delete out.analysis;
       delete out.confirm;
+      // ADAAAA-8287: the row-level lane (lane + label + the cited measurement)
+      // STAYS — it is the whole point of the row label. Only the inspector half
+      // (the raw attestation flags + the dive verdict) is gated, exactly like
+      // `analysis` / `confirm` above.
+      if (out.confirmation) {
+        out.confirmation = {
+          lane: out.confirmation.lane,
+          label: out.confirmation.label,
+          measurement: out.confirmation.measurement,
+          ...(out.confirmation.detail ? { detail: out.confirmation.detail } : {}),
+        };
+      }
       return out;
     }),
   }));
