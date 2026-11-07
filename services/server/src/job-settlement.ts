@@ -16,7 +16,8 @@
 //
 // Pure functions only: no store/db access, so the shape is unit-testable and
 // every caller (boot sweep, stop, failure) settles identically.
-import type { Job } from "@highlights/events";
+import type { Job, StageAMetricsSnapshot } from "@highlights/events";
+import { completedLiveCounterFields } from "./job-counters";
 
 /** Perceive persistent-session list price per hour (docker/runners.json
  * perceives `$0.01/hr`). Flat hour unit, so session billing is proportional to
@@ -160,4 +161,97 @@ export function buildTerminalAccountingPatch(input: TerminalAccountingInput): Pa
     patch.costUsd = undefined;
   }
   return { ...patch, ...(input.extra ?? {}) };
+}
+
+/**
+ * ADAAAA-8310: the ONE settlement shape for a live stream that ends `cancelled`.
+ *
+ * A live stop has TWO writers, and before this they disagreed about the record:
+ *
+ *   * the pass itself (`runLiveJob`'s `stoppedMidPass` branch) settles from the
+ *     outcome it just produced — `observeMetrics`, `liveWatchMinutes`, the live
+ *     counters and the perceive session id;
+ *   * the stop route's drain-timeout fallback (`markJobCancelled`) settles when
+ *     the pass could not unwind inside `JOB_STOP_DRAIN_MS` — it wrote the decide
+ *     count and `costUsd` from the durable per-decide rows and NOTHING else.
+ *
+ * Which writer won was a timing coin flip, and the fallback's window is not
+ * rare: on leg `8299` (content-fps 2) the drained sibling took 9.2 s against a
+ * 10 s grace. Stream `216e586e` lost that race and stored `decideCalls` 70 /
+ * `costUsd` 0.2319 with **no** `observeMetrics` and **no** `liveWatchMinutes`,
+ * while sibling `d85aca45` stored the full block — so AC4's spend clause could
+ * not be graded on the stored-field denominator for half the leg.
+ *
+ * Both writers now call THIS function, so the two paths differ only in the
+ * `progressLabel` that says which one settled (`stopped` vs
+ * `stopped (drain timeout)`). Two rules fall out of it:
+ *
+ *   1. `liveWatchMinutes` is written on EVERY live terminal row — it is derived
+ *      from the same `perceiveSessionS` the patch bills, so a hard stop cannot
+ *      lose the watch clock (the AC4 denominator).
+ *   2. `decideCalls`, `costUsd` and `observeMetrics.confirmCalls` read from ONE
+ *      source (ADAAAA-8242): the pass snapshot when one was published, else the
+ *      durable per-decide rows. A snapshot that disagrees with the rows cannot
+ *      produce a row whose cost term and meter contradict each other.
+ *
+ * `observeMetrics` is only ever the pass's OWN measured snapshot (published live
+ * via `onObserveSnapshot`), never a reconstruction — when no snapshot exists the
+ * field stays absent (the ADAAAA-8223 rule: absent ≠ fabricated).
+ */
+export interface LiveCancelledSettlementInput {
+  /** `DECIDE_FEE` list price per decide call. */
+  decideFee: number;
+  /** Seconds the perceive session was paid for; null when the clock never
+   * started (no `startedAt`), in which case no watch-minutes are claimed. */
+  perceiveSessionS: number | null;
+  /** The live pass's observe snapshot — its final outcome on the drained path,
+   * the last published snapshot on the drain-timeout path. */
+  observeMetrics?: Job["observeMetrics"];
+  /** Durable per-decide rows, the measured fallback when no snapshot exists. */
+  decideRows: number;
+  /** Stage-A audio-gate snapshot (for `completedLiveCounterFields`). */
+  stageA?: StageAMetricsSnapshot;
+  /** Store's DEDUPED highlight count for the job. */
+  persistedHighlights: number;
+  perceiveSessionId?: string;
+  /** `stopped` (pass settled itself) or `stopped (drain timeout)` (route settled). */
+  progressLabel: string;
+  error?: string;
+  nowMs?: number;
+}
+
+export function liveCancelledSettlement(input: LiveCancelledSettlementInput): Partial<Omit<Job, "id">> {
+  const { observeMetrics, perceiveSessionS } = input;
+  // ONE source for the decide term (ADAAAA-8242): the snapshot the pass
+  // published wins, the durable rows are the fallback. `null` (never 0) when
+  // neither exists, so the row settles `costUnavailable` instead of a false $0.
+  const decideCalls =
+    observeMetrics?.decideCalls ?? (input.decideRows > 0 ? input.decideRows : null);
+  return buildTerminalAccountingPatch({
+    status: "cancelled",
+    decideFee: input.decideFee,
+    decideCalls,
+    perceiveSessionS,
+    nowMs: input.nowMs,
+    observeMetrics,
+    error: input.error ?? "stopped (cancelled via API)",
+    costUnavailableReason: "decide-count-not-persisted",
+    extra: {
+      stage: "cancelled",
+      progressLabel: input.progressLabel,
+      // ADAAAA-8310/7722: the watch clock is the measured session clock the
+      // patch bills on — written by BOTH writers, so a stopped stream always
+      // carries the AC4 stored-field denominator.
+      ...(perceiveSessionS !== null
+        ? { liveWatchMinutes: Number((perceiveSessionS / 60).toFixed(3)) }
+        : {}),
+      ...(input.perceiveSessionId ? { perceiveSessionId: input.perceiveSessionId } : {}),
+      // ADAAAA-7624/7667: Stage-A status + live candidate counters. Absent only
+      // when the route could not read a Stage-A snapshot (then the row keeps
+      // whatever the running pass already persisted — never a fabricated n/a).
+      ...(input.stageA
+        ? completedLiveCounterFields(input.stageA, observeMetrics, input.persistedHighlights)
+        : {}),
+    },
+  });
 }

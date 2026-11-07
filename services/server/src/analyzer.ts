@@ -8727,7 +8727,20 @@ export async function analyzeJob(
    * a fresh session once the job has been stopped (otherwise the stop-path
    * slot release would make the in-flight analyze 404 and re-bind a new slot
    * on a job that is already stopping). */
-  slotRef?: { onReserve?: (res: ReserveResult) => void; isStopped?: () => boolean },
+  slotRef?: {
+    onReserve?: (res: ReserveResult) => void;
+    isStopped?: () => boolean;
+    /**
+     * ADAAAA-8310: the pass publishes its OWN live observe snapshot here while it
+     * runs. A stop that outruns `JOB_STOP_DRAIN_MS` is settled by the stop route
+     * instead of by this pass, and without a snapshot that fallback stored no
+     * `observeMetrics` at all (leg `8299`: half a sibling pair lost the meter).
+     * The getter reads the live counters, so the value is a measurement of the
+     * instant it is called — never a reconstruction. Only fired for a pass that
+     * owns a decide observer (a VOD pass has no live metrics).
+     */
+    onObserveSnapshot?: (get: () => LiveObserveMetricsSnapshot) => void;
+  },
   /** Progress hook (ADAAAA-6873): fires with the running frames-processed count
    * after each frame is fed to the pipeline, so the durable worker can persist
    * a throttled, monotonic progress snapshot without waiting for job
@@ -9148,6 +9161,49 @@ export async function analyzeJob(
   let perceiveBudgetSkipped = 0;
   let perceiveHotCalls = 0;
   let perceiveCalls = 0;
+  /**
+   * ADAAAA-8310: the live observe snapshot as a CALLABLE, defined here (before
+   * the frame loop) so it reads the counters LIVE and can be sampled at any
+   * moment — the pass's own completion and the stop route's drain-timeout
+   * fallback both settle from this one expression, so the two writers can never
+   * disagree about which observe fields a stopped stream carries. Everything it
+   * reads is declared above it; nothing is captured by value.
+   */
+  const observeSnapshot = liveObserver
+    ? (): LiveObserveMetricsSnapshot =>
+        withDecideAdmissionMetrics(
+          buildLiveObserveMetrics(
+            liveObserver,
+            {
+              framesSeen,
+              framesAnalyzed,
+              framesStrided,
+              perceiveCalls,
+              perceiveSkipped,
+              perceiveBudgetSkipped,
+              perceiveHotCalls,
+              analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
+              perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
+              // ADAAAA-8121: the consume clock both live indicators read, in
+              // content seconds. Persisted so a stored record answers "where did
+              // the analysis get to and how far ahead was the tap" without the
+              // in-memory observation set.
+              ...(lastConsumedTs > 0 ? { analysedThroughTs: Number(lastConsumedTs.toFixed(3)) } : {}),
+              ...(lastSeenTs > 0 ? { tapThroughTs: Number(lastSeenTs.toFixed(3)) } : {}),
+            },
+            // ADAAAA-8205: the async confirm lane's meter, read at the same
+            // instant as the decide counters so the cost term and the meter
+            // describe one point in the run.
+            { calls: run.confirmDiveCalls(), dives: run.confirmDiveCount(), dropped: run.confirmDiveDropped() }
+          ),
+          // ADAAAA-8254: the decide admission counters + capacity snapshot, read
+          // off the gate at the same instant.
+          client.decideAdmissionMetrics?.()
+        )
+    : undefined;
+  // ADAAAA-8310: publish the getter so a stop that pre-empts this pass settles
+  // the stored row with the same observe fields this pass would have written.
+  if (observeSnapshot) slotRef?.onObserveSnapshot?.(observeSnapshot);
   try {
     for await (const frame of iterFrames) {
       // ADAAAA-8061: a graceful stop must unwind the pass WITHOUT burning more
@@ -9564,36 +9620,9 @@ export async function analyzeJob(
     highlights,
     framesAnalyzed,
     ...(perceiveCadenceEnabled ? { perceiveCalls } : {}),
-    ...(liveObserver
-      ? {
-          observeMetrics: withDecideAdmissionMetrics(
-            buildLiveObserveMetrics(liveObserver, {
-              framesSeen,
-              framesAnalyzed,
-              framesStrided,
-              perceiveCalls,
-              perceiveSkipped,
-              perceiveBudgetSkipped,
-              perceiveHotCalls,
-              analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
-              perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
-              // ADAAAA-8121: the consume clock both live indicators read, in
-              // content seconds. Persisted so a stored record answers "where did
-              // the analysis get to and how far ahead was the tap" without the
-              // in-memory observation set.
-              ...(lastConsumedTs > 0 ? { analysedThroughTs: Number(lastConsumedTs.toFixed(3)) } : {}),
-              ...(lastSeenTs > 0 ? { tapThroughTs: Number(lastSeenTs.toFixed(3)) } : {}),
-            }, {
-              calls: run.confirmDiveCalls(),
-              dives: run.confirmDiveCount(),
-              dropped: run.confirmDiveDropped(),
-            }),
-            // ADAAAA-8254: the decide admission counters + capacity snapshot,
-            // read off the gate at job end so the stored row carries them.
-            client.decideAdmissionMetrics?.(),
-          ),
-        }
-      : {}),
+    // ADAAAA-8310: the SAME expression the mid-run snapshot getter uses, so the
+    // stored final record and a drain-timeout settlement are byte-equivalent.
+    ...(observeSnapshot ? { observeMetrics: observeSnapshot() } : {}),
     ...(observeDecider ? { vodObserveMetrics: buildVodObserveMetrics(observeDecider) } : {}),
   };
 }
