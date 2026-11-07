@@ -71,9 +71,21 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Mapping
+from typing import Mapping, Optional
 
 SERVER_LINE = re.compile(r"^\s*server\s+(\S+)")
+
+
+class RunnerCapacityUnavailable(RuntimeError):
+    """The routed-set capacity could not be read completely this tick.
+
+    Raised instead of publishing a short number: `decide-router.conf` is
+    rewritten (git reset / deploy) while the registrar is running, and a read
+    that lands mid-write sees a truncated pool block. Publishing that count
+    would cap a session's decide admission below the routed set.
+    """
+
+
 UPSTREAM_START = re.compile(r"^\s*upstream\s+([A-Za-z0-9_]+)\s*\{")
 
 
@@ -104,22 +116,36 @@ class RunnerConfig:
 
     # --- capacity -------------------------------------------------------
     @staticmethod
-    def pool_capacity(conf_text: str, seqs: int, upstream: str = "decide_pool") -> int:
-        """Primary upstream count x per-worker concurrency.
+    def pool_capacity(conf_text: str, seqs: int, upstream: str = "decide_pool") -> Optional[int]:
+        """Primary upstream count x per-worker concurrency, or None when the
+        pool block could not be read completely.
 
         The PRIMARY servers are the balancing set; `backup` servers are failover
         only and must not be counted, otherwise a failover-only x99 pair would
         inflate the advertised ceiling the admission gate reads.
+
+        A deploy rewrites `decide-router.conf`, and a read that lands mid-write
+        sees a TRUNCATED file: `upstream` opened, two of three `server` lines
+        present, no closing brace. Counting that file publishes `2 x seqs = 4`
+        and the server latches it for the whole session (measured 2026-11-07
+        15:46-16:00Z on the box: advertised flapped 6 -> 4 -> 6 across two
+        deploy rewrites, capping one session at 4). Returning None makes the
+        caller hold the last known capacity instead of publishing a short
+        number; a conf that lacks the block entirely is equally unusable.
         """
         inside = False
+        seen_block = False
+        closed = False
         primaries = 0
         for line in conf_text.splitlines():
             start = UPSTREAM_START.match(line)
             if start:
                 inside = start.group(1) == upstream
+                seen_block = seen_block or inside
                 continue
             if inside and line.strip() == "}":
                 inside = False
+                closed = True
                 continue
             if not inside:
                 continue
@@ -129,6 +155,8 @@ class RunnerConfig:
             if re.search(r"\bbackup\b", line):
                 continue
             primaries += 1
+        if not seen_block or not closed:
+            return None
         return max(1, primaries * seqs)
 
     def capacity(self) -> int:
@@ -136,18 +164,29 @@ class RunnerConfig:
             return int(self.capacity_raw)
         if not self.auto_conf:
             raise SystemExit(f"{self.prefix} RUNNER_CAPACITY=auto needs RUNNER_AUTO_CONF")
-        with open(self.auto_conf, "r", encoding="utf-8") as fh:
-            return self.pool_capacity(fh.read(), self.auto_seqs)
+        try:
+            with open(self.auto_conf, "r", encoding="utf-8") as fh:
+                derived = self.pool_capacity(fh.read(), self.auto_seqs)
+        except OSError as err:
+            raise RunnerCapacityUnavailable(
+                f"{self.prefix} cannot read {self.auto_conf}: {err}"
+            ) from err
+        if derived is None:
+            raise RunnerCapacityUnavailable(
+                f"{self.prefix} capacity read incomplete: no closed `decide_pool` "
+                f"block in {self.auto_conf} (a deploy was rewriting it)"
+            )
+        return derived
 
     # --- payload --------------------------------------------------------
-    def payload(self) -> dict:
+    def payload(self, capacity: Optional[int] = None) -> dict:
         p = {
             "runner_id": self.runner_id,
             "app": self.app,
             "runner_url": self.runner_url,
             "status": "ready",
             "mode": self.mode,
-            "capacity": self.capacity(),
+            "capacity": self.capacity() if capacity is None else capacity,
             "price_info": {
                 "price": float(self.price),
                 "currency": self.price_currency,
@@ -181,6 +220,9 @@ class Registrar:
         self.heartbeat_secret = ""
         self.registered = False
         self.last_capacity = None
+        # True while a partial conf read is served with the last known capacity
+        # (so the hold/recover lines print once per episode).
+        self.holding_capacity = False
 
     # --- transport ------------------------------------------------------
     def _request(self, method: str, path: str, auth: str, body: dict | None = None):
@@ -274,7 +316,32 @@ class Registrar:
                 # registry release them.
                 self.unregister("unhealthy")
             return
-        self.heartbeat(self.cfg.payload())
+        try:
+            payload = self.cfg.payload()
+        except RunnerCapacityUnavailable as err:
+            # Hold the last number we published rather than shrinking the
+            # advertised ceiling on a transient partial read. The heartbeat
+            # MUST still go out: the registry expires a dynamic runner after
+            # 20 s without one, which would release its sessions.
+            if self.last_capacity is None:
+                print(f"{self.cfg.prefix} capacity unavailable, heartbeat deferred: {err}", flush=True)
+                return
+            if not self.holding_capacity:
+                print(
+                    f"{self.cfg.prefix} capacity unavailable, holding "
+                    f"{self.last_capacity}: {err}",
+                    flush=True,
+                )
+                self.holding_capacity = True
+            payload = self.cfg.payload(capacity=self.last_capacity)
+        else:
+            if self.holding_capacity:
+                print(
+                    f"{self.cfg.prefix} capacity readable again: {payload['capacity']}",
+                    flush=True,
+                )
+                self.holding_capacity = False
+        self.heartbeat(payload)
 
     def stop(self) -> None:
         if self.registered:
@@ -287,7 +354,11 @@ def main() -> int:
         print(json.dumps(cfg.payload(), sort_keys=True))
         return 0
     if "--print-capacity" in sys.argv:
-        print(cfg.capacity())
+        try:
+            print(cfg.capacity())
+        except RunnerCapacityUnavailable as err:
+            sys.stderr.write(f"{err}\n")
+            return 3
         return 0
 
     for key in ("runner_id", "app", "runner_url"):
