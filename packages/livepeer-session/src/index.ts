@@ -331,6 +331,173 @@ export class HttpSignerClient implements SignerClient {
   }
 }
 
+// --- Decide admission (ADAAAA-8254) ------------------------------------------
+// ONE gate owns every decide app-call (live observer, VOD pass, planner). The
+// gate is:
+//
+//   1. CAPACITY-AWARE, DOWNWARD ONLY. The effective ceiling is
+//      `min(funded DECIDE_CONCURRENCY, sum(runner.capacity) over the decide
+//      runners the signer discovers)`, clamped to [1, funded]. A discovered
+//      number can only ever LOWER admission: the CEO ruled capacity stays 8
+//      (ADAAAA-7803), so the 8/2/2 advertisement must never size the gate up.
+//      No configured probe => byte-identical to the pre-8254 static gate.
+//   2. AN ORDERED QUEUE. Waiters are admitted FIFO. A 503 opens one shared
+//      pause window; every waiter waits on the SAME deadline, and exactly ONE
+//      waiter runs the probe per window, so a zero-capacity episode costs one
+//      decide probe per backoff window instead of one per queued request.
+//   3. BOUNDED + COUNTED LOSS. A decide whose queue wait exceeds
+//      DECIDE_QUEUE_MAX_WAIT_MS (or whose 503 retries are exhausted) fails with
+//      the typed {@link DecideCapacityError}, increments `decideDropped`, and
+//      never aborts the owning job. The counters ride the job's observe metrics
+//      (see the server's `observeMetrics` snapshot).
+//
+// The capacity probe is deliberately NEVER awaited on the decide path: a slow
+// or failing signer must not add latency or throw (AC2). A probe failure keeps
+// the last known capacity, then the funded ceiling — never 0.
+
+/** Funded decide ceiling when none is configured: the decide runner's
+ * capacity-2 admission (ADAAAA-6911). */
+export const DECIDE_FUNDED_CEILING_DEFAULT = 2;
+
+/** First backoff window of a 503 episode (shared by every queued decide). */
+export const DECIDE_BACKOFF_BASE_MS = 500;
+
+/** Cap for one backoff window. */
+export const DECIDE_BACKOFF_MAX_MS = 8_000;
+
+/** Default capacity-refresh interval (`DECIDE_CAPACITY_REFRESH_S` = 60). */
+export const DECIDE_CAPACITY_REFRESH_MS_DEFAULT = 60_000;
+
+/** Default hard per-decide queue-wait budget (`DECIDE_QUEUE_MAX_WAIT_MS`). */
+export const DECIDE_QUEUE_MAX_WAIT_MS_DEFAULT = 60_000;
+
+/** Wall-clock budget for one capacity probe (`DECIDE_CAPACITY_TIMEOUT_S` = 2). */
+export const DECIDE_CAPACITY_PROBE_TIMEOUT_MS = 2_000;
+
+/** The three numbers the startup log line and the job snapshot carry. */
+export interface DecideCapacitySnapshot {
+  /** Sum of `capacity` over the discovered decide runners; 0 = unknown. */
+  advertised: number;
+  /** The funded ceiling (`DECIDE_CONCURRENCY`) — the value that WINS. */
+  funded: number;
+  /** What the gate actually admits: min(funded, advertised), clamped [1, funded]. */
+  effective: number;
+}
+
+/** Result of one signer discovery, reduced to the decide-relevant numbers. */
+export interface DecideCapacityProbeResult {
+  /** Sum of `capacity` (falling back to `capacity_available`) over the decide
+   * runners; `null` when the advertisement carries no usable number. */
+  capacity: number | null;
+  /** True when EVERY decide runner reported `capacity_available === 0`. Used
+   * only as a stall signal with hysteresis — never to size the gate. */
+  noneAvailable?: boolean;
+}
+
+/** Per-job decide-admission counters surfaced on the job's observe metrics. */
+export interface DecideAdmissionMetrics {
+  /** Decide calls that had to wait in the queue (retries counted separately). */
+  decideQueued: number;
+  /** Decides dropped by the queue budget / exhausted 503 retries. */
+  decideDropped: number;
+  /** 503 no-capacity responses observed by the decide path. */
+  decide503: number;
+  /** Shared pause windows opened (a 503 episode or the stall hysteresis). */
+  decidePauses: number;
+  /** Capacity probes that errored, timed out, or came back malformed. */
+  capacityProbeErrors: number;
+  /** {advertised, funded, effective} at snapshot time. */
+  capacity: DecideCapacitySnapshot;
+}
+
+/** A decide that lost admission: the queue budget expired or the runner stayed
+ * at 503 through every retry. Typed so the live rail can log + continue instead
+ * of failing the job (AC4). */
+export class DecideCapacityError extends Error {
+  constructor(
+    /** Wall ms this decide waited for admission (across retries). */
+    readonly waitedMs: number,
+    /** The configured DECIDE_QUEUE_MAX_WAIT_MS. */
+    readonly maxWaitMs: number,
+    reason = "queue wait exceeded",
+  ) {
+    super(`decide dropped: ${reason} (waited ${Math.round(waitedMs)} ms, budget ${maxWaitMs} ms)`);
+    this.name = "DecideCapacityError";
+  }
+}
+
+/** True when a discovered runner advertises the decide app. The signer is
+ * queried for `caps=highlights-live/<decide>`; the runner `app` field is the
+ * bare `highlights-decide` on this fleet, so accept both spellings. */
+export function isDecideRunnerApp(app: string | undefined): boolean {
+  if (!app) return false;
+  // `highlights-decide` (the runner app) and `highlights-live/decide` (the
+  // capability the signer is queried for) name the same runner; match the leaf.
+  const leaf = app.split("/").pop();
+  return leaf === "decide" || leaf === ROUTES.decide;
+}
+
+/**
+ * Reduce a `/discover-orchestrators` answer to the decide capacity numbers.
+ *
+ * - `capacity` wins; a missing `capacity` falls back to `capacity_available`
+ *   (an older advertisement), and a missing/NaN on EVERY runner yields `null`
+ *   (unknown) — never 0, so a field-less advertisement cannot shrink the gate.
+ * - `noneAvailable` is true only when every decide runner actually reported
+ *   `capacity_available === 0`; it is a transient stall signal, not a size.
+ */
+export function summarizeDecideDiscovery(
+  discovery: { runners?: DiscoveredRunner[] }[] | null | undefined,
+): DecideCapacityProbeResult {
+  const runners = (Array.isArray(discovery) ? discovery : [])
+    .flatMap((o) => (Array.isArray(o?.runners) ? o.runners : []))
+    .filter((r) => isDecideRunnerApp(r?.app));
+  if (runners.length === 0) return { capacity: null, noneAvailable: false };
+  let sum = 0;
+  let known = false;
+  let everyAvailableKnown = true;
+  let everyAvailableZero = true;
+  for (const r of runners) {
+    const advertised = typeof r.capacity === "number" && Number.isFinite(r.capacity)
+      ? r.capacity
+      : typeof r.capacity_available === "number" && Number.isFinite(r.capacity_available)
+        ? r.capacity_available
+        : null;
+    if (advertised !== null) {
+      sum += Math.max(0, Math.floor(advertised));
+      known = true;
+    }
+    if (typeof r.capacity_available === "number" && Number.isFinite(r.capacity_available)) {
+      if (r.capacity_available > 0) everyAvailableZero = false;
+    } else {
+      everyAvailableKnown = false;
+    }
+  }
+  return {
+    capacity: known ? sum : null,
+    noneAvailable: everyAvailableKnown && everyAvailableZero,
+  };
+}
+
+/** Grant handed out by the decide queue: `release` frees the slot, `probe` marks
+ * the single-flight probe of a paused window. */
+interface DecideGrant {
+  release: () => void;
+  probe: boolean;
+}
+
+interface DecideQueueItem {
+  resolve: (grant: DecideGrant) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  settled: boolean;
+  enqueuedAt: number;
+  /** The decide CALL's monotonic sequence. A retry re-enters with its original
+   * sequence, so the queue stays FIFO by REQUEST order rather than deprioritizing
+   * an older window behind newer ones after a 503. */
+  seq: number;
+}
+
 export class LivepeerClient {
   constructor(
     public readonly orchBase: string,
@@ -351,8 +518,38 @@ export class LivepeerClient {
        * re-sign/retry — distinct from the benign 480/482/481 cases, which need
        * no orchestrator round-trip. */
       ticketParamsRetryBackoffMs?: number;
+      /** ADAAAA-8254: the capacity probe. Returns the advertised decide capacity
+       * (from the signer's `/discover-orchestrators`) or `null` when the fleet
+       * advertises no number. The probe runs at job start and at most every
+       * {@link decideCapacityRefreshMs}; it is NEVER awaited on the decide path
+       * and a rejection/timeout only bumps `capacityProbeErrors`. Unset (no
+       * signer) => the funded ceiling alone, byte-identical to pre-8254. */
+      decideCapacityProbe?: () => Promise<DecideCapacityProbeResult | null>;
+      /** ADAAAA-8254: minimum ms between capacity probes (default 60 000;
+       * `DECIDE_CAPACITY_REFRESH_S`). */
+      decideCapacityRefreshMs?: number;
+      /** ADAAAA-8254: hard per-decide queue-wait budget in ms (default 60 000;
+       * `DECIDE_QUEUE_MAX_WAIT_MS`). Exceeding it drops the decide with
+       * {@link DecideCapacityError}. */
+      decideQueueMaxWaitMs?: number;
+      /** ADAAAA-8254: single-flight probe wall budget (default 2 000 ms). */
+      decideCapacityProbeTimeoutMs?: number;
+      /** ADAAAA-8254: jitter as a fraction of the backoff window (default 0.25). */
+      decideBackoffJitterRatio?: number;
+      /** ADAAAA-8254: fires when the {advertised, funded, effective} snapshot
+       * changes, so the server can print the startup/refresh log line. */
+      onDecideCapacity?: (snapshot: DecideCapacitySnapshot) => void;
+      /** ADAAAA-8254: fires when a capacity probe fails (error/timeout), so the
+       * server can log it. Never rethrows. */
+      onDecideCapacityError?: (err: unknown) => void;
     } = {}
-  ) {}
+  ) {
+    this.capacitySnapshot = {
+      advertised: 0,
+      funded: this.fundedDecideCeiling,
+      effective: this.fundedDecideCeiling,
+    };
+  }
 
   /**
    * Reserve a persistent perceive session.
@@ -460,40 +657,366 @@ export class LivepeerClient {
     body: unknown,
     opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
   ): Promise<{ status: number; data: unknown }> {
-    return this.decideGate(() => this.decideUnserialized(path, body, opts));
+    return this.decideAdmitted(path, body, opts);
   }
 
-  /** Bounded-concurrency gate for decide-runner app calls (ADAAAA-6911).
-   * Previously a strict capacity-1 promise chain (`serializedDecide`), which
-   * silently serialized EVERY decide call to one at a time and therefore
-   * defeated the ADAAAA-6903 "unbounded VOD dispatch" — the decide runner's
-   * capacity-2 admission was never used and no concurrent-decide throughput
-   * existed. Now bounded by `decideConcurrency` (default = runner capacity 2),
-   * and oversubscription is absorbed by the orchestrator's `503 no capacity`
-   * which `decideUnserialized` retries with backoff (the increment's stated
-   * admission-backpressure design). */
-  private activeDecides = 0;
-  private decideWaiters: (() => void)[] = [];
-  private get decideConcurrency(): number {
-    return Math.max(1, this.opts.decideConcurrency ?? 2);
+  /** Bounded-concurrency, capacity-aware, ORDERED gate for decide-runner app
+   * calls (ADAAAA-6911 -> ADAAAA-8254).
+   *
+   * Pre-8254 this was a static `activeDecides < decideConcurrency` counter whose
+   * overflow was absorbed by a per-request 503 retry loop: every in-flight decide
+   * probed the runner on its own schedule, so a zero-capacity episode cost one
+   * probe per queued request per backoff window, and the gate could not see a
+   * shrunken pool. Now:
+   *
+   * - the ceiling is `min(funded DECIDE_CONCURRENCY, discovered capacity)`,
+   *   clamped [1, funded] (downward only — see the section comment);
+   * - waiters are one FIFO queue; a 503 opens a SHARED `pausedUntil` window that
+   *   every waiter respects, and only one waiter probes per window;
+   * - a waiter past its DECIDE_QUEUE_MAX_WAIT_MS budget is dropped with
+   *   {@link DecideCapacityError} and counted.
+   *
+   * Everything below is per-client process state; the server calls
+   * {@link beginDecideJob} at job start to reset the per-job counters. */
+  private inFlightDecides = 0;
+  private decideQueue: DecideQueueItem[] = [];
+  private pumping = false;
+  private pumpTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A shared pause window is open (opened by a 503 or the stall hysteresis). */
+  private pauseOpen = false;
+  /** Absolute deadline every queued decide waits for. */
+  private pausedUntil = 0;
+  /** Consecutive pause windows => exponential 500 ms .. 8 s. */
+  private pauseWindow = 0;
+  /** The single probe of the current pause window is in flight. */
+  private probeOutstanding = false;
+  /** Last advertised capacity (sum over decide runners); null = unknown. */
+  private lastAdvertisedCapacity: number | null = null;
+  /** Set in the constructor body: class-field initializers run before the
+   * parameter properties (`this.opts`) are assigned. */
+  private capacitySnapshot!: DecideCapacitySnapshot;
+  private capacityProbeInFlight: Promise<void> | null = null;
+  private lastCapacityProbeAt = 0;
+  /** Consecutive probes where every runner reported capacity_available = 0. */
+  private stallStreak = 0;
+  private decideQueuedCount = 0;
+  private decideDroppedCount = 0;
+  private decide503Count = 0;
+  private decidePausesCount = 0;
+  private capacityProbeErrorCount = 0;
+  /** Monotonic decide-CALL sequence (a retry reuses its call's seq). */
+  private decideSeq = 0;
+  /** Counter baseline captured at job start; the snapshot reports the DELTA so
+   * a shared client (one adapter per server process) serves each job's numbers
+   * instead of zeroing a job that is still running. */
+  private decideBaseline = { queued: 0, dropped: 0, s503: 0, pauses: 0, probeErrors: 0 };
+
+  /** The FUNDED ceiling (DECIDE_CONCURRENCY). Discovered capacity can only lower
+   * admission; it can never raise this. */
+  private get fundedDecideCeiling(): number {
+    return Math.max(1, Math.floor(this.opts.decideConcurrency ?? DECIDE_FUNDED_CEILING_DEFAULT));
   }
-  private async decideGate<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.activeDecides < this.decideConcurrency) {
-      this.activeDecides++;
-    } else {
-      await new Promise<void>((r) => this.decideWaiters.push(r));
-      this.activeDecides++;
+  /** What the gate admits right now: min(funded, advertised), clamped [1, funded]. */
+  private get effectiveDecideCeiling(): number {
+    return Math.max(1, Math.min(this.fundedDecideCeiling, this.capacitySnapshot.effective));
+  }
+  private get decideQueueMaxWaitMs(): number {
+    return Math.max(0, this.opts.decideQueueMaxWaitMs ?? DECIDE_QUEUE_MAX_WAIT_MS_DEFAULT);
+  }
+  private get decideCapacityRefreshMs(): number {
+    return Math.max(0, this.opts.decideCapacityRefreshMs ?? DECIDE_CAPACITY_REFRESH_MS_DEFAULT);
+  }
+
+  /**
+   * ADAAAA-8254: mark the start of a decide-owning job (live or VOD): capture
+   * the counter baseline and kick ONE capacity refresh. The refresh is
+   * deliberately fire-and-forget: a 2 s signer timeout must never delay a job's
+   * first decide, and admission keeps the last known value until the probe lands.
+   *
+   * The baseline is a DELTA, not a reset: the server keeps one client per
+   * process, so zeroing would erase a concurrent live job's counters.
+   */
+  beginDecideJob(): void {
+    this.decideBaseline = {
+      queued: this.decideQueuedCount,
+      dropped: this.decideDroppedCount,
+      s503: this.decide503Count,
+      pauses: this.decidePausesCount,
+      probeErrors: this.capacityProbeErrorCount,
+    };
+    void this.refreshDecideCapacity(true);
+  }
+
+  /** ADAAAA-8254: the per-job counters + capacity snapshot for the job record. */
+  decideAdmissionMetrics(): DecideAdmissionMetrics {
+    const delta = (now: number, base: number): number => Math.max(0, now - base);
+    return {
+      decideQueued: delta(this.decideQueuedCount, this.decideBaseline.queued),
+      decideDropped: delta(this.decideDroppedCount, this.decideBaseline.dropped),
+      decide503: delta(this.decide503Count, this.decideBaseline.s503),
+      decidePauses: delta(this.decidePausesCount, this.decideBaseline.pauses),
+      capacityProbeErrors: delta(this.capacityProbeErrorCount, this.decideBaseline.probeErrors),
+      capacity: { ...this.capacitySnapshot },
+    };
+  }
+
+  /**
+   * ADAAAA-8254: refresh the advertised decide capacity from the configured
+   * probe. Single-flight, at most once per `decideCapacityRefreshMs` unless
+   * forced (job start), bounded by `decideCapacityProbeTimeoutMs`.
+   *
+   * NEVER throws (AC2): a rejected/timed-out probe increments
+   * `capacityProbeErrors` and keeps the last known value; a probe with no usable
+   * number keeps the last known then the funded ceiling; the effective ceiling
+   * is never 0.
+   */
+  async refreshDecideCapacity(force = false): Promise<DecideCapacitySnapshot> {
+    const probe = this.opts.decideCapacityProbe;
+    if (!probe) return this.capacitySnapshot;
+    const now = Date.now();
+    if (!force && now - this.lastCapacityProbeAt < this.decideCapacityRefreshMs) return this.capacitySnapshot;
+    if (this.capacityProbeInFlight) {
+      await this.capacityProbeInFlight.catch(() => {});
+      return this.capacitySnapshot;
     }
+    this.lastCapacityProbeAt = now;
+    const timeoutMs = Math.max(1, this.opts.decideCapacityProbeTimeoutMs ?? DECIDE_CAPACITY_PROBE_TIMEOUT_MS);
+    const inFlight = (async () => {
+      let result: DecideCapacityProbeResult | null = null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        result = await Promise.race([
+          probe(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`decide capacity probe timed out after ${timeoutMs} ms`)),
+              timeoutMs,
+            );
+          }),
+        ]);
+      } catch (err) {
+        // Discovery error / timeout: count it, keep the last known capacity,
+        // and never surface the error to a decide (AC2).
+        this.capacityProbeErrorCount++;
+        try {
+          this.opts.onDecideCapacityError?.(err);
+        } catch {
+          /* the logger must not break admission either */
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+      if (result && typeof result.capacity === "number" && Number.isFinite(result.capacity)) {
+        this.lastAdvertisedCapacity = Math.max(0, Math.floor(result.capacity));
+      }
+      // `capacity === null` (no usable field) is NOT zero capacity: keep the last
+      // known value and fall through to the funded ceiling when there is none.
+      if (result?.noneAvailable) {
+        // Hysteresis: ONE zero sample is noise; two consecutive zero samples mean
+        // the fleet has nothing available right now, so hold the queue (one probe
+        // per backoff window) instead of admitting into a guaranteed 503.
+        this.stallStreak++;
+        if (this.stallStreak >= 2) this.openPauseWindow();
+      } else if (result) {
+        this.stallStreak = 0;
+      }
+      this.recomputeDecideCapacity();
+    })();
+    this.capacityProbeInFlight = inFlight;
     try {
-      return await fn();
+      await inFlight;
     } finally {
-      this.activeDecides--;
-      const next = this.decideWaiters.shift();
-      if (next) next();
+      this.capacityProbeInFlight = null;
+    }
+    return this.capacitySnapshot;
+  }
+
+  private recomputeDecideCapacity(): void {
+    const funded = this.fundedDecideCeiling;
+    const advertised = this.lastAdvertisedCapacity;
+    const effective = advertised === null ? funded : Math.max(1, Math.min(funded, advertised));
+    const changed = effective !== this.capacitySnapshot.effective || advertised !== this.capacitySnapshot.advertised;
+    this.capacitySnapshot = { advertised: advertised ?? 0, funded, effective };
+    if (changed) {
+      try {
+        this.opts.onDecideCapacity?.({ ...this.capacitySnapshot });
+      } catch {
+        /* observability only */
+      }
+      this.pumpDecideQueue();
     }
   }
 
-  private async decideUnserialized(
+  /** Open (or advance) the SHARED pause window. Every queued decide waits on
+   * `pausedUntil`; one of them probes per window. */
+  private openPauseWindow(): void {
+    const base = Math.max(1, this.opts.decideBackoffBaseMs ?? DECIDE_BACKOFF_BASE_MS);
+    this.pauseWindow++;
+    const windowMs = Math.min(base * 2 ** (this.pauseWindow - 1), DECIDE_BACKOFF_MAX_MS);
+    const jitterRatio = Math.max(0, this.opts.decideBackoffJitterRatio ?? 0.25);
+    this.pausedUntil = Date.now() + windowMs + windowMs * jitterRatio * Math.random();
+    this.pauseOpen = true;
+    this.probeOutstanding = false;
+    this.decidePausesCount++;
+  }
+
+  /** A decide completed without a capacity failure: close the episode so the
+   * queue returns to normal admission. */
+  private noteDecideSucceeded(): void {
+    if (!this.pauseOpen) return;
+    this.pauseOpen = false;
+    this.probeOutstanding = false;
+    this.pausedUntil = 0;
+    this.pauseWindow = 0;
+  }
+
+  /** A 503 `no capacity available for runner`: count it and (re)open the shared
+   * pause window only when the previous window has elapsed — several in-flight
+   * requests 503ing together are ONE episode, not one window each. */
+  private noteDecide503(): void {
+    this.decide503Count++;
+    if (!this.pauseOpen || Date.now() >= this.pausedUntil) this.openPauseWindow();
+    else this.probeOutstanding = false;
+  }
+
+  /** FIFO admission. Resolves with a grant when this caller may issue its
+   * request; rejects with {@link DecideCapacityError} when the queue budget
+   * expires. */
+  private acquireDecideSlot(deadline: number, callStartedAt: number, seq: number): Promise<DecideGrant> {
+    if (
+      this.decideQueue.length === 0 &&
+      !this.pauseOpen &&
+      Date.now() >= this.pausedUntil &&
+      this.inFlightDecides < this.effectiveDecideCeiling
+    ) {
+      this.inFlightDecides++;
+      return Promise.resolve({ release: this.makeRelease(), probe: false });
+    }
+    return new Promise<DecideGrant>((resolve, reject) => {
+      const enqueuedAt = Date.now();
+      const item: DecideQueueItem = {
+        resolve,
+        reject,
+        settled: false,
+        enqueuedAt,
+        seq,
+        timer: setTimeout(() => {
+          if (item.settled) return;
+          item.settled = true;
+          const idx = this.decideQueue.indexOf(item);
+          if (idx >= 0) this.decideQueue.splice(idx, 1);
+          this.decideDroppedCount++;
+          reject(
+            new DecideCapacityError(Date.now() - callStartedAt, this.decideQueueMaxWaitMs, "queue wait exceeded"),
+          );
+          this.pumpDecideQueue();
+        }, Math.max(0, deadline - enqueuedAt)),
+      };
+      // FIFO by request order: a retried decide keeps its original position in
+      // front of requests that arrived after it (insertion sort on `seq`).
+      let at = this.decideQueue.length;
+      while (at > 0 && this.decideQueue[at - 1].seq > seq) at--;
+      this.decideQueue.splice(at, 0, item);
+      this.decideQueuedCount++;
+      this.pumpDecideQueue();
+    });
+  }
+
+  private makeRelease(): () => void {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      if (this.inFlightDecides > 0) this.inFlightDecides--;
+      this.pumpDecideQueue();
+    };
+  }
+
+  private schedulePump(delayMs: number): void {
+    if (this.pumpTimer) return;
+    this.pumpTimer = setTimeout(() => {
+      this.pumpTimer = null;
+      this.pumpDecideQueue();
+    }, Math.max(0, delayMs));
+  }
+
+  private clearPumpTimer(): void {
+    if (!this.pumpTimer) return;
+    clearTimeout(this.pumpTimer);
+    this.pumpTimer = null;
+  }
+
+  /**
+   * Grant the queue in FIFO order, honoring the shared pause window.
+   *
+   * - Paused and before the deadline: schedule one wake-up at the deadline; no
+   *   admission (so N queued decides cost ZERO probes during the window).
+   * - Paused at/after the deadline: exactly ONE probe is granted per window
+   *   (AC3: <= ceil(episode / window) + 1 probes, never N per window).
+   * - Not paused: normal bounded admission up to the effective ceiling.
+   */
+  private pumpDecideQueue(): void {
+    if (this.pumping) return;
+    this.pumping = true;
+    try {
+      for (;;) {
+        const head = this.decideQueue[0];
+        if (!head) {
+          this.clearPumpTimer();
+          return;
+        }
+        if (head.settled) {
+          this.decideQueue.shift();
+          continue;
+        }
+        const now = Date.now();
+        if (now < this.pausedUntil) {
+          this.schedulePump(this.pausedUntil - now);
+          return;
+        }
+        if (this.pauseOpen) {
+          if (this.probeOutstanding || this.inFlightDecides > 0) return;
+          this.decideQueue.shift();
+          head.settled = true;
+          clearTimeout(head.timer);
+          this.probeOutstanding = true;
+          this.inFlightDecides++;
+          head.resolve({ release: this.makeRelease(), probe: true });
+          return;
+        }
+        if (this.inFlightDecides >= this.effectiveDecideCeiling) return;
+        this.decideQueue.shift();
+        head.settled = true;
+        clearTimeout(head.timer);
+        this.inFlightDecides++;
+        head.resolve({ release: this.makeRelease(), probe: false });
+      }
+    } finally {
+      this.pumping = false;
+    }
+  }
+
+  /**
+   * ADAAAA-8254: issue one decide app-call through the admission queue.
+   *
+   * Each attempt takes a queue slot, issues the request, and releases the slot
+   * before deciding whether to retry — so a 503'd attempt goes back to the tail
+   * of the FIFO queue and waits on the shared pause instead of sleeping inside
+   * its slot (that was the per-request probe fan-out this ticket removes).
+   *
+   * Two transients stay retryable:
+   *   - `503 no capacity available for runner` — a capacity episode. The shared
+   *     pause window paces every waiter; retries are exhausted -> typed
+   *     {@link DecideCapacityError} + `decideDropped`, which the live rail logs
+   *     and continues from rather than aborting the job (AC4).
+   *   - `404 runner not found` / `404 runner session not found` / `404 session
+   *     not found` — the orchestrator briefly unregisters the runner during its
+   *     ~2 s `/health` flap (ADAAAA-6521 follow-up) or released the session on
+   *     a restart (ADAAAA-6623). A 404 means the request was NOT routed /
+   *     processed, so a retry cannot double-bill or double-persist a highlight.
+   *     This path keeps the ADAAAA-6709 exponential backoff 500 ms -> 8 s.
+   */
+  private async decideAdmitted(
     path: string,
     body: unknown,
     opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
@@ -501,70 +1024,81 @@ export class LivepeerClient {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts?.headers || {}) };
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
     if (opts?.paymentHeaders) Object.assign(headers, opts.paymentHeaders);
-    // Guardrail: retry transient runner-availability failures on the capacity-1
-    // single-shot live decide runner so a single blip never fails the whole
-    // live job. Two transients are retried with backoff:
-    //   - `503 no capacity available for runner` — a momentary slot collision
-    //     from a concurrent candidate/job (ADAAAA-6521).
-    //   - `404 runner not found` / `404 runner session not found` / `404
-    //     session not found` — the orchestrator briefly unregisters the
-    //     runner during its ~2s `/health` flap, so a request lands while no
-    //     runner is routed (ADAAAA-6521 follow-up) OR go-livepeer released the
-    //     runner's session on a flap / orchestrator restart (ADAAAA-6623),
-    //     which turns the proxied app call into the session-lost 404. The
-    //     `session not found` phrasing does NOT match the old `/runner not
-    //     found/i` regex (the word `session` sits between `runner` and `not
-    //     found`), so that 404 returned immediately and dropped the candidate
-    //     — the same class of symptom the perceive path fix (ADAAAA-6577)
-    //     targeted. A 404 means the request was NOT routed/processed, so a
-    //     retry cannot double-bill or double-persist a highlight.
+    const maxAttempts = Math.max(1, Math.floor(this.opts.decideMaxAttempts ?? 5)); // 1 initial call + 4 retries
+    const backoffBaseMs = Math.max(1, this.opts.decideBackoffBaseMs ?? DECIDE_BACKOFF_BASE_MS);
+    const callStartedAt = Date.now();
+    const deadline = callStartedAt + this.decideQueueMaxWaitMs;
+    // ADAAAA-8254: one sequence per CALL (not per attempt) so a retry keeps its
+    // FIFO position instead of queueing behind newer windows.
+    const seq = this.decideSeq++;
     let lastStatus = 0;
-    // ADAAAA-6709: bounded exponential backoff for the repeatable transients
-    // (503 no-capacity, 404 runner/session not found). The previous linear
-    // `400 * (attempt+1)` cadence let a flapping decide runner burn requests
-    // fast against the SAME 404; the parent ADAAAA-6707 saw a "long loop of
-    // very fast retries". Exponential 500ms -> 1s -> 2s -> 4s (cap 8s) idles
-    // near ~1 req/sec instead of hammering the orchestrator, and the loop
-    // still aborts cleanly after `maxAttempts` with a clear error rather than
-    // silently returning a generic HTTP status.
-    const maxAttempts = this.opts.decideMaxAttempts ?? 5; // 1 initial call + 4 retries
-    const backoffBaseMs = this.opts.decideBackoffBaseMs ?? 500;
     for (let attempt = 0; ; attempt++) {
-      const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
-        headers,
-        body: JSON.stringify(body),
-      });
-      // Read the body up front: needed both to detect the transient
-      // "runner not found" / "session not found" 404 and to parse the 402
-      // payment challenge, and to drain the socket on retried transients.
-      const text = await res.text().catch(() => "");
-      const runnerNotFound = res.status === 404 && /(runner not found|session not found)/i.test(text);
-      if (res.status !== 503 && !runnerNotFound) {
-        lastStatus = res.status;
-        if (res.status === 402) {
-          let body2: unknown = {};
-          try {
-            body2 = text ? JSON.parse(text) : {};
-          } catch {
-            body2 = {};
-          }
-          throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
-        }
-        let data: unknown = null;
-        try {
-          data = text ? JSON.parse(text) : null;
-        } catch {
-          data = text;
-        }
-        return { status: res.status, data };
+      // ADAAAA-8254: refresh the advertised capacity on the decide path too, at
+      // most every DECIDE_CAPACITY_REFRESH_S. NEVER awaited: a slow signer cannot
+      // add latency and a failing one cannot throw into decide (AC2).
+      if (Date.now() - this.lastCapacityProbeAt >= this.decideCapacityRefreshMs) {
+        void this.refreshDecideCapacity();
       }
-      lastStatus = res.status;
+      const grant = await this.acquireDecideSlot(deadline, callStartedAt, seq);
+      let retryable = false;
+      try {
+        const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
+          headers,
+          body: JSON.stringify(body),
+        });
+        // Read the body up front: needed both to detect the transient
+        // "runner not found" / "session not found" 404 and to parse the 402
+        // payment challenge, and to drain the socket on retried transients.
+        const text = await res.text().catch(() => "");
+        const runnerNotFound = res.status === 404 && /(runner not found|session not found)/i.test(text);
+        if (res.status !== 503 && !runnerNotFound) {
+          if (res.status === 402) {
+            let body2: unknown = {};
+            try {
+              body2 = text ? JSON.parse(text) : {};
+            } catch {
+              body2 = {};
+            }
+            throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
+          }
+          // A completed call proves the runner has capacity: close any pause.
+          this.noteDecideSucceeded();
+          let data: unknown = null;
+          try {
+            data = text ? JSON.parse(text) : null;
+          } catch {
+            data = text;
+          }
+          return { status: res.status, data };
+        }
+        lastStatus = res.status;
+        if (res.status === 503) this.noteDecide503();
+        retryable = true;
+      } finally {
+        // Clear the single-flight probe marker before handing the slot back so
+        // the next window can grant its own probe (or normal admission).
+        if (grant.probe) this.probeOutstanding = false;
+        grant.release();
+      }
+      if (!retryable) break;
       if (attempt >= maxAttempts - 1) break;
-      await new Promise((r) => setTimeout(r, Math.min(backoffBaseMs * 2 ** attempt, 8000)));
+      // A 503 is paced by the shared pause (the next acquire waits on it); a 404
+      // keeps its own exponential backoff so a flapping runner is not hammered.
+      if (lastStatus !== 503) {
+        await new Promise((r) => setTimeout(r, Math.min(backoffBaseMs * 2 ** attempt, DECIDE_BACKOFF_MAX_MS)));
+      }
     }
-    const detail = lastStatus === 404
-      ? "runner not found / session not found (lost decide runner)"
-      : "no capacity available for runner";
+    if (lastStatus === 503) {
+      // AC4: the decide is honestly lost, counted, and typed so the live rail
+      // can log it and keep the job running instead of failing the stream.
+      this.decideDroppedCount++;
+      throw new DecideCapacityError(
+        Date.now() - callStartedAt,
+        this.decideQueueMaxWaitMs,
+        `decide runner unavailable after ${maxAttempts} attempts (503 no capacity)`,
+      );
+    }
+    const detail = "runner not found / session not found (lost decide runner)";
     throw new Error(`decide runner unavailable after ${maxAttempts} attempts (last HTTP ${lastStatus}: ${detail})`);
   }
 

@@ -162,6 +162,53 @@ budget** (cadence + gemma end-to-end latency) and how it is measured/reported on
 the Livepeer runner are documented in
 [`docs/plan/09-live-observer-latency-report.md`](plan/09-live-observer-latency-report.md).
 
+## Decide admission: capacity-aware ceiling + ordered 503 queue (ADAAAA-8254)
+
+Every decide app-call (live observer, VOD pass, planner) is admitted through ONE
+gate in `packages/livepeer-session/src/index.ts`. Two properties matter:
+
+1. **The ceiling is capacity-aware, downward only.**
+   `effective = min(funded, advertised)` clamped to `[1, funded]`, where
+   `funded` is `DECIDE_CONCURRENCY` (the box runs 8) and `advertised` is the sum
+   of `capacity` over the `highlights-live/decide` runners the signer's
+   `GET /discover-orchestrators` returns (the 8/2/2 pool advertises 12).
+   **`DECIDE_CONCURRENCY` is the funded ceiling that WINS**: capacity stays 8 by
+   CEO ruling (ADAAAA-7803, ratified 2026-11-02), so a discovered advertisement
+   can only LOWER admission, never raise it. `capacity_available` is recorded but
+   never sizes the gate (it is transient); two consecutive all-zero samples hold
+   the queue (one probe per backoff window). Discovery errors / timeouts (2 s) /
+   malformed answers keep the LAST KNOWN capacity, then the funded value — a
+   probe failure never throws into decide and never yields 0.
+2. **A 503 is recovered by an ordered queue, not a probe fan-out.**
+   Waiters are FIFO by request order (a retry keeps its position). A 503 opens a
+   SHARED pause window (exponential 500 ms → 8 s, with jitter); every queued
+   decide waits on that deadline and exactly ONE of them probes per window, so a
+   zero-capacity episode costs one decide probe per backoff window instead of one
+   per queued request. A decide that exceeds its queue budget fails with the
+   typed `DecideCapacityError`, increments `decideDropped`, and the live job
+   CONTINUES (logged as `decide @<ts>s dropped by admission`).
+
+Knobs (all unset = the defaults below, i.e. today's behaviour plus the shared
+pause queue):
+
+| Env | Default | Meaning |
+|---|---|---|
+| `DECIDE_CONCURRENCY` | client default 2; box ships 8 | **Funded** decide ceiling — the value that wins. Discovered capacity can only lower admission below it. |
+| `DECIDE_CAPACITY_REFRESH_S` | 60 | Minimum seconds between signer capacity probes. A probe also runs (fire-and-forget) at every decide-job start. |
+| `DECIDE_QUEUE_MAX_WAIT_MS` | 60000 | Hard per-decide queue-wait budget; exceeding it drops the decide with `DecideCapacityError`. |
+| `DECIDE_CAPACITY_DISCOVERY` | on | `0`/`false`/`off`/`no` disables the capacity probe entirely (the byte-identical pre-8254 static gate). No signer configured => no probe regardless. |
+
+Observability: the gate's counters land on the job's `observeMetrics` record
+(`decideQueued`, `decideDropped`, `decide503`, `decidePauses`,
+`capacityProbeErrors`, and `decideCapacity: {advertised, funded, effective}`), so
+QA can grade a run from `GET /jobs/:id` without reading container logs. The
+server also prints one `[decide-capacity] advertised=… funded=… effective=…`
+line whenever the snapshot changes.
+
+What must NOT change with this feature: `OBSERVE_CADENCE_S` (3 s), the 10 s live
+window, the live frame budget, `LIVE_DECIDE_KEEP_RATIO`, the funded capacity, and
+the VOD 402 → signer → retry path (VOD shares the gate and inherits the queue).
+
 ## Post-deploy live re-check (acceptance for this task)
 
 After a deploy, confirm the served behavior matches source:

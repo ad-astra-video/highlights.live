@@ -8,6 +8,9 @@ import {
   ROUTES,
   isSessionRefreshError,
   isTicketParamsExpiredText,
+  summarizeDecideDiscovery,
+  type DecideAdmissionMetrics,
+  type DecideCapacityProbeResult,
   type LivePayment,
   type RemotePaymentStateSig,
   type SignerClient,
@@ -15,6 +18,14 @@ import {
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
 import type { PerceiveSessionLedger } from "./perceive-ledger";
+
+/**
+ * ADAAAA-8254: the capability the signer is asked about for the capacity-aware
+ * decide ceiling. The server pays the `highlights-decide` single-shot runners
+ * behind `decide-router`, and `docker/runners.json` advertises them under the
+ * `highlights-live/decide` capability.
+ */
+const DECIDE_CAPACITY_CAPS = ["highlights-live/decide"];
 
 /**
  * ADAAAA-7003: an orchestrator HTTP 400 on a fixed-price single-shot
@@ -116,16 +127,53 @@ export class OrchestratorAdapter implements PipelineClient {
 
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
     this.cfg = cfg;
-    this.client = new LivepeerClient(
-      cfg.orchestratorUrl,
-      undefined,
-      cfg.decideConcurrency !== undefined ? { decideConcurrency: cfg.decideConcurrency } : undefined
-    );
+    // ADAAAA-8254: the capacity-aware ceiling + ordered 503 queue. The probe is
+    // attached only when a signer exists (its `/discover-orchestrators` is the
+    // capacity source) AND discovery was not explicitly disabled
+    // (`DECIDE_CAPACITY_DISCOVERY=0`). With no signer / no probe the client's
+    // admission is the funded ceiling exactly as before.
+    const decideCapacityProbe =
+      opts.signer && cfg.decideCapacityDiscovery !== false
+        ? async (): Promise<DecideCapacityProbeResult> => {
+            const discovery = await opts.signer!.discover(DECIDE_CAPACITY_CAPS);
+            return summarizeDecideDiscovery(discovery);
+          }
+        : undefined;
+    this.client = new LivepeerClient(cfg.orchestratorUrl, undefined, {
+      ...(cfg.decideConcurrency !== undefined ? { decideConcurrency: cfg.decideConcurrency } : {}),
+      ...(decideCapacityProbe ? { decideCapacityProbe } : {}),
+      ...(cfg.decideCapacityRefreshS !== undefined
+        ? { decideCapacityRefreshMs: Math.max(0, cfg.decideCapacityRefreshS * 1000) }
+        : {}),
+      ...(cfg.decideQueueMaxWaitMs !== undefined ? { decideQueueMaxWaitMs: cfg.decideQueueMaxWaitMs } : {}),
+      // AC1 startup/refresh log line: the three numbers, never the token or the
+      // signer URL. Only fires when the snapshot changes.
+      onDecideCapacity: (snapshot) => {
+        console.log(
+          `[decide-capacity] advertised=${snapshot.advertised} funded=${snapshot.funded} effective=${snapshot.effective}`,
+        );
+      },
+      onDecideCapacityError: (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[decide-capacity] probe failed (keeping last known): ${msg}`);
+      },
+    });
     this.signer = opts.signer;
     this.payerAddress = opts.payerAddress;
     this.paymentIntervalMs = opts.paymentIntervalMs ?? 10_000;
     this.ledger = opts.ledger;
     this.ticketParamsRetryBackoffMs = opts.ticketParamsRetryBackoffMs ?? 1000;
+  }
+
+  /** ADAAAA-8254: start-of-job hook for the decide admission gate (resets the
+   * per-job counters + kicks one capacity refresh, never awaited). */
+  beginDecideJob(): void {
+    this.client.beginDecideJob();
+  }
+
+  /** ADAAAA-8254: the job's decide admission counters + capacity snapshot. */
+  decideAdmissionMetrics(): DecideAdmissionMetrics {
+    return this.client.decideAdmissionMetrics();
   }
 
   /**
