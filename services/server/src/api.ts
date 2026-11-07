@@ -5279,9 +5279,29 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // names from the job's `matchContext`, so no name is invented here.
     const copyTargetFor = (h: HighlightRecord): string =>
       projectPostTitle(h, { subject: postTitleTeamSubject(h, job.matchContext) });
+    // ADAAAA-8328 (Defect 2, ADAAAA-8319 QA FAIL of AC4): the announcer DETAIL
+    // never goes missing. The write seam legitimately refuses copy it cannot
+    // gate (a score claim this window never measured), so a row can carry
+    // `reason_raw` and NO `caption`/`cardTitles`/`reason` — measured on job
+    // 55a0eb33, 2 of 3 rows. Losing the card's "What happened" line is exactly
+    // what the parent ticket forbids, and it has nothing to do with the model's
+    // `postTitle`: a refused/absent title must NEVER take the announcer line
+    // with it (the title is a SEPARATE surface, gated separately, and the copy
+    // fields below are spread from the stored row untouched).
+    //
+    // The degrade is the SAME fact-only derivation the copy target uses — the
+    // stored label plus the row's own window instant plus, only when the row's
+    // own copy names one, a team from the job's `matchContext`. Pure, no model
+    // call, never empty, and it asserts nothing this window did not store. A
+    // stored caption is served byte-for-byte.
+    const announcerDetailFor = (h: HighlightRecord): string => {
+      const stored = (h.caption ?? "").trim();
+      return stored || copyTargetFor(h);
+    };
     const postableHighlights = postable.highlights.map((h) => ({
       ...h,
       postTitle: copyTargetFor(h),
+      caption: announcerDetailFor(h),
       exportUri: exportUriForHighlight(h, user.id),
       ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
     }));
@@ -5295,6 +5315,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-8318: the notable lane mounts the same card, so it needs the same
       // copy target (the deterministic title for a non-goal moment).
       postTitle: copyTargetFor(h),
+      // ADAAAA-8328: and the same never-empty announcer detail.
+      caption: announcerDetailFor(h),
       exportUri: exportUriForHighlight(h, user.id),
     }));
 
