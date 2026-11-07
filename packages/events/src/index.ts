@@ -460,6 +460,18 @@ export const ConfirmMetricsSnapshotSchema = z.object({
 });
 export type ConfirmMetricsSnapshot = z.infer<typeof ConfirmMetricsSnapshotSchema>;
 
+// ADAAAA-8254: the capacity-aware decide ceiling, as recorded on the job. The
+// three numbers are the startup log line's: `advertised` = sum of `capacity`
+// over the discovered decide runners (0 = unknown), `funded` = the
+// DECIDE_CONCURRENCY ceiling that WINS, `effective` = min(funded, advertised)
+// clamped to [1, funded] — the value the gate actually admitted.
+export const DecideCapacitySnapshotSchema = z.object({
+  advertised: z.number().int().min(0),
+  funded: z.number().int().min(1),
+  effective: z.number().int().min(1),
+});
+export type DecideCapacitySnapshot = z.infer<typeof DecideCapacitySnapshotSchema>;
+
 // Live decide-observer cadence + decide gemma E2E latency snapshot (ADAAAA-7011).
 // Recorded on a live job when the decide-observer is enabled, so the cadence +
 // gemma end-to-end latency (the ~30 s budget = ~3 s cadence + gemma E2E) is
@@ -700,6 +712,21 @@ export const ObserveMetricsSnapshotSchema = z.object({
   confirmCalls: z.number().int().min(0).optional(),
   confirmDiveCount: z.number().int().min(0).optional(),
   confirmDropped: z.number().int().min(0).optional(),
+  // ADAAAA-8254: decide ADMISSION counters, so QA can grade the capacity-aware
+  // ceiling + ordered 503 queue from the job record instead of container logs.
+  // Additive optional: absent on records written before this field existed.
+  /** Decide calls that waited in the admission queue (retries included). */
+  decideQueued: z.number().int().min(0).optional(),
+  /** Decides dropped by DECIDE_QUEUE_MAX_WAIT_MS / exhausted 503 retries. */
+  decideDropped: z.number().int().min(0).optional(),
+  /** 503 no-capacity responses seen by the decide path. */
+  decide503: z.number().int().min(0).optional(),
+  /** Shared pause windows opened (a 503 episode or the stall hysteresis). */
+  decidePauses: z.number().int().min(0).optional(),
+  /** Capacity probes that errored / timed out (discovery is optional). */
+  capacityProbeErrors: z.number().int().min(0).optional(),
+  /** {advertised, funded, effective} decide ceiling at snapshot time. */
+  decideCapacity: DecideCapacitySnapshotSchema.optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 

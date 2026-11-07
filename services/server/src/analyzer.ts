@@ -3,6 +3,7 @@
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
+import type { DecideAdmissionMetrics } from "@highlights/livepeer-session";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import {
@@ -2714,6 +2715,19 @@ export interface PipelineClient {
    */
   train(request: TrainRunRequest): Promise<TrainResult>;
   stopPerceive(sessionId: string): Promise<void>;
+  /**
+   * ADAAAA-8254: mark the start of a decide-owning job on the admission gate.
+   * Resets the per-job admission counters and kicks ONE capacity refresh. It is
+   * deliberately fire-and-forget (never delays the first decide) and optional so
+   * a FAKE/older client keeps its own behaviour.
+   */
+  beginDecideJob?(): void;
+  /**
+   * ADAAAA-8254: the decide admission counters + `{advertised, funded,
+   * effective}` capacity snapshot for the job's `observeMetrics`. Optional;
+   * absent on a client with no admission gate (e.g. the direct-dev adapter).
+   */
+  decideAdmissionMetrics?(): DecideAdmissionMetrics;
 }
 
 /** Manifest + hyper-params for a highlights-train single-shot job. Mirrors the
@@ -3497,6 +3511,35 @@ export interface LiveObserveMetricsSnapshot {
   /** ADAAAA-8205: dives dropped fail-closed (busy pool / budget / timeout /
    *  transport / parse) — every one leaves its card unchanged. */
   confirmDropped?: number;
+  /** ADAAAA-8254: decide admission counters, mirrored from the gate so a stored
+   *  live row answers the capacity/queue question without container logs. */
+  decideQueued?: number;
+  decideDropped?: number;
+  decide503?: number;
+  decidePauses?: number;
+  capacityProbeErrors?: number;
+  /** ADAAAA-8254: `{advertised, funded, effective}` decide ceiling. */
+  decideCapacity?: { advertised: number; funded: number; effective: number };
+}
+
+/**
+ * ADAAAA-8254: fold the admission counters onto the live observe snapshot.
+ * Absent admission (no gate / older client) leaves `base` byte-identical.
+ */
+export function withDecideAdmissionMetrics(
+  base: LiveObserveMetricsSnapshot,
+  admission?: DecideAdmissionMetrics
+): LiveObserveMetricsSnapshot {
+  if (!admission) return base;
+  return {
+    ...base,
+    decideQueued: admission.decideQueued,
+    decideDropped: admission.decideDropped,
+    decide503: admission.decide503,
+    decidePauses: admission.decidePauses,
+    capacityProbeErrors: admission.capacityProbeErrors,
+    decideCapacity: { ...admission.capacity },
+  };
 }
 
 /** ADAAAA-7774: the LIVE observe pass's ingest -> analysis stride evidence. */
@@ -8637,6 +8680,18 @@ export async function configurePerceiveCalibration(
   });
 }
 
+/**
+ * ADAAAA-8254: true when a decide failure is an ADMISSION drop
+ * (`DecideCapacityError` — queue budget expired or the 503 retries were
+ * exhausted) rather than a genuine pipeline failure. Matched by `name` so the
+ * check works without importing the class value (the server must not depend on
+ * the gate's module identity). A drop is counted on the job's observe metrics by
+ * the gate itself; the caller only logs + continues.
+ */
+export function isDecideCapacityError(err: unknown): boolean {
+  return !!err && typeof err === "object" && (err as { name?: string }).name === "DecideCapacityError";
+}
+
 export async function analyzeJob(
   client: PipelineClient,
   iterFrames: AsyncIterable<{ seq: number; timestamp: number; imageB64: string }>,
@@ -8669,6 +8724,9 @@ export async function analyzeJob(
    * unaffected. */
   onProgress?: (framesAnalyzed: number) => void
 ): Promise<AnalyzeOutcome> {
+  // ADAAAA-8254: this pass owns a decide job — reset the admission counters and
+  // kick ONE capacity refresh (fire-and-forget). Nothing here awaits a signer.
+  client.beginDecideJob?.();
   const maxReReserves = cfg.maxReReserves ?? 3;
   // ADAAAA-6577: bounded exponential backoff between a perceive session-lost
   // re-reserve and the retry of the same frame. A flapping perceive runner
@@ -8766,6 +8824,19 @@ export async function analyzeJob(
                     decide: async () => {
                       await measuredDecide(payload.centerTs, async () => {
                         verdict = await observeDecideOnly(client, run, cfg, sessionId, payload);
+                      }).catch((err) => {
+                        // ADAAAA-8254: a dropped decide leaves no verdict, so the
+                        // window is simply not accepted — the pass continues.
+                        if (isDecideCapacityError(err)) {
+                          console.error(
+                            `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
+                              (err as Error).message
+                            }`
+                          );
+                          verdict = null;
+                          return;
+                        }
+                        throw err;
                       });
                     },
                     accept: async () => {
@@ -8777,7 +8848,23 @@ export async function analyzeJob(
               }
             : {
                 onDecide: (payload: ObserveDecidePayload) =>
-                  measuredDecide(payload.centerTs, () => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload)),
+                  measuredDecide(payload.centerTs, () =>
+                    observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload)
+                  ).catch((err) => {
+                    // ADAAAA-8254: a decide dropped by admission (queue budget or
+                    // exhausted 503 retries) is a bounded, COUNTED loss: log it
+                    // and keep the stream running (AC4). Any other error still
+                    // aborts the pass exactly as before.
+                    if (isDecideCapacityError(err)) {
+                      console.error(
+                        `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
+                          (err as Error).message
+                        }`
+                      );
+                      return false;
+                    }
+                    throw err;
+                  }),
               }),
         })
       : null;
@@ -8879,6 +8966,19 @@ export async function analyzeJob(
                     decide: async () => {
                       await measuredDecide(payload.centerTs, async () => {
                         verdict = await observeDecideOnly(client, run, cfg, sessionId, payload);
+                      }).catch((err) => {
+                        // ADAAAA-8254: a dropped decide leaves no verdict, so the
+                        // window is simply not accepted — the pass continues.
+                        if (isDecideCapacityError(err)) {
+                          console.error(
+                            `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
+                              (err as Error).message
+                            }`
+                          );
+                          verdict = null;
+                          return;
+                        }
+                        throw err;
                       });
                     },
                     accept: async () => {
@@ -8890,7 +8990,23 @@ export async function analyzeJob(
               }
             : {
                 onDecide: (payload: ObserveDecidePayload) =>
-                  measuredDecide(payload.centerTs, () => observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload)),
+                  measuredDecide(payload.centerTs, () =>
+                    observeOnDecide(client, run, cut, cfg, onEvent, sessionId, payload)
+                  ).catch((err) => {
+                    // ADAAAA-8254: a decide dropped by admission (queue budget or
+                    // exhausted 503 retries) is a bounded, COUNTED loss: log it
+                    // and keep the stream running (AC4). Any other error still
+                    // aborts the pass exactly as before.
+                    if (isDecideCapacityError(err)) {
+                      console.error(
+                        `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
+                          (err as Error).message
+                        }`
+                      );
+                      return false;
+                    }
+                    throw err;
+                  }),
               }),
         })
       : null;
@@ -9439,27 +9555,32 @@ export async function analyzeJob(
     ...(perceiveCadenceEnabled ? { perceiveCalls } : {}),
     ...(liveObserver
       ? {
-          observeMetrics: buildLiveObserveMetrics(liveObserver, {
-            framesSeen,
-            framesAnalyzed,
-            framesStrided,
-            perceiveCalls,
-            perceiveSkipped,
-            perceiveBudgetSkipped,
-            perceiveHotCalls,
-            analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
-            perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
-            // ADAAAA-8121: the consume clock both live indicators read, in
-            // content seconds. Persisted so a stored record answers "where did
-            // the analysis get to and how far ahead was the tap" without the
-            // in-memory observation set.
-            ...(lastConsumedTs > 0 ? { analysedThroughTs: Number(lastConsumedTs.toFixed(3)) } : {}),
-            ...(lastSeenTs > 0 ? { tapThroughTs: Number(lastSeenTs.toFixed(3)) } : {}),
-          }, {
-            calls: run.confirmDiveCalls(),
-            dives: run.confirmDiveCount(),
-            dropped: run.confirmDiveDropped(),
-          }),
+          observeMetrics: withDecideAdmissionMetrics(
+            buildLiveObserveMetrics(liveObserver, {
+              framesSeen,
+              framesAnalyzed,
+              framesStrided,
+              perceiveCalls,
+              perceiveSkipped,
+              perceiveBudgetSkipped,
+              perceiveHotCalls,
+              analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
+              perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
+              // ADAAAA-8121: the consume clock both live indicators read, in
+              // content seconds. Persisted so a stored record answers "where did
+              // the analysis get to and how far ahead was the tap" without the
+              // in-memory observation set.
+              ...(lastConsumedTs > 0 ? { analysedThroughTs: Number(lastConsumedTs.toFixed(3)) } : {}),
+              ...(lastSeenTs > 0 ? { tapThroughTs: Number(lastSeenTs.toFixed(3)) } : {}),
+            }, {
+              calls: run.confirmDiveCalls(),
+              dives: run.confirmDiveCount(),
+              dropped: run.confirmDiveDropped(),
+            }),
+            // ADAAAA-8254: the decide admission counters + capacity snapshot,
+            // read off the gate at job end so the stored row carries them.
+            client.decideAdmissionMetrics?.(),
+          ),
         }
       : {}),
     ...(observeDecider ? { vodObserveMetrics: buildVodObserveMetrics(observeDecider) } : {}),
