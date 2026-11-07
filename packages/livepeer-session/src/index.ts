@@ -374,6 +374,15 @@ export const DECIDE_QUEUE_MAX_WAIT_MS_DEFAULT = 60_000;
 /** Wall-clock budget for one capacity probe (`DECIDE_CAPACITY_TIMEOUT_S` = 2). */
 export const DECIDE_CAPACITY_PROBE_TIMEOUT_MS = 2_000;
 
+/** Where the snapshot's `advertised` value came from (ADAAAA-8262). */
+export type DecideCapacitySource =
+  /** The most recent probe supplied the number. */
+  | "probe"
+  /** The most recent probe failed / gave no number; a previous probe's value is kept. */
+  | "last-known"
+  /** Nothing was ever advertised (dark discovery / no probe) => `effective = funded`. */
+  | "funded";
+
 /** The three numbers the startup log line and the job snapshot carry. */
 export interface DecideCapacitySnapshot {
   /** Sum of `capacity` over the discovered decide runners; 0 = unknown. */
@@ -382,6 +391,14 @@ export interface DecideCapacitySnapshot {
   funded: number;
   /** What the gate actually admits: min(funded, advertised), clamped [1, funded]. */
   effective: number;
+  /** ADAAAA-8262: the last probe came back well-formed (no throw / timeout).
+   * `false` means "probe failed" — distinct from a probe that answered with an
+   * empty fleet (`probeOk: true, runners: 0`). Never affects the arithmetic. */
+  probeOk: boolean;
+  /** ADAAAA-8262: decide runners in the last well-formed answer (0 = none). */
+  runners: number;
+  /** ADAAAA-8262: provenance of `advertised` (see {@link DecideCapacitySource}). */
+  source: DecideCapacitySource;
 }
 
 /** Result of one signer discovery, reduced to the decide-relevant numbers. */
@@ -392,6 +409,9 @@ export interface DecideCapacityProbeResult {
   /** True when EVERY decide runner reported `capacity_available === 0`. Used
    * only as a stall signal with hysteresis — never to size the gate. */
   noneAvailable?: boolean;
+  /** ADAAAA-8262: how many decide runners the answer carried (0 = empty fleet),
+   * so a failed probe is distinguishable from a runner-less advertisement. */
+  runners?: number;
 }
 
 /** Per-job decide-admission counters surfaced on the job's observe metrics. */
@@ -476,6 +496,7 @@ export function summarizeDecideDiscovery(
   return {
     capacity: known ? sum : null,
     noneAvailable: everyAvailableKnown && everyAvailableZero,
+    runners: runners.length,
   };
 }
 
@@ -548,6 +569,9 @@ export class LivepeerClient {
       advertised: 0,
       funded: this.fundedDecideCeiling,
       effective: this.fundedDecideCeiling,
+      probeOk: false,
+      runners: 0,
+      source: "funded",
     };
   }
 
@@ -692,6 +716,12 @@ export class LivepeerClient {
   private probeOutstanding = false;
   /** Last advertised capacity (sum over decide runners); null = unknown. */
   private lastAdvertisedCapacity: number | null = null;
+  /** ADAAAA-8262: the last probe answered (no throw / timeout). */
+  private probeOk = false;
+  /** ADAAAA-8262: decide runners in the last well-formed answer. */
+  private lastRunnerCount = 0;
+  /** ADAAAA-8262: the last well-formed answer carried a usable capacity number. */
+  private lastProbeYieldedCapacity = false;
   /** Set in the constructor body: class-field initializers run before the
    * parameter properties (`this.opts`) are assigned. */
   private capacitySnapshot!: DecideCapacitySnapshot;
@@ -806,6 +836,21 @@ export class LivepeerClient {
       } finally {
         if (timer) clearTimeout(timer);
       }
+      if (result) {
+        // A well-formed answer (even an empty fleet) is PROBE OK; `runners: 0`
+        // then means "no decide runner advertised", not "the probe failed".
+        this.probeOk = true;
+        this.lastRunnerCount = typeof result.runners === "number" && Number.isFinite(result.runners)
+          ? Math.max(0, Math.floor(result.runners))
+          : 0;
+        this.lastProbeYieldedCapacity =
+          typeof result.capacity === "number" && Number.isFinite(result.capacity);
+      } else {
+        // Throw / timeout / null answer: provenance stays "last-known" or "funded".
+        this.probeOk = false;
+        this.lastRunnerCount = 0;
+        this.lastProbeYieldedCapacity = false;
+      }
       if (result && typeof result.capacity === "number" && Number.isFinite(result.capacity)) {
         this.lastAdvertisedCapacity = Math.max(0, Math.floor(result.capacity));
       }
@@ -835,8 +880,18 @@ export class LivepeerClient {
     const funded = this.fundedDecideCeiling;
     const advertised = this.lastAdvertisedCapacity;
     const effective = advertised === null ? funded : Math.max(1, Math.min(funded, advertised));
-    const changed = effective !== this.capacitySnapshot.effective || advertised !== this.capacitySnapshot.advertised;
-    this.capacitySnapshot = { advertised: advertised ?? 0, funded, effective };
+    // ADAAAA-8262: provenance only — the ceiling arithmetic above is untouched.
+    const source: DecideCapacitySource =
+      advertised === null ? "funded" : this.lastProbeYieldedCapacity ? "probe" : "last-known";
+    const probeOk = this.probeOk;
+    const runners = this.lastRunnerCount;
+    const changed =
+      effective !== this.capacitySnapshot.effective ||
+      advertised !== this.capacitySnapshot.advertised ||
+      probeOk !== this.capacitySnapshot.probeOk ||
+      runners !== this.capacitySnapshot.runners ||
+      source !== this.capacitySnapshot.source;
+    this.capacitySnapshot = { advertised: advertised ?? 0, funded, effective, probeOk, runners, source };
     if (changed) {
       try {
         this.opts.onDecideCapacity?.({ ...this.capacitySnapshot });

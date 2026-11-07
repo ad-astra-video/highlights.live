@@ -147,10 +147,12 @@ export class OrchestratorAdapter implements PipelineClient {
         : {}),
       ...(cfg.decideQueueMaxWaitMs !== undefined ? { decideQueueMaxWaitMs: cfg.decideQueueMaxWaitMs } : {}),
       // AC1 startup/refresh log line: the three numbers, never the token or the
-      // signer URL. Only fires when the snapshot changes.
+      // signer URL. Only fires when the snapshot changes. ADAAAA-8262 appends the
+      // provenance so a failed probe is not mistaken for an empty fleet.
       onDecideCapacity: (snapshot) => {
         console.log(
-          `[decide-capacity] advertised=${snapshot.advertised} funded=${snapshot.funded} effective=${snapshot.effective}`,
+          `[decide-capacity] advertised=${snapshot.advertised} funded=${snapshot.funded} effective=${snapshot.effective}` +
+            ` probeOk=${snapshot.probeOk} runners=${snapshot.runners} source=${snapshot.source}`,
         );
       },
       onDecideCapacityError: (err) => {

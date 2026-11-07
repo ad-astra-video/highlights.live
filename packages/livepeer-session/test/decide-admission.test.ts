@@ -89,9 +89,9 @@ describe("ADAAAA-8254 AC1: capacity-aware effective ceiling (downward only)", ()
       onDecideCapacity: (s) => seen.push(s),
     });
     const snap = await c.refreshDecideCapacity(true);
-    expect(snap).toEqual({ advertised: 12, funded: 8, effective: 8 });
+    expect(snap).toEqual({ advertised: 12, funded: 8, effective: 8, probeOk: true, runners: 3, source: "probe" });
     // AC1 startup log line carries the three numbers.
-    expect(seen.at(-1)).toEqual({ advertised: 12, funded: 8, effective: 8 });
+    expect(seen.at(-1)).toEqual({ advertised: 12, funded: 8, effective: 8, probeOk: true, runners: 3, source: "probe" });
   });
 
   it("shrinks to a single cap-4 fleet when the pool is smaller than the funded ceiling", async () => {
@@ -100,7 +100,7 @@ describe("ADAAAA-8254 AC1: capacity-aware effective ceiling (downward only)", ()
       decideCapacityProbe: async () => ({ capacity: 4 }),
     });
     const snap = await c.refreshDecideCapacity(true);
-    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4 });
+    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 0, source: "probe" });
   });
 
   it("never sizes UP past the funded ceiling (advertised 12 with DECIDE_CONCURRENCY=2 -> 2)", async () => {
@@ -139,14 +139,14 @@ describe("ADAAAA-8254 AC1: capacity-aware effective ceiling (downward only)", ()
       decideConcurrency: 8,
       decideCapacityProbe: async () => summary,
     });
-    expect(await c.refreshDecideCapacity(true)).toEqual({ advertised: 0, funded: 8, effective: 8 });
+    expect(await c.refreshDecideCapacity(true)).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: true, runners: 1, source: "funded" });
   });
 
   it("unset env + no signer (no probe) is byte-identical to today's static gate", async () => {
     const t = new ScriptedTransport(() => 200);
     const c = new LivepeerClient("http://orch:8935", t);
     // No probe: the funded default (capacity-2 admission, ADAAAA-6911) wins.
-    expect(c.decideAdmissionMetrics().capacity).toEqual({ advertised: 0, funded: 2, effective: 2 });
+    expect(c.decideAdmissionMetrics().capacity).toEqual({ advertised: 0, funded: 2, effective: 2, probeOk: false, runners: 0, source: "funded" });
     const r = await c.decide("decide", { id: 1 });
     expect(r.status).toBe(200);
     expect(t.calls.length).toBe(1);
@@ -162,7 +162,8 @@ describe("ADAAAA-8254 AC2: discovery failures never reach the decide path", () =
       },
     });
     const snap = await c.refreshDecideCapacity(true);
-    expect(snap).toEqual({ advertised: 0, funded: 8, effective: 8 });
+    // ADAAAA-8262: a FAILED probe (probeOk false) is not an empty fleet.
+    expect(snap).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: false, runners: 0, source: "funded" });
     expect(c.decideAdmissionMetrics().capacityProbeErrors).toBe(1);
     // Decide still returns 200 while the probe is broken.
     const r = await c.decide("decide", { id: 7 });
@@ -184,8 +185,10 @@ describe("ADAAAA-8254 AC2: discovery failures never reach the decide path", () =
     const started = Date.now();
     const snap = await c.refreshDecideCapacity(true);
     expect(Date.now() - started).toBeLessThan(500);
-    // Last known advertised capacity survives the failed probe.
-    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4 });
+    // Last known advertised capacity survives the failed probe — and the
+    // snapshot says so (`probeOk: false`, `source: "last-known"`), which is
+    // exactly the distinction ADAAAA-8254 could not express.
+    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4, probeOk: false, runners: 0, source: "last-known" });
     expect(c.decideAdmissionMetrics().capacityProbeErrors).toBe(1);
     // Decide is unaffected.
     expect((await c.decide("decide", { id: 1 })).status).toBe(200);
@@ -344,6 +347,55 @@ describe("ADAAAA-8254 AC4: bounded, counted loss", () => {
     expect(jobB.decide503).toBe(0);
   });
 
+  it("ADAAAA-8262: a FAILED probe and an advertisement with no decide runner are distinguishable", async () => {
+    let mode: "fail" | "empty" | "zero" = "empty";
+    const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
+      decideConcurrency: 8,
+      decideCapacityProbe: async (): Promise<DecideCapacityProbeResult> => {
+        if (mode === "fail") throw new Error("signer discover failed: HTTP 503 cache empty");
+        if (mode === "zero") return summarizeDecideDiscovery([{ runners: [runner("highlights-decide", 0, 0)] }]);
+        // A well-formed signer answer that carries only a perceive runner.
+        return summarizeDecideDiscovery([{ runners: [runner("highlights-perceive", 4)] }]);
+      },
+    });
+
+    // Probe OK, fleet empty: advertised 0 but `probeOk: true, runners: 0`.
+    expect(await c.refreshDecideCapacity(true)).toEqual({
+      advertised: 0,
+      funded: 8,
+      effective: 8,
+      probeOk: true,
+      runners: 0,
+      source: "funded",
+    });
+
+    // Probe OK, decide runner present but at zero capacity: a REAL advertisement.
+    mode = "zero";
+    expect(await c.refreshDecideCapacity(true)).toEqual({
+      advertised: 0,
+      funded: 8,
+      effective: 1,
+      probeOk: true,
+      runners: 1,
+      source: "probe",
+    });
+
+    // Signer dark (503 cache empty): the probe FAILED — the snapshot says so
+    // instead of silently reading like an empty fleet. The last advertised
+    // number is kept (0 here) and labelled `last-known`.
+    mode = "fail";
+    const dark = await c.refreshDecideCapacity(true);
+    expect(dark).toEqual({
+      advertised: 0,
+      funded: 8,
+      effective: 1,
+      probeOk: false,
+      runners: 0,
+      source: "last-known",
+    });
+    expect(c.decideAdmissionMetrics().capacityProbeErrors).toBe(1);
+  });
+
   it("the admission counters mirror onto the job's observe metrics shape", async () => {
     const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
       decideConcurrency: 8,
@@ -370,14 +422,15 @@ describe("ADAAAA-8254 summarizeDecideDiscovery", () => {
       summarizeDecideDiscovery([
         { runners: [runner("highlights-decide", 4, 2), runner("highlights-perceive", 8, 8)] },
       ])
-    ).toEqual({ capacity: 4, noneAvailable: false });
+    ).toEqual({ capacity: 4, noneAvailable: false, runners: 1 });
     expect(
       summarizeDecideDiscovery([{ runners: [runner("highlights-decide", 4, 0), runner("highlights-live/decide", 2, 0)] }])
-    ).toEqual({ capacity: 6, noneAvailable: true });
+    ).toEqual({ capacity: 6, noneAvailable: true, runners: 2 });
     // Absent capacity_available is not "zero available".
     expect(summarizeDecideDiscovery([{ runners: [runner("highlights-decide", 4)] }])).toEqual({
       capacity: 4,
       noneAvailable: false,
+      runners: 1,
     });
   });
 
