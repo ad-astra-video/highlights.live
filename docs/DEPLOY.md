@@ -229,9 +229,25 @@ that registration's `capacity` **is** the declared routed set — and
 | `registrar-decide` sidecar env | `RUNNER_CAPACITY=auto` + `RUNNER_AUTO_SEQS=2` | `3 primary workers x --max-num-seqs 2 = 6`, DERIVED from the pool at every heartbeat |
 
 There is no second file to keep in step: the capacity is computed from the pool
-(`docker/live-runner-registrar.py` `pool_capacity`), so a pool edit plus a
-restart of the sidecar changes `advertised` with no orchestrator restart and no
-session drop. `services/server/test/decide-router-upstreams.test.ts` pins
+(`docker/live-runner-registrar.py` `pool_capacity`) at EVERY heartbeat, so the
+advertised ceiling follows a pool edit with no orchestrator restart. Read the
+three-hop latency before promising "immediately", because each hop caches:
+
+| Hop | Bound | Why |
+|---|---|---|
+| registrar -> orchestrator registry | one heartbeat (5 s) | the sidecar re-reads `RUNNER_AUTO_CONF` each tick; an IN-PLACE file write (`cat new > conf`, same inode) is visible without a container restart, a rename-based write (`sed -i`) is NOT (bind-mounted inode) |
+| orchestrator registry -> signer snapshot | `-liveAICapReportInterval` (compose ships `60s`; go-livepeer's default is 25 MINUTES) | `/discover-orchestrators` serves a cached capability snapshot |
+| signer snapshot -> server admission | `DECIDE_CAPACITY_REFRESH_S` (default 60 s, probed on the decide path) | `[decide-capacity]` only logs when the snapshot changes |
+
+**Do not restart `registrar-decide` while a decide is in flight.** A graceful
+shutdown unregisters the runner, and go-livepeer's `removeRunnerWithRunnerLocked`
+releases EVERY session on it (`live runner deregistered` / `live runner session
+released` in `highlights-orchestrator`). The sidecar unregisters on purpose (a
+stopped sidecar must not leave a phantom runner for the 20 s TTL), so the safe
+operator actions are: edit the conf IN PLACE and let the next heartbeat
+re-derive (no restart at all), or recreate the sidecar in a quiet window.
+
+`services/server/test/decide-router-upstreams.test.ts` pins
 `registrar capacity === primary_count * 2` (and that `backup` lines are never
 counted), so the two cannot drift silently. `DECIDE_CONCURRENCY` stays the
 FUNDED bar (8); with L1 in force the box prints
@@ -318,6 +334,38 @@ docker exec highlights-signer wget -qO- 'http://127.0.0.1:7936/discover-orchestr
 A runner whose container has no registrar sidecar is simply absent from
 discovery (that is why `train`, which only ships in
 `docker-compose.gpu.yml`, is not registered on this box).
+
+#### Re-derive the advertised capacity from a pool edit (ADAAAA-8292)
+
+```sh
+cd /home/brad/highlights.live
+
+# 1. edit the POOL. In place: same inode, so both the router and the registrar
+#    sidecar see it; `sed -i` renames and the bind-mounted containers do not.
+python3 - <<'PY'
+p = "docker/decide-router.conf"
+t = open(p).read()
+open(p, "w").write(t.replace("    server 192.168.1.151:8093", "#   server 192.168.1.151:8093", 1))
+PY
+docker exec highlights-decide-router nginx -t && docker exec highlights-decide-router nginx -s reload
+
+# 2. NOTHING else to restart. The registrar re-reads the conf every 5 s and
+#    heartbeats the new capacity; the orchestrator registry is live.
+docker logs --tail 5 highlights-registrar-decide     # "capacity changed ... 6 -> 4"
+
+# 3. the advertised number follows within the signer interval + the server probe:
+sleep 70
+docker exec highlights-server curl -s \
+  'http://signer:7936/discover-orchestrators?caps=highlights-live/decide' | jq '.[].runners[].capacity'
+docker logs highlights-server | grep '\[decide-capacity\]' | tail -2
+
+# 4. restore the pool the same way (uncomment, nginx -t, nginx -s reload)
+```
+
+`LIVE_AI_CAP_REPORT_INTERVAL` (compose default `60s`) is the knob for hop 2; set
+it back to go-livepeer's default by removing the compose line (25 min) only if
+the box stops needing live capacity changes. Unsetting it does not change the
+registry's capacity, only how fast `advertised` reflects it.
 
 
 ### The signer must be able to verify the orchestrator's cert (ADAAAA-8262)

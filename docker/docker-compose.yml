@@ -1105,6 +1105,12 @@ services:
       # go-livepeer regenerates that self-signed cert on every start, so the
       # signer re-pins it and restarts its livepeer child when it changes.
       - ORCH_CA_REFRESH_SEC=${ORCH_CA_REFRESH_SEC:-300}
+      # ADAAAA-8292: how often the signer refreshes the /discover-orchestrators
+      # capability snapshot the decide admission ceiling is read from.
+      # go-livepeer's default is 25 MINUTES, which would hide a dynamic runner's
+      # capacity change (one heartbeat) for up to 25 min; 60 s keeps the
+      # advertised number within ~1 min of the pool edit + registrar recreate.
+      - LIVE_AI_CAP_REPORT_INTERVAL=${LIVE_AI_CAP_REPORT_INTERVAL:-60s}
       - SIGNER_ALLOW_NO_AUTH=${SIGNER_ALLOW_NO_AUTH:-}
       # The signer binds its REST HTTP API on the private `hl` network so the
       # server/media containers can reach it at http://signer:7936. The Dockerfile
