@@ -728,6 +728,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // via POST /jobs/:id/recording; this holds the per-job evidence + lazy perceive
   // session.
   const browserJobs = new Map<string, { evidence: EvidenceTracker; sessionId?: string; recordingExt?: string; mediaSessionId?: string; mediaWsUrl?: string; mediaIceServers?: any[]; rail?: MediaRailObserver; frames?: LiveFrameWriter; contentTs?: number; analysedTs?: number }>();
+  // ADAAAA-8250: the media rail's consume/stride evidence for an IN-FLIGHT share
+  // (the same `perceive` block it writes into the job record at share end). The
+  // analyse-position chip reads it mid-share so the stride count is visible while
+  // the share is running — the stored record carries no block until completion and
+  // the chip hides itself on a terminal job. Counts only, no new meter: the
+  // accessor returns null when the rail runs no stride (content rate unset), so
+  // the chip keeps degrading to "no stride data" honestly.
+  const liveConsumeEvidence = (jobId: string) => browserJobs.get(jobId)?.rail?.liveConsumeEvidence() ?? null;
   // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
   // job plus whether the job has been stopped. The stop path uses this to
   // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
@@ -5081,6 +5089,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         job.status === "done" || job.status === "failed" || job.status === "cancelled"
           ? null
           : browserJobs.get(job.id)?.analysedTs ?? null,
+      // ADAAAA-8250: the rail's live stride counters, so the chip can name the
+      // count DURING the share instead of reading "no stride data" until the
+      // record is finalized. Terminal jobs pass nothing (AC-4).
+      liveConsume:
+        job.status === "done" || job.status === "failed" || job.status === "cancelled"
+          ? null
+          : liveConsumeEvidence(job.id),
     });
     return {
       // ADAAAA-7854: `postableHighlights` / `mergedHighlights` / `rawHighlights`
@@ -5243,6 +5258,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // ADAAAA-8121: same consume clock as `GET /jobs/:id`, so the live stage
           // and the detail payload never disagree about where the analysis is.
           analysedThroughTs: browserJobs.get(job.id)?.analysedTs ?? null,
+          // ADAAAA-8250: same live stride counters as `GET /jobs/:id` — the two
+          // surfaces must never disagree about the count either.
+          liveConsume: liveConsumeEvidence(job.id),
         }),
         // ADAAAA-7750: WHY the window list is empty, when it is. Derived from
         // stored counters only (no decide, no GPU): a dead capture surface, a
