@@ -42,7 +42,19 @@ export const REPLAY_MAX_GAP_S = 300;
 /** Hamming distance at which two 8x8 aHash fingerprints count as the same
  * picture. 6 bits is the near-duplicate threshold the training splitter already
  * uses (`bucketNearDuplicates`), so the detector inherits a calibrated value
- * rather than inventing one. */
+ * rather than inventing one.
+ *
+ * MEASURED LIMIT (job 545be947, 2026-11-07; numbers in the ADAAAA-8321 evidence
+ * work product). Two frames 1/3 s apart in the SAME window differ by a median of
+ * 16 bits on this hash (goal window 16, replay window 22, 0-15 s control 21), so
+ * 6 bits is far below the frame-to-frame noise floor: the bar fires only on
+ * near-identical pictures. That is deliberate — precision first — and it is also
+ * why the real broadcast replay (behind-the-net camera at 207 s vs side-on at
+ * 159 s) measures 0 matches at every threshold up to 16 bits and needs 20+ bits
+ * to produce even 4/22, which no ratio bar accepts. Do NOT loosen these
+ * constants to chase a missed attach: the recall for a re-framed broadcast
+ * replay has to come from a decide-level `phase` verdict (ADAAAA-8325), not from
+ * a bigger hash budget here. */
 export const REPLAY_HASH_MATCH_BITS = 6;
 
 /** Attach bar: at least this many of the new window's fingerprints must match,
