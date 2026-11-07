@@ -10,7 +10,7 @@ import {
   type JobCandidate,
   type TrackObservation,
 } from "@highlights/events";
-import type { Db, DatasetRecord } from "./db";
+import type { Db, DatasetRecord, JobDeletionOptions } from "./db";
 import { mergeResumeCheckpoint, type ResumeCheckpointPatch } from "./vod-resume";
 
 export interface StoredObservation {
@@ -354,8 +354,12 @@ export class Store {
    * highlight + `media_sessions` row that belongs to it (ADAAAA-6838). Used by
    * DELETE /jobs/:id so deleting a completed/failed VOD job also removes its
    * highlights and frees the perceive slot. Idempotent: deleting an already-
-   * removed job is a no-op. */
-  async deleteJob(id: string): Promise<boolean> {
+   * removed job is a no-op.
+   *
+   * ADAAAA-8286: `opts` carries the acceptance-lane tombstone + audit entry,
+   * which the DB writes inside the delete transaction. Callers build them BEFORE
+   * calling this, because the in-memory candidates/highlights are cleared here. */
+  async deleteJob(id: string, opts?: JobDeletionOptions): Promise<boolean> {
     if (!this.jobs.has(id)) return false;
     this.jobs.delete(id);
     const hids = this.byJob.get(id) ?? [];
@@ -363,7 +367,7 @@ export class Store {
     this.byJob.delete(id);
     this.observations.delete(id);
     this.candidates.delete(id);
-    if (this.db) await this.db.deleteJob(id);
+    if (this.db) await this.db.deleteJob(id, opts);
     return true;
   }
 
