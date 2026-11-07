@@ -162,20 +162,40 @@ describe("highlight posting actions (ADAAAA-7622, ADAAAA-7910)", () => {
     ]);
   });
 
-  it("renders the suggested caption with no internal prefix (ADAAAA-7881)", () => {
+  it("makes the post title the copy target and keeps the announcer line as detail (ADAAAA-8318)", () => {
+    const announcer = "Argentina scores from close range.";
     const html_ = renderToString(
       React.createElement(HighlightCard, {
         highlight: hl({ localizedTs: 69 }),
         onDecision: () => {},
         onCaptionChange: () => {},
-        summaryLog: [{ seq: 1, ts: "2026-10-18T00:00:00Z", windowTs: 68, text: "Argentina scores from close range." }],
+        summaryLog: [{ seq: 1, ts: "2026-10-18T00:00:00Z", windowTs: 68, text: announcer }],
       })
     );
     expect(html_).toContain("data-detail-caption");
     expect(html_).toContain("Suggested caption");
-    expect(html_).toContain("Argentina scores from close range.");
-    // The old seed line (`GOAL · T+69s — …`) must never reach the caption box.
+    // The copy target is the deterministic post title (no stored title on this
+    // fixture), NOT the announcer sentence and NOT a `T+` prefix.
+    const box = html_.slice(html_.indexOf("data-detail-copy-target"), html_.indexOf("</textarea>"));
+    expect(box).toContain("GOAL · 1:09");
+    expect(box).not.toContain(announcer);
     expect(html_).not.toContain("GOAL · T+");
+    // The announcer line is still reachable on the card, as collapsed detail.
+    expect(html_).toContain("data-detail-announcer");
+    expect(html_).toContain("What happened");
+    expect(html_).toContain(announcer);
+  });
+
+  it("serves a stored postTitle as the copy target byte-for-byte (ADAAAA-8318)", () => {
+    const html_ = renderToString(
+      React.createElement(HighlightCard, {
+        highlight: hl({ localizedTs: 69, postTitle: "Ordonez opens the scoring" }),
+        onDecision: () => {},
+        onCaptionChange: () => {},
+      })
+    );
+    expect(html_).toContain("Ordonez opens the scoring");
+    expect(html_).not.toContain("GOAL · 1:09");
   });
 
   it("renders 2-3 one-line post titles with a `Use as caption` affordance (ADAAAA-7881)", () => {
@@ -191,7 +211,9 @@ describe("highlight posting actions (ADAAAA-7622, ADAAAA-7910)", () => {
     const titles = html_.match(/data-detail-title="/g) ?? [];
     expect(titles.length).toBeGreaterThanOrEqual(2);
     expect(titles.length).toBeLessThanOrEqual(3);
-    expect(html_).toContain('aria-label="Use &quot;Argentina breaks the deadlock&quot; as caption"');
+    // ADAAAA-8318: an option is the served string verbatim (no read-time trim),
+    // so the accessible name carries its own terminal punctuation.
+    expect(html_).toContain('aria-label="Use &quot;Argentina breaks the deadlock.&quot; as caption"');
     expect(html_).toContain("Use as caption");
   });
 

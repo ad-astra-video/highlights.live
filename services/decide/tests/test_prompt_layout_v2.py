@@ -60,9 +60,12 @@ GOLDEN_V3_FULL = (
     12714,
     "6807ddd7bf000fcc8efa6a694695b6e153d766b2164331745f6e0a0b4bf1408c",
 )
+# ADAAAA-8318 re-pins the COMPACT prompt only: the fast rail gained the
+# `postTitle` output field (+145 chars <= +40 input tokens). The FULL/VOD
+# goldens below are UNCHANGED bytes, which is the AC8 guard.
 GOLDEN_V3_COMPACT = (
-    14931,
-    "5608a15268101d23d46fd888d5915dc3d46dde02a33cd588158dbfd8fbdcfe17",
+    15076,
+    "089c351e8dc0ec5dd07c06d5652c15df0eb34ee40c61b0712db36731f3e89222",
 )
 GOLDEN_V3_FULL_MC_PG = (
     12918,
@@ -358,8 +361,9 @@ def test_compact_contract_hoisted_and_full_contract_untouched():
 def test_compact_golden_hash_pinned():
     """The compact contract text is pinned by length + hash so a later caption
     edit cannot silently ride along in this change (v3 added the timestamp
-    citation only: 4547 -> 4640 chars)."""
-    assert len(_OUTPUT_CONTRACT_COMPACT) == 4640
+    citation only: 4547 -> 4640 chars; ADAAAA-8318 added the `postTitle` field:
+    4640 -> 4785 chars)."""
+    assert len(_OUTPUT_CONTRACT_COMPACT) == 4785
     assert _sha(_OUTPUT_CONTRACT_COMPACT) == _sha(_OUTPUT_CONTRACT_COMPACT)
     # the compact flat prompt is the pinned v3 golden
     compact = build_prompt(
