@@ -59,6 +59,7 @@ import {
   type ScoreboardDeltaEvidence,
 } from "./analyzer";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
+import type { LiveConsumeEvidence } from "./live-progress";
 import { liveDecideAdmission } from "./live-decide-admission";
 import {
   audioTriggerFromCandidate,
@@ -484,6 +485,32 @@ export class MediaRailObserver {
    *  `framesAnalyzed`, and the count the writer must persist). */
   frameCount(): number {
     return this.frames;
+  }
+
+  /**
+   * ADAAAA-8250: the consume/stride evidence this rail has accumulated SO FAR —
+   * the same block {@link observeMetrics} publishes into the job record at share
+   * end, readable MID-SHARE so the customer's analyse-position chip can name the
+   * stride count while the share is still in flight (the stored record carries
+   * no `perceive` block until completion, and the chip hides itself afterwards).
+   *
+   * Reads the counters already kept for the terminal snapshot — no new meter, no
+   * inference call. `null` when no content rate is configured (`contentFps` unset
+   * = no stride ran), which keeps the shipped record byte-identical and lets the
+   * chip degrade to "no stride data" honestly. Counts are counts; the only
+   * timestamps are the rail's own content clocks, so a strided frame can never be
+   * read back as a position (AC-3 of ADAAAA-8121 stays true).
+   */
+  liveConsumeEvidence(): LiveConsumeEvidence | null {
+    if (this.contentFps <= 0) return null;
+    return {
+      framesSeen: this.framesSeen,
+      framesAnalyzed: this.frames,
+      framesStrided: this.framesStrided,
+      analysisFps: this.contentFps,
+      analysedThroughTs: Number(this.lastConsumedTs.toFixed(3)),
+      tapThroughTs: Number(this.lastSeenTs.toFixed(3)),
+    };
   }
 
   /**
