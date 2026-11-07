@@ -26,7 +26,9 @@
 // (or the `zone` it requires) silently.
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
@@ -194,5 +196,99 @@ describe("decide runner health probe (ADAAAA-8088)", () => {
     const block = conf.slice(start, end);
     expect(block).toMatch(/return\s+200/);
     expect(block).not.toMatch(/proxy_pass/);
+  });
+});
+
+// ADAAAA-8281 (integrated reliability): a deploy rewrites `decide-router.conf`,
+// and the registrar re-reads it every 5 s. A read that lands mid-write sees a
+// TRUNCATED pool block (upstream opened, two of three servers present, no
+// closing brace). The old parser counted those two servers and published
+// `2 x 2 = 4`, which the decision server latches for the whole session — on the
+// box the advertised ceiling flapped 6 -> 4 -> 6 across the 15:46-16:00Z deploy
+// rewrites and one session (3ee24d68) stored `advertised: 4, effective: 4`.
+// These tests pin the guard: an incomplete read must never shrink the
+// advertised routed set.
+describe("registrar capacity guard (ADAAAA-8281)", () => {
+  const truncated = () => {
+    const start = conf.indexOf("upstream decide_pool {");
+    expect(start).toBeGreaterThanOrEqual(0);
+    // Cut right after the SECOND primary `server` line: the shape a mid-write
+    // read produced on the box.
+    const lines = conf.slice(start).split("\n");
+    const serverIdx = lines
+      .map((l, i) => (/^\s*server\s+/.test(l) && !/\bbackup\b/.test(l) ? i : -1))
+      .filter((i) => i >= 0);
+    return conf.slice(0, start) + lines.slice(0, serverIdx[1] + 1).join("\n");
+  };
+
+  it("refuses a truncated pool read instead of publishing 2 x seqs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registrar-conf-"));
+    const path = join(dir, "decide-router.conf");
+    writeFileSync(path, truncated());
+    let status = 0;
+    let stderr = "";
+    try {
+      execFileSync("python3", [registrar, "--print-capacity"], {
+        encoding: "utf8",
+        env: registrarEnv({
+          RUNNER_CAPACITY: "auto",
+          RUNNER_AUTO_CONF: path,
+          RUNNER_AUTO_SEQS: "2",
+        }),
+      });
+    } catch (err: any) {
+      status = err.status;
+      stderr = String(err.stderr ?? "");
+    }
+    expect(status).toBe(3);
+    expect(stderr).toMatch(/capacity read incomplete/);
+  });
+
+  it("refuses a conf that has no decide_pool block at all", () => {
+    const dir = mkdtempSync(join(tmpdir(), "registrar-conf-"));
+    const path = join(dir, "decide-router.conf");
+    writeFileSync(path, "http {\n}\n");
+    let status = 0;
+    try {
+      execFileSync("python3", [registrar, "--print-capacity"], {
+        encoding: "utf8",
+        env: registrarEnv({ RUNNER_CAPACITY: "auto", RUNNER_AUTO_CONF: path, RUNNER_AUTO_SEQS: "2" }),
+      });
+    } catch (err: any) {
+      status = err.status;
+    }
+    expect(status).toBe(3);
+  });
+
+  it("keeps heartbeating the last known capacity through a partial read", () => {
+    // The registry expires a dynamic runner after a 20 s TTL with no heartbeat,
+    // so the guard must HOLD and still heartbeat — not skip the tick.
+    const dir = mkdtempSync(join(tmpdir(), "registrar-conf-"));
+    const path = join(dir, "decide-router.conf");
+    writeFileSync(path, truncated());
+    const harness = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("reg", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+cfg = m.RunnerConfig({
+    "RUNNER_ID": "highlights-decide", "RUNNER_APP": "highlights-live/decide",
+    "RUNNER_URL": "http://decide-router:8081", "RUNNER_CAPACITY": "auto",
+    "RUNNER_AUTO_CONF": sys.argv[2], "RUNNER_AUTO_SEQS": "2",
+})
+r = m.Registrar(cfg)
+r.registered = True
+r.last_capacity = 6
+sent = []
+r.healthy = lambda: True
+r.heartbeat = lambda p: (sent.append(p["capacity"]), True)[1]
+r.tick()
+print(json.dumps({"sent": sent, "holding": r.holding_capacity}))
+`;
+    const out = execFileSync("python3", ["-c", harness, registrar, path], { encoding: "utf8" });
+    // The hold line prints to stdout first; the harness's JSON is the last line.
+    const result = JSON.parse(out.trim().split("\n").pop()!);
+    expect(result.sent).toEqual([6]);
+    expect(result.holding).toBe(true);
   });
 });
