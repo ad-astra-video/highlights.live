@@ -25,11 +25,13 @@
 // This suite pins the config surface so a future edit cannot drop `resolve`
 // (or the `zone` it requires) silently.
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
 const conf = readFileSync(repoFile("docker/decide-router.conf"), "utf8");
+const compose = readFileSync(repoFile("docker/docker-compose.yml"), "utf8");
 
 /** The body of one `upstream <name> { ... }` block. */
 function upstreamBlock(name: string): string {
@@ -91,19 +93,17 @@ describe("decide router upstreams (ADAAAA-8083)", () => {
   it("declares the routed set: capacity == primaries x 2 seq per 5090 worker", () => {
     // ADAAAA-8281 AC2: admission reads the runner registration's capacity, and
     // that number is the routed set — 3 primary workers at `--max-num-seqs 2`
-    // each = 6. Pinning the arithmetic here means a pool edit and a capacity
-    // edit cannot drift apart silently (funded DECIDE_CONCURRENCY stays 8).
+    // each = 6. Since the dynamic-registration follow-up there is no
+    // runners.json to keep in step: the registrar DERIVES the number from this
+    // same pool (`RUNNER_CAPACITY=auto`), so a pool edit cannot drift from the
+    // advertised ceiling. Pinning the arithmetic here fails the suite if the
+    // parser ever counts a `backup` line (the x99 pair is failover only).
     const block = upstreamBlock("decide_pool");
     const primaries = block
       .split("\n")
       .filter((l) => /^\s*server\s+\S+:\d+/.test(l) && !/\bbackup\b/.test(l));
-    for (const rel of ["docker/runners.json", "docker/runners.template.json"]) {
-      const runner = readRunners(rel).runners.find((r) => r.label === "highlights-decide") as
-        | { capacity: number }
-        | undefined;
-      expect(runner, `${rel}: highlights-decide runner missing`).toBeTruthy();
-      expect(runner!.capacity).toBe(primaries.length * 2);
-    }
+    expect(primaries.length).toBe(3);
+    expect(registrarCapacity()).toBe(primaries.length * 2);
   });
 
   it("keeps the router-local liveness endpoint that never proxies", () => {
@@ -113,33 +113,79 @@ describe("decide router upstreams (ADAAAA-8083)", () => {
 
 // ADAAAA-8088: the decide runner's health probe must hit the router-local
 // endpoint, not the proxied `/health`. go-livepeer (v0.9.2,
-// `ai/runner/live_runner.go`) probes every static runner on a 5 s ticker with a
+// `ai/runner/live_runner.go`) probes every STATIC runner on a 5 s ticker with a
 // 3 s timeout and, on a SINGLE failed probe, sets `Status = "unavailable"` and
 // releases every session on that runner. `health_url` is relative to
 // `runner_url` (staticRunnerHealthURL joins them), so with `runner_url =
 // http://decide-router:8081` a `/health` probe is proxied into the decide pool
 // and pays any upstream connect/inference stall. `/nginx-health` answers inside
-// nginx (`return 200`), so a worker stall can no longer fail the probe. This
-// suite pins both the config value and the non-proxying endpoint.
-const readRunners = (rel: string) =>
-  JSON.parse(readFileSync(repoFile(rel), "utf8")) as {
-    runners: Array<{ label: string; runner_url: string; health_url: string }>;
-  };
+// nginx (`return 200`), so a worker stall can no longer fail the probe.
+//
+// ADAAAA-8281 follow-up: the registration is no longer a JSON file — the
+// `registrar-decide` sidecar heartbeats the runner's own description. These
+// tests run the sidecar's parser (`--print-payload` / `--print-capacity`, no
+// network) so the config asserted here is byte-for-byte what the box sends to
+// `POST /runners/heartbeat`, and they require python3 (present on the dev box
+// and on the deploy host; see docker/live-runner-registrar.py).
+const registrar = repoFile("docker/live-runner-registrar.py");
 
-function decideRunner(rel: string) {
-  const runner = readRunners(rel).runners.find((r) => r.label === "highlights-decide");
-  expect(runner, `${rel}: highlights-decide runner missing`).toBeTruthy();
-  return runner!;
+function registrarEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
+  return { ...process.env, ...overrides };
+}
+
+/** Resolve the decide registration exactly as the compose sidecar does. */
+function decideRegistrarPayload(): Record<string, any> {
+  const out = execFileSync(
+    "python3",
+    [registrar, "--print-payload"],
+    {
+      encoding: "utf8",
+      env: registrarEnv({
+        RUNNER_ID: "highlights-decide",
+        RUNNER_APP: "highlights-live/decide",
+        RUNNER_URL: "http://decide-router:8081",
+        RUNNER_HEALTH_URL: "/nginx-health",
+        RUNNER_MODE: "single-shot",
+        RUNNER_PROXY: "1",
+        RUNNER_CAPACITY: "auto",
+        RUNNER_AUTO_CONF: repoFile("docker/decide-router.conf"),
+        RUNNER_AUTO_SEQS: "2",
+        RUNNER_METADATA: '{"model": "m", "engine": "vllm", "quantization": "q", "maxConcurrency": 8}',
+        RUNNER_PRICE: "0.01",
+        RUNNER_PRICE_UNIT: "fixed",
+      }),
+    },
+  );
+  return JSON.parse(out);
+}
+
+function registrarCapacity(): number {
+  const out = execFileSync("python3", [registrar, "--print-capacity"], {
+    encoding: "utf8",
+    env: registrarEnv({
+      RUNNER_CAPACITY: "auto",
+      RUNNER_AUTO_CONF: repoFile("docker/decide-router.conf"),
+      RUNNER_AUTO_SEQS: "2",
+    }),
+  });
+  return Number(out.trim());
 }
 
 describe("decide runner health probe (ADAAAA-8088)", () => {
-  for (const rel of ["docker/runners.json", "docker/runners.template.json"]) {
-    it(`${rel}: decide health_url is the router-local /nginx-health`, () => {
-      const runner = decideRunner(rel);
-      expect(runner.runner_url).toBe("http://decide-router:8081");
-      expect(runner.health_url).toBe("/nginx-health");
-    });
-  }
+  it("decide registration probes the router-local /nginx-health", () => {
+    const payload = decideRegistrarPayload();
+    expect(payload.runner_id).toBe("highlights-decide");
+    expect(payload.app).toBe("highlights-live/decide");
+    expect(payload.runner_url).toBe("http://decide-router:8081");
+    // A heartbeat carries no health_url (the registry only probes STATIC runners);
+    // the registrar uses RUNNER_HEALTH_URL locally to decide whether to heartbeat.
+    expect("health_url" in payload).toBe(false);
+    expect(payload.mode).toBe("single-shot");
+    expect(payload.capacity).toBe(6);
+    // The sidecar env carries the health path the registrar probes:
+    // RUNNER_HEALTH_URL=/nginx-health in docker/docker-compose.yml.
+    expect(compose).toMatch(/RUNNER_HEALTH_URL=\/nginx-health/);
+  });
 
   it("the health endpoint answers inside nginx and never proxies", () => {
     const start = conf.indexOf("location = /nginx-health");

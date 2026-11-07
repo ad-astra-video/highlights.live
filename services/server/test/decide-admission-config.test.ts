@@ -13,6 +13,7 @@
 // This suite pins the two config surfaces plus the budget arithmetic that joins
 // them, so a revert of either knob fails here instead of in a box measurement.
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { LiveDecideAdmission } from "../src/live-decide-admission";
@@ -20,8 +21,34 @@ import { loadConfig } from "../src/config";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
 const compose = readFileSync(repoFile("docker/docker-compose.yml"), "utf8");
-const runners = JSON.parse(readFileSync(repoFile("docker/runners.json"), "utf8"));
-const runnersTemplate = JSON.parse(readFileSync(repoFile("docker/runners.template.json"), "utf8"));
+// ADAAAA-8281 follow-up: the registration is dynamic now (`POST
+// /runners/heartbeat` from docker/live-runner-registrar.py); there is no
+// runners.json. Resolve the decide registration by running the sidecar's own
+// payload builder, so these assertions describe exactly what the box sends.
+const registrar = repoFile("docker/live-runner-registrar.py");
+
+function decideRegistration(): Record<string, any> {
+  const out = execFileSync("python3", [registrar, "--print-payload"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      RUNNER_ID: "highlights-decide",
+      RUNNER_APP: "highlights-live/decide",
+      RUNNER_URL: "http://decide-router:8081",
+      RUNNER_HEALTH_URL: "/nginx-health",
+      RUNNER_MODE: "single-shot",
+      RUNNER_PROXY: "1",
+      RUNNER_CAPACITY: "auto",
+      RUNNER_AUTO_CONF: repoFile("docker/decide-router.conf"),
+      RUNNER_AUTO_SEQS: "2",
+      RUNNER_METADATA:
+        '{"model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", "engine": "vllm", "quantization": "compressed-tensors INT4", "maxConcurrency": 8}',
+      RUNNER_PRICE: "0.01",
+      RUNNER_PRICE_UNIT: "fixed",
+    },
+  });
+  return JSON.parse(out);
+}
 
 /** The `environment:` block of one compose service, as text. */
 function serviceBlock(name: string): string {
@@ -40,11 +67,6 @@ function serviceBlock(name: string): string {
   return lines.slice(start, end).join("\n");
 }
 
-function decideRunner(doc: { runners: Array<Record<string, any>> }) {
-  const r = doc.runners.find((x) => x.label === "highlights-decide");
-  expect(r, "highlights-decide runner registration").toBeTruthy();
-  return r!;
-}
 
 describe("decide admission config (ADAAAA-7773)", () => {
   it("the server ships DECIDE_CONCURRENCY=8 (the pair's 4+4 decide slots)", () => {
@@ -54,21 +76,30 @@ describe("decide admission config (ADAAAA-7773)", () => {
     expect(server.match(/DECIDE_CONCURRENCY=/g)?.length).toBe(1);
   });
 
-  it("the decide runner advertises the ROUTED set: 6 slots (committed + template)", () => {
+  it("the decide runner advertises the ROUTED set: 6 slots, derived from the pool", () => {
     // ADAAAA-8281: the pool's primary upstreams are the three 5090 decide
     // workers at `--max-num-seqs 2` each; the x99 pair is `backup` only, so the
     // capacity the router actually balances across is 3 x 2 = 6. The funded bar
     // stays DECIDE_CONCURRENCY=8 — the whole point of the capacity-aware ceiling
     // is that `effective = min(funded, advertised) = 6` comes from the routed
     // set, not from the server hardcoding a list.
-    for (const doc of [runners, runnersTemplate]) {
-      const r = decideRunner(doc);
-      expect(r.capacity).toBe(6);
-      // metadata is a JSON-encoded string on the registration; it describes the
-      // model engine, not the pool, so it keeps the engine's own maxConcurrency.
-      const md = typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata;
-      expect(md.maxConcurrency).toBe(8);
-    }
+    //
+    // The number is NOT written in a config file any more: the sidecar derives
+    // it from the pool (`RUNNER_CAPACITY=auto`), which is why this test runs the
+    // registrar rather than reading JSON. If someone hardcodes 6 again the
+    // pool-parser assertion in decide-router-upstreams.test.ts is what catches
+    // the drift; here we pin that the shipped sidecar still derives, and that
+    // the engine metadata keeps its own maxConcurrency (8), which is NOT the
+    // admission ceiling.
+    const registration = decideRegistration();
+    expect(registration.capacity).toBe(6);
+    expect(registration.mode).toBe("single-shot");
+    expect(registration.runner_id).toBe("highlights-decide");
+    const md = JSON.parse(registration.metadata);
+    expect(md.maxConcurrency).toBe(8);
+    // The sidecar env must keep the derivation, not a literal capacity.
+    expect(serviceBlock("registrar-decide")).toContain("RUNNER_CAPACITY=auto");
+    expect(serviceBlock("registrar-decide")).toContain("RUNNER_AUTO_SEQS=${DECIDE_WORKER_SEQS:-2}");
   });
 
   it("config.ts reads the env and keeps the client's own default when unset", () => {

@@ -14,7 +14,12 @@ services:
     command:
       - -orchestrator
       - -useLiveRunners
-      - -liveRunnerConfig=/config/runners.json
+      # ADAAAA-8281 follow-up: NO `-liveRunnerConfig`. The static JSON file is
+      # gone; each runner registers ITSELF over go-livepeer's dynamic registration
+      # API (`POST /runners/heartbeat`, see docker/live-runner-registrar.py) and
+      # keeps its entry alive with a 5 s heartbeat (20 s TTL). Dynamic
+      # registration is enabled by `-orchSecret` being non-empty, which is also
+      # the registration credential the sidecars present.
       - -serviceAddr=https://orchestrator:8935
       - -httpAddr=0.0.0.0:8935
       - -liveRunnerAddr=https://orchestrator:8935
@@ -51,7 +56,6 @@ services:
     ports:
       - "8935:8935"
     volumes:
-      - ./runners.json:/config/runners.json:ro
       - ./lpdata-orch:/root/.lpData
     healthcheck:
       test: ["CMD-SHELL", "openssl s_client -connect 127.0.0.1:8935 </dev/null 2>/dev/null | grep -q CONNECTED"]
@@ -495,6 +499,95 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+    networks: [hl]
+
+  # ADAAAA-8281 follow-up: dynamic live-runner registration.
+  #
+  # Each runner describes ITSELF to the orchestrator with `POST
+  # /runners/heartbeat` instead of being enumerated in `docker/runners.json`.
+  # go-livepeer only health-probes STATIC runners; a dynamic runner's readiness
+  # is what its heartbeat reports and its entry expires 20 s after the last
+  # heartbeat. So the sidecar probes the runner's OWN health endpoint, reports
+  # `ready` only while that answers, and unregisters on failure — the registry
+  # then releases that runner's sessions exactly like the old static health
+  # probe did. It also unregisters on SIGTERM, so a stopped sidecar never leaves
+  # a phantom runner behind.
+  #
+  # `RUNNER_CAPACITY=auto` on decide derives the advertised ceiling from
+  # `decide-router.conf`: PRIMARY upstream count x 2 seqs per 5090 worker. That
+  # is the routed set, so the pool membership stays the single declared source
+  # the admission gate reads, and re-routing the pool + restarting this sidecar
+  # changes `advertised` with NO orchestrator restart and NO session drop.
+  registrar-perceive:
+    image: ${LIVE_RUNNER_REGISTRAR_IMAGE:-python:3.12-alpine}
+    container_name: highlights-registrar-perceive
+    command: ["python3", "/opt/live-runner-registrar.py"]
+    restart: unless-stopped
+    depends_on:
+      perceive:
+        condition: service_started
+      orchestrator:
+        condition: service_started
+    environment:
+      - ORCH_URL=https://orchestrator:8935
+      - ORCH_SECRET=${ORCHESTRATOR_SECRET:-highlights-secret}
+      # MUST match ROUTES.perceive in packages/livepeer-session/src/index.ts —
+      # the server calls /apps/<this id>/session, so a different id is invisible.
+      - RUNNER_ID=highlights-perceive
+      - RUNNER_APP=highlights-live/perceive
+      - RUNNER_URL=http://perceive:8080
+      - RUNNER_HEALTH_URL=/health
+      - RUNNER_MODE=persistent
+      - RUNNER_PROXY=1
+      - RUNNER_CAPACITY=${PERCEIVE_CAPACITY:-4}
+      - 'RUNNER_METADATA={"maxTracks": 2, "models": "florence-sam"}'
+      - RUNNER_VERSION=0.1.0
+      - RUNNER_GPU_ID=0
+      - RUNNER_GPU_NAME=NVIDIA GeForce RTX 3090 Ti
+      - RUNNER_GPU_VRAM_MB=24564
+      - RUNNER_PRICE=0.01
+      - RUNNER_PRICE_UNIT=hour
+      - REGISTRAR_LOG_PREFIX=[registrar-perceive]
+    volumes:
+      - ./live-runner-registrar.py:/opt/live-runner-registrar.py:ro
+    networks: [hl]
+
+  registrar-decide:
+    image: ${LIVE_RUNNER_REGISTRAR_IMAGE:-python:3.12-alpine}
+    container_name: highlights-registrar-decide
+    command: ["python3", "/opt/live-runner-registrar.py"]
+    restart: unless-stopped
+    depends_on:
+      decide-router:
+        condition: service_started
+      orchestrator:
+        condition: service_started
+    environment:
+      - ORCH_URL=https://orchestrator:8935
+      - ORCH_SECRET=${ORCHESTRATOR_SECRET:-highlights-secret}
+      # MUST match ROUTES.decide; ONE decide registration fronts the whole pool,
+      # so the 5090 trio + x99 failover stay a router concern, not a registry one.
+      - RUNNER_ID=highlights-decide
+      - RUNNER_APP=highlights-live/decide
+      - RUNNER_URL=http://decide-router:8081
+      - RUNNER_HEALTH_URL=/nginx-health
+      - RUNNER_MODE=single-shot
+      - RUNNER_PROXY=1
+      # The routed set, read from the pool: 3 primary 5090 workers x 2 seqs = 6.
+      - RUNNER_CAPACITY=auto
+      - RUNNER_AUTO_CONF=/etc/decide-router/nginx.conf
+      - RUNNER_AUTO_SEQS=${DECIDE_WORKER_SEQS:-2}
+      - 'RUNNER_METADATA={"model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", "engine": "vllm", "quantization": "compressed-tensors INT4", "maxConcurrency": 8}'
+      - RUNNER_VERSION=0.1.0
+      - RUNNER_GPU_ID=1
+      - RUNNER_GPU_NAME=NVIDIA GeForce RTX 5070 Ti
+      - RUNNER_GPU_VRAM_MB=16303
+      - RUNNER_PRICE=0.01
+      - RUNNER_PRICE_UNIT=fixed
+      - REGISTRAR_LOG_PREFIX=[registrar-decide]
+    volumes:
+      - ./live-runner-registrar.py:/opt/live-runner-registrar.py:ro
+      - ./decide-router.conf:/etc/decide-router/nginx.conf:ro
     networks: [hl]
 
   server:
