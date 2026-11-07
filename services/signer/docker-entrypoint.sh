@@ -105,7 +105,12 @@ fi
 # the signer mints only the elapsed fee, so the orchestrator's reserved balance
 # drains to the release trough at each refill boundary (under-fee). Sizing the
 # forward reserve keeps the reserved balance above the per-interval fee.
-if [ -n "$LIVE_PAYMENT_RESERVE" ]; then
+#
+# ADAAAA-8262: go-livepeer v0.9.2 does NOT define -livePaymentReserve (it landed
+# in a later release), and an unknown flag makes livepeer print its usage dump and
+# exit — i.e. a signer rebuild crash-loops on this env. Probe the binary and only
+# forward the flag when it exists (a future base image activates it by itself).
+if [ -n "$LIVE_PAYMENT_RESERVE" ] && livepeer -help 2>&1 | grep -q -- "-livePaymentReserve"; then
   set -- "$@" -livePaymentReserve "$LIVE_PAYMENT_RESERVE"
 fi
 # Routes discovery/probe traffic to the local orchestrator on the private `hl`
