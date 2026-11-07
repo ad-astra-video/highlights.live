@@ -272,6 +272,88 @@ export function buildPersistedConfirmContext(input: {
   };
 }
 
+/**
+ * ADAAAA-8239: corroboration sources that are NOT a score measurement.
+ *
+ * A dive that only had persisted frames (or commentary text) to go on can say
+ * "this looks like a goal", but it cannot overturn the window's own measured
+ * lane. The falsifier run (ADAAAA-8236, job `8dd6a383`) promoted a provisional
+ * celebration at content 29-44 s on `frame_attestation` while that same row's
+ * attestation read `scoreBoardChanged=false`, `postSamples 0` of `need 2`, and
+ * all four non-visual signals were degraded — frames were the only witness. The
+ * one real goal in the segment was the later, score-attested transition.
+ */
+export const NON_SCORE_CORROBORATION_SOURCES = ["frame_attestation", "audio_text"] as const;
+export type NonScoreCorroborationSource = (typeof NON_SCORE_CORROBORATION_SOURCES)[number];
+
+/** The row fields the frame-only gate reads: the accept-time attestation the
+ *  ADAAAA-7996/8071 gate stamped when it demoted the row, and the deferred score
+ *  read that resolved a transition (ADAAAA-8006). Both additive optional. */
+export interface RowMeasuredScoreEvidence {
+  attestationUsed?: {
+    scoreBoardChanged?: boolean;
+    postSamples?: number;
+    need?: number;
+  } | null;
+  deferredAttestation?: {
+    deltaTs?: number;
+    pre?: readonly number[];
+    post?: readonly number[];
+  } | null;
+}
+
+/**
+ * ADAAAA-8239: did the ROW itself measure a score transition? Only two positive
+ * signals count:
+ *   - the accept-time attestation read a scoreboard change, or
+ *   - a deferred score read recorded a REAL pre -> post delta
+ *     (`deferredAttestation {pre, post, deltaTs}` — equal sides are not a
+ *     transition, they are a legible non-transition).
+ * A missing attestation is NOT a measurement: absent evidence is never credited,
+ * the same rule the dive context applies to a degraded signal.
+ */
+export function rowMeasuredScoreTransition(row: RowMeasuredScoreEvidence): boolean {
+  const used = row?.attestationUsed;
+  if (used?.scoreBoardChanged === true) return true;
+  const deferred = row?.deferredAttestation;
+  if (!deferred || !Number.isFinite(deferred.deltaTs)) return false;
+  const pre = Array.isArray(deferred.pre) ? deferred.pre.join("-") : "";
+  const post = Array.isArray(deferred.post) ? deferred.post.join("-") : "";
+  return !!pre && !!post && pre !== post;
+}
+
+/** One-line, gradable rendering of the row's own measurement, for the hold
+ *  reason and the provisional note (so an audit can read WHY it was held). */
+export function describeRowMeasurement(row: RowMeasuredScoreEvidence): string {
+  const used = row?.attestationUsed;
+  const parts = [
+    `scoreBoardChanged=${used?.scoreBoardChanged === true}`,
+    `postSamples=${typeof used?.postSamples === "number" ? used.postSamples : "absent"}`,
+    `need=${typeof used?.need === "number" ? used.need : "absent"}`,
+  ];
+  const deferred = row?.deferredAttestation;
+  if (deferred && Number.isFinite(deferred.deltaTs)) parts.push(`deferredDeltaTs=${deferred.deltaTs}`);
+  return parts.join(", ");
+}
+
+/**
+ * ADAAAA-8239: does this verdict need the row's own measured transition before
+ * it may promote? True when the corroboration is a non-score source
+ * (`frame_attestation` / `audio_text`) AND the row recorded no transition.
+ *
+ * A `scoreboard` corroboration needs no such proof (the dive itself measured the
+ * score), and an uncorroborated verdict never reaches the promote arm.
+ */
+export function frameOnlyCorroborationNeedsTransition(
+  row: RowMeasuredScoreEvidence,
+  verdict: ConfirmDiveVerdict | undefined
+): boolean {
+  if (verdict?.corroborated !== true) return false;
+  const src = verdict?.corroborationSource ?? null;
+  if (!src || !(NON_SCORE_CORROBORATION_SOURCES as readonly string[]).includes(src)) return false;
+  return !rowMeasuredScoreTransition(row);
+}
+
 /** The store patch a verdict produces, and which lane the row ends in. */
 export interface ConfirmDiveAdoption {
   kind: "promoted" | "refuted" | "unchanged";
@@ -287,6 +369,15 @@ export interface ConfirmDiveAdoption {
  * `confirmed_goal` + `corroborated=true` -> scoring lane (`scoring_play` /
  * `GOAL`), the provisional marker is cleared and `confirmAttestation` stamped.
  *
+ * ADAAAA-8239: a `confirmed_goal` corroborated ONLY by a non-score source
+ * (`frame_attestation` / `audio_text`) may not promote a window that measured no
+ * score transition. The row is HELD (`provisionalGoal status=provisional`,
+ * `refuted: true`, a note naming the missing measurement) unless the row's own
+ * record proves the transition — `attestationUsed.scoreBoardChanged=true` or a
+ * `deferredAttestation {pre !== post, deltaTs}`. The dive's stated verdict is
+ * never rewritten: `confirmAttestation` keeps the six AV10 keys and reports what
+ * the dive actually said; the HOLD is carried by the row's lane and its marker.
+ *
  * `near_miss` / `not_goal` (or a `confirmed_goal` whose corroboration never
  * fired) -> the row stays a celebration with its clip, `provisionalGoal` KEEPS
  * `status: "provisional"` (AC-A7: the badge the CEO sees is not removed), gains
@@ -301,7 +392,7 @@ export interface ConfirmDiveAdoption {
  * (ADAAAA-8223 B3) instead of inventing a cue/timestamp on the row.
  */
 export function confirmDiveAdoption(
-  row: { outcome?: string; eventType?: string; provisionalGoal?: Record<string, unknown> },
+  row: { outcome?: string; eventType?: string; provisionalGoal?: Record<string, unknown> } & RowMeasuredScoreEvidence,
   verdict: ConfirmDiveVerdict | undefined,
   meta: { diveAt: string; diveLatencyMs: number; contextDegraded: DegradedSignal[] }
 ): ConfirmDiveAdoption {
@@ -335,7 +426,12 @@ export function confirmDiveAdoption(
       reason: "passthrough (no structured verdict) — row unchanged",
     };
   }
-  if (goalConfirmed === "confirmed_goal" && corroborated) {
+  // ADAAAA-8239: a frame/commentary-only confirmation cannot promote past a
+  // window the MEASURED lane read as "no transition". Computed before the promote
+  // arm so the hold reason is available to every arm below it.
+  const needsMeasuredTransition =
+    goalConfirmed === "confirmed_goal" && frameOnlyCorroborationNeedsTransition(row, verdict);
+  if (goalConfirmed === "confirmed_goal" && corroborated && !needsMeasuredTransition) {
     return {
       kind: "promoted",
       patch: {
@@ -357,13 +453,20 @@ export function confirmDiveAdoption(
     return {
       kind: "unchanged",
       patch: { confirmAttestation: attestation, pendingConfirmDive: undefined },
-      reason: "no provisional marker — refutation not applicable",
+      reason: needsMeasuredTransition
+        ? `frame/commentary-only confirmation held: no measured transition in the window ` +
+          `(${describeRowMeasurement(row)}) and no provisional marker to refute — row stays a celebration`
+        : "no provisional marker — refutation not applicable",
     };
   }
-  // Refuted: near_miss / not_goal, or a confirmation with no corroboration.
+  // Refuted: near_miss / not_goal, a confirmation with no corroboration, or
+  // (ADAAAA-8239) a non-score corroboration over a window that measured none.
   const prev = row.provisionalGoal;
-  const note =
-    goalConfirmed === "confirmed_goal"
+  const note = needsMeasuredTransition
+    ? `The deep dive saw a goal in the frames/commentary only (corroboration=${attestation.corroborationSource}) ` +
+      `while this window measured no score transition (${describeRowMeasurement(row)}), so this moment stays ` +
+      "unconfirmed until a later score read measures the transition."
+    : goalConfirmed === "confirmed_goal"
       ? "The deep dive described a goal but could not corroborate it, so this moment is still unconfirmed."
       : "The deep dive did not confirm this goal, so this moment stays unconfirmed.";
   const provisional = { ...prev, status: "provisional", refuted: true, note };
@@ -374,7 +477,10 @@ export function confirmDiveAdoption(
       confirmAttestation: attestation,
       pendingConfirmDive: undefined,
     },
-    reason: `deep dive did NOT confirm the goal (goalConfirmed=${goalConfirmed}, corroborated=${corroborated})`,
+    reason: needsMeasuredTransition
+      ? `deep dive did NOT promote: non-score corroboration (${attestation.corroborationSource}) over a window ` +
+        `with no measured score transition (${describeRowMeasurement(row)})`
+      : `deep dive did NOT confirm the goal (goalConfirmed=${goalConfirmed}, corroborated=${corroborated})`,
   };
 }
 
