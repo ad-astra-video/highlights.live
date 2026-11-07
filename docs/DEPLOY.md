@@ -200,9 +200,15 @@ pause queue):
 
 Observability: the gate's counters land on the job's `observeMetrics` record
 (`decideQueued`, `decideDropped`, `decide503`, `decidePauses`,
-`capacityProbeErrors`, and `decideCapacity: {advertised, funded, effective}`), so
-QA can grade a run from `GET /jobs/:id` without reading container logs. The
-server also prints one `[decide-capacity] advertised=… funded=… effective=…`
+`capacityProbeErrors`, and
+`decideCapacity: {advertised, funded, effective, probeOk, runners, source}`), so
+QA can grade a run from `GET /jobs/:id` without reading container logs.
+`probeOk`/`runners`/`source` are provenance only (ADAAAA-8262): `probeOk: false`
+means the last discovery probe FAILED, while `probeOk: true, runners: 0` means
+the signer answered and advertised no decide runner. `source` names where
+`advertised` came from (`probe`, `last-known`, `funded`); none of the three
+changes the ceiling arithmetic. The server also prints one
+`[decide-capacity] advertised=… funded=… effective=… probeOk=… runners=… source=…`
 line whenever the snapshot changes.
 
 What must NOT change with this feature: `OBSERVE_CADENCE_S` (3 s), the 10 s live

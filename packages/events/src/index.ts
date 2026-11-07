@@ -469,6 +469,12 @@ export const DecideCapacitySnapshotSchema = z.object({
   advertised: z.number().int().min(0),
   funded: z.number().int().min(1),
   effective: z.number().int().min(1),
+  // ADAAAA-8262: provenance, so a probe FAILURE is distinguishable from an
+  // advertisement that genuinely lists no decide runner. Optional because rows
+  // written before this change carry only the three numbers.
+  probeOk: z.boolean().optional(),
+  runners: z.number().int().min(0).optional(),
+  source: z.enum(["probe", "last-known", "funded"]).optional(),
 });
 export type DecideCapacitySnapshot = z.infer<typeof DecideCapacitySnapshotSchema>;
 

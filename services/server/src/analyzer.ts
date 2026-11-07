@@ -3518,8 +3518,19 @@ export interface LiveObserveMetricsSnapshot {
   decide503?: number;
   decidePauses?: number;
   capacityProbeErrors?: number;
-  /** ADAAAA-8254: `{advertised, funded, effective}` decide ceiling. */
-  decideCapacity?: { advertised: number; funded: number; effective: number };
+  /** ADAAAA-8254: `{advertised, funded, effective}` decide ceiling.
+   *  ADAAAA-8262 adds `probeOk` / `runners` / `source` provenance. */
+  decideCapacity?: {
+    advertised: number;
+    funded: number;
+    effective: number;
+    /** False = the last probe failed (distinct from an empty fleet). */
+    probeOk?: boolean;
+    /** Decide runners in the last well-formed answer (0 = none). */
+    runners?: number;
+    /** Provenance of `advertised`. */
+    source?: "probe" | "last-known" | "funded";
+  };
 }
 
 /**
