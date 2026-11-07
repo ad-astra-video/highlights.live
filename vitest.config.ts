@@ -15,6 +15,9 @@ export default defineConfig({
       "services/server/test/**/*.test.ts",
       "services/media/test/**/*.test.ts",
       "webapp/src/**/*.test.ts?(x)",
+      // .mts tests are ESM-only by extension; match them explicitly so files
+      // like JobDetail.clips.test.mts are not silently skipped (ADAAAA-8312).
+      "webapp/src/**/*.test.mts",
     ],
     environment: "node",
     testTimeout: 30000,
