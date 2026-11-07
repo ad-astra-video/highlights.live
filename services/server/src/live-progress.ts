@@ -119,6 +119,14 @@ export interface LiveProgressInput {
    * at hand (e.g. a resumed process) and, with `newestObservationTs`, keeps the
    * position sourced from the job's own consume evidence. */
   analysedThroughTs?: number | null;
+  /** ADAAAA-8250: the rail's LIVE consume/stride evidence for an in-flight job —
+   * the same `perceive` block the rail publishes into `observeMetrics` at share
+   * end, read MID-SHARE from the in-memory rail. Without it a live share had no
+   * consume block until completion (and the chip hides itself on a terminal
+   * job), so the analyse-position label read `no stride data` for the whole
+   * share. Counts + content-clock positions only: no new meter, no new
+   * inference. Ignored for a terminal job (AC-4). */
+  liveConsume?: LiveConsumeEvidence | null;
   /** Injected reference time (ms) so the derivation is unit-testable. */
   nowMs?: number;
   /** Override the decide cadence (defaults to LIVE_PROGRESS_CADENCE_S). */
@@ -274,7 +282,14 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
   // ADAAAA-8121: the consume evidence on the record, read for the POSITION and
   // the COUNTS only. `perceive` absent = the content-fps knob was unset on that
   // run, and the indicator must say "no stride data" rather than invent one.
-  const perceive = job.observeMetrics?.perceive ?? null;
+  // ADAAAA-8250: in flight the rail only publishes that block at share end, so
+  // the stored record carries null for the whole share and the chip could never
+  // name the stride count. The caller now hands the SAME counters in from the
+  // live rail (`liveConsume`); the stored block stays the terminal source, so a
+  // completed record still reads exactly what it did before. A terminal job
+  // ignores the live block outright (AC-4: the chip hides itself there).
+  const storedPerceive = job.observeMetrics?.perceive ?? null;
+  const perceive = (terminal ? null : input.liveConsume ?? null) ?? storedPerceive;
   const consumeTs = Math.max(0, finiteNumber(input.analysedThroughTs) ?? 0);
   const storedAnalysedTs = Math.max(0, finiteNumber(perceive?.analysedThroughTs) ?? 0);
   const tapTs = Math.max(0, finiteNumber(perceive?.tapThroughTs) ?? 0);
