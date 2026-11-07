@@ -126,6 +126,7 @@ import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
 import { createVodMatchContextResolver, matchContextEnabled, type MatchContextResolver } from "./match-context";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
+import { acceptanceLaneRow, acceptanceLaneCounts, buildDeletedJobTombstone } from "./acceptance-lane";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
 import { buildMediaNodeReport } from "./media-node";
@@ -5449,6 +5450,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // row + its highlights + media_sessions and remove its on-disk artifacts.
   // A live/browser job still holding an active ingest session returns 409 and
   // the caller must POST /jobs/:id/stop first.
+  // ADAAAA-8286: the cascade would otherwise destroy the acceptance-lane
+  // evidence (job_candidates status/trigger/confirm), so the delete snapshots it
+  // into a `deleted_jobs` tombstone and appends one `job.delete` admin-audit row,
+  // both in the delete transaction. The response echoes the captured counts.
   app.delete<{ Params: { id: string } }>("/jobs/:id", { preHandler: authReq }, async (req: any, reply) => {
     const user = req.user;
     const job = store.getJob(req.params.id);
@@ -5486,10 +5491,87 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // the job so a DELETE never leaves orphaned clip files behind.
       ...store.alternativesForJob(job.id).map((a) => a.clipUri),
     ].filter(Boolean);
-    await removeJobArtifacts(cfg.dataDir, job.id, clipUris);
-    await store.deleteJob(job.id);
 
-    return { deleted: job.id };
+    // ADAAAA-8286: snapshot the acceptance lane BEFORE the cascade. The cascade
+    // removes `job_candidates` (status / trigger / confirm per candidate) and
+    // `highlights`, which are exactly the rows that answer "why was this
+    // highlight never confirmed?" — without this, a job delete leaves the
+    // window-level `decide_audit` with nothing to join back to. The tombstone
+    // and one `admin_audit` row are written inside the delete transaction, so a
+    // committed delete can never lose the lane or the actor.
+    const candidates = store.candidatesForJob(job.id);
+    const tombstone = buildDeletedJobTombstone(
+      job,
+      candidates,
+      {
+        highlights: store.highlightsForJob(job.id).length,
+        alternatives: store.alternativesForJob(job.id).length,
+        observations: store.observationsForJob(job.id).length,
+      },
+      user.id ?? null
+    );
+
+    await removeJobArtifacts(cfg.dataDir, job.id, clipUris);
+    await store.deleteJob(job.id, {
+      tombstone,
+      audit: {
+        actorId: user.id,
+        actorEmail: user.email ?? "",
+        action: "job.delete",
+        targetId: job.id,
+        targetEmail: "",
+        detail: {
+          status: job.status ?? null,
+          source: job.source ?? null,
+          ownerId: job.ownerId ?? null,
+          counts: tombstone.counts,
+        },
+      },
+    });
+
+    // Echo the captured lane so the caller can see what the tombstone kept.
+    return { deleted: job.id, evidence: tombstone.counts };
+  });
+
+  // ADAAAA-8286: the durable acceptance-lane read projection. Answers "which
+  // lane confirmed this highlight?" for a LIVE job (rows from the Store) and for
+  // a DELETED one (the lane captured by the delete tombstone), from one route —
+  // so a caller does not have to know, or care, whether the job row still
+  // exists. Owner-or-admin, the same gate as GET /jobs/:id.
+  app.get<{ Params: { id: string } }>("/jobs/:id/acceptance-lane", { preHandler: authReq }, async (req: any, reply) => {
+    const user = req.user;
+    const job = store.getJob(req.params.id);
+    if (job) {
+      if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+      const candidates = store.candidatesForJob(job.id);
+      return {
+        jobId: job.id,
+        deleted: false,
+        deletedAt: null,
+        deletedBy: null,
+        status: job.status ?? null,
+        source: job.source ?? null,
+        counts: acceptanceLaneCounts(candidates.map(acceptanceLaneRow), {
+          highlights: store.highlightsForJob(job.id).length,
+          alternatives: store.alternativesForJob(job.id).length,
+          observations: store.observationsForJob(job.id).length,
+        }),
+        candidates: candidates.map(acceptanceLaneRow),
+      };
+    }
+    const tomb = await db.getJobTombstone(req.params.id);
+    if (!tomb) return reply.code(404).send({ error: "not found" });
+    if (tomb.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
+    return {
+      jobId: tomb.jobId,
+      deleted: true,
+      deletedAt: tomb.deletedAt,
+      deletedBy: tomb.deletedBy,
+      status: tomb.status,
+      source: tomb.source,
+      counts: tomb.counts,
+      candidates: tomb.candidates,
+    };
   });
 
   // ADAAAA-7907 (VOD resume, Increment 3): the manual resume route.
