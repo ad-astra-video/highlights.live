@@ -209,6 +209,31 @@ What must NOT change with this feature: `OBSERVE_CADENCE_S` (3 s), the 10 s live
 window, the live frame budget, `LIVE_DECIDE_KEEP_RATIO`, the funded capacity, and
 the VOD 402 → signer → retry path (VOD shares the gate and inherits the queue).
 
+### The signer must be able to verify the orchestrator's cert (ADAAAA-8262)
+
+`advertised` comes from the signer's discovery poll, and that poll's `/discovery`
+fetch uses a plain `http.Client` with the container's system roots
+(`discovery/db_discovery.go` `callOrchestratorDiscovery`) — unlike the gRPC
+`GetOrchestratorInfo` path, which sets `InsecureSkipVerify`. go-livepeer v0.9.2
+regenerates the orchestrator's self-signed cert on **every** process start
+(`server/cert.go` `getCert()`), so a pinned CA file (the ADAAAA-2957 fix) goes
+stale at the next orchestrator restart; the poll failure is DEBUG-only, so the
+only visible symptom is `GET /discover-orchestrators` → `503 cache empty` and
+`decideCapacity.advertised = 0` (the ceiling then stays at `funded`).
+
+`services/signer/docker-entrypoint.sh` therefore fetches the orchestrator's
+**current** cert at container start, installs it into
+`/usr/local/share/ca-certificates` and runs `update-ca-certificates`, then
+re-checks it every `ORCH_CA_REFRESH_SEC` (default 300 s). On change it re-pins and
+restarts the `livepeer` child — a restart is required because Go caches the
+system root pool per process, so a disk-only CA refresh is never seen by the
+running binary. `docker/orchestrator-ca.crt` remains mounted as the fallback pin
+used when the fetch fails.
+
+| Env | Default | Meaning |
+|---|---|---|
+| `ORCH_CA_REFRESH_SEC` | 300 | Seconds between orchestrator-cert re-checks by the signer entrypoint. On a fingerprint change it re-pins the CA and restarts `livepeer`. |
+
 ## Post-deploy live re-check (acceptance for this task)
 
 After a deploy, confirm the served behavior matches source:
