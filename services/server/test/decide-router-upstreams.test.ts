@@ -1,7 +1,9 @@
 // ADAAAA-8083: the decide router must RE-RESOLVE its upstreams while nginx runs.
 //
-// `docker/decide-router.conf` fronts the two decide workers (`decide`,
-// `decide-b`) behind one origin. nginx resolves an upstream `server <name>`
+// `docker/decide-router.conf` fronts the decide workers behind one origin. Since
+// ADAAAA-8281 the three 5090 workers on ai-server-5090x3-1 are the PRIMARY
+// upstreams and the x99 pair (`decide`, `decide-b`) is `backup`-only failover.
+// nginx resolves an upstream `server <name>`
 // ONCE, at startup, unless the line carries `resolve`. A decide worker is
 // recreated by every deploy of that image, which gives it a NEW bridge IP, so a
 // pool without `resolve` keeps dialling the dead address forever: the connect
@@ -50,12 +52,57 @@ describe("decide router upstreams (ADAAAA-8083)", () => {
     expect(block).toMatch(/zone\s+decide_pool\s+\d+k/);
   });
 
-  it("carries `resolve` on every decide worker server line", () => {
+  it("balances across the three 5090 decide workers as the PRIMARY set", () => {
+    // ADAAAA-8281 (L1): the 5090 trio is the primary term — it measured decide
+    // p50 2.02 s vs ~3.7 s blended on the x99 pair at the same cell (04:32Z leg,
+    // ADAAAA-8258/8259) and is the cheaper/faster GPU term.
     const block = upstreamBlock("decide_pool");
-    const servers = block.split("\n").filter((l) => /^\s*server\s+\S+:8081/.test(l));
-    expect(servers.length).toBe(2);
-    for (const line of servers) {
-      expect(line, `upstream server line without \`resolve\`: ${line.trim()}`).toMatch(/\bresolve\b/);
+    const servers = block.split("\n").filter((l) => /^\s*server\s+\S+:\d+/.test(l));
+    const primary = servers.filter((l) => !/\bbackup\b/.test(l));
+    expect(primary.length).toBe(3);
+    expect(primary.map((l) => l.trim().split(/\s+/)[1]).sort()).toEqual([
+      "192.168.1.151:8091",
+      "192.168.1.151:8092",
+      "192.168.1.151:8093",
+    ]);
+    for (const line of primary) {
+      // Literal host:port, never `resolve`: the 5090 workers are `docker run`
+      // containers on ai-server-5090x3-1 with PUBLISHED ports, which Docker's
+      // embedded DNS cannot resolve, and a literal IP cannot go stale.
+      expect(line, `5090 primary must not use resolve: ${line.trim()}`).not.toMatch(/\bresolve\b/);
+      expect(line).toMatch(/max_fails=\d+/);
+    }
+  });
+
+  it("keeps the x99 pair as `backup`, re-resolved, so failover survives", () => {
+    // `backup` takes the x99 pair out of the balancing set while ANY 5090 primary
+    // is healthy; nginx moves traffic to it only when every primary is marked
+    // down by max_fails inside fail_timeout. Losing all three 5090s therefore
+    // degrades to the pre-8281 x99 behaviour instead of failing decides.
+    const block = upstreamBlock("decide_pool");
+    const backups = block.split("\n").filter((l) => /^\s*server\s+/.test(l) && /\bbackup\b/.test(l));
+    expect(backups.length).toBe(2);
+    for (const line of backups) {
+      expect(line).toMatch(/server\s+(decide|decide-b):8081/);
+      expect(line, `x99 backup must keep resolve: ${line.trim()}`).toMatch(/\bresolve\b/);
+    }
+  });
+
+  it("declares the routed set: capacity == primaries x 2 seq per 5090 worker", () => {
+    // ADAAAA-8281 AC2: admission reads the runner registration's capacity, and
+    // that number is the routed set — 3 primary workers at `--max-num-seqs 2`
+    // each = 6. Pinning the arithmetic here means a pool edit and a capacity
+    // edit cannot drift apart silently (funded DECIDE_CONCURRENCY stays 8).
+    const block = upstreamBlock("decide_pool");
+    const primaries = block
+      .split("\n")
+      .filter((l) => /^\s*server\s+\S+:\d+/.test(l) && !/\bbackup\b/.test(l));
+    for (const rel of ["docker/runners.json", "docker/runners.template.json"]) {
+      const runner = readRunners(rel).runners.find((r) => r.label === "highlights-decide") as
+        | { capacity: number }
+        | undefined;
+      expect(runner, `${rel}: highlights-decide runner missing`).toBeTruthy();
+      expect(runner!.capacity).toBe(primaries.length * 2);
     }
   });
 

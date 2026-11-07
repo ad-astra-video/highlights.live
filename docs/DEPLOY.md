@@ -215,6 +215,52 @@ What must NOT change with this feature: `OBSERVE_CADENCE_S` (3 s), the 10 s live
 window, the live frame budget, `LIVE_DECIDE_KEEP_RATIO`, the funded capacity, and
 the VOD 402 → signer → retry path (VOD shares the gate and inherits the queue).
 
+### The routed set is what `advertised` must read (ADAAAA-8281)
+
+`advertised` is the sum of `capacity` over the `highlights-live/decide` runners
+the signer answers with. The box has exactly ONE such registration
+(`highlights-decide` in `docker/runners.json`, `runner_url =
+http://decide-router:8081`), so that registration's `capacity` **is** the declared
+routed set — and `docker/decide-router.conf` is the same declaration seen from
+the pool side:
+
+| File | Field | Declares |
+|---|---|---|
+| `docker/decide-router.conf` | `upstream decide_pool` | three PRIMARY upstreams `192.168.1.151:8091/8092/8093`; the x99 pair `decide`/`decide-b` as `backup` (failover only) |
+| `docker/runners.template.json` -> `runners.json` | `highlights-decide.capacity` | `3 primary workers x --max-num-seqs 2 = 6` |
+
+Change the two together: the pool edit and the capacity edit are one fact, and
+`services/server/test/decide-router-upstreams.test.ts` pins
+`capacity === primary_count * 2` so they cannot drift silently. `DECIDE_CONCURRENCY`
+stays the FUNDED bar (8); with L1 in force the box prints
+`[decide-capacity] advertised=6 funded=8 effective=6 probeOk=true runners=1 source=probe`.
+If the 6 ceiling ever binds (`maxDecideInFlight` pinned at 6 with
+`decideQueued` rising), the answer is a fourth worker, not a higher funded bar.
+
+Restore, one command per knob, each returning the pre-8281 state:
+
+```sh
+# pool: x99 pair primary again, no backup, no 5090 upstreams
+cp docker/decide-router.conf.bak-8281-* docker/decide-router.conf
+docker compose -f docker-compose.yml up -d --no-deps --force-recreate decide-router
+
+# capacity: back to the fleet number (8091..8093 no longer in the balancing set)
+DECIDE_RUNNER_CAPACITY=8 sh docker/render-runners.sh
+docker compose -f docker-compose.yml up -d --no-deps --force-recreate orchestrator
+
+# funded concurrency: NOT changed by this landing (DECIDE_CONCURRENCY=8)
+```
+
+**The bind-mounted conf is an inode, not a path.** `decide-router` mounts
+`decide-router.conf` as a single file; a `mv`/atomic replace of the host file
+leaves the container serving the OLD inode, and `docker restart` does NOT remount
+it — only `--force-recreate` does. Measured on the 8281 landing: host md5
+`708048fc…` vs container md5 `9ac3c308…`, `nginx -T` still listing 2 upstreams
+after a reload that read the new host file. Write the file in place
+(`cat new > decide-router.conf`) or force-recreate, then always prove membership
+from `docker exec highlights-decide-router nginx -T`, never from the host file.
+
+
 ### The signer must be able to verify the orchestrator's cert (ADAAAA-8262)
 
 `advertised` comes from the signer's discovery poll, and that poll's `/discovery`
