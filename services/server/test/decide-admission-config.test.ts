@@ -108,6 +108,23 @@ describe("decide admission config (ADAAAA-7773)", () => {
     expect(loadConfig({} as NodeJS.ProcessEnv).decideConcurrency).toBeUndefined();
   });
 
+  it("the signer advertises a capacity change in ~1 min, not go-livepeer's 25 min default", () => {
+    // ADAAAA-8292: `advertised` is read from the signer's /discover-orchestrators
+    // answer, and go-livepeer caches that answer for `-liveAICapReportInterval`
+    // (default 25 MINUTES). A dynamically registered runner changes capacity on
+    // ONE heartbeat, so the default cache would hide a pool re-route + registrar
+    // recreate for up to 25 min — the admitted ceiling would keep saying 6 while
+    // the registry says 4. Pin the bounded interval and that the entrypoint
+    // forwards it only when the binary knows the flag (an unknown flag makes
+    // livepeer print usage and exit, i.e. a crash-looping signer).
+    const signer = serviceBlock("signer");
+    expect(signer).toContain("LIVE_AI_CAP_REPORT_INTERVAL=${LIVE_AI_CAP_REPORT_INTERVAL:-60s}");
+    const entrypoint = readFileSync(repoFile("services/signer/docker-entrypoint.sh"), "utf8");
+    expect(entrypoint).toMatch(
+      /-help 2>&1 \| grep -q -- "-liveAICapReportInterval".*[\s\S]*-liveAICapReportInterval "\$LIVE_AI_CAP_REPORT_INTERVAL"/,
+    );
+  });
+
   it("an 8-wide admission gives two streams 4 each instead of the serial pass", () => {
     // The ADAAAA-7771 shared budget: floor(admission / activeStreams), capped by
     // the per-stream depth (LIVE_OBSERVE_IN_FLIGHT, shipped 4).
