@@ -261,6 +261,26 @@ docker compose --env-file .env -f docker-compose.yml up -d --no-deps \
 docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py --print-capacity
 ```
 
+**A conf read that lands mid-write HOLDS the last capacity; it never publishes a short one.**
+The sidecar re-parses `decide-router.conf` every 5 s, and a deploy's `git reset` truncates that
+file while it is being replaced. A partial parse used to count the primaries that were already
+written and publish `2 workers x 2 = 4` with no error; the server latches a session's ceiling at
+start, so one unlucky read capped a whole session (job `3ee24d68`, 16:00Z, stored
+`advertised=4 effective=4`). Since the 8281 guard (`7d938ca`): a `decide_pool` block that is not
+seen AND closed raises instead of counting (a conf with no block is equally unusable — never
+publish `1`), the tick keeps the LAST published capacity and still heartbeats (the registry's 20 s
+TTL would otherwise expire the runner and release its sessions), and each episode logs one
+`holding N` line and one `capacity readable again` line so a dip is visible instead of silent.
+
+```sh
+# A hold is healthy: capacity is unchanged while the rewrite finishes, decides keep flowing.
+docker logs highlights-registrar-decide --since 10m 2>&1 | grep -E "holding|capacity changed|capacity readable"
+# --print-capacity now REFUSES rather than print a short number; exit 3 is a mid-write read,
+# not a broken sidecar. Re-run once the deploy has finished writing the file.
+docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py --print-capacity; echo "exit=$?"
+# -> exit=3  capacity read incomplete: no closed `decide_pool` block in /etc/decide-router/nginx.conf
+```
+
 `services/server/test/decide-router-upstreams.test.ts` pins
 `registrar capacity === primary_count * 2` (and that `backup` lines are never
 counted), so the two cannot drift silently. `DECIDE_CONCURRENCY` stays the
