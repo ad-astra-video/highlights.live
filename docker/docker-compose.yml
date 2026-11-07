@@ -1008,6 +1008,10 @@ services:
       - MAX_PRICE_PER_UNIT=${MAX_PRICE_PER_UNIT:-}
       - LIVE_PAYMENT_RESERVE=${LIVE_PAYMENT_RESERVE:-}
       - ORCH_ADDR=${ORCH_ADDR:-}
+      # ADAAAA-8262: seconds between re-checks of the orchestrator's TLS cert.
+      # go-livepeer regenerates that self-signed cert on every start, so the
+      # signer re-pins it and restarts its livepeer child when it changes.
+      - ORCH_CA_REFRESH_SEC=${ORCH_CA_REFRESH_SEC:-300}
       - SIGNER_ALLOW_NO_AUTH=${SIGNER_ALLOW_NO_AUTH:-}
       # The signer binds its REST HTTP API on the private `hl` network so the
       # server/media containers can reach it at http://signer:7936. The Dockerfile
