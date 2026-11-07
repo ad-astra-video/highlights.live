@@ -15,7 +15,7 @@ import { momentRangeLabel } from "./highlightPost";
  * markup tests, and the interactive rules are pinned on these helpers.
  */
 
-export type ClipRailSlideKind = "highlight" | "celebration";
+export type ClipRailSlideKind = "highlight" | "celebration" | "replay";
 
 export interface ClipRailSlide {
   kind: ClipRailSlideKind;
@@ -32,6 +32,9 @@ export interface ClipRailSlide {
   eventType?: string;
   /** ADAAAA-8032: the primary slide keeps the bounded wait state. */
   waitingSinceMs?: number;
+  /** ADAAAA-8321: the delivered alternative this slide shows (absent on the
+   * moment's own clip). The picker posts THIS id. */
+  alternativeId?: string;
 }
 
 /**
@@ -54,7 +57,8 @@ export function clipRailSlides(h: JobDetailHighlight): ClipRailSlide[] {
   ];
   for (const a of h.alternatives ?? []) {
     slides.push({
-      kind: "celebration",
+      kind: a.eventType === "replay" ? "replay" : "celebration",
+      alternativeId: a.id,
       key: `alternative:${a.id}`,
       src: a.clipUri,
       error: a.clipError,
@@ -64,6 +68,24 @@ export function clipRailSlides(h: JobDetailHighlight): ClipRailSlide[] {
     });
   }
   return slides;
+}
+
+/**
+ * ADAAAA-8321 (AC6): the slide the card opens on. The moment's pick wins; with
+ * no pick the original clip stays the default (board policy: the original
+ * carries the live-pass evidence).
+ */
+export function clipRailDefaultIndex(h: JobDetailHighlight): number {
+  const chosen = h.clipChoice?.alternativeId;
+  if (!chosen) return 0;
+  const idx = (h.alternatives ?? []).findIndex((a) => a.id === chosen);
+  return idx >= 0 ? idx + 1 : 0;
+}
+
+/** The picker's copy for an alternative: "Replay @ 207 s" / "Celebration @ 165 s". */
+export function clipRailPickerLabel(slide: ClipRailSlide): string {
+  const role = slide.kind === "replay" ? "Replay" : "Celebration";
+  return `${role} @ ${Math.round(slide.start)} s`;
 }
 
 /** The badge copy, or `null` when the card has exactly one clip (no badge). */
@@ -76,7 +98,7 @@ export function clipRailBadgeLabel(count: number): string | null {
  * its own moment range, never the pipeline event type, score or outcome code.
  */
 export function clipRailIdentityLabel(slide: ClipRailSlide): string {
-  const role = slide.kind === "highlight" ? "Highlight" : "Celebration";
+  const role = slide.kind === "highlight" ? "Highlight" : slide.kind === "replay" ? "Replay" : "Celebration";
   return `${role} · ${momentRangeLabel(slide.start, slide.end)}`;
 }
 

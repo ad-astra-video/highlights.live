@@ -8,6 +8,7 @@ import {
   type HighlightRecord,
   type Job,
   type JobCandidate,
+  type ClipChoice,
   type ReplayEvidence,
   type TrackObservation,
 } from "@highlights/events";
@@ -393,6 +394,19 @@ export class Store {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
     const next = HighlightRecordSchema.parse({ ...h, ...patch });
+    this.highlights.set(id, next);
+    if (this.db) await this.db.saveHighlight(next);
+    return next;
+  }
+
+  /** ADAAAA-8321 (AC6): record which delivered clip a moment serves. `undefined`
+   * clears the choice and restores the record's own original cut. Writes only the
+   * selection: no clip is cut again and no price/quota field is touched. */
+  async setClipChoice(id: string, choice?: ClipChoice): Promise<HighlightRecord> {
+    const h = this.highlights.get(id);
+    if (!h) throw new Error(`no highlight ${id}`);
+    const { clipChoice: _drop, ...rest } = h;
+    const next = HighlightRecordSchema.parse(choice ? { ...rest, clipChoice: choice } : rest);
     this.highlights.set(id, next);
     if (this.db) await this.db.saveHighlight(next);
     return next;
