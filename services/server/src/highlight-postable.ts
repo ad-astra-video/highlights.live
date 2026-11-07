@@ -139,10 +139,17 @@ function betterMoment(a: PostableHighlight, b: PostableHighlight): PostableHighl
  * fresh objects), so the caller can hand it the live store array.
  */
 export function buildPostableHighlights(list: HighlightRecord[]): PostableHighlights {
+  // ADAAAA-8321: a replay window is footage of a moment this job already has.
+  // It is delivered under that moment's `alternatives` (never its own card, never
+  // the notable lane) and must not touch any count — including the merged /
+  // quota arithmetic. Drop it before any bucket sees it, so the count identity
+  // `raw - postable = merged + rejected + notScoring + contradicting` still
+  // holds against the RAW row total.
+  const visible = list.filter((h) => !h.replayOf);
   const counts = { total: list.length, rejected: 0, notScoring: 0, contradicting: 0, postable: 0, merged: 0 };
   const candidates: HighlightRecord[] = [];
   const notable: HighlightRecord[] = [];
-  for (const h of list) {
+  for (const h of visible) {
     if (h.status === "rejected") {
       counts.rejected += 1;
       continue;

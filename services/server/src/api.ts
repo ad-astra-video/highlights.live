@@ -77,6 +77,7 @@ import { buildPostableHighlights, countsFromPostable, postableCountFields, quota
 // ADAAAA-7984: deliver post-goal celebration/replay windows as alternative clips
 // ATTACHED to their owning GOAL highlight (never as highlights themselves).
 import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./celebration-alternatives";
+import { attachReplayWindows, partitionAttachedReplays, replayAlternativeFrom } from "./replay-alternatives";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
@@ -3553,6 +3554,30 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       resume: mergeResumeCheckpoint(store.getJob(jobId)?.resume, { phase: "finalize" }),
     });
     attemptStats.phase = "finalize";
+    // ADAAAA-8321 (Inc 1): mark windows whose footage repeats an earlier moment
+    // of the SAME job as replays of it, from the frames extraction already wrote
+    // (one ffmpeg pass over the JPEGs, no GPU, no decide). Runs BEFORE the
+    // alternative delivery below so the read side groups the marked rows. Never
+    // fails the job: an attach is additive and swallows its own errors, and the
+    // owner record is never written.
+    let replaysAttached = 0;
+    try {
+      const attach = await attachReplayWindows({
+        store,
+        jobId,
+        ffmpegPath: cfg.ffmpegPath,
+        framesDir: frameDir,
+        sampleFps,
+        // The material a decide call had in memory: the rolling cache ends at the
+        // moment's anchor and holds `vodDecideWindowN` frames.
+        windowS: Math.max(1, cfg.vodDecideWindowN / Math.max(1, sampleFps)),
+        log: (m) => console.log(m),
+      });
+      replaysAttached = attach.attached;
+    } catch (e: any) {
+      console.error(`[replay:${jobId}] attach failed:`, String(e?.message || e));
+    }
+    void replaysAttached;
     // ADAAAA-7984 (ADAAAA-7953 decision A+): deliver the post-goal celebration /
     // replay windows this pass decided as ALTERNATIVE CLIPS of their owning GOAL
     // highlight. Derived from the STORED rows (accepted GOAL highlights + the
@@ -5266,6 +5291,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // notable lane. Same pass, so `job.alternativeClipsDelivered` below cannot
     // disagree with the grouped lists.
     const alternativesByOwner = groupAlternativesByOwner(store.alternativesForJob(job.id));
+    // ADAAAA-8321: replay windows attached to a moment are delivered in the SAME
+    // alternative lane (their clip already exists, so nothing is re-cut and
+    // nothing is billed twice). They are derived from the marked stored rows, so
+    // a read never has to re-run the detector.
+    const attachedReplays = partitionAttachedReplays(store.highlightsForJob(job.id));
+    for (const [ownerId, replays] of attachedReplays.byOwner) {
+      const owner = store.highlightsForJob(job.id).find((h) => h.id === ownerId);
+      const list = alternativesByOwner.get(ownerId) ?? [];
+      for (const r of replays) list.push(replayAlternativeFrom(r, owner?.end));
+      list.sort((a, b) => a.windowAnchorTs - b.windowAnchorTs);
+      alternativesByOwner.set(ownerId, list);
+    }
     const postableHighlights = postable.highlights.map((h) => ({
       ...h,
       exportUri: exportUriForHighlight(h, user.id),
@@ -5315,6 +5352,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         },
         highlights: postableHighlights,
         notableHighlights,
+        // ADAAAA-8321: how many replay windows this job attached as alternatives
+        // (never their own highlights). Additive top-level field.
+        replaysAttached: attachedReplays.attached,
         duplicateHighlights: postable.duplicates,
         traces,
         sections: sectionList,

@@ -8,6 +8,7 @@ import {
   type HighlightRecord,
   type Job,
   type JobCandidate,
+  type ReplayEvidence,
   type TrackObservation,
 } from "@highlights/events";
 import type { Db, DatasetRecord, JobDeletionOptions } from "./db";
@@ -372,6 +373,23 @@ export class Store {
   }
 
   async patchHighlight(id: string, patch: Partial<Pick<HighlightRecord, "clipUri" | "start" | "end" | "clipError" | "hasAudio" | "asrTranscript" | "localizedTs" | "clipAnchorMethod" | "clipAnchorFileTs" | "clipAnchorEvidenceTs" | "clipAnchorLagSec" | "clipAnchorScore" | "clipAnchorRunnerUp" | "clipCutStartSec" | "clipCutDurSec" | "clipCutClamped" | "clipDeliveredSec" | "clipAnchorDeliveredOffsetSec" | "clipScoreFlipPx" | "clipScoreFlipDigits" | "clipScoreFlipRunnerUpTs">>): Promise<HighlightRecord> {
+    const h = this.highlights.get(id);
+    if (!h) throw new Error(`no highlight ${id}`);
+    const next = HighlightRecordSchema.parse({ ...h, ...patch });
+    this.highlights.set(id, next);
+    if (this.db) await this.db.saveHighlight(next);
+    return next;
+  }
+
+  /** ADAAAA-8321: mark an already-persisted window as a REPLAY of an earlier
+   * moment. A dedicated seam on purpose: it writes only the replay marker and
+   * the detector's measured evidence, never a verdict, clip or price field — the
+   * owner row and every billing/quota row are untouched (an attach inserts no
+   * highlight, so it debits no slot and bills nothing). */
+  async markReplay(
+    id: string,
+    patch: { replayOf: string; replayEvidence: ReplayEvidence }
+  ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
     if (!h) throw new Error(`no highlight ${id}`);
     const next = HighlightRecordSchema.parse({ ...h, ...patch });
