@@ -85,7 +85,7 @@ import { buildStageTimings } from "./vod-stage-timings";
 // ADAAAA-7928: pure admin aggregate behind GET /admin/vod-breakdown.
 import { buildVodBreakdown, type VodBreakdownScopeKind } from "./vod-breakdown";
 import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
-import { deriveLiveProgress, newestObservationTs } from "./live-progress";
+import { appliedDecideWatermark, deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { deriveLiveCapture } from "./live-capture";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
@@ -5081,6 +5081,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         job.status === "done" || job.status === "failed" || job.status === "cancelled"
           ? 0
           : newestObservationTs(store.observationsForJob(job.id)),
+      // ADAAAA-8265: the processed-through watermark is the newest APPLIED
+      // decide (one `job_candidates` row per decided window), not the newest
+      // summary-log row — the summary writer's ~20 s cadence is not decide
+      // progress, and reading it as such made this chip report 28-46 s on a leg
+      // whose decide p50 was 2.0 s. Zero decide calls: the rows are in memory.
+      decidedThroughTs: appliedDecideWatermark(store.candidatesForJob(job.id)).ts,
+      decidedAtMs: appliedDecideWatermark(store.candidatesForJob(job.id)).atMs,
       // ADAAAA-8121: the rail's own consume clock (content ts of the newest
       // ANALYSED frame), so the position survives even when the observation
       // window has been decimated. Terminal jobs pass nothing — the indicator is
@@ -5255,6 +5262,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         liveProgress: deriveLiveProgress({
           job,
           newestObservationTs: newestObservationTs(obs),
+          // ADAAAA-8265: same applied-decide watermark as `GET /jobs/:id`, so the
+          // two surfaces can never disagree about how far behind the run is.
+          decidedThroughTs: appliedDecideWatermark(store.candidatesForJob(job.id)).ts,
+          decidedAtMs: appliedDecideWatermark(store.candidatesForJob(job.id)).atMs,
           // ADAAAA-8121: same consume clock as `GET /jobs/:id`, so the live stage
           // and the detail payload never disagree about where the analysis is.
           analysedThroughTs: browserJobs.get(job.id)?.analysedTs ?? null,

@@ -12,9 +12,23 @@
 //
 // This module derives the projection at READ time from data that is already
 // stored — the job's content-clock anchor, the append-only `summaryLog` (one
-// entry per decided window: wall `ts` plus content `windowTs`) and the newest
-// persisted observation. Zero decide calls, zero GPU seconds, no stored-data
-// mutation, no new field on the hot path.
+// entry per EMITTED SUMMARY ROW: wall `ts` plus content `windowTs`), the newest
+// applied decide and the newest persisted observation. Zero decide calls, zero
+// GPU seconds, no stored-data mutation, no new field on the hot path.
+//
+// ADAAAA-8265: the `summaryLog` is NOT one entry per decided window. It is
+// appended by `appendSummaryEntry` only when the running-summary pass kept a
+// caption row, which on the live rail is a coarse cadence (~20 s p50, up to
+// 105 s measured, and ZERO rows on a short leg). Using its newest `windowTs` as
+// "processed through" therefore measured the SUMMARY cadence, not decide
+// progress: on the 3 s hop / keep 0.69 cell with decide p50 2.0 s the meter read
+// 28-46 s p50 while every per-window lag stayed under 20 s (and the two streams
+// under an identical posture read 28 s vs 46 s purely on summary-row gaps). The
+// watermark is now the newest APPLIED DECIDE — one `job_candidates` row per
+// decided window, rejected ones included, carrying the content `timestamp` and
+// the apply wall `createdAt` the read path already has in memory. The summary
+// log stays the fallback for records written before this change so a legacy job
+// keeps its old reading instead of losing one.
 //
 // It deliberately surfaces ONLY the live edge, the newest decided window, the
 // delta between them, how many windows the lag budget swallowed and a coarse
@@ -50,7 +64,9 @@ export interface LiveProgress {
   /** Content seconds available at the tap (wall elapsed since the content-clock
    * anchor for an in-flight job). */
   liveEdgeTs: number;
-  /** Content ts of the newest DECIDED window (newest `summaryLog` windowTs). */
+  /** Content ts of the newest window whose decide verdict has been APPLIED —
+   * the newest `job_candidates.timestamp`, falling back to the newest
+   * `summaryLog` windowTs on a record written before ADAAAA-8265. */
   processedThroughTs: number;
   /** liveEdgeTs - processedThroughTs, clamped >= 0. */
   lagSec: number;
@@ -127,6 +143,17 @@ export interface LiveProgressInput {
    * share. Counts + content-clock positions only: no new meter, no new
    * inference. Ignored for a terminal job (AC-4). */
   liveConsume?: LiveConsumeEvidence | null;
+  /** ADAAAA-8265: content ts of the newest window whose verdict the run has
+   * APPLIED (one row per decided window, rejected included). This is the
+   * processed-through watermark — the `summaryLog` cadence measured the summary
+   * writer, not decide progress. Absent on a job with no applied window yet, and
+   * on records written before this change (fallback = summaryLog). */
+  decidedThroughTs?: number | null;
+  /** ADAAAA-8265: wall clock (ms) the newest applied decide landed — the moment
+   * its verdict reached the feed. Freezes the live edge of a TERMINAL job at the
+   * last applied window instead of the last summary row (which can be a whole
+   * minute earlier). */
+  decidedAtMs?: number | null;
   /** Injected reference time (ms) so the derivation is unit-testable. */
   nowMs?: number;
   /** Override the decide cadence (defaults to LIVE_PROGRESS_CADENCE_S). */
@@ -157,6 +184,37 @@ export function newestObservationTs(observations: Array<{ timestamp?: number }> 
     if (ts !== null && ts > newest) newest = ts;
   }
   return newest;
+}
+
+/**
+ * ADAAAA-8265: the processed-through watermark and its wall clock, read off the
+ * job's own candidate rows.
+ *
+ * `job_candidates` holds exactly ONE row per decided window — rejected windows
+ * included — each stamped with the content ts the decide reasoned over
+ * (`timestamp`) and the wall clock the verdict was APPLIED (`createdAt`), so it
+ * is the honest "what content has this run processed" ledger. It replaced the
+ * `summaryLog` newest `windowTs`, which tracks the running-summary writer (a
+ * caption row every ~20 s, sometimes none at all) and made the lag chip read
+ * the summary cadence: 28-46 s p50 on a leg whose decides were 2 s.
+ *
+ * Zero decide calls, zero GPU: the rows are already in memory. Both fields are
+ * read independently (a row with an unparseable `createdAt` still contributes
+ * its content ts, and vice versa) so one malformed legacy row cannot blank the
+ * whole watermark.
+ */
+export function appliedDecideWatermark(
+  candidates: Array<{ timestamp?: number; createdAt?: string }> | undefined
+): { ts: number; atMs: number | null } {
+  let ts = 0;
+  let atMs: number | null = null;
+  for (const c of candidates ?? []) {
+    const contentTs = finiteNumber(c?.timestamp);
+    if (contentTs !== null && contentTs > ts) ts = contentTs;
+    const wall = parseMs(c?.createdAt);
+    if (wall !== null && (atMs === null || wall > atMs)) atMs = wall;
+  }
+  return { ts, atMs };
 }
 
 /**
@@ -247,11 +305,11 @@ function lastSummaryAppendMs(entries: Array<{ ts?: string }> | undefined): numbe
  * Derive the customer-facing live-progress object from stored data only.
  *
  * - in-flight: liveEdge is wall elapsed since the content-clock anchor; state is
- *   `caught_up` when the newest decided window is within LIVE_PROGRESS_CAUGHT_UP_S
- *   of that edge, else `behind`.
- * - terminal: the edge freezes at `finishedAt`/`completedAt` (never a number
- *   that keeps ticking after the job ended) and state is `unknown`, because
- *   "how live is this" no longer means anything.
+ *   `caught_up` when the newest APPLIED decide is within
+ *   LIVE_PROGRESS_CAUGHT_UP_S of that edge, else `behind`.
+ * - terminal: the edge freezes at the moment the newest applied decide landed
+ *   (never a number that keeps ticking after the job ended) and state is
+ *   `unknown`, because "how live is this" no longer means anything.
  * - no anchor or no decided window yet: state `unknown` — the UI renders nothing
  *   rather than a fabricated "caught up". `processedThroughTs` is 0 because
  *   nothing has been decided, so `lagSec` still satisfies
@@ -266,16 +324,30 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
   const windows = entries
     .map((e: { windowTs?: number }) => finiteNumber(e?.windowTs))
     .filter((w: number | null): w is number => w !== null);
-  const processedThroughTs = windows.length > 0 ? Math.max(...windows) : 0;
+  // ADAAAA-8265: the processed-through watermark is the newest APPLIED DECIDE,
+  // not the newest summary row. `summaryLog` is appended only when the running
+  // summary emitted a caption (coarse, and empty on short legs), so grading it as
+  // decide progress read the summary cadence and inflated the lag 3-5x on a leg
+  // whose decides were 2 s. `decidedThroughTs` is absent on a legacy record and
+  // on a share with no applied window, where the summary log is still the only
+  // evidence — so take the max of the two rather than preferring one blindly.
+  const appliedThroughTs = Math.max(0, finiteNumber(input.decidedThroughTs) ?? 0);
+  const processedThroughTs = Math.max(
+    appliedThroughTs,
+    windows.length > 0 ? Math.max(...windows) : 0
+  );
 
   const anchorMs = liveContentAnchorMs(job);
-  // A terminal job has no live edge; freeze it at the moment the last decided
-  // window's result landed (its append wall clock) so the frozen lag is exactly
-  // the completed lag the viewer experienced — never a number inflated by clip
-  // finalization, and never a number that keeps ticking after the run ended.
+  // A terminal job has no live edge; freeze it at the moment the newest decided
+  // window's result reached the feed, so the frozen lag is exactly the completed
+  // lag the viewer experienced — never a number inflated by clip finalization,
+  // and never a number that keeps ticking after the run ended. ADAAAA-8265: the
+  // freeze uses the newest APPLIED DECIDE wall when known (a summary row can be
+  // a whole minute older), then the summary append, then the job's own end.
   // `finishedAt`/`completedAt` are only a fallback for a job with no entries.
+  const decidedAtMs = finiteNumber(input.decidedAtMs);
   const edgeWallMs = terminal
-    ? (lastSummaryAppendMs(entries) ?? parseMs(job.finishedAt) ?? parseMs(job.completedAt) ?? nowMs)
+    ? (decidedAtMs ?? lastSummaryAppendMs(entries) ?? parseMs(job.finishedAt) ?? parseMs(job.completedAt) ?? nowMs)
     : nowMs;
   const elapsedS = anchorMs !== null ? Math.max(0, (edgeWallMs - anchorMs) / 1000) : 0;
   const observationS = Math.max(0, finiteNumber(input.newestObservationTs) ?? 0);
@@ -333,7 +405,7 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
       : Math.max(derivedSkips, recordedSkips);
 
   const state: LiveProgress["state"] =
-    !LIVE_SOURCES.has(String(job.source ?? "")) || anchorMs === null || windows.length === 0
+    !LIVE_SOURCES.has(String(job.source ?? "")) || anchorMs === null || processedThroughTs <= 0
       ? "unknown"
       : lagSec <= LIVE_PROGRESS_CAUGHT_UP_S
         ? "caught_up"
