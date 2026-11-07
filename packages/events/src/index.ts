@@ -1456,6 +1456,24 @@ export const ReplayEvidenceSchema = z.object({
 });
 export type ReplayEvidence = z.infer<typeof ReplayEvidenceSchema>;
 
+/** ADAAAA-8321 (AC6): the alternative clip a moment serves instead of its own
+ * original cut. The chosen clip is already cut when the alternative was
+ * delivered (celebration delivery or the replay's own row), so a pick is a
+ * POINTER swap: no re-cut, no GPU, no new row. Absent on a record = serve the
+ * original. */
+export const ClipChoiceSchema = z.object({
+  /** The delivered alternative (celebration or replay) being served. */
+  alternativeId: z.string(),
+  /** The served clip's web path (`/clips/<file>.mp4`). */
+  clipUri: z.string(),
+  /** The served clip's own window (content seconds) — display only; the
+   * moment's `start`/`end` stay authoritative for counts and the summary. */
+  start: z.number(),
+  end: z.number(),
+  chosenAt: z.string(),
+});
+export type ClipChoice = z.infer<typeof ClipChoiceSchema>;
+
 export const HighlightRecordSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -1477,6 +1495,13 @@ export const HighlightRecordSchema = z.object({
   // meaning is unchanged.
   replayOf: z.string().optional(),
   replayEvidence: ReplayEvidenceSchema.optional(),
+  // ADAAAA-8321 (Inc 1) AC6: the clip the moment SERVES. Absent (the default)
+  // means its own original cut; when the operator picks an alternative (the
+  // replay, or a celebration) the chosen window's already-cut clip is served by
+  // every surface (card, download, export, post). `start`/`end` above stay the
+  // moment's own window, so the pick never moves the moment, never changes the
+  // summary ladder and never re-opens the quota/billing math.
+  clipChoice: ClipChoiceSchema.optional(),
   // ADAAAA-7232: the deterministic localized highlight instant (seconds from
   // stream start) the delivered clip is centered on, plus the signal that
   // produced it ("peak_frame" | "peak_audio" | "trigger"). Additive optional —
