@@ -1,0 +1,65 @@
+{
+  "arm": "score_crowd",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 858.3,
+    "p95": 889.3,
+    "max": 918.7
+  },
+  "auc_candidate": 0.4495,
+  "gate": [
+    "crowd_level.score"
+  ],
+  "thresholdSweep": {
+    "steps": 40,
+    "best": {
+      "threshold": 0.05,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "5/6",
+      "posClipsLost": [
+        "soc-goal-02"
+      ],
+      "candidatesKept": 16,
+      "positivesKept": "11/22",
+      "precisionProjection": 0.688
+    },
+    "best_safe": null,
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "crowd_level.p0": {
+      "posMean": 0.421,
+      "negMean": 0.524,
+      "min": 0.033,
+      "max": 0.925
+    },
+    "crowd_level.p1": {
+      "posMean": 0.139,
+      "negMean": 0.046,
+      "min": 0.035,
+      "max": 0.342
+    },
+    "crowd_level.p2": {
+      "posMean": 0.44,
+      "negMean": 0.43,
+      "min": 0.032,
+      "max": 0.924
+    },
+    "crowd_level.score": {
+      "posMean": 0.938,
+      "negMean": 1.118,
+      "min": 0.0,
+      "max": 2.0
+    }
+  },
+  "wallSeconds": 42.2
+}

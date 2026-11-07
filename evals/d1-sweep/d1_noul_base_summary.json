@@ -1,0 +1,125 @@
+{
+  "arm": "noul_base",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 1851.9,
+    "p95": 1927.9,
+    "max": 2277.6
+  },
+  "auc_candidate": 0.5657,
+  "gate": [
+    "crowd_eruption",
+    "whistle"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.88,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.3,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 25,
+      "positivesKept": "20/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.98,
+      "temp": 0.5,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "0/6",
+      "posClipsLost": [
+        "soc-goal-01",
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 0,
+      "positivesKept": "0/22",
+      "precisionProjection": null
+    },
+    "best_safe": {
+      "threshold": 0.04,
+      "temp": 0.25,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 25,
+      "positivesKept": "20/22",
+      "precisionProjection": 0.8
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "commentary_excited": {
+      "posMean": 0.438,
+      "negMean": 0.266,
+      "min": 0.16,
+      "max": 0.875
+    },
+    "crowd_eruption": {
+      "posMean": 0.547,
+      "negMean": 0.534,
+      "min": 0.143,
+      "max": 0.905
+    },
+    "whistle": {
+      "posMean": 0.358,
+      "negMean": 0.18,
+      "min": 0.098,
+      "max": 0.667
+    }
+  },
+  "wallSeconds": 93.4
+}

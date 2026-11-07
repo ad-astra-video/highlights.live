@@ -1,0 +1,121 @@
+{
+  "arm": "choice_goal",
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 934.8,
+    "p95": 965.1,
+    "max": 969.8
+  },
+  "auc_candidate": 0.6515,
+  "gate": [
+    "outcome.goal_celebration"
+  ],
+  "thresholdSweep": {
+    "steps": 49,
+    "best": {
+      "threshold": 0.64,
+      "temp": 1.0,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "1/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-01",
+        "soc-near-02"
+      ],
+      "candidatesKept": 3,
+      "positivesKept": "3/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.04,
+      "temp": 1.0,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "temperatureSensitivity": {
+    "steps": 343,
+    "best": {
+      "threshold": 0.9,
+      "temp": 0.25,
+      "ac1": "4/4",
+      "ac1_n": 4,
+      "negClipsEliminated": [
+        "soc-off-01",
+        "soc-off-02",
+        "soc-warm-01",
+        "soc-warm-02"
+      ],
+      "ac2": "2/6",
+      "posClipsLost": [
+        "soc-goal-02",
+        "soc-goal-03",
+        "soc-goal-04",
+        "soc-near-02"
+      ],
+      "candidatesKept": 4,
+      "positivesKept": "4/22",
+      "precisionProjection": 1.0
+    },
+    "best_safe": {
+      "threshold": 0.02,
+      "temp": 0.75,
+      "ac1": "2/4",
+      "ac1_n": 2,
+      "negClipsEliminated": [
+        "soc-off-02",
+        "soc-warm-02"
+      ],
+      "ac2": "6/6",
+      "posClipsLost": [],
+      "candidatesKept": 26,
+      "positivesKept": "21/22",
+      "precisionProjection": 0.808
+    },
+    "feasible_operating_points": [],
+    "feasible_count": 0
+  },
+  "perAnswer": {
+    "outcome.goal_celebration": {
+      "posMean": 0.373,
+      "negMean": 0.261,
+      "min": 0.014,
+      "max": 0.886
+    },
+    "outcome.off_target_or_warmup": {
+      "posMean": 0.3,
+      "negMean": 0.335,
+      "min": 0.057,
+      "max": 0.567
+    },
+    "outcome.routine_play": {
+      "posMean": 0.328,
+      "negMean": 0.404,
+      "min": 0.057,
+      "max": 0.584
+    }
+  },
+  "wallSeconds": 45.9
+}

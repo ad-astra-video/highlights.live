@@ -1,0 +1,185 @@
+{
+  "choice_goal": {
+    "p50": 934.8,
+    "p95": 965.1,
+    "max": 969.8,
+    "auc": 0.6515,
+    "best_t": 0.04,
+    "ac1": 2,
+    "elim": [
+      "soc-off-02",
+      "soc-warm-02"
+    ],
+    "ac2": 6,
+    "kp": 21,
+    "kn": 5,
+    "prec": 0.808,
+    "candidatesKept": 26,
+    "acceptedCandidates": 31,
+    "feasible": 0,
+    "negClips": [
+      "soc-off-01",
+      "soc-off-02",
+      "soc-warm-01",
+      "soc-warm-02"
+    ],
+    "posClips": [
+      "soc-goal-01",
+      "soc-goal-02",
+      "soc-goal-03",
+      "soc-goal-04",
+      "soc-near-01",
+      "soc-near-02"
+    ]
+  },
+  "choice_goal2": {
+    "p50": 751.5,
+    "p95": 776.7,
+    "max": 789.3,
+    "auc": 0.6717,
+    "best_t": 0.06,
+    "ac1": 2,
+    "elim": [
+      "soc-off-02",
+      "soc-warm-02"
+    ],
+    "ac2": 6,
+    "kp": 21,
+    "kn": 5,
+    "prec": 0.808,
+    "candidatesKept": 26,
+    "acceptedCandidates": 31,
+    "feasible": 0,
+    "negClips": [
+      "soc-off-01",
+      "soc-off-02",
+      "soc-warm-01",
+      "soc-warm-02"
+    ],
+    "posClips": [
+      "soc-goal-01",
+      "soc-goal-02",
+      "soc-goal-03",
+      "soc-goal-04",
+      "soc-near-01",
+      "soc-near-02"
+    ]
+  },
+  "noul_base": {
+    "p50": 1851.9,
+    "p95": 1927.9,
+    "max": 2277.6,
+    "auc": 0.5657,
+    "best_t": 0.3,
+    "ac1": 2,
+    "elim": [
+      "soc-off-02",
+      "soc-warm-02"
+    ],
+    "ac2": 6,
+    "kp": 20,
+    "kn": 5,
+    "prec": 0.8,
+    "candidatesKept": 25,
+    "acceptedCandidates": 31,
+    "feasible": 0,
+    "negClips": [
+      "soc-off-01",
+      "soc-off-02",
+      "soc-warm-01",
+      "soc-warm-02"
+    ],
+    "posClips": [
+      "soc-goal-01",
+      "soc-goal-02",
+      "soc-goal-03",
+      "soc-goal-04",
+      "soc-near-01",
+      "soc-near-02"
+    ]
+  },
+  "noul_criteria": {
+    "p50": 1154.3,
+    "p95": 1190.2,
+    "max": 1196.4,
+    "auc": 0.6515,
+    "best_t": 0.22,
+    "ac1": 2,
+    "elim": [
+      "soc-off-02",
+      "soc-warm-02"
+    ],
+    "ac2": 6,
+    "kp": 20,
+    "kn": 5,
+    "prec": 0.8,
+    "candidatesKept": 25,
+    "acceptedCandidates": 31,
+    "feasible": 0,
+    "negClips": [
+      "soc-off-01",
+      "soc-off-02",
+      "soc-warm-01",
+      "soc-warm-02"
+    ],
+    "posClips": [
+      "soc-goal-01",
+      "soc-goal-02",
+      "soc-goal-03",
+      "soc-goal-04",
+      "soc-near-01",
+      "soc-near-02"
+    ]
+  },
+  "noul_event": {
+    "p50": 1194.3,
+    "p95": 1237.7,
+    "max": 1245.6,
+    "auc": 0.4899,
+    "best_t": 0.36,
+    "ac1": 2,
+    "elim": [
+      "soc-off-02",
+      "soc-warm-02"
+    ],
+    "ac2": 6,
+    "kp": 19,
+    "kn": 5,
+    "prec": 0.792,
+    "candidatesKept": 24,
+    "acceptedCandidates": 31,
+    "feasible": 0,
+    "negClips": [
+      "soc-off-01",
+      "soc-off-02",
+      "soc-warm-01",
+      "soc-warm-02"
+    ],
+    "posClips": [
+      "soc-goal-01",
+      "soc-goal-02",
+      "soc-goal-03",
+      "soc-goal-04",
+      "soc-near-01",
+      "soc-near-02"
+    ]
+  },
+  "score_crowd": {
+    "p50": 858.3,
+    "p95": 889.3,
+    "max": 918.7,
+    "auc": 0.4495,
+    "best_t": null,
+    "ac1": null,
+    "elim": null,
+    "ac2": null,
+    "kp": null,
+    "kn": null,
+    "prec": null,
+    "candidatesKept": null,
+    "acceptedCandidates": null,
+    "feasible": 0,
+    "negClips": null,
+    "posClips": null
+  }
+}
