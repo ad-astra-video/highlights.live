@@ -38,6 +38,7 @@ import {
   type AudioSeriesPoint,
   type ConfirmRecord,
   type WindowAnalysis,
+  type WindowConfirmation,
 } from "../lib/jobDetail";
 import {
   audioDp2,
@@ -724,6 +725,83 @@ function AudioAsrBlock({ a }: { a: WindowAnalysis }) {
   );
 }
 
+/**
+ * ADAAAA-8287: the window's confirmation lane, at the top of the inspector.
+ *
+ * Two lanes confirm a VOD highlight and only the Stage-2 dive leaves a confirm
+ * panel, so the inspector is where the raw attestation behind a lane-1 accept
+ * becomes readable: the four stored goal criteria (the decide verdict's own
+ * `criteria` block, or the dive's evidence when that is where the flags live)
+ * plus the dive verdict for the SAME row. Read-only over the stored capture —
+ * a lane-1 row shows "no deep dive ran (measured attestation)", which is the
+ * designed behaviour (`shouldRunConfirm()` skips the dive for an attested goal),
+ * not a missing record.
+ */
+function attestationFlagText(v: boolean | null | undefined): "seen" | "not seen" | "unverifiable" | "—" {
+  if (v === true) return "seen";
+  if (v === false) return "not seen";
+  if (v === null) return "unverifiable";
+  return "—";
+}
+
+const ATTESTATION_FLAGS: { key: keyof NonNullable<WindowConfirmation["flags"]>; label: string }[] = [
+  { key: "ballCrossedLineBetweenPosts", label: "ball crossed line between posts" },
+  { key: "ballInNet", label: "ball in net" },
+  { key: "scoreboardChanged", label: "scoreboard changed" },
+  { key: "crowdErupted", label: "crowd erupted" },
+];
+
+function ConfirmationBlock({ confirmation }: { confirmation: WindowConfirmation }) {
+  const flags = confirmation.flags;
+  const dive = confirmation.dive;
+  return (
+    <div className="mb-2 rounded-md border border-mut/30 bg-mut/10 p-2 text-xs" data-confirmation-block={confirmation.lane}>
+      <div className="flex items-baseline gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-mut">Confirmation lane</span>
+        <span className="font-bold text-slate-ink" data-confirmation-label>
+          {confirmation.label}
+        </span>
+      </div>
+      {flags ? (
+        <div className="mt-1 grid gap-x-4 gap-y-1 sm:grid-cols-2" data-confirm-attestation data-flags-source={confirmation.flagsSource ?? "none"}>
+          {ATTESTATION_FLAGS.map(({ key, label }) => {
+            const value = flags[key];
+            return (
+              <div key={key} className="flex items-baseline gap-1" data-attestation-flag={key} data-attestation-value={attestationFlagText(value)}>
+                <span className="text-mut">{label}</span>
+                <span
+                  className={`font-mono text-[10px] uppercase ${
+                    value === true ? "text-green" : value === false ? "text-yellow" : "text-mut"
+                  }`}
+                >
+                  {attestationFlagText(value)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="mt-1 text-mut" data-confirm-attestation="absent">
+          No stored attestation flags for this window.
+        </div>
+      )}
+      <div className="mt-1 flex items-baseline gap-1" data-dive-verdict={dive ? (dive.corroborated ? "corroborated" : "not-corroborated") : "none"}>
+        <span className="text-mut">deep dive</span>
+        {dive ? (
+          <span className="min-w-0 flex-1 text-slate-ink">
+            {goalConfirmedLabel(dive.goalConfirmed)}
+            {dive.confidence !== null ? ` · confidence ${Math.round(dive.confidence * 100)}%` : ""}
+            {dive.stage1Disagreed !== null ? ` · stage-1 disagreed: ${dive.stage1Disagreed ? "yes" : "no"}` : ""}
+            {dive.outcome ? ` · outcome ${dive.outcome}` : ""}
+          </span>
+        ) : (
+          <span className="min-w-0 flex-1 text-mut">no deep dive ran (measured attestation)</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** The Stage-2 confirm (deep frame dive) sub-panel: the confirm request context
  *  + its ConfirmDecision. Rendered only when the candidate went to deeper
  *  processing (a `confirm` record exists). */
@@ -833,6 +911,9 @@ export interface WindowAnalysisPanelProps {
   analysis?: WindowAnalysis;
   /** The Stage-2 confirm (deep dive) record, when the candidate was deeper-processed. */
   confirm?: ConfirmRecord;
+  /** ADAAAA-8287: the derived acceptance lane for this row (lane + label, plus
+   * the inspector half — the stored attestation flags and the dive verdict). */
+  confirmation?: WindowConfirmation;
   /** Job id, used to resolve lazy frame/image refs to their delivery URI. */
   jobId: string;
   /** ADAAAA-7255: the candidate trigger onset timestamp (seconds) to mark on
@@ -845,19 +926,25 @@ export interface WindowAnalysisPanelProps {
  * Renders an explicit "not captured" state when `analysis` is absent (legacy)
  * rather than a blank.
  */
-export function WindowAnalysisPanel({ analysis, confirm, jobId, triggerTs }: WindowAnalysisPanelProps) {
+export function WindowAnalysisPanel({ analysis, confirm, confirmation, jobId, triggerTs }: WindowAnalysisPanelProps) {
   if (!analysis) {
     return (
       <div
         className="mt-1 rounded-md border border-mut/25 bg-mut/5 px-3 py-2 text-xs text-mut"
         data-window-analysis="not-captured"
       >
+        {/* ADAAAA-8287: the lane + its stored flags are derived from the ROW,
+            not from the capture, so a legacy window still states its lane here
+            even though its prompt/response was never captured. */}
+        {confirmation && <ConfirmationBlock confirmation={confirmation} />}
         Analysis not captured for this window — this decide note predates per-window capture (legacy).
       </div>
     );
   }
   return (
     <div className="mt-1 rounded-md border border-neon/30 bg-black/30 p-3" data-window-analysis>
+      {/* ADAAAA-8287: which lane confirmed the row, with the raw attestation. */}
+      {confirmation && <ConfirmationBlock confirmation={confirmation} />}
       {/* Prompt (verbatim, monospace) */}
       <div data-prompt>
         <span className="text-[10px] uppercase tracking-wide text-mut">Prompt (verbatim)</span>

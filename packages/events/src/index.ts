@@ -2065,6 +2065,54 @@ export const JobTraceSchema = z.object({
 });
 export type JobTrace = z.infer<typeof JobTraceSchema>;
 
+/**
+ * ADAAAA-8287: which acceptance lane confirmed a decide window, derived at read
+ * time from the stored candidate (`status` / `trigger` / `analysis.response` /
+ * `confirm.decision`) — no inference, no persisted field.
+ *
+ * Two lanes accept a VOD highlight and only one leaves a visible artefact:
+ * `measured` = a measured attestation inside the judged window (the primary
+ * lane; `shouldRunConfirm()` skips the Stage-2 dive for it, so it stores NO
+ * confirm record), `dive` = the Stage-2 deep dive (the fallback; the only lane
+ * that writes a confirm block). `dive_disagreed` is a demotion the dive itself
+ * produced ("dive did not corroborate"), and `unconfirmed` is an accepted row
+ * with neither (never a claim the clip is wrong).
+ *
+ * `label` is the row-body sentence, so a board reader can tell lane 1 from lane
+ * 2 WITHOUT opening the inspector; `flags` / `dive` are the inspector half
+ * (`GET /jobs/:id/sections/:index/inspect`, `?inspect=1`) and are stripped from
+ * the default payload exactly like `analysis` / `confirm`.
+ */
+export const WindowConfirmationSchema = z.object({
+  lane: z.enum(["measured", "dive", "dive_disagreed", "unconfirmed"]),
+  label: z.string(),
+  measurement: z.enum(["goal_line", "ball_in_net", "score", "ball_outcome", "dive", "none"]),
+  /** The measured detail the label cites, exactly as stored (e.g. "0-0 → 0-1 at 04:47"). */
+  detail: z.string().optional(),
+  /** The four goal criteria the decide layer asks the model to verify; `null` =
+   *  the wire carried null (unverifiable for that window). */
+  flags: z
+    .object({
+      scoreboardChanged: z.boolean().nullable(),
+      ballCrossedLineBetweenPosts: z.boolean().nullable(),
+      ballInNet: z.boolean().nullable(),
+      crowdErupted: z.boolean().nullable(),
+    })
+    .optional(),
+  flagsSource: z.enum(["stage1_verdict", "dive_evidence", "trigger"]).optional(),
+  /** The Stage-2 dive verdict (present only when a confirm record was stored). */
+  dive: z
+    .object({
+      goalConfirmed: z.enum(["confirmed_goal", "near_miss", "not_goal"]).nullable(),
+      confidence: z.number().nullable(),
+      stage1Disagreed: z.boolean().nullable(),
+      outcome: z.string().nullable(),
+      corroborated: z.boolean(),
+    })
+    .optional(),
+});
+export type WindowConfirmation = z.infer<typeof WindowConfirmationSchema>;
+
 /** A decide note surfaced in a 3 s frame section (ADAAAA-6851 Inc 2). */
 export const DecideNoteSchema = z.object({
   seq: z.number().int().min(0),
@@ -2081,6 +2129,10 @@ export const DecideNoteSchema = z.object({
   // section's decide note. Additive optional — absent on legacy notes.
   analysis: WindowAnalysisSchema.optional(),
   confirm: ConfirmRecordSchema.optional(),
+  // ADAAAA-8287: the derived acceptance lane for this window (additive
+  // optional — absent on notes the server predates). See
+  // `WindowConfirmationSchema` above.
+  confirmation: WindowConfirmationSchema.optional(),
 });
 export type DecideNote = z.infer<typeof DecideNoteSchema>;
 

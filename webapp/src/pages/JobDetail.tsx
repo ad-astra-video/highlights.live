@@ -44,6 +44,7 @@ import {
   type SectionsDelta,
   type JobDetailFrame,
   type DecideNote,
+  type ConfirmationLane,
   type NoteKind,
   type SummaryLogEntry,
   type LiveProgress,
@@ -219,6 +220,26 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
   );
 }
 
+/**
+ * ADAAAA-8287: lane accents for the row-body confirmation line (token-only).
+ * A measured (lane-1) accept reads green, a Stage-2 dive reads pink (the same
+ * tone its confirm panel uses), a demoted dive reads yellow, and an accepted row
+ * with no lane reads muted — never green, because nothing corroborated it.
+ */
+const CONFIRM_LANE_TONE: Record<ConfirmationLane, string> = {
+  measured: "border-green/50 text-green",
+  dive: "border-pink/50 text-pink",
+  dive_disagreed: "border-yellow/50 text-yellow",
+  unconfirmed: "border-mut/40 text-mut",
+};
+
+const CONFIRM_LANE_BADGE: Record<ConfirmationLane, string> = {
+  measured: "measured",
+  dive: "deep dive",
+  dive_disagreed: "not corroborated",
+  unconfirmed: "no lane",
+};
+
 /** One expandable decide-note banner: the one-line summary plus an "Inspect
  *  window" toggle that opens the per-window LLM inspection panel (ADAAAA-7157
  *  Increment C). Read-only over the job-detail API data.
@@ -237,6 +258,11 @@ function DecideNoteBanner({ note, jobId, defaultOpen = false }: { note: DecideNo
   // had no captured audio, so a silent window stays silent.
   const asr = asrSummary(note.analysis);
   const asrLine = asrSummaryLine(note.analysis);
+  // ADAAAA-8287: WHICH lane confirmed this window. Two lanes accept a VOD
+  // highlight and only the Stage-2 dive leaves a confirm panel, so a lane-1
+  // measured accept used to read as "not confirmed". The sentence rides the
+  // DEFAULT payload (no ?inspect=1 needed) — that is the point of the label.
+  const lane = note.confirmation;
   return (
     <div
       className={`rounded-lg border px-3 py-2 text-xs ${
@@ -262,6 +288,20 @@ function DecideNoteBanner({ note, jobId, defaultOpen = false }: { note: DecideNo
           Inspect window
         </span>
       </button>
+      {lane && (
+        <div
+          className="mt-0.5 flex min-w-0 items-baseline gap-1 text-[11px]"
+          data-confirm-lane={lane.lane}
+          data-confirm-lane-label={lane.label}
+          data-confirm-lane-measurement={lane.measurement}
+          title={lane.label}
+        >
+          <span className={`shrink-0 rounded border px-1 py-0 font-mono text-[10px] uppercase tracking-wide ${CONFIRM_LANE_TONE[lane.lane]}`}>
+            {CONFIRM_LANE_BADGE[lane.lane]}
+          </span>
+          <span className="min-w-0 flex-1 text-slate-ink">{lane.label}</span>
+        </div>
+      )}
       {note.reason && <div className="mt-0.5 text-mut">{note.reason}</div>}
       {asr && (
         <div
@@ -274,7 +314,15 @@ function DecideNoteBanner({ note, jobId, defaultOpen = false }: { note: DecideNo
           <span className="min-w-0 flex-1 truncate text-slate-ink">{`"${asr.transcript}"`}</span>
         </div>
       )}
-      {open && <WindowAnalysisPanel analysis={note.analysis} confirm={note.confirm} jobId={jobId} triggerTs={note.timestamp} />}
+      {open && (
+        <WindowAnalysisPanel
+          analysis={note.analysis}
+          confirm={note.confirm}
+          confirmation={note.confirmation}
+          jobId={jobId}
+          triggerTs={note.timestamp}
+        />
+      )}
     </div>
   );
 }

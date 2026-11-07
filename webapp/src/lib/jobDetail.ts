@@ -114,6 +114,42 @@ export interface ConfirmRecord {
   decision: ConfirmDecisionBlock;
 }
 
+/**
+ * ADAAAA-8287: which acceptance lane confirmed this window (mirrors
+ * `WindowConfirmationSchema` in @highlights/events). Derived server-side at read
+ * time from the stored candidate — two lanes accept a VOD highlight and only the
+ * Stage-2 dive leaves a confirm panel, so a lane-1 (measured attestation) accept
+ * used to be indistinguishable from an unconfirmed one.
+ *
+ * `label` is the row-body sentence. `flags` / `dive` are the inspector half
+ * (`?inspect=1` / `/sections/:index/inspect`) and are absent from the default
+ * payload.
+ */
+export type ConfirmationLane = "measured" | "dive" | "dive_disagreed" | "unconfirmed";
+export type ConfirmationMeasurement = "goal_line" | "ball_in_net" | "score" | "ball_outcome" | "dive" | "none";
+export interface ConfirmationFlags {
+  scoreboardChanged: boolean | null;
+  ballCrossedLineBetweenPosts: boolean | null;
+  ballInNet: boolean | null;
+  crowdErupted: boolean | null;
+}
+export interface ConfirmationDive {
+  goalConfirmed: "confirmed_goal" | "near_miss" | "not_goal" | null;
+  confidence: number | null;
+  stage1Disagreed: boolean | null;
+  outcome: string | null;
+  corroborated: boolean;
+}
+export interface WindowConfirmation {
+  lane: ConfirmationLane;
+  label: string;
+  measurement: ConfirmationMeasurement;
+  detail?: string;
+  flags?: ConfirmationFlags;
+  flagsSource?: "stage1_verdict" | "dive_evidence" | "trigger";
+  dive?: ConfirmationDive;
+}
+
 /** A decide-LLM note anchored to its trigger timestamp (ADAAAA-6851 Inc 2). */
 export interface DecideNote {
   seq: number;
@@ -131,6 +167,10 @@ export interface DecideNote {
   // without a capture (the UI renders an explicit "not captured" state).
   analysis?: WindowAnalysis;
   confirm?: ConfirmRecord;
+  // ADAAAA-8287: the derived acceptance lane (lane + row-body label), so the
+  // row itself can say whether a measured attestation or the Stage-2 dive
+  // confirmed it. Inspector half (flags / dive) rides the inspect payload only.
+  confirmation?: WindowConfirmation;
 }
 
 /**
