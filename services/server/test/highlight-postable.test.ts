@@ -414,3 +414,168 @@ describe("buildPostableHighlights (ADAAAA-8199 celebration absorption)", () => {
     expect(stored?.provisionalGoal?.status).toBe("provisional");
   });
 });
+
+// ADAAAA-8155: one surfaced item per real goal transition on the provisional
+// lane. Regression source: job b5de5a9a-2f14-42e8-b5ea-64b156c06906 (QA leg on
+// the served ADAAAA-8139 build 8842f3c), where the board rendered the accepted
+// GOAL card `8508f8a1` (scoring_play, span 52.985-67.985 s, judged transition
+// 2-1 going to 2-2) AND a "GOAL (unconfirmed)" notable row `f48cafec`
+// (BIG_PLAY/big_play, span 57.699-72.699 s, provisionalGoal.declaredTs
+// 64.612 s) for the SAME transition. The rows below are the stored ones
+// verbatim; only the read projection changes.
+const BF_JOB = "b5de5a9a-2f14-42e8-b5ea-64b156c06906";
+const BF_ACCEPTED_START = 52.984999895095825;
+const BF_ACCEPTED_END = 67.98499989509583;
+const BF_DEMOTED_START = 57.698999881744385;
+const BF_DEMOTED_END = 72.69899988174438;
+const BF_JUDGED_TS = 64.61199998855591;
+const BF_PROVISIONAL_NOTE =
+  "provisional goal: frame_celebration in the judged window, no measured scoreboard change yet - " +
+  "the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL).";
+
+/** The accepted GOAL of the measured transition on b5de5a9a. */
+function bfAcceptedGoal(over: Partial<HighlightRecord> = {}): HighlightRecord {
+  return d61Highlight(
+    {
+      id: "8508f8a1",
+      start: BF_ACCEPTED_START,
+      end: BF_ACCEPTED_END,
+      score: 95,
+      eventType: "GOAL",
+      outcome: "scoring_play",
+      ...over,
+    },
+    BF_JOB
+  );
+}
+
+/** The demoted provisional row of the same transition (window defaults to the
+ * stored one; override `start`/`end` for the localized-away-clip shape). */
+function bfDemoted(over: Partial<HighlightRecord> = {}): HighlightRecord {
+  return d61Highlight(
+    {
+      id: "f48cafec",
+      start: BF_DEMOTED_START,
+      end: BF_DEMOTED_END,
+      score: 85,
+      eventType: "BIG_PLAY",
+      outcome: "big_play",
+      reason: BF_PROVISIONAL_NOTE,
+      provisionalGoal: {
+        status: "provisional",
+        cues: ["frame_celebration"],
+        declaredTs: BF_JUDGED_TS,
+        note: BF_PROVISIONAL_NOTE,
+      },
+      ...over,
+    },
+    BF_JOB
+  );
+}
+
+/** The job's kick-off row, so the measured leg keeps its stored shape. */
+function bfKickoff(): HighlightRecord {
+  return d61Highlight({ id: "a13f8db5", start: 0, end: 15, score: 95, eventType: "GOAL" }, BF_JOB);
+}
+
+describe("buildPostableHighlights (ADAAAA-8155 covering accepted GOAL)", () => {
+  const surfaced = (out: ReturnType<typeof buildPostableHighlights>): HighlightRecord[] => [
+    ...out.highlights,
+    ...out.notable,
+    ...out.duplicates,
+  ];
+
+  it("AC-1: the measured b5de5a9a duplicate ships no second 'GOAL (unconfirmed)' row", () => {
+    const rows = [bfKickoff(), bfAcceptedGoal(), bfDemoted()];
+    const out = buildPostableHighlights(rows);
+    // The transition has ONE surfaced goal row, and it is the accepted GOAL.
+    expect(out.highlights.map((h) => h.id)).toEqual(["a13f8db5", "8508f8a1"]);
+    // The demoted row is the same moment: absorbed, not a second notable card.
+    expect(out.notable).toEqual([]);
+    expect(out.duplicates.map((h) => [h.id, h.duplicateOf])).toEqual([["f48cafec", "8508f8a1"]]);
+    // Nothing surfaced for the transition prints the provisional marker.
+    for (const h of surfaced(out)) expect(h.provisionalGoal).toBeUndefined();
+    // The stored row keeps its marker (projection only, never a mutation).
+    expect(rows[2].provisionalGoal?.status).toBe("provisional");
+    expect(out.counts).toMatchObject({ total: 3, postable: 2, merged: 1, notScoring: 0, rejected: 0, contradicting: 0 });
+  });
+
+  it("AC-1: clears the marker when the accepted GOAL covers the judged instant but the clips do not overlap", () => {
+    // The localized clip: the demoted row's window was moved off the instant the
+    // window was judged at, so the ADAAAA-8199 overlap absorb cannot see it.
+    const demoted = bfDemoted({ start: 70, end: 85 });
+    const accepted = bfAcceptedGoal();
+    expect(windowsOverlap(accepted, demoted)).toBe(false);
+    const out = buildPostableHighlights([accepted, demoted]);
+    expect(out.highlights.map((h) => h.id)).toEqual(["8508f8a1"]);
+    expect(out.duplicates).toEqual([]);
+    expect(out.notable.map((h) => h.id)).toEqual(["f48cafec"]);
+    // ... but the judged instant 64.612 s IS inside the accepted 52.985-67.985 s
+    // span, so the row no longer claims to be a second, unconfirmed goal.
+    expect(out.notable[0].provisionalGoal).toBeUndefined();
+    // Its own lane label survives: still a notable big play, not a goal.
+    expect(out.notable[0].outcome).toBe("big_play");
+    expect(out.notable[0].eventType).toBe("BIG_PLAY");
+  });
+
+  it("AC-1: an uncovered demoted row still renders the unconfirmed marker", () => {
+    // No accepted GOAL anywhere near the judged instant.
+    const farGoal = bfAcceptedGoal({ start: 300, end: 315 });
+    const uncovered = buildPostableHighlights([farGoal, bfDemoted({ start: 70, end: 85 })]);
+    expect(uncovered.notable.map((h) => h.id)).toEqual(["f48cafec"]);
+    expect(uncovered.notable[0].provisionalGoal?.status).toBe("provisional");
+
+    // Fail-closed at the boundary too: 0.6 s past the accepted clip's end is NOT
+    // covered, so the marker stays. Coverage is strict containment, no tolerance.
+    const boundary = buildPostableHighlights([
+      bfAcceptedGoal(),
+      bfDemoted({
+        start: 70,
+        end: 85,
+        provisionalGoal: {
+          status: "provisional",
+          cues: ["frame_celebration"],
+          declaredTs: BF_ACCEPTED_END + 0.6,
+          note: BF_PROVISIONAL_NOTE,
+        },
+      }),
+    ]);
+    expect(boundary.notable[0].provisionalGoal?.status).toBe("provisional");
+  });
+
+  it("AC-2: never promotes the demoted row and never changes either row's outcome/eventType", () => {
+    for (const demoted of [bfDemoted(), bfDemoted({ start: 70, end: 85 })]) {
+      const accepted = bfAcceptedGoal();
+      const out = buildPostableHighlights([accepted, demoted]);
+      // The demoted row is never postable, with or without a covering GOAL.
+      expect(out.highlights.map((h) => h.id)).not.toContain("f48cafec");
+      expect(out.highlights.every((h) => h.outcome === "scoring_play")).toBe(true);
+      expect(isPostableHighlight(demoted)).toBe(false);
+      // Neither stored row was rewritten, and their labels are untouched.
+      expect(accepted.outcome).toBe("scoring_play");
+      expect(accepted.eventType).toBe("GOAL");
+      expect(demoted.outcome).toBe("big_play");
+      expect(demoted.eventType).toBe("BIG_PLAY");
+      expect(demoted.provisionalGoal?.status).toBe("provisional");
+    }
+  });
+
+  it("AC-2: the count identity is unchanged by the marker projection", () => {
+    const covered = buildPostableHighlights([bfKickoff(), bfAcceptedGoal(), bfDemoted({ start: 70, end: 85 })]);
+    const uncovered = buildPostableHighlights([
+      bfKickoff(),
+      bfAcceptedGoal({ start: 300, end: 315 }),
+      bfDemoted({ start: 70, end: 85 }),
+    ]);
+    // Clearing a marker is not a merge: the row stays notable and the postable
+    // count is the same as the uncovered shape.
+    expect(covered.counts.postable).toBe(uncovered.counts.postable);
+    expect(covered.counts.notScoring).toBe(uncovered.counts.notScoring);
+    expect(covered.counts.merged).toBe(uncovered.counts.merged);
+    for (const out of [covered, uncovered]) {
+      expect(out.counts.total - out.counts.postable).toBe(
+        out.counts.merged + out.counts.rejected + out.counts.notScoring + out.counts.contradicting
+      );
+    }
+  });
+});
