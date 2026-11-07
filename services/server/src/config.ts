@@ -39,15 +39,32 @@ export interface ServerConfig {
   matchContextAsrSeconds: number;
   /** Hard cap on the decoded prefix bytes (MATCH_CONTEXT_ASR_MAX_BYTES). */
   matchContextAsrMaxBytes: number;
-  /** ADAAAA-6911: server-side knob for the livepeer-session decide-runner gate
-   * (`DECIDE_CONCURRENCY`). Left unset -> the client keeps its default (decide
+  /** ADAAAA-6911 + ADAAAA-8254: the FUNDED decide ceiling (`DECIDE_CONCURRENCY`)
+   * — the value that WINS. Left unset -> the client keeps its default (decide
    * runner capacity 2). ADAAAA-7773: docker-compose ships
    * `DECIDE_CONCURRENCY=${DECIDE_CONCURRENCY:-8}` because the box has 8 real
-   * decide slots (4 per gemma card behind decide-router); the fallback below
-   * stays at the client's own default so a bare `pnpm dev` keeps the client
-   * behaviour it actually has. Set to 1 to reproduce the capacity-1 serial
-   * baseline for an on-box measurement. */
+   * decide slots (4 per gemma card behind decide-router).
+   *
+   * ADAAAA-8254: the livepeer-session gate admits
+   * `min(decideConcurrency, discovered decide capacity)` clamped to [1,
+   * decideConcurrency], refreshed at job start and at most every
+   * `DECIDE_CAPACITY_REFRESH_S`. Discovered capacity can only LOWER admission —
+   * the 8/2/2 advertisement must never raise it past the funded 8 (CEO ruling
+   * ADAAAA-7803). Set to 1 to reproduce the capacity-1 serial baseline. */
   decideConcurrency?: number;
+  /** ADAAAA-8254: minimum seconds between signer capacity probes
+   * (`DECIDE_CAPACITY_REFRESH_S`, default 60). A probe also runs at every decide
+   * job start. */
+  decideCapacityRefreshS?: number;
+  /** ADAAAA-8254: hard per-decide queue-wait budget in ms
+   * (`DECIDE_QUEUE_MAX_WAIT_MS`, default 60 000) before the decide is dropped
+   * with a typed DecideCapacityError. */
+  decideQueueMaxWaitMs?: number;
+  /** ADAAAA-8254: discovery toggle (`DECIDE_CAPACITY_DISCOVERY`). Default on;
+   * `0`/`false`/`off`/`no` disables the capacity probe entirely, which is the
+   * byte-identical pre-8254 static gate. With no signer configured the probe is
+   * never attached regardless. */
+  decideCapacityDiscovery?: boolean;
   /** When set, bypass the orchestrator and call the train runner directly (dev).
    * No train container ships with the local stack today, so this stays unset
    * and direct train calls fail with a clear error until a TRAIN_URL is wired. */
@@ -708,6 +725,20 @@ function finiteNumberOrUndefined(raw: string | undefined): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/**
+ * Parse a boolean env flag. Unset / unrecognized -> `fallback`; the common
+ * off-spellings ("0", "false", "off", "no", case-insensitive) -> false. Used by
+ * the ADAAAA-8254 discovery toggle so `DECIDE_CAPACITY_DISCOVERY=0` disables the
+ * capacity probe while leaving the rest of the admission path intact.
+ */
+export function parseBooleanFlag(raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const v = raw.trim().toLowerCase();
+  if (["0", "false", "off", "no"].includes(v)) return false;
+  if (["1", "true", "on", "yes"].includes(v)) return true;
+  return fallback;
+}
+
 function parseGoalLineCalibrations(raw: string | undefined): Record<string, GoalLineCalibration> | undefined {
   if (!raw) return undefined;
   try {
@@ -833,6 +864,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     matchContextAsrSeconds: Number(env.MATCH_CONTEXT_ASR_SECONDS ?? 90),
     matchContextAsrMaxBytes: Number(env.MATCH_CONTEXT_ASR_MAX_BYTES ?? 8 * 1024 * 1024),
     decideConcurrency: env.DECIDE_CONCURRENCY ? Number(env.DECIDE_CONCURRENCY) : undefined,
+    // ADAAAA-8254: the capacity-aware decide ceiling + ordered 503 queue knobs.
+    // Unset keeps the client defaults (60 s refresh, 60 s queue budget, probe
+    // on when a signer exists), so an unset environment behaves exactly like
+    // the pre-8254 static gate plus the shared-pause queue.
+    decideCapacityRefreshS: env.DECIDE_CAPACITY_REFRESH_S
+      ? Number(env.DECIDE_CAPACITY_REFRESH_S)
+      : undefined,
+    decideQueueMaxWaitMs: env.DECIDE_QUEUE_MAX_WAIT_MS ? Number(env.DECIDE_QUEUE_MAX_WAIT_MS) : undefined,
+    decideCapacityDiscovery: parseBooleanFlag(env.DECIDE_CAPACITY_DISCOVERY, true),
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     mediaPublicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
