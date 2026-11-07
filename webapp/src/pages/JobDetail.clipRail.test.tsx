@@ -1,5 +1,6 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import React from "react";
 import { HighlightCard } from "./JobDetail";
 import type { JobDetailAlternative, JobDetailHighlight } from "../lib/jobDetail";
@@ -220,5 +221,73 @@ describe("AC7 — customer copy: no pipeline tokens on any slide, and Celebratio
     expect(html).toContain("data-detail-pipeline");
     expect(html).toContain("GOAL");
     expect(html).toContain(">92<");
+  });
+});
+
+// ADAAAA-8304 (board follow-up): the rail chrome has to read as part of the
+// move-it theme — neon/purple accents on the void/dusk surfaces — not as a
+// neutral black/white overlay dropped on top of a `.card`. These assertions pin
+// the palette (and the absence of the neutral chrome) so a later edit cannot
+// quietly walk it back, plus the token-only scrollbar in the token layer.
+describe("Theme — rail chrome is palette-coloured, not neutral overlay chrome", () => {
+  const html = card(hl({ alternatives: TWO_ALTS }));
+  const rail = html.slice(html.indexOf('data-detail-clip-rail="true"'), html.indexOf("data-detail-moment-range"));
+
+  function tagOf(marker: string, open: string): string {
+    const at = rail.indexOf(marker);
+    expect(at).toBeGreaterThan(-1);
+    // The whole opening tag: React emits attributes in JSX order, so a
+    // className written after the data hook must still be inside the slice.
+    return rail.slice(rail.lastIndexOf(open, at), rail.indexOf(">", at) + 1);
+  }
+
+  it("the clip-count badge uses the neon accent on a void surface", () => {
+    const badge = tagOf("data-detail-clip-count-badge", "<span");
+    expect(badge).toContain("border-neon/50");
+    expect(badge).toContain("bg-void/80");
+    expect(badge).toContain("text-neon");
+    expect(badge).toContain("backdrop-blur");
+  });
+
+  it("prev/next are neon-bordered void buttons, centred on the player, with a visible focus ring", () => {
+    for (const marker of ["data-detail-clip-prev", "data-detail-clip-next"]) {
+      const button = tagOf(marker, "<button");
+      expect(button).toContain("border-neon/50");
+      expect(button).toContain("bg-void/75");
+      expect(button).toContain("text-neon");
+      expect(button).toContain("top-1/2");
+      expect(button).toContain("-translate-y-1/2");
+      expect(button).toContain("focus-visible:outline-ink");
+    }
+  });
+
+  it("each slide's identity line sits on the dusk surface with a purple hairline; the role is accented", () => {
+    const parts = rail.split("data-detail-clip-slide");
+    // parts[1] = primary slide, parts[2] = first celebration slide.
+    expect(parts[1]).toContain("border-purple/30");
+    expect(parts[1]).toContain("bg-dusk/90");
+    expect(parts[1]).toContain("text-neon");
+    expect(parts[1]).toContain("text-slate-ink");
+    expect(parts[2]).toContain("text-purple");
+    expect(parts[2]).not.toContain('uppercase tracking-wide text-neon">Celebration');
+  });
+
+  it("no neutral chrome and no arbitrary bracket values remain inside the rail", () => {
+    expect(rail).not.toContain("bg-black/70");
+    expect(rail).not.toContain("border-mut/30");
+    expect(rail).not.toMatch(/className="[^"]*\[[^\]]*\]/);
+  });
+
+  it("the token layer colours the rail's own scrollbar with the palette (no hex, no raw rgb)", () => {
+    const css = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+    const from = css.indexOf("[data-detail-clip-rail] {\n  scrollbar-width: thin;");
+    expect(from).toBeGreaterThan(-1);
+    const block = css.slice(from);
+    expect(block).toContain("scrollbar-color: var(--color-purple) transparent");
+    expect(block).toContain("[data-detail-clip-rail]::-webkit-scrollbar-thumb");
+    expect(block).toContain("background: var(--color-neon)");
+    // The rail's scrollbar block is token-only: no literal colour anywhere in it.
+    expect(block).not.toMatch(/#[0-9a-fA-F]{3,8}/);
+    expect(block).not.toContain("rgba(");
   });
 });
