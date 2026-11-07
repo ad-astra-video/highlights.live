@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Check, X, Undo2, Loader2, ChevronDown, ChevronLeft, ChevronRight, VolumeX, Search, Download, Link2 } from "lucide-react";
+import { ArrowLeft, Play, Check, X, Undo2, Loader2, ChevronDown, ChevronLeft, ChevronRight, VolumeX, Search, Download, Link2, Film } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
@@ -1156,13 +1156,17 @@ function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admi
             {/* AC4/AC7: the identity line names the clip's ROLE and its own
                 moment range — customer-safe, never the event taxonomy. */}
             <div
-              className="flex items-center gap-2 border-t border-mut/30 bg-mut/10 px-3 py-1 text-xs text-mut"
+              className="flex items-center gap-2 border-t border-purple/30 bg-dusk/90 px-3 py-1 text-xs text-mut"
               data-detail-clip-identity
             >
-              <span className="font-bold uppercase tracking-wide text-ink">
+              <span
+                className={`font-bold uppercase tracking-wide ${
+                  slide.kind === "highlight" ? "text-neon" : "text-purple"
+                }`}
+              >
                 {slide.kind === "highlight" ? "Highlight" : "Celebration"}
               </span>
-              <span className="font-mono" data-detail-clip-range>
+              <span className="font-mono text-slate-ink" data-detail-clip-range>
                 {`· ${momentRangeLabel(slide.start, slide.end)}`}
               </span>
             </div>
@@ -1171,9 +1175,10 @@ function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admi
       </div>
       {badge && (
         <span
-          className="pointer-events-none absolute right-2 top-2 z-10 rounded-full border border-mut/30 bg-black/70 px-2 py-0.5 text-xs font-bold text-ink"
+          className="pointer-events-none absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-full border border-neon/50 bg-void/80 px-2 py-0.5 text-xs font-bold text-neon backdrop-blur"
           data-detail-clip-count-badge
         >
+          <Film className="h-3 w-3" aria-hidden />
           {badge}
         </span>
       )}
@@ -1184,7 +1189,7 @@ function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admi
             aria-label="Previous clip"
             onClick={() => goTo(activeRef.current - 1)}
             data-detail-clip-prev
-            className="absolute left-1 top-[30%] z-10 grid h-8 w-8 place-items-center rounded-full border border-mut/30 bg-black/70 text-ink hover:border-neon hover:text-neon"
+            className="absolute left-1 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full border border-neon/50 bg-void/75 text-neon transition hover:border-neon hover:bg-neon/20 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
             <ChevronLeft className="h-4 w-4" aria-hidden />
           </button>
@@ -1193,7 +1198,7 @@ function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admi
             aria-label="Next clip"
             onClick={() => goTo(activeRef.current + 1)}
             data-detail-clip-next
-            className="absolute right-1 top-[30%] z-10 grid h-8 w-8 place-items-center rounded-full border border-mut/30 bg-black/70 text-ink hover:border-neon hover:text-neon"
+            className="absolute right-1 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full border border-neon/50 bg-void/75 text-neon transition hover:border-neon hover:bg-neon/20 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
             <ChevronRight className="h-4 w-4" aria-hidden />
           </button>
