@@ -213,6 +213,88 @@ export interface UserDeletionResult {
   audit: AdminAuditEntry | null;
 }
 
+// ---------------------------------------------------------------------------
+// ADAAAA-8286: acceptance-lane tombstones for deleted jobs.
+//
+// `DELETE /jobs/:id` cascade-deletes `job_candidates` (the per-candidate decide
+// record: `status`, `trigger.scoreBoardChanged` / `goalCrossed` / `ballOutcome`,
+// the Stage-2 `confirm` block), `highlights` and the job row itself. Those rows
+// are exactly the evidence behind "why was this highlight never confirmed?", so
+// once a graded VOD job is deleted only the window-level `decide_audit` survives
+// and it cannot be joined back to candidate ids or acceptance decisions. The
+// delete therefore snapshots the lane into `deleted_jobs` in the SAME
+// transaction, and `GET /jobs/:id/acceptance-lane` serves it afterwards.
+// ---------------------------------------------------------------------------
+
+/** Counts over a job's acceptance lane, snapshotted at delete time. */
+export interface DeletedJobCounts {
+  candidates: number;
+  accepted: number;
+  suppressed: number;
+  rejected: number;
+  /** Candidates whose Stage-2 (confirm) dive ran — `confirm` present. */
+  confirmed: number;
+  highlights: number;
+  alternatives: number;
+  observations: number;
+}
+
+/** One compact acceptance-lane row: precisely the fields that answer "was this
+ * accepted, and by which lane?". The heavy `analysis` payload (full prompt +
+ * ordered data items + raw reply) is deliberately NOT copied — it is what would
+ * make a 260-candidate tombstone megabytes, and the lane question never needs
+ * it (the prompt text survives in `decide_audit`). */
+export interface AcceptanceLaneRow {
+  id: string;
+  seq: number;
+  timestamp: number;
+  eventType: string;
+  score: number;
+  isHighlight: boolean;
+  outcome: string | null;
+  status: "accepted" | "suppressed" | "rejected";
+  reason: string | null;
+  suppressionReason: string | null;
+  /** Trigger provenance — the scoreboard/ball signals the accept gate used. */
+  trigger: {
+    kind: string | null;
+    scoreBoardChanged: boolean | null;
+    goalCrossed: boolean | null;
+    ballOutcome: string | null;
+  } | null;
+  /** Stage-2 dive outcome when it ran (the "confirm" lane). */
+  confirm: {
+    goalConfirmed: string | null;
+    confidence: number | null;
+    stage1Disagreed: boolean | null;
+    corroborated: boolean | null;
+    corroborationSource: string | null;
+  } | null;
+}
+
+/** Durable tombstone written by `DELETE /jobs/:id`: who deleted which job when,
+ * plus the acceptance lane as it stood at that moment. One row per deleted job;
+ * it outlives the job row and is queryable via `GET /jobs/:id/acceptance-lane`. */
+export interface DeletedJobTombstone {
+  jobId: string;
+  ownerId: string | null;
+  /** Job status at delete time (`done` / `failed` / `cancelled` / …). */
+  status: string | null;
+  source: string | null;
+  deletedAt: string;
+  /** Actor (user id) that issued the DELETE. */
+  deletedBy: string | null;
+  counts: DeletedJobCounts;
+  candidates: AcceptanceLaneRow[];
+}
+
+/** Options for `Db.deleteJob`. Both are written inside the delete transaction so
+ * a committed deletion always keeps its lane + its audit trail. */
+export interface JobDeletionOptions {
+  tombstone?: DeletedJobTombstone;
+  audit?: Omit<AdminAuditEntry, "id" | "createdAt">;
+}
+
 /** A single-use invite code issued by the cohort owner (invite path "a").
  * Stored as a SHA-256 hash; the plaintext code is shown to the owner once at
  * issuance and handed out of band. */
@@ -500,8 +582,16 @@ export interface Db {
   /** Every alternative across all jobs (hydrates the Store on boot). */
   listHighlightAlternatives(): Promise<HighlightAlternative[]>;
   /** Permanently remove a job row and cascade to its highlights + media_sessions
-   * rows in one transaction (ADAAAA-6838 / DELETE /jobs/:id). */
-  deleteJob(id: string): Promise<void>;
+   * rows in one transaction (ADAAAA-6838 / DELETE /jobs/:id).
+   *
+   * ADAAAA-8286: the optional acceptance-lane tombstone and `admin_audit` row
+   * ride the SAME transaction, so a committed delete always keeps the lane
+   * evidence and the actor trail. Returns the tombstone that was written. */
+  deleteJob(id: string, opts?: JobDeletionOptions): Promise<DeletedJobTombstone | null>;
+  /** ADAAAA-8286: the acceptance-lane tombstone of a deleted job, when one was
+   * captured at delete time. Resolves undefined for a job that was never
+   * deleted (or was deleted before tombstones existed). */
+  getJobTombstone(jobId: string): Promise<DeletedJobTombstone | undefined>;
   // --- per-frame perceive observations + per-candidate decide notes
   //     (ADAAAA-6851, durable job-detail data) ---
   /** Persist one per-frame perceive observation (write-through from Store). */
@@ -942,11 +1032,19 @@ export class SqliteDb implements Db {
     return rows.map((r) => JSON.parse(r.record) as HighlightAlternative);
   }
 
-  async deleteJob(id: string): Promise<void> {
+  async deleteJob(id: string, opts: JobDeletionOptions = {}): Promise<DeletedJobTombstone | null> {
     // ADAAAA-6838: remove the job row and cascade to its highlights + media_sessions
     // in one transaction so a DELETE never leaves orphaned rows behind.
+    // ADAAAA-8286: the acceptance-lane tombstone + admin_audit row are written in
+    // the same transaction, so a committed delete can never lose the lane.
+    let tombstone: DeletedJobTombstone | null = null;
     this.db.exec("BEGIN");
     try {
+      if (opts.tombstone) {
+        this.insertJobTombstone(opts.tombstone);
+        tombstone = opts.tombstone;
+      }
+      if (opts.audit) this.insertAdminAudit(opts.audit);
       this.db.prepare("DELETE FROM highlights WHERE job_id = ?").run(id);
       this.db.prepare("DELETE FROM highlight_alternatives WHERE job_id = ?").run(id);
       this.db.prepare("DELETE FROM media_sessions WHERE job_id = ?").run(id);
@@ -958,6 +1056,35 @@ export class SqliteDb implements Db {
       this.db.exec("ROLLBACK");
       throw e;
     }
+    return tombstone;
+  }
+
+  /** ADAAAA-8286: upsert one acceptance-lane tombstone (called inside the
+   * deleteJob transaction so the lane commits with the deletion). */
+  private insertJobTombstone(t: DeletedJobTombstone): void {
+    this.db
+      .prepare(
+        `INSERT INTO deleted_jobs (job_id,owner_id,status,source,deleted_by,deleted_at,counts,candidates)
+         VALUES (?,?,?,?,?,?,?,?)
+         ON CONFLICT(job_id) DO UPDATE SET owner_id=excluded.owner_id, status=excluded.status,
+           source=excluded.source, deleted_by=excluded.deleted_by, deleted_at=excluded.deleted_at,
+           counts=excluded.counts, candidates=excluded.candidates`
+      )
+      .run(
+        t.jobId,
+        t.ownerId ?? null,
+        t.status ?? null,
+        t.source ?? null,
+        t.deletedBy ?? null,
+        t.deletedAt,
+        JSON.stringify(t.counts),
+        JSON.stringify(t.candidates)
+      );
+  }
+
+  async getJobTombstone(jobId: string): Promise<DeletedJobTombstone | undefined> {
+    const row = this.db.prepare("SELECT * FROM deleted_jobs WHERE job_id = ?").get(jobId) as any;
+    return row ? rowToJobTombstone(row) : undefined;
   }
 
   async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
@@ -1760,12 +1887,19 @@ export class PgDb implements Db {
     return r.rows.map((row) => JSON.parse(row.record) as HighlightAlternative);
   }
 
-  async deleteJob(id: string): Promise<void> {
+  async deleteJob(id: string, opts: JobDeletionOptions = {}): Promise<DeletedJobTombstone | null> {
     // ADAAAA-6838: remove the job row and cascade to its highlights + media_sessions
     // in one transaction so a DELETE never leaves orphaned rows behind.
+    // ADAAAA-8286: tombstone + audit ride the same transaction (see SqliteDb).
+    let tombstone: DeletedJobTombstone | null = null;
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      if (opts.tombstone) {
+        await insertJobTombstoneWith(client, opts.tombstone);
+        tombstone = opts.tombstone;
+      }
+      if (opts.audit) await insertAdminAuditWith(client, opts.audit);
       await client.query("DELETE FROM highlights WHERE job_id = $1", [id]);
       await client.query("DELETE FROM highlight_alternatives WHERE job_id = $1", [id]);
       await client.query("DELETE FROM media_sessions WHERE job_id = $1", [id]);
@@ -1779,6 +1913,12 @@ export class PgDb implements Db {
     } finally {
       client.release();
     }
+    return tombstone;
+  }
+
+  async getJobTombstone(jobId: string): Promise<DeletedJobTombstone | undefined> {
+    const r = await this.pool.query("SELECT * FROM deleted_jobs WHERE job_id = $1", [jobId]);
+    return r.rows[0] ? rowToJobTombstone(r.rows[0]) : undefined;
   }
 
   async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
@@ -2418,6 +2558,22 @@ const SCHEMA_SQLITE = `
     owner_id TEXT,
     created_at TEXT
   );
+  -- ADAAAA-8286: the acceptance-lane tombstone of a deleted job. The
+  -- job_candidates rows are cascade-deleted with the job row, so the lane
+  -- evidence (status, trigger, confirm) is snapshotted here inside the delete
+  -- transaction and stays queryable through GET /jobs/:id/acceptance-lane.
+  -- The candidates column holds the compact rows only (no prompt/analysis
+  -- payload); counts is the JSON summary of the same lane.
+  CREATE TABLE IF NOT EXISTS deleted_jobs (
+    job_id TEXT PRIMARY KEY,
+    owner_id TEXT,
+    status TEXT,
+    source TEXT,
+    deleted_by TEXT,
+    deleted_at TEXT NOT NULL,
+    counts TEXT NOT NULL,
+    candidates TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS decide_audit (
     id TEXT PRIMARY KEY,
     job_id TEXT,
@@ -2640,6 +2796,22 @@ const SCHEMA_PG = `
     record TEXT NOT NULL,
     owner_id TEXT,
     created_at TEXT
+  );
+  -- ADAAAA-8286: the acceptance-lane tombstone of a deleted job. The
+  -- job_candidates rows are cascade-deleted with the job row, so the lane
+  -- evidence (status, trigger, confirm) is snapshotted here inside the delete
+  -- transaction and stays queryable through GET /jobs/:id/acceptance-lane.
+  -- The candidates column holds the compact rows only (no prompt/analysis
+  -- payload); counts is the JSON summary of the same lane.
+  CREATE TABLE IF NOT EXISTS deleted_jobs (
+    job_id TEXT PRIMARY KEY,
+    owner_id TEXT,
+    status TEXT,
+    source TEXT,
+    deleted_by TEXT,
+    deleted_at TEXT NOT NULL,
+    counts TEXT NOT NULL,
+    candidates TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS decide_audit (
     id TEXT PRIMARY KEY,
@@ -3084,6 +3256,62 @@ async function insertAdminAuditWith(
     ]
   );
   return entry;
+}
+
+/** ADAAAA-8286: insert one acceptance-lane tombstone through an open PG client so
+ * it commits (or rolls back) with the job deletion. */
+async function insertJobTombstoneWith(
+  client: { query: (sql: string, params?: any[]) => Promise<{ rows: any[] }> },
+  t: DeletedJobTombstone
+): Promise<void> {
+  await client.query(
+    `INSERT INTO deleted_jobs (job_id,owner_id,status,source,deleted_by,deleted_at,counts,candidates)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (job_id) DO UPDATE SET owner_id=EXCLUDED.owner_id, status=EXCLUDED.status,
+       source=EXCLUDED.source, deleted_by=EXCLUDED.deleted_by, deleted_at=EXCLUDED.deleted_at,
+       counts=EXCLUDED.counts, candidates=EXCLUDED.candidates`,
+    [
+      t.jobId,
+      t.ownerId ?? null,
+      t.status ?? null,
+      t.source ?? null,
+      t.deletedBy ?? null,
+      t.deletedAt,
+      JSON.stringify(t.counts),
+      JSON.stringify(t.candidates),
+    ]
+  );
+}
+
+/** Map a raw deleted_jobs row (snake_case) to a DeletedJobTombstone. */
+function rowToJobTombstone(r: any): DeletedJobTombstone {
+  const parse = <T>(raw: unknown, fallback: T): T => {
+    if (raw == null) return fallback;
+    try {
+      return (typeof raw === "string" ? JSON.parse(raw) : raw) as T;
+    } catch {
+      return fallback;
+    }
+  };
+  return {
+    jobId: r.job_id,
+    ownerId: r.owner_id ?? null,
+    status: r.status ?? null,
+    source: r.source ?? null,
+    deletedAt: r.deleted_at,
+    deletedBy: r.deleted_by ?? null,
+    counts: parse<DeletedJobCounts>(r.counts, {
+      candidates: 0,
+      accepted: 0,
+      suppressed: 0,
+      rejected: 0,
+      confirmed: 0,
+      highlights: 0,
+      alternatives: 0,
+      observations: 0,
+    }),
+    candidates: parse<AcceptanceLaneRow[]>(r.candidates, []),
+  };
 }
 
 function rowToAdminAudit(r: any): AdminAuditEntry {
