@@ -638,6 +638,11 @@ def parse_decision(text: str) -> dict | None:
         # ADAAAA-7111 (Increment D): the running video summary the model updated
         # for this window. Bound on write (see _compile_summary in the caller).
         "runningSummary": _as_text(obj.get("runningSummary")),
+        # ADAAAA-8318: the clip card's copy target (a short post title). Same
+        # reply as runningSummary — no second inference. Bounded at the server
+        # write seam (shape + v9 grounding, deterministic fallback on refusal);
+        # carried here so the audit capture shows what the model actually said.
+        "postTitle": _as_text(obj.get("postTitle")),
         "source": "gemma",
     }
 
@@ -1542,6 +1547,14 @@ _OUTPUT_CONTRACT_COMPACT = (
     "A celebration or replay window NEVER states the goal again, whatever the "
     "scoreboard shows — the goal belongs to the window where the ball first "
     "entered the net and is not re-said afterwards. "
+    # ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET. The
+    # runningSummary above stays the announcer detail line; this ONE extra field
+    # is the title a user posts, generated in the SAME reply (no second call).
+    # The addendum is budgeted: <= +40 input tokens / <= +25 output tokens per
+    # decide, so the bars are inlined tersely instead of restating the contract.
+    "\"postTitle\": \"<ONE clause, <=60 chars, <=10 words, simple tense; no "
+    "place words, no clock, no em-dash, no goal claim unless a goal, no "
+    "period>\", "
     "COLOR BEAT — a "
     "SEPARATE CHANNEL, NEVER the play: on a highlight window the em-dash clause "
     "may carry ONLY crowd or stand reaction, players' body language or posture, "
@@ -2413,6 +2426,9 @@ def _response_block(decision: dict) -> dict:
         "evidenceAttested": decision.get("evidenceAttested") or [],
         "audioContext": decision.get("audioContext"),
         "runningSummary": decision.get("runningSummary"),
+        # ADAAAA-8318: the model's own post title (before the server write-seam
+        # gate). Absent on the VOD/full contract, which never asks for one.
+        "postTitle": decision.get("postTitle"),
         "source": decision.get("source"),
     }
 

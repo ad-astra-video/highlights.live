@@ -59,6 +59,8 @@ import {
   DatasetSchema,
   DetectionTrainingSampleSchema,
   JobDetailSchema,
+  postTitleTeamSubject,
+  projectPostTitle,
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
@@ -532,6 +534,9 @@ export async function attestDeferredGoalHighlight(
     // GOAL row. Cleared here so the page re-derives copy from the restored reason.
     caption: copy ? copy.caption : upgrade.caption,
     cardTitles: copy ? copy.cardTitles : upgrade.cardTitles,
+    // ADAAAA-8318: the copy target is part of the same surface set — a promoted
+    // GOAL must never pair a scoring caption with a celebration title.
+    postTitle: copy ? copy.postTitle : upgrade.postTitle,
     colour: copy ? copy.colour : upgrade.colour,
     reason_raw: copy ? copy.reason_raw : upgrade.reasonRaw,
     // ADAAAA-8212: the MEASURED attestation that resolved the transition replaces
@@ -5266,8 +5271,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // notable lane. Same pass, so `job.alternativeClipsDelivered` below cannot
     // disagree with the grouped lists.
     const alternativesByOwner = groupAlternativesByOwner(store.alternativesForJob(job.id));
+    // ADAAAA-8318 (ADAAAA-8302 Option 2): every card carries a copy target.
+    // The stored `postTitle` is served byte-for-byte while it satisfies the title
+    // shape bar; a legacy row (or one whose title the write gate refused) gets the
+    // deterministic `LABEL · m:ss · subject` title — pure, no model call at read
+    // time, never empty. The subject is only ever a team the row's own stored copy
+    // names from the job's `matchContext`, so no name is invented here.
+    const copyTargetFor = (h: HighlightRecord): string =>
+      projectPostTitle(h, { subject: postTitleTeamSubject(h, job.matchContext) });
     const postableHighlights = postable.highlights.map((h) => ({
       ...h,
+      postTitle: copyTargetFor(h),
       exportUri: exportUriForHighlight(h, user.id),
       ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
     }));
@@ -5278,6 +5292,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // notable clip downloads and marks exactly like a postable one.
     const notableHighlights = postable.notable.map((h) => ({
       ...h,
+      // ADAAAA-8318: the notable lane mounts the same card, so it needs the same
+      // copy target (the deterministic title for a non-goal moment).
+      postTitle: copyTargetFor(h),
       exportUri: exportUriForHighlight(h, user.id),
     }));
 

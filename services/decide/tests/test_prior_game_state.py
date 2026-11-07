@@ -44,8 +44,10 @@ STORY = "Goal at 42s: Ronaldo finishes low to make it 1-0 Portugal."
 GOLDEN = {
     ("full", ""): (12034, "462ff1861c902722391ab48f592ba39e86343992cfbecbb43e3ce0c3c8793409"),
     ("full", STORY): (12286, "fceba52d260de7e1ac2540d8721903d88ae7026cc5b1a1f6f9ccc68c27e642ab"),
-    ("compact", ""): (14251, "e93eb440349b6b95edea294c73b6434316f462333aa36ced3f18a18ae0cbb090"),
-    ("compact", STORY): (14503, "317fe05e9816be740d10d66938c8417e3a27619cf56f5e475fe16819d4a80f9e"),
+    # ADAAAA-8318 re-pinned the two COMPACT rows (+145 chars: the `postTitle`
+    # field). Both FULL rows above are untouched pre-change bytes (AC8).
+    ("compact", ""): (14396, "a9abe8a55aa8cbf48447073c49b7d131e4a7fb190c8471cc91e56c92ac1c49ea"),
+    ("compact", STORY): (14648, "feb868075998c61158d831fb1e3a5c88d098006a5ef6a24c551a0037d2f4fc33"),
 }
 
 
