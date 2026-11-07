@@ -2,7 +2,7 @@
 # ADAAAA-6854 + ADAAAA-6891 (updated ADAAAA-7385, ADAAAA-7773): render
 # docker/runners.json
 # from docker/runners.template.json. Each tunable capacity defaults to the value
-# already carried in the template (decide 8 after ADAAAA-7773, perceive 4 after
+# already carried in the template (decide 6 after ADAAAA-8281, perceive 4 after
 # ADAAAA-7383 / ADAAAA-7385); an explicit DECIDE_RUNNER_CAPACITY /
 # PERCEIVE_RUNNER_CAPACITY env var overrides it (must be a positive integer). The
 # go-livepeer orchestrator admits N concurrent sessions per runner. Idempotent;
@@ -10,10 +10,15 @@
 #
 #   DECIDE_RUNNER_CAPACITY=6 PERCEIVE_RUNNER_CAPACITY=4 ./render-runners.sh
 #
-# The committed docker/runners.json already ships the defaults (decide 8,
-# perceive 4). Decide's 8 is the pair's real capacity: two gemma cards at
-# `--max-num-seqs 4` each, behind `decide-router` (least_conn), so one
-# `highlights-decide` registration fronts 8 slots (ADAAAA-7769 / ADAAAA-7773).
+# The committed docker/runners.json already ships the defaults (decide 6,
+# perceive 4). Decide's 6 is the ROUTED set, not the fleet: the three 5090
+# decide workers are the primary upstreams of `decide-router` and each gemma
+# engine runs `--max-num-seqs 2` (3 x 2 = 6), while the x99 pair is `backup`
+# only (ADAAAA-8281). This number and the pool's primary upstreams are one
+# declaration seen from two sides — change them together. It is also what the
+# server's capacity-aware ceiling reads (`[decide-capacity] advertised=6
+# funded=8 effective=6`), so `DECIDE_CONCURRENCY=8` stays the FUNDED bar and the
+# routed set is what admission actually allows.
 #
 # Live-path note (ADAAAA-7008): the live path runs a cadence-driven
 # decide-observer; perceive remains the persistent session runner and decide the

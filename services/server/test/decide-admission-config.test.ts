@@ -54,11 +54,18 @@ describe("decide admission config (ADAAAA-7773)", () => {
     expect(server.match(/DECIDE_CONCURRENCY=/g)?.length).toBe(1);
   });
 
-  it("the decide runner advertises the same 8 slots (committed + template)", () => {
+  it("the decide runner advertises the ROUTED set: 6 slots (committed + template)", () => {
+    // ADAAAA-8281: the pool's primary upstreams are the three 5090 decide
+    // workers at `--max-num-seqs 2` each; the x99 pair is `backup` only, so the
+    // capacity the router actually balances across is 3 x 2 = 6. The funded bar
+    // stays DECIDE_CONCURRENCY=8 — the whole point of the capacity-aware ceiling
+    // is that `effective = min(funded, advertised) = 6` comes from the routed
+    // set, not from the server hardcoding a list.
     for (const doc of [runners, runnersTemplate]) {
       const r = decideRunner(doc);
-      expect(r.capacity).toBe(8);
-      // metadata is a JSON-encoded string on the registration.
+      expect(r.capacity).toBe(6);
+      // metadata is a JSON-encoded string on the registration; it describes the
+      // model engine, not the pool, so it keeps the engine's own maxConcurrency.
       const md = typeof r.metadata === "string" ? JSON.parse(r.metadata) : r.metadata;
       expect(md.maxConcurrency).toBe(8);
     }

@@ -33,7 +33,7 @@
       "version": "0.1.0",
       "metadata": "{\"model\": \"cyankiwi/gemma-4-12B-it-qat-AWQ-INT4\", \"engine\": \"vllm\", \"quantization\": \"compressed-tensors INT4\", \"maxConcurrency\": 8}",
       "mode": "single-shot",
-      "capacity": 8,
+      "capacity": 6,
       "proxy": true,
       "gpu": {
         "id": "1",
