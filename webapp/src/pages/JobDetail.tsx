@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Play, Check, X, Undo2, Loader2, ChevronDown, ChevronRight, VolumeX, Search, Download, Link2 } from "lucide-react";
+import { ArrowLeft, Play, Check, X, Undo2, Loader2, ChevronDown, ChevronLeft, ChevronRight, VolumeX, Search, Download, Link2 } from "lucide-react";
 import { api, getToken } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { VideoClip } from "../components/VideoClip";
+import {
+  clipRailBadgeLabel,
+  clipRailClampIndex,
+  clipRailIndexFromScroll,
+  clipRailScrollLeft,
+  clipRailSlides,
+  clipRailStepIndex,
+  pauseClipRailPlayers,
+} from "../lib/clipRail";
 import { JobDetailMetrics } from "../components/JobMetrics";
 import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
@@ -1050,6 +1059,151 @@ export function HighlightActionRow({
 }
 
 /**
+ * ADAAAA-8304: the card's clip rail.
+ *
+ * The video area is a horizontal rail: slide 1 is the highlight's own clip,
+ * then one slide per `h.alternatives[]` (the goal's delivered
+ * celebration/replay clips). One slide occupies the card width, so the card
+ * height does not change between 1 and 3 clips, and the rail scrolls only
+ * itself (the card keeps `overflow-hidden`, the page never gains horizontal
+ * scroll). A badge overlays the video when the card has 2+ clips.
+ *
+ * Every slide is still a `VideoClip`, so the lazy IntersectionObserver mount
+ * (and its `preload="metadata"`) is preserved: an offscreen slide fetches
+ * nothing until it approaches the viewport.
+ */
+function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admin: boolean }) {
+  const slides = useMemo(() => clipRailSlides(h), [h]);
+  const count = slides.length;
+  const [active, setActive] = useState(0);
+  const activeRef = useRef(0);
+  const railRef = useRef<HTMLDivElement | null>(null);
+  // A live job can grow its alternatives while the card is mounted, so the
+  // rendered index is clamped to the slides that actually exist.
+  const shown = clipRailClampIndex(active, count);
+
+  const goTo = useCallback(
+    (target: number) => {
+      const rail = railRef.current;
+      const next = clipRailStepIndex(activeRef.current, target - activeRef.current, count);
+      // Moving to a slide pauses the one that was playing, so at most one clip
+      // plays at a time (AC4).
+      pauseClipRailPlayers(rail, next);
+      activeRef.current = next;
+      setActive(next);
+      if (rail) {
+        // Scroll the RAIL only — `scrollIntoView` can drag the page vertically.
+        rail.scrollTo?.({ left: clipRailScrollLeft(next, rail.clientWidth), behavior: "smooth" });
+      }
+    },
+    [count]
+  );
+
+  const onScroll = useCallback(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+    const idx = clipRailIndexFromScroll(rail.scrollLeft, rail.clientWidth, count);
+    if (idx === activeRef.current) return;
+    activeRef.current = idx;
+    setActive(idx);
+    pauseClipRailPlayers(rail, idx);
+  }, [count]);
+
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (count < 2) return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        goTo(activeRef.current + 1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        goTo(activeRef.current - 1);
+      }
+    },
+    [count, goTo]
+  );
+
+  const badge = clipRailBadgeLabel(count);
+
+  return (
+    <div className="relative min-w-0" data-detail-clip-rail-wrap>
+      <div
+        ref={railRef}
+        className="flex min-w-0 snap-x snap-mandatory overflow-x-auto overscroll-x-contain"
+        data-detail-clip-rail
+        data-clip-count={count}
+        data-clip-active-index={shown}
+        role={count > 1 ? "group" : undefined}
+        aria-label={count > 1 ? `Clip rail, ${count} clips, showing ${shown + 1}` : undefined}
+        tabIndex={count > 1 ? 0 : -1}
+        onKeyDown={onKeyDown}
+        onScroll={onScroll}
+      >
+        {slides.map((slide, index) => (
+          <div
+            key={slide.key}
+            className="w-full shrink-0 snap-start"
+            data-detail-clip-slide
+            data-clip-index={index}
+            {...(slide.kind === "celebration" ? { "data-detail-alternative": true } : {})}
+          >
+            <VideoClip
+              src={slide.src}
+              error={slide.error}
+              label={admin ? slide.eventType : undefined}
+              waitingSinceMs={slide.waitingSinceMs}
+            />
+            {/* AC4/AC7: the identity line names the clip's ROLE and its own
+                moment range — customer-safe, never the event taxonomy. */}
+            <div
+              className="flex items-center gap-2 border-t border-mut/30 bg-mut/10 px-3 py-1 text-xs text-mut"
+              data-detail-clip-identity
+            >
+              <span className="font-bold uppercase tracking-wide text-ink">
+                {slide.kind === "highlight" ? "Highlight" : "Celebration"}
+              </span>
+              <span className="font-mono" data-detail-clip-range>
+                {`· ${momentRangeLabel(slide.start, slide.end)}`}
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      {badge && (
+        <span
+          className="pointer-events-none absolute right-2 top-2 z-10 rounded-full border border-mut/30 bg-black/70 px-2 py-0.5 text-xs font-bold text-ink"
+          data-detail-clip-count-badge
+        >
+          {badge}
+        </span>
+      )}
+      {count > 1 && (
+        <>
+          <button
+            type="button"
+            aria-label="Previous clip"
+            onClick={() => goTo(activeRef.current - 1)}
+            data-detail-clip-prev
+            className="absolute left-1 top-[30%] z-10 grid h-8 w-8 place-items-center rounded-full border border-mut/30 bg-black/70 text-ink hover:border-neon hover:text-neon"
+          >
+            <ChevronLeft className="h-4 w-4" aria-hidden />
+          </button>
+          <button
+            type="button"
+            aria-label="Next clip"
+            onClick={() => goTo(activeRef.current + 1)}
+            data-detail-clip-next
+            className="absolute right-1 top-[30%] z-10 grid h-8 w-8 place-items-center rounded-full border border-mut/30 bg-black/70 text-ink hover:border-neon hover:text-neon"
+          >
+            <ChevronRight className="h-4 w-4" aria-hidden />
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
  * One identified/accepted highlight on the per-job detail surface. Renders the
  * clip player (VideoClip) so the highlight shows its video, plus the metadata
  * and the single action row (HighlightActionRow: Download / Copy Link /
@@ -1164,15 +1318,10 @@ export function HighlightCard({
       data-detail-highlight
       {...(notable ? { "data-detail-notable-card": true } : {})}
     >
-      <VideoClip
-        src={h.clipUri}
-        label={admin ? h.eventType : undefined}
-        error={h.clipError}
-        // ADAAAA-8032: the wait state counts from the moment the highlight was
-        // accepted, so a live card says "cutting clip… 8s" instead of an
-        // indefinite "clip processing…" for the whole share.
-        waitingSinceMs={h.createdAt ? Date.parse(h.createdAt) : undefined}
-      />
+      {/* ADAAAA-8304: the card's video AREA is the clip rail — the highlight's
+          own clip plus one slide per delivered celebration/replay clip. The
+          metadata block below keeps everything else (never a second player). */}
+      <ClipRail highlight={h} admin={admin} />
       {/* ADAAAA-7881: the audio state describes the CLIP, so it sits with the
           clip — once, quiet, and never duplicated below the metadata. */}
       {h.hasAudio === false && (
@@ -1333,28 +1482,9 @@ export function HighlightCard({
         {/* ADAAAA-7984 (ADAAAA-7953 decision A+): the goal's aftermath. The
             celebration/replay clips delivered for this goal are ALTERNATIVES of
             THIS highlight — grouped inside its card, never rendered as their own
-            highlight card and never in the notable lane. Each one is a real cut
-            clip (playable here) so the goal keeps its replay depth. */}
-        {!!h.alternatives?.length && (
-          <div className="mt-3 rounded-lg border border-mut/30 bg-mut/10 px-2 py-2" data-detail-alternatives>
-            <div className="text-xs uppercase tracking-wide text-mut" data-detail-alternatives-heading>
-              Also from this goal — {h.alternatives.length} alternative {h.alternatives.length === 1 ? "clip" : "clips"}
-            </div>
-            <ul className="mt-2 flex flex-col gap-2">
-              {h.alternatives.map((a) => (
-                <li key={a.id} className="min-w-0 overflow-hidden rounded-lg border border-mut/30" data-detail-alternative>
-                  <VideoClip src={a.clipUri} label={admin ? a.eventType : undefined} error={a.clipError} />
-                  <div className="flex flex-wrap items-center gap-2 px-2 py-1 text-xs text-mut">
-                    <span className="font-bold uppercase tracking-wide text-ink">Celebration</span>
-                    <span className="font-mono" data-detail-alternative-range>
-                      {momentRangeLabel(a.start, a.end)}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+            highlight card and never in the notable lane. ADAAAA-8304 moved them
+            OUT of this metadata block: they are slides of the card's clip rail
+            (primary clip first), so the metadata block carries no player. */}
         {/* ADAAAA-7881: operator pipeline internals — event type, score, trigger
             and outcome reason — live in ONE collapsed disclosure so the
             customer-facing hierarchy stays intact. ADAAAA-7893: the review
