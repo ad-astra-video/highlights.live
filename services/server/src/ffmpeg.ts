@@ -266,6 +266,27 @@ export async function locateImageInSource(
   };
 }
 
+/** ADAAAA-8321: decode an EXTRACTED frame directory (ffmpeg `image2` sequence)
+ * into one SIZE×SIZE gray vector per frame, in ONE process. The VOD pipeline
+ * already wrote these JPEGs during extraction, so a replay fingerprint pass adds
+ * no decode of the source video and no GPU work. Returns vectors in file order;
+ * the caller maps index -> content instant with its `sampleFps`. */
+export async function sampleFrameDirGray(
+  ffmpegPath: string,
+  framesDir: string,
+  pattern: string,
+  startNumber = 1,
+  size = 8
+): Promise<Float32Array[] | null> {
+  const raw = await readGrayFrames(
+    ffmpegPath,
+    ["-start_number", String(startNumber), "-i", path.join(framesDir, pattern)],
+    `scale=${size}:${size}:flags=bilinear,format=gray`,
+    size
+  );
+  return raw && raw.vecs.length ? raw.vecs : null;
+}
+
 /** Shared raw-gray decode: one ffmpeg process, stdout = SIZE×SIZE gray frames,
  * stderr's showinfo lines = the pts of each frame in order. */
 async function readGrayFrames(

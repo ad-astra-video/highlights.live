@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   resolve: {
     alias: {
+      // The subpath export must come BEFORE the bare alias: Vite matches aliases
+      // by prefix, so "@highlights/events" would otherwise rewrite the subpath to
+      // `<index.ts>/training` (ADAAAA-8321 imports the fingerprint helpers).
+      "@highlights/events/training": fileURLToPath(new URL("./packages/events/src/training.ts", import.meta.url)),
       "@highlights/events": fileURLToPath(new URL("./packages/events/src/index.ts", import.meta.url)),
       "@highlights/livepeer-session": fileURLToPath(new URL("./packages/livepeer-session/src/index.ts", import.meta.url)),
     },
