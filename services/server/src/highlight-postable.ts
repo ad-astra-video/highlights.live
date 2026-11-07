@@ -169,13 +169,20 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
   // both); the read-side projection is what the board and the counts show.
   const absorbed = absorbGoalCelebrations(collapsed.moments, notable);
   counts.merged += absorbed.absorbed;
+  // ADAAAA-8155: a demoted row that survives the overlap absorb can still be the
+  // SAME transition as an accepted GOAL when its judged instant sits inside that
+  // GOAL's clip window — the clip was localized away from the judged instant, so
+  // the windows no longer overlap and the absorb rule cannot see it. Clear the
+  // marker there too, or the board prints "GOAL (unconfirmed)" beside the
+  // accepted card for one goal. Marker only: the fail-closed invariant stands.
+  const notableRows = suppressCoveredProvisionalMarkers(collapsed.moments, absorbed.notable);
   // The absorbed rows leave the "not scoring" drop bucket and join the merged
   // one, so the count identity `raw - postable = merged + rejected + notScoring +
   // contradicting` still holds (nothing is counted twice or lost).
   counts.notScoring = Math.max(0, counts.notScoring - absorbed.absorbed);
   const duplicates = [...collapsed.duplicates, ...absorbed.duplicates].sort((a, b) => a.start - b.start);
   counts.postable = collapsed.moments.length;
-  return { highlights: collapsed.moments, notable: absorbed.notable, duplicates, counts };
+  return { highlights: collapsed.moments, notable: notableRows, duplicates, counts };
 }
 
 /**
@@ -244,6 +251,52 @@ function absorbGoalCelebrations(
     absorbed += 1;
   }
   return { notable: kept, duplicates, absorbed };
+}
+
+/**
+ * ADAAAA-8155: is the demoted row the SAME transition as an accepted GOAL?
+ *
+ * The overlap absorb above catches every demoted row whose clip window shares
+ * footage with the confirmed GOAL. This catches the case that rule cannot see:
+ * the demoted row's clip was LOCALIZED away from the instant the window was
+ * judged at, so its window no longer overlaps the accepted clip even though the
+ * GOAL's clip window still contains that judged instant (`declaredTs`) — the
+ * measured QA shape on job b5de5a9a. Coverage is strict containment with no
+ * tolerance: a row whose judged instant merely sits NEAR the accepted clip stays
+ * provisional, because the marker is a fail-closed claim about one transition.
+ */
+export function isCoveredByAcceptedGoal(
+  h: Pick<HighlightRecord, "provisionalGoal" | "start" | "end">,
+  moments: Pick<HighlightRecord, "outcome" | "start" | "end">[]
+): boolean {
+  const ts = h.provisionalGoal?.declaredTs;
+  if (ts === undefined) return false;
+  return moments.some((m) => m.outcome === "scoring_play" && ts >= m.start && ts <= m.end);
+}
+
+/**
+ * ADAAAA-8155: clear the provisional marker on every notable row whose judged
+ * instant an accepted postable GOAL covers, so one goal never renders as a
+ * postable GOAL card PLUS a "GOAL (unconfirmed)" notable row.
+ *
+ * Marker-only projection: `outcome` / `eventType` are untouched, the row stays
+ * in the notable lane and never enters the postable list (a provisional row
+ * still needs its own measured re-attestation to become a GOAL), and the
+ * persisted record keeps its marker. Returns the SAME array when nothing was
+ * covered, so callers can rely on referential identity for the no-op case.
+ */
+export function suppressCoveredProvisionalMarkers(
+  moments: PostableHighlight[],
+  notable: HighlightRecord[]
+): HighlightRecord[] {
+  if (!notable.some((h) => h.provisionalGoal)) return notable;
+  let cleared = 0;
+  const out = notable.map((h) => {
+    if (!isCoveredByAcceptedGoal(h, moments)) return h;
+    cleared += 1;
+    return { ...h, provisionalGoal: undefined };
+  });
+  return cleared ? out : notable;
 }
 
 /** The result of collapsing overlapping clip windows into moments. */
