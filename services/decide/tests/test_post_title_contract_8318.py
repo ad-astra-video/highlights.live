@@ -1,0 +1,164 @@
+"""ADAAAA-8318 — the `postTitle` field's prompt-contract snapshot (AC8/AC9).
+
+The clip card's copy target is a short post title generated in the SAME decide
+call as the announcer line. These tests pin the contract itself:
+
+  * the FAST rail asks for `postTitle` (one field, budgeted), in the contract
+    block — one inference per window, no second call;
+  * the VOD / full long-form contract is BYTE-IDENTICAL (a pinned sha256), which
+    is the AC8 guard: the VOD prompt file must not change;
+  * the addendum stays inside its token budget (<= +40 input tokens);
+  * `/highlight` carries the model's title through to the decision (bounded at
+    the server write seam, not here).
+"""
+import hashlib
+import json
+
+from fastapi.testclient import TestClient
+
+from app import app as decide_app
+from app.gemma import (
+    _OUTPUT_CONTRACT_COMPACT,
+    _OUTPUT_CONTRACT_FULL,
+    parse_decision,
+    _response_block,
+    build_prompt,
+)
+
+client = TestClient(decide_app)
+
+SHR = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
+
+# Captured from the code BEFORE ADAAAA-8318 touched the compact contract. The
+# VOD (full) contract must never move; the compact one moved by the title field
+# only, and the delta is asserted below.
+VOD_CONTRACT_V3_SHA = "19a001493d5851a3cd348a5d4e6cb4fb9082b542152cf6eadff675ad34719352"
+VOD_CONTRACT_V3_LEN = 2423
+PRE_CHANGE_COMPACT_LEN = 4640
+
+EV = {"trackCount": 3, "scoreBoardChanged": True, "goalCrossed": True}
+
+
+def test_fast_rail_asks_for_post_title():
+    prompt = build_prompt("GOAL", EV, "soccer", n_frames=8, compact=True)
+    assert '"postTitle"' in prompt
+    # the bars are inlined so the model cannot float back to a description
+    assert "<=60 chars" in prompt and "<=10 words" in prompt
+    assert "ONE clause" in prompt
+    # it rides the SAME reply as the announcer line — nothing splits the call
+    assert '"runningSummary"' in prompt
+
+
+def test_vod_contract_is_byte_identical():
+    """AC8: the long-form/VOD prompt is untouched, byte for byte."""
+    assert len(_OUTPUT_CONTRACT_FULL) == VOD_CONTRACT_V3_LEN
+    assert SHR(_OUTPUT_CONTRACT_FULL) == VOD_CONTRACT_V3_SHA
+    # and it never asks for a title: VOD rows derive theirs at projection time
+    assert "postTitle" not in _OUTPUT_CONTRACT_FULL
+    full = build_prompt("GOAL", EV, "soccer", n_frames=8)
+    assert "postTitle" not in full
+    assert "~1800 chars max" in full
+
+
+def test_title_addendum_is_within_its_input_token_budget():
+    """<= +40 input tokens: measured as the character delta from the pre-change
+    contract, at the contract's own ~4 chars/token ratio (<= 160 chars)."""
+    delta = len(_OUTPUT_CONTRACT_COMPACT) - PRE_CHANGE_COMPACT_LEN
+    assert delta > 0
+    assert delta <= 160, f"postTitle addendum grew the contract by {delta} chars"
+
+
+def test_normalize_decision_carries_the_title():
+    raw = {
+        "isHighlight": True,
+        "score": 88,
+        "eventType": "GOAL",
+        "outcome": "scoring_play",
+        "reason": "the ball crosses the line at t=3.2s",
+        "reasoning": "Observed the net bulge.",
+        "runningSummary": "Ordonez drives it home at 72s.",
+        "postTitle": "Ordonez opens the scoring",
+    }
+    decision = parse_decision(json.dumps(raw))
+    assert decision["postTitle"] == "Ordonez opens the scoring"
+    # absent (VOD / legacy model) degrades to empty, never to a crash
+    assert parse_decision(json.dumps({**raw, "postTitle": None}))["postTitle"] == ""
+
+
+def test_audit_capture_keeps_the_raw_title():
+    """The stored `analysis.response` shows what the model said, so a QA replay
+    can compare the RAW title with the SERVED (gated) one."""
+    block = _response_block({"postTitle": "Raw   model title", "runningSummary": "s"})
+    assert block["postTitle"] == "Raw   model title"
+    assert _response_block({"runningSummary": "s"})["postTitle"] is None
+
+
+def test_gemma_wire_returns_the_title_on_the_decision():
+    """The live decide wire carries the field: `decide_with_gemma(compact=True)`
+    parses the model reply and returns the title on the decision dict."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    from app.gemma import decide_with_gemma
+
+    reply = json.dumps({
+        "isHighlight": True,
+        "score": 91,
+        "eventType": "GOAL",
+        "outcome": "scoring_play",
+        "reason": "ball in net at t=2.0s",
+        "reasoning": "Observed the net move.",
+        "verdict": {
+            "hypothesis": "GOAL",
+            "independentlyObserved": "ball inside the net",
+            "criteria": {
+                "ballCrossedLineBetweenPosts": True,
+                "ballInNet": True,
+                "scoreboardChanged": True,
+                "crowdErupted": True,
+            },
+            "contradictedBy": None,
+        },
+        "runningSummary": "Ordonez opens the scoring.",
+        "postTitle": "Ordonez opens the scoring",
+    })
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = json.dumps({"choices": [{"message": {"content": reply}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):  # noqa: A002,D102
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        decision = decide_with_gemma(
+            "GOAL",
+            {"trackCount": 2, "goalCrossed": True},
+            game_hint="soccer",
+            frames=[{"seq": 1, "base64": "AAA"}],
+            url=f"http://127.0.0.1:{server.server_port}",
+            compact=True,
+        )
+    finally:
+        server.shutdown()
+    assert decision["postTitle"] == "Ordonez opens the scoring"
+    # the announcer line is untouched by the title field
+    assert decision["runningSummary"] == "Ordonez opens the scoring."
+
+
+def test_highlight_response_declares_the_title_field():
+    """`/highlight` declares a response_model with `extra="ignore"`, which
+    silently DROPS an undeclared field (the ADAAAA-7221 failure mode). The title
+    must be declared or it never reaches the server."""
+    from app import HighlightDecision
+
+    assert "postTitle" in HighlightDecision.model_fields
+    assert HighlightDecision.model_fields["postTitle"].default == ""

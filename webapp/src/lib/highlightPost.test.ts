@@ -11,7 +11,9 @@ import {
   MAX_CAPTION_CHARS,
   momentRangeLabel,
   postTitles,
+  postTitleOf,
   suggestCaption,
+  withinPostTitleBar,
 } from "./highlightPost";
 import { buildZip, crc32 } from "./zip";
 import type { JobDetailHighlight, SummaryLogEntry } from "./jobDetail";
@@ -228,11 +230,23 @@ describe("post titles — gated sentences only (ADAAAA-8053 v8 §3b.1)", () => {
     expect(titles).toEqual([]);
   });
 
-  it("serves a long narrative whole (a title cut is a prefix, AC10)", () => {
+  it("refuses a long narrative instead of cutting it into a prefix (AC10 + ADAAAA-8318 bar)", () => {
     const long = "The action intensifies as the white-clad team pushes into the final third of the pitch.";
     const titles = postTitles(hl({ reason: undefined }), [entry(1, 68, long)]);
-    assertTitleSet(titles);
-    expect(titles[0]).toBe(long);
+    // ADAAAA-8318: an on-card option is capped to the copy-target bar (60 chars /
+    // 10 words). A sentence past it is REFUSED, never trimmed — a trimmed title
+    // was the AC10 defect (a prefix cut).
+    expect(titles).toEqual([]);
+    expect(titles.join("")).not.toContain("The action intensifies");
+  });
+
+  it("offers short gated sentences inside the copy-target bar (ADAAAA-8318)", () => {
+    const short = "Argentina break the deadlock.";
+    expect(withinPostTitleBar(short)).toBe(true);
+    expect(postTitles(hl({ reason: undefined }), [entry(1, 68, short)])).toEqual([short]);
+    // 61+ chars or 11+ words sit outside the bar
+    expect(withinPostTitleBar("x".repeat(61))).toBe(false);
+    expect(withinPostTitleBar("one two three four five six seven eight nine ten eleven")).toBe(false);
   });
 
   it("filters token options out of a stored legacy card (the `86f6ada4` triple)", () => {
@@ -248,6 +262,32 @@ describe("post titles — gated sentences only (ADAAAA-8053 v8 §3b.1)", () => {
     expect(captionFromTitle("Argentina breaks the deadlock")).toBe("Argentina breaks the deadlock.");
     expect(captionFromTitle("Argentina breaks the deadlock.")).toBe("Argentina breaks the deadlock.");
     expect(captionFromTitle("")).toBe("");
+  });
+});
+
+describe("postTitleOf — the card's copy target (ADAAAA-8318)", () => {
+  it("serves the stored/served postTitle byte-for-byte", () => {
+    expect(postTitleOf(hl({ postTitle: "Ordonez opens the scoring", localizedTs: 69 }))).toBe(
+      "Ordonez opens the scoring"
+    );
+  });
+
+  it("derives the deterministic title for a legacy row (no model call, never empty)", () => {
+    expect(postTitleOf(hl({ localizedTs: 69, eventType: "GOAL" }))).toBe("GOAL · 1:09");
+    expect(postTitleOf(hl({ start: 261, eventType: "BIG_PLAY" }))).toBe("BIG PLAY · 4:21");
+    expect(postTitleOf(hl({ eventType: undefined, outcome: undefined }))).not.toBe("");
+  });
+
+  it("never renders a `T+` prefix or a trailing period", () => {
+    const title = postTitleOf(hl({ localizedTs: 69 }));
+    expect(title).not.toContain("T+");
+    expect(title).not.toMatch(/[.!?]$/);
+  });
+
+  it("refuses a stored title that breaks the shape bar and falls back deterministically", () => {
+    expect(
+      postTitleOf(hl({ postTitle: "Ordonez shoots in the penalty area", localizedTs: 109, eventType: "SHOT" }))
+    ).toBe("SHOT · 1:49");
   });
 });
 

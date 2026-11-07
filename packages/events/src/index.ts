@@ -1752,6 +1752,14 @@ export const HighlightRecordSchema = z.object({
   // legacy rows and on the VOD rail, which keep their own render path (AC8).
   caption: z.string().optional(),
   cardTitles: z.array(z.string()).optional(),
+  // ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET — a short
+  // post title (<= 60 target / 70 hard max chars, <= 10 words, one clause, no
+  // colour beat, no place chain, no clock prefix, no trailing period) generated
+  // by the SAME decide pass as `caption` (one inference per window, no second
+  // call). Additive optional: absent on legacy rows and on the VOD rail, whose
+  // long-form prompt stays byte-identical (AC8); the read-time projection fills
+  // those deterministically (never empty, never a model call).
+  postTitle: z.string().optional(),
   // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
   // `reason` was derived from, with the frame that confirms it.
   colour: ColourSignalSchema.optional(),
@@ -2345,3 +2353,7 @@ export * from "./training";
 // server summary seam and the webapp seeded-caption seam share ONE import
 // specifier and cannot drift (`@highlights/events`).
 export * from "./caption-grounding";
+// ADAAAA-8318: the post-title contract (copy target) + its deterministic
+// fallback. Shared by the server write seam/projection and the webapp card so
+// one title function serves both.
+export * from "./post-title";

@@ -8,6 +8,7 @@ import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation,
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import {
   captionColour,
+  gatePostTitleValue,
   groundCaption,
   isQuietVerdict,
   regateServedSentence,
@@ -951,6 +952,10 @@ export interface DeferredGoalAttestation {
   reason?: string;
   caption?: string;
   cardTitles?: string[];
+  /** ADAAAA-8318: the gated post title (the card's copy target) for the
+   * pre-downgrade verdict, so a re-attested GOAL restores copy gated for the
+   * lane it enters. Absent when the gate refused it. */
+  postTitle?: string;
   colour?: ColourSignal;
   reasonRaw?: string;
   /** ADAAAA-8134 read counts the gate measured for this window (AC-R4). ADAAAA-8139:
@@ -967,6 +972,10 @@ export interface StoredSurfaceFields {
   colour?: ColourSignal;
   caption?: string;
   cardTitles?: string[];
+  /** ADAAAA-8318: the gated post title (the card's copy target). Absent when the
+   * model produced none or the gate refused it — the read projection then derives
+   * the deterministic title. */
+  postTitle?: string;
   reason_raw?: string;
 }
 
@@ -2197,6 +2206,12 @@ export interface DecisionResult {
   // decide brain updated for this window. The server persists it onto the job
   // and forwards it into the next cadence tick. Optional + additive.
   runningSummary?: string;
+  // ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET — a short
+  // post title produced by the SAME decide reply as `runningSummary`. Optional
+  // and additive: the VOD/full contract never asks for one, so VOD rows carry
+  // none and project a deterministic title instead. Gated at the write seam
+  // (`storedSurfaceFor`) before it is ever stored.
+  postTitle?: string;
   // ADAAAA-7155 Increment A / ADAAAA-7156 Increment B: the per-window analysis
   // payload (exact prompt / ordered dataItems / media refs / full response)
   // returned by the decide service for this window. Carried across the adapter
@@ -5798,10 +5813,20 @@ export function storedSurfaceFor(
   // card is earned only by corroboration (§3.4), never by copy (clause 2).
   const quietCopy = grounding && !card.caption && !reasonClean ? quietStoredCopy(rawSurface, grounding) : "";
   const storedReason = grounding ? card.caption || (reasonClean ? shapedReason : quietCopy) : gatedReason;
+  // ADAAAA-8318 (ADAAAA-8302 Option 2): the CARD'S COPY TARGET. The model writes
+  // the title in the same reply as the announcer line; it crosses the same v9
+  // grounding gate here (goal claim on this row's verdict, names from this
+  // window's prompt, no internal tokens) PLUS the title shape bar (<= 70 chars,
+  // <= 10 words, one clause, no place chain, no clock prefix, no trailing
+  // period). A refusal stores NOTHING: the read projection derives the
+  // deterministic `LABEL · m:ss · subject` title from stored facts, which is
+  // always better than a half-gated claim on a customer card.
+  const postTitle = gatePostTitleValue(decision.postTitle, grounding) ?? undefined;
   return {
     ...(storedReason ? { reason: storedReason } : {}),
     ...(grounding?.colourSignal && captionColour(storedReason) ? { colour: grounding.colourSignal } : {}),
     ...(card.caption ? { caption: card.caption, cardTitles: card.cardTitles } : {}),
+    ...(postTitle ? { postTitle } : {}),
     ...(grounding && storedReason !== decision.reason && (decision.reason ?? "").trim() ? { reason_raw: decision.reason } : {}),
   };
 }
@@ -6387,6 +6412,8 @@ export async function acceptVideoDecision(
     // colour clause, no dropped period).
     ...(surface.colour ? { colour: surface.colour } : {}),
     ...(surface.caption ? { caption: surface.caption, cardTitles: surface.cardTitles } : {}),
+    // ADAAAA-8318: the copy target rides the row beside the announcer caption.
+    ...(surface.postTitle ? { postTitle: surface.postTitle } : {}),
     ...(surface.reason_raw ? { reason_raw: surface.reason_raw } : {}),
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
     // distinctly via the outcome/nearMiss flag.
@@ -6441,6 +6468,7 @@ export async function acceptVideoDecision(
       reason: scoringSurface.reason,
       caption: scoringSurface.caption,
       cardTitles: scoringSurface.cardTitles,
+      postTitle: scoringSurface.postTitle,
       colour: scoringSurface.colour,
       reasonRaw: scoringSurface.reason_raw,
       // ADAAAA-8139: the read counts the gate measured, so the persisted-frame

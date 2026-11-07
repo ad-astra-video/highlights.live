@@ -198,7 +198,9 @@ def test_static_block_budget():
     assert static_block <= MAX_STATIC_BLOCK_CHARS
     # measured deltas vs v2 (reported on the ticket, bounded here)
     assert len(STATIC_PREAMBLE) - V2_PREAMBLE_CHARS <= 2500
-    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 120
+    # v3 added +93; ADAAAA-8318 adds the `postTitle` field (+145) — bounded at 260
+    # so another field cannot ride along. The FULL/VOD contract stays at 0 delta.
+    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 260
     assert len(_OUTPUT_CONTRACT_FULL) - V2_FULL_CONTRACT_CHARS <= 100
 
 

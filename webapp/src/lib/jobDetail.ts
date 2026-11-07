@@ -349,6 +349,13 @@ export interface JobDetailHighlight {
   // the derived render path.
   caption?: string;
   cardTitles?: string[];
+  /** ADAAAA-8318 (ADAAAA-8302 Option 2): the card's COPY TARGET — the post title
+   * the "Suggested caption" / "Use as caption" affordance carries, served by the
+   * detail route on EVERY clip row (stored when the decide gate accepted the
+   * model's title, deterministic `LABEL · m:ss · subject` otherwise). Absent on
+   * payloads from a server that predates it, where the card derives the same
+   * deterministic title from this row's stored facts. No `T+` prefix. */
+  postTitle?: string;
   createdAt: string;
   // ADAAAA-7622: the deterministic localized highlight instant (seconds from
   // stream start) the delivered clip is centered on, plus the signal that
