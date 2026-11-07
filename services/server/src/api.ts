@@ -79,6 +79,8 @@ import { buildPostableHighlights, countsFromPostable, postableCountFields, quota
 // ADAAAA-7984: deliver post-goal celebration/replay windows as alternative clips
 // ATTACHED to their owning GOAL highlight (never as highlights themselves).
 import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./celebration-alternatives";
+import { attachReplayWindows, partitionAttachedReplays, replayAlternativeFrom } from "./replay-alternatives";
+import { clipChoiceFor, servedClipUri } from "./clip-choice";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
@@ -3558,6 +3560,30 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       resume: mergeResumeCheckpoint(store.getJob(jobId)?.resume, { phase: "finalize" }),
     });
     attemptStats.phase = "finalize";
+    // ADAAAA-8321 (Inc 1): mark windows whose footage repeats an earlier moment
+    // of the SAME job as replays of it, from the frames extraction already wrote
+    // (one ffmpeg pass over the JPEGs, no GPU, no decide). Runs BEFORE the
+    // alternative delivery below so the read side groups the marked rows. Never
+    // fails the job: an attach is additive and swallows its own errors, and the
+    // owner record is never written.
+    let replaysAttached = 0;
+    try {
+      const attach = await attachReplayWindows({
+        store,
+        jobId,
+        ffmpegPath: cfg.ffmpegPath,
+        framesDir: frameDir,
+        sampleFps,
+        // The material a decide call had in memory: the rolling cache ends at the
+        // moment's anchor and holds `vodDecideWindowN` frames.
+        windowS: Math.max(1, cfg.vodDecideWindowN / Math.max(1, sampleFps)),
+        log: (m) => console.log(m),
+      });
+      replaysAttached = attach.attached;
+    } catch (e: any) {
+      console.error(`[replay:${jobId}] attach failed:`, String(e?.message || e));
+    }
+    void replaysAttached;
     // ADAAAA-7984 (ADAAAA-7953 decision A+): deliver the post-goal celebration /
     // replay windows this pass decided as ALTERNATIVE CLIPS of their owning GOAL
     // highlight. Derived from the STORED rows (accepted GOAL highlights + the
@@ -5271,6 +5297,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // notable lane. Same pass, so `job.alternativeClipsDelivered` below cannot
     // disagree with the grouped lists.
     const alternativesByOwner = groupAlternativesByOwner(store.alternativesForJob(job.id));
+    // ADAAAA-8321: replay windows attached to a moment are delivered in the SAME
+    // alternative lane (their clip already exists, so nothing is re-cut and
+    // nothing is billed twice). They are derived from the marked stored rows, so
+    // a read never has to re-run the detector.
+    const jobHighlights = store.highlightsForJob(job.id);
+    const attachedReplays = partitionAttachedReplays(jobHighlights);
+    for (const [ownerId, replays] of attachedReplays.byOwner) {
+      const owner = jobHighlights.find((h) => h.id === ownerId);
+      const list = alternativesByOwner.get(ownerId) ?? [];
+      for (const r of replays) list.push(replayAlternativeFrom(r, owner?.end));
+      list.sort((a, b) => a.windowAnchorTs - b.windowAnchorTs);
+      alternativesByOwner.set(ownerId, list);
+    }
     // ADAAAA-8318 (ADAAAA-8302 Option 2): every card carries a copy target.
     // The stored `postTitle` is served byte-for-byte while it satisfies the title
     // shape bar; a legacy row (or one whose title the write gate refused) gets the
@@ -5298,27 +5337,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const stored = (h.caption ?? "").trim();
       return stored || copyTargetFor(h);
     };
-    const postableHighlights = postable.highlights.map((h) => ({
-      ...h,
-      postTitle: copyTargetFor(h),
-      caption: announcerDetailFor(h),
-      exportUri: exportUriForHighlight(h, user.id),
-      ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
-    }));
+    const postableHighlights = postable.highlights.map((h) => {
+      // ADAAAA-8321 (AC6): a moment that has a picked alternative serves THAT
+      // clip everywhere (card, download/export, post); with no pick this is the
+      // record's own clip and nothing changes.
+      const served = { ...h, clipUri: servedClipUri(h) };
+      return {
+        ...served,
+        postTitle: copyTargetFor(h),
+        caption: announcerDetailFor(h),
+        exportUri: exportUriForHighlight(served, user.id),
+        ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
+      };
+    });
     // ADAAAA-8178: a notable row is rendered by the SAME card the postable feed
     // uses, so its Download / Copy Link must work too. The export token is minted
     // per caller for EVERY row (the /clips/* export path verifies the token
     // against the highlight id and marks it; it has no postability gate), so a
     // notable clip downloads and marks exactly like a postable one.
-    const notableHighlights = postable.notable.map((h) => ({
-      ...h,
-      // ADAAAA-8318: the notable lane mounts the same card, so it needs the same
-      // copy target (the deterministic title for a non-goal moment).
-      postTitle: copyTargetFor(h),
-      // ADAAAA-8328: and the same never-empty announcer detail.
-      caption: announcerDetailFor(h),
-      exportUri: exportUriForHighlight(h, user.id),
-    }));
+    const notableHighlights = postable.notable.map((h) => {
+      const served = { ...h, clipUri: servedClipUri(h) };
+      return {
+        ...served,
+        // ADAAAA-8318: the notable lane mounts the same card, so it needs the same
+        // copy target (the deterministic title for a non-goal moment).
+        postTitle: copyTargetFor(h),
+        // ADAAAA-8328: and the same never-empty announcer detail.
+        caption: announcerDetailFor(h),
+        exportUri: exportUriForHighlight(served, user.id),
+      };
+    });
 
     // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
     // narratives) derived from STORED data only. Zero decide calls / GPU
@@ -5354,6 +5402,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         },
         highlights: postableHighlights,
         notableHighlights,
+        // ADAAAA-8321: how many replay windows this job attached as alternatives
+        // (never their own highlights). Additive top-level field.
+        replaysAttached: attachedReplays.attached,
         duplicateHighlights: postable.duplicates,
         traces,
         sections: sectionList,
@@ -6834,6 +6885,42 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const all = store.allHighlights();
     return { highlights: user.role === "admin" ? all : all.filter((h) => h.ownerId === user.id) };
   });
+
+  /**
+   * ADAAAA-8321 (AC6): pick which delivered clip a moment serves.
+   *
+   * `{ alternativeId: "<id>" }` serves that alternative's already-cut clip;
+   * `{ alternativeId: null }` restores the moment's own original cut. The pick
+   * is a pointer swap persisted on the record, so it survives reload and every
+   * surface (card, download, export, post) serves the chosen footage with no
+   * re-cut, no GPU and no new row.
+   */
+  app.post<{ Params: { id: string }; Body: { alternativeId?: string | null } }>(
+    "/highlights/:id/clip-choice",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const user = req.user as { id: string; role: string };
+      const cur = store.getHighlight(req.params.id);
+      if (!cur) return reply.code(404).send({ error: "no highlight" });
+      if (user.role !== "admin" && cur.ownerId !== user.id) {
+        return reply.code(403).send({ error: "not your highlight" });
+      }
+      const alternativeId = typeof req.body?.alternativeId === "string" ? req.body.alternativeId : null;
+      if (!alternativeId) {
+        await store.setClipChoice(cur.id, undefined);
+        return { ok: true, clipUri: servedClipUri(cur), clipChoice: null };
+      }
+      // The alternatives a moment may serve: delivered celebration rows plus any
+      // replay attached to it. Both already carry a cut clip.
+      const celebration = store.alternativesForJob(cur.jobId).filter((a) => a.highlightId === cur.id);
+      const replays = partitionAttachedReplays(store.highlightsForJob(cur.jobId)).byOwner.get(cur.id) ?? [];
+      const choices = [...celebration, ...replays.map((r) => replayAlternativeFrom(r, cur.end))];
+      const choice = clipChoiceFor(cur.id, alternativeId, choices);
+      if (!choice) return reply.code(422).send({ error: "unknown alternative for this highlight" });
+      await store.setClipChoice(cur.id, choice);
+      return { ok: true, clipUri: choice.clipUri, clipChoice: choice };
+    }
+  );
 
   app.post<{ Params: { id: string }; Body: { status: "accepted" | "rejected" } }>(
     "/highlights/:id/review",

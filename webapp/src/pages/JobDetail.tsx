@@ -7,6 +7,9 @@ import { VideoClip } from "../components/VideoClip";
 import {
   clipRailBadgeLabel,
   clipRailClampIndex,
+  clipRailDefaultIndex,
+  clipRailIdentityLabel,
+  clipRailPickerLabel,
   clipRailIndexFromScroll,
   clipRailScrollLeft,
   clipRailSlides,
@@ -1072,15 +1075,37 @@ export function HighlightActionRow({
  * (and its `preload="metadata"`) is preserved: an offscreen slide fetches
  * nothing until it approaches the viewport.
  */
-function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admin: boolean }) {
+function ClipRail({
+  highlight: h,
+  admin,
+  onPick,
+  pendingPick = null,
+}: {
+  highlight: JobDetailHighlight;
+  admin: boolean;
+  /** ADAAAA-8321 (AC6): serve an alternative's clip (`null` = original). */
+  onPick?: (alternativeId: string | null) => void;
+  pendingPick?: string | null;
+}) {
   const slides = useMemo(() => clipRailSlides(h), [h]);
   const count = slides.length;
-  const [active, setActive] = useState(0);
-  const activeRef = useRef(0);
+  // The card opens on the moment's PICK when it has one; the original clip is
+  // the default otherwise (board policy).
+  const [active, setActive] = useState(() => clipRailDefaultIndex(h));
+  const activeRef = useRef(active);
   const railRef = useRef<HTMLDivElement | null>(null);
   // A live job can grow its alternatives while the card is mounted, so the
   // rendered index is clamped to the slides that actually exist.
   const shown = clipRailClampIndex(active, count);
+  // A pick or a pick-restore refreshes the payload; the rail opens on the served
+  // slide so the card shows the same footage the server will post.
+  const chosenId = h.clipChoice?.alternativeId ?? null;
+  useEffect(() => {
+    const next = clipRailDefaultIndex(h);
+    activeRef.current = next;
+    setActive(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chosenId]);
 
   const goTo = useCallback(
     (target: number) => {
@@ -1145,7 +1170,10 @@ function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admi
             className="w-full shrink-0 snap-start"
             data-detail-clip-slide
             data-clip-index={index}
-            {...(slide.kind === "celebration" ? { "data-detail-alternative": true } : {})}
+            {...(slide.kind === "celebration" || slide.kind === "replay"
+              ? { "data-detail-alternative": true }
+              : {})}
+            {...(slide.kind === "replay" ? { "data-detail-replay": true } : {})}
           >
             <VideoClip
               src={slide.src}
@@ -1164,12 +1192,32 @@ function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admi
                   slide.kind === "highlight" ? "text-neon" : "text-purple"
                 }`}
               >
-                {slide.kind === "highlight" ? "Highlight" : "Celebration"}
+                {clipRailIdentityLabel(slide).split(" · ")[0]}
               </span>
               <span className="font-mono text-slate-ink" data-detail-clip-range>
                 {`· ${momentRangeLabel(slide.start, slide.end)}`}
               </span>
             </div>
+            {/* ADAAAA-8321 (AC6): an alternative is pickable — choosing it makes
+                the posted/public clip carry THIS footage; clearing restores the
+                original. The original stays the default until a pick is made. */}
+            {slide.alternativeId && onPick && (
+              <div className="flex items-center justify-between gap-2 bg-dusk/90 px-3 py-1.5 text-xs">
+                <span className="text-mut" data-detail-clip-pick-label>
+                  {clipRailPickerLabel(slide)}
+                </span>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 rounded-full border border-purple/60 px-2 py-0.5 font-bold uppercase tracking-wide text-purple transition hover:border-neon hover:text-neon focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                  data-detail-clip-pick={slide.alternativeId}
+                  aria-pressed={chosenId === slide.alternativeId}
+                  disabled={pendingPick !== null && pendingPick === slide.alternativeId}
+                  onClick={() => onPick(chosenId === slide.alternativeId ? null : slide.alternativeId!)}
+                >
+                  {chosenId === slide.alternativeId ? "Serving — use original" : "Use this clip"}
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -1221,6 +1269,10 @@ function ClipRail({ highlight: h, admin }: { highlight: JobDetailHighlight; admi
 export interface HighlightCardProps {
   highlight: JobDetailHighlight;
   onDecision?: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
+  /** ADAAAA-8321 (AC6): serve an alternative clip for this moment (`null` =
+   * restore the original). */
+  onClipChoice?: (h: JobDetailHighlight, alternativeId: string | null) => void;
+  pendingClipChoice?: string | null;
   /** Which review action is currently in-flight for this card (drives the
    * per-control loading state; disables both controls while pending). */
   pendingStatus?: "accepted" | "rejected" | null;
@@ -1260,6 +1312,8 @@ export interface HighlightCardProps {
 export function HighlightCard({
   highlight: h,
   onDecision,
+  onClipChoice,
+  pendingClipChoice = null,
   pendingStatus = null,
   caption = "",
   onCaptionChange,
@@ -1332,7 +1386,12 @@ export function HighlightCard({
       {/* ADAAAA-8304: the card's video AREA is the clip rail — the highlight's
           own clip plus one slide per delivered celebration/replay clip. The
           metadata block below keeps everything else (never a second player). */}
-      <ClipRail highlight={h} admin={admin} />
+      <ClipRail
+        highlight={h}
+        admin={admin}
+        onPick={onClipChoice ? (alternativeId) => onClipChoice(h, alternativeId) : undefined}
+        pendingPick={pendingClipChoice}
+      />
       {/* ADAAAA-7881: the audio state describes the CLIP, so it sits with the
           clip — once, quiet, and never duplicated below the metadata. */}
       {h.hasAudio === false && (
@@ -2062,6 +2121,8 @@ export function JobDetail() {
   const windowInspectRef = useRef(createWindowInspectStore(id, fetchSectionInspect));
   // Which review action is in-flight for which highlight id (per-control loading).
   const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
+  // ADAAAA-8321 (AC6): which alternative pick is in flight for which card.
+  const [pendingClipChoice, setPendingClipChoice] = useState<{ id: string; alternativeId: string } | null>(null);
   // ADAAAA-7915 (increment 3): the RAW audit rows of this job (GET /jobs/:id,
   // owner-or-admin scoped). `detail.highlights` is the POSTABLE projection and
   // drops every rejected row, so a rejected clip had no surface to render on and
@@ -2618,6 +2679,50 @@ export function JobDetail() {
     }
   }
 
+  /**
+   * ADAAAA-8321 (AC6): pick the clip this moment serves. A pointer swap on the
+   * record, so the card, download, export and post all serve the chosen
+   * footage, and the pick survives reload. `null` restores the original.
+   */
+  async function pickClip(h: JobDetailHighlight, alternativeId: string | null) {
+    if (pendingClipChoice) return;
+    setPendingClipChoice({ id: h.id, alternativeId: alternativeId ?? "original" });
+    try {
+      const r = await api<{ clipUri?: string; clipChoice?: JobDetailHighlight["clipChoice"] | null }>(
+        `/highlights/${h.id}/clip-choice`,
+        { body: { alternativeId } }
+      );
+      const nextUri = r?.clipUri || h.clipUri;
+      const nextChoice = r?.clipChoice ?? undefined;
+      const patchRow = (x: JobDetailHighlight): JobDetailHighlight =>
+        x.id === h.id ? { ...x, clipUri: nextUri, clipChoice: nextChoice } : x;
+      setDetail((d) =>
+        d
+          ? {
+              ...d,
+              highlights: d.highlights.map(patchRow),
+              notableHighlights: (d.notableHighlights ?? []).map(patchRow),
+            }
+          : d
+      );
+      // Re-fetch the authoritative payload so the persisted pick wins over any
+      // concurrent SSE refresh that read a stale snapshot.
+      try {
+        const fresh = await fetchJobDetail(id, { inspect });
+        if (aliveRef.current) {
+          setDetail(fresh);
+          setError(null);
+        }
+      } catch {
+        /* keep the optimistic local update; the next refresh reconciles */
+      }
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setPendingClipChoice(null);
+    }
+  }
+
   async function review(h: JobDetailHighlight, status: "accepted" | "rejected") {
     // Guard against double-submit while a review is already in-flight for this card.
     if (pendingReview) return;
@@ -2928,6 +3033,8 @@ export function JobDetail() {
                   key={h.id}
                   highlight={h}
                   onDecision={review}
+                  onClipChoice={pickClip}
+                  pendingClipChoice={pendingClipChoice?.id === h.id ? pendingClipChoice.alternativeId : null}
                   pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
                   caption={captionOf(h)}
                   onCaptionChange={setHighlightCaption}
