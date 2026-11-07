@@ -134,6 +134,9 @@ COMPACT_JSON_FIELDS = [
     "crowdErupted",
     "contradictedBy",
     "runningSummary",
+    # ADAAAA-8318: the clip card's copy target — ONE extra output field in the
+    # SAME reply (no second decide call). The announcer line above is unchanged.
+    "postTitle",
 ]
 
 
@@ -316,6 +319,9 @@ def test_compact_prompt_delta_is_bounded():
     # 14509 chars on this evidence dict (+3398, of which +2385 is the static
     # preamble and +93 the compact contract). Prefill only — the field set is
     # unchanged and the caption budgets are untouched.
+    # ADAAAA-8318 adds the `postTitle` field (+145 chars on the contract; ~+36
+    # input tokens, inside the ticket's +40 budget) and one output field. Prefill
+    # only — the announcer budgets are untouched.
     # Bound the growth so a later edit cannot silently inflate every window.
     assert len(_compact_prompt()) <= 14800
 

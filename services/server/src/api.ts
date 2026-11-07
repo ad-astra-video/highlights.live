@@ -59,6 +59,8 @@ import {
   DatasetSchema,
   DetectionTrainingSampleSchema,
   JobDetailSchema,
+  postTitleTeamSubject,
+  projectPostTitle,
   type Dataset,
   type DetectionTrainingSample,
   type HighlightRecord,
@@ -534,6 +536,9 @@ export async function attestDeferredGoalHighlight(
     // GOAL row. Cleared here so the page re-derives copy from the restored reason.
     caption: copy ? copy.caption : upgrade.caption,
     cardTitles: copy ? copy.cardTitles : upgrade.cardTitles,
+    // ADAAAA-8318: the copy target is part of the same surface set — a promoted
+    // GOAL must never pair a scoring caption with a celebration title.
+    postTitle: copy ? copy.postTitle : upgrade.postTitle,
     colour: copy ? copy.colour : upgrade.colour,
     reason_raw: copy ? copy.reason_raw : upgrade.reasonRaw,
     // ADAAAA-8212: the MEASURED attestation that resolved the transition replaces
@@ -5296,14 +5301,42 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // alternative lane (their clip already exists, so nothing is re-cut and
     // nothing is billed twice). They are derived from the marked stored rows, so
     // a read never has to re-run the detector.
-    const attachedReplays = partitionAttachedReplays(store.highlightsForJob(job.id));
+    const jobHighlights = store.highlightsForJob(job.id);
+    const attachedReplays = partitionAttachedReplays(jobHighlights);
     for (const [ownerId, replays] of attachedReplays.byOwner) {
-      const owner = store.highlightsForJob(job.id).find((h) => h.id === ownerId);
+      const owner = jobHighlights.find((h) => h.id === ownerId);
       const list = alternativesByOwner.get(ownerId) ?? [];
       for (const r of replays) list.push(replayAlternativeFrom(r, owner?.end));
       list.sort((a, b) => a.windowAnchorTs - b.windowAnchorTs);
       alternativesByOwner.set(ownerId, list);
     }
+    // ADAAAA-8318 (ADAAAA-8302 Option 2): every card carries a copy target.
+    // The stored `postTitle` is served byte-for-byte while it satisfies the title
+    // shape bar; a legacy row (or one whose title the write gate refused) gets the
+    // deterministic `LABEL · m:ss · subject` title — pure, no model call at read
+    // time, never empty. The subject is only ever a team the row's own stored copy
+    // names from the job's `matchContext`, so no name is invented here.
+    const copyTargetFor = (h: HighlightRecord): string =>
+      projectPostTitle(h, { subject: postTitleTeamSubject(h, job.matchContext) });
+    // ADAAAA-8328 (Defect 2, ADAAAA-8319 QA FAIL of AC4): the announcer DETAIL
+    // never goes missing. The write seam legitimately refuses copy it cannot
+    // gate (a score claim this window never measured), so a row can carry
+    // `reason_raw` and NO `caption`/`cardTitles`/`reason` — measured on job
+    // 55a0eb33, 2 of 3 rows. Losing the card's "What happened" line is exactly
+    // what the parent ticket forbids, and it has nothing to do with the model's
+    // `postTitle`: a refused/absent title must NEVER take the announcer line
+    // with it (the title is a SEPARATE surface, gated separately, and the copy
+    // fields below are spread from the stored row untouched).
+    //
+    // The degrade is the SAME fact-only derivation the copy target uses — the
+    // stored label plus the row's own window instant plus, only when the row's
+    // own copy names one, a team from the job's `matchContext`. Pure, no model
+    // call, never empty, and it asserts nothing this window did not store. A
+    // stored caption is served byte-for-byte.
+    const announcerDetailFor = (h: HighlightRecord): string => {
+      const stored = (h.caption ?? "").trim();
+      return stored || copyTargetFor(h);
+    };
     const postableHighlights = postable.highlights.map((h) => {
       // ADAAAA-8321 (AC6): a moment that has a picked alternative serves THAT
       // clip everywhere (card, download/export, post); with no pick this is the
@@ -5311,6 +5344,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const served = { ...h, clipUri: servedClipUri(h) };
       return {
         ...served,
+        postTitle: copyTargetFor(h),
+        caption: announcerDetailFor(h),
         exportUri: exportUriForHighlight(served, user.id),
         ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
       };
@@ -5322,7 +5357,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // notable clip downloads and marks exactly like a postable one.
     const notableHighlights = postable.notable.map((h) => {
       const served = { ...h, clipUri: servedClipUri(h) };
-      return { ...served, exportUri: exportUriForHighlight(served, user.id) };
+      return {
+        ...served,
+        // ADAAAA-8318: the notable lane mounts the same card, so it needs the same
+        // copy target (the deterministic title for a non-goal moment).
+        postTitle: copyTargetFor(h),
+        // ADAAAA-8328: and the same never-empty announcer detail.
+        caption: announcerDetailFor(h),
+        exportUri: exportUriForHighlight(served, user.id),
+      };
     });
 
     // ADAAAA-7623: the summary ladder (match summary -> chapters -> window

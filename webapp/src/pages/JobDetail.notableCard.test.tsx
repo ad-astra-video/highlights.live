@@ -46,6 +46,23 @@ function count(html: string, needle: string): number {
   return html.split(needle).length - 1;
 }
 
+/**
+ * The badge element's OWN markup (ADAAAA-8318).
+ *
+ * The card now carries a copy target (`data-detail-copy-target`) whose
+ * deterministic label can legitimately contain the moment-type words the badge
+ * uses (`BIG PLAY · 4:21` is ADAAAA-8302 Option 2's own example). "Exactly one
+ * badge" is a statement about the BADGE, so the label counts below are scoped to
+ * the badge element instead of the whole card.
+ */
+function badgeHtml(html: string): string {
+  const at = html.indexOf("data-detail-notable-badge");
+  if (at < 0) return "";
+  const start = html.lastIndexOf("<", at);
+  const end = html.indexOf("</span>", at);
+  return html.slice(start, end < 0 ? undefined : end + 7);
+}
+
 function card(row: JobDetailHighlight, admin = true): string {
   return text(
     renderToString(
@@ -66,15 +83,15 @@ describe("AC2 — exactly one notable badge per card, with the documented preced
       const html = card(row);
       expect(count(html, "data-detail-notable-badge")).toBe(1);
       expect(count(html, `data-notable-kind="${kind}"`)).toBe(1);
-      expect(count(html, label)).toBe(1);
+      expect(count(badgeHtml(html), label)).toBe(1);
     });
   }
 
   it("precedence: a provisional goal that is also a big_play reads GOAL (unconfirmed), never BIG PLAY", () => {
     const html = card(hl({ provisionalGoal: provisional(), outcome: "big_play" }));
     expect(count(html, "data-detail-notable-badge")).toBe(1);
-    expect(count(html, "GOAL (unconfirmed)")).toBe(1);
-    expect(count(html, "BIG PLAY")).toBe(0);
+    expect(count(badgeHtml(html), "GOAL (unconfirmed)")).toBe(1);
+    expect(count(badgeHtml(html), "BIG PLAY")).toBe(0);
     // The generic provisional chip is folded into the notable badge: no second
     // copy of the same string on the card.
     expect(count(html, "data-detail-provisional-goal")).toBe(0);
@@ -83,9 +100,9 @@ describe("AC2 — exactly one notable badge per card, with the documented preced
   it("no badge for a notable row whose outcome is neither (it is never mislabelled)", () => {
     const html = card(hl({ outcome: "scoring_play" }));
     expect(count(html, "data-detail-notable-badge")).toBe(0);
-    expect(count(html, "BIG PLAY")).toBe(0);
-    expect(count(html, "NEAR MISS")).toBe(0);
-    expect(count(html, "GOAL (unconfirmed)")).toBe(0);
+    expect(count(badgeHtml(html), "BIG PLAY")).toBe(0);
+    expect(count(badgeHtml(html), "NEAR MISS")).toBe(0);
+    expect(count(badgeHtml(html), "GOAL (unconfirmed)")).toBe(0);
   });
 
   it("the plain (postable) card still renders no notable badge", () => {
@@ -113,9 +130,12 @@ describe("AC2 — exactly one notable badge per card, with the documented preced
       )
     );
     expect(count(html, "data-detail-notable-badge")).toBe(3);
-    expect(count(html, "BIG PLAY")).toBe(1);
-    expect(count(html, "GOAL (unconfirmed)")).toBe(1);
-    expect(count(html, "NEAR MISS")).toBe(1);
+    // one badge kind each, counted inside each badge element
+    const badges = html.split("data-detail-notable-badge").slice(1);
+    const kinds = badges.map((chunk) => chunk.slice(0, chunk.indexOf("</span>") + 7));
+    expect(kinds.filter((b) => b.includes("BIG PLAY")).length).toBe(1);
+    expect(kinds.filter((b) => b.includes("GOAL (unconfirmed)")).length).toBe(1);
+    expect(kinds.filter((b) => b.includes("NEAR MISS")).length).toBe(1);
   });
 });
 

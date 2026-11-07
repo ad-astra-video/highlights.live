@@ -9,6 +9,7 @@ import {
   hasTerminalPunctuation,
   humanEventLabel as sharedHumanEventLabel,
   isServableCardOption,
+  projectPostTitle,
   stripInternalTokens,
   type CaptionGroundingContext,
 } from "@highlights/events";
@@ -308,6 +309,38 @@ export function suggestCaption(
   return sentenceCase(body) || sentenceCase(fallback);
 }
 
+/** ADAAAA-8318 (ADAAAA-8302 Option 2): the copy target's own bar — a card title
+ * OPTION is refused (never cut) past it, the same 60-char / 10-word limit the
+ * write seam holds `postTitle` to. */
+export const POST_TITLE_MAX_CHARS = 60;
+export const POST_TITLE_MAX_WORDS = 10;
+
+/** Does a card option fit the copy-target bar? A refusal keeps every served
+ * option byte-identical (v8 §3b.1) instead of trimming it into a prefix. */
+export function withinPostTitleBar(title: string): boolean {
+  const t = (title ?? "").trim();
+  if (!t) return false;
+  return t.length <= POST_TITLE_MAX_CHARS && t.split(/\s+/).length <= POST_TITLE_MAX_WORDS;
+}
+
+/**
+ * ADAAAA-8318: the card's COPY TARGET — the string "Suggested caption" /
+ * "Use as caption" carries. The server serves `postTitle` on every clip row
+ * (stored when the decide gate accepted it, deterministic `LABEL · m:ss ·
+ * subject` otherwise); an older payload, or a component test that carries none,
+ * derives the SAME deterministic title from the row's stored facts, so the copy
+ * target is never empty and never the announcer line.
+ *
+ * Pure: no network, no model call, no `T+` prefix (the deterministic title
+ * renders its own `m:ss` clock segment).
+ */
+export function postTitleOf(
+  h: Pick<JobDetailHighlight, "eventType" | "outcome" | "reason" | "caption"> &
+    Pick<Partial<JobDetailHighlight>, "postTitle" | "localizedTs" | "start">
+): string {
+  return projectPostTitle(h);
+}
+
 /** Longest post title the card will suggest. Retained for `captionFromTitle`
  * callers; card OPTIONS are now whole gated sentences (v8 §3b.1) capped at the
  * stored card-option ceiling so a served option is the stored string itself. */
@@ -338,7 +371,10 @@ export function postTitles(
   // served: it is filtered here (a refused option is not a rewrite).
   const stored = (h.cardTitles ?? [])
     .filter((t): t is string => typeof t === "string" && !!t.trim())
-    .filter((t) => isServableCardOption(t));
+    .filter((t) => isServableCardOption(t))
+    // ADAAAA-8318: an on-card option is capped to the SAME copy-target bar as
+    // `postTitle` (60 chars / 10 words). A longer sentence is REFUSED, never cut.
+    .filter((t) => withinPostTitleBar(t));
   if (stored.length) return stored.slice(0, 3);
   const selected = selectNarrative(h, log);
   const grounding = ctx ?? captionGroundingFor(h, { fromLog: selected.fromLog });
@@ -353,6 +389,8 @@ export function postTitles(
     const title = (value ?? "").trim();
     if (!title || title.length > MAX_CARD_OPTION_CHARS) return;
     if (!isServableCardOption(title)) return;
+    // ADAAAA-8318: the option bar is the post-title bar, not the caption's.
+    if (!withinPostTitleBar(title)) return;
     if (!out.includes(title)) out.push(title);
   };
   push(narrative);

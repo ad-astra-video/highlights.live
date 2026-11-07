@@ -427,6 +427,15 @@ class HighlightDecision(BaseModel):
     # after this window, so the server persists it and carries it into the next
     # cadence tick. Bounded (compacted). Empty when the path does not produce one.
     runningSummary: str = ""
+    # ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET — a short
+    # post title (<60 chars / <10 words, one clause) the SAME reply produces
+    # beside the announcer line. Declared here for the same reason
+    # `runningSummary` is: `extra="ignore"` above silently DROPS an undeclared
+    # field at the `/highlight` response boundary, so an undeclared title would
+    # never reach the server. Empty on the VOD/full contract and the rule path;
+    # the server write seam gates it and the read projection fills a
+    # deterministic title when it is absent or refused.
+    postTitle: str = ""
     # ADAAAA-7155 Increment A / ADAAAA-7221: the per-window LLM inspection block —
     # the exact prompt, the ordered dataItems, the frame/image refs, the audio/asr
     # context and the full model response (reasoning / verdict / evidenceAttested /

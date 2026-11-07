@@ -437,6 +437,8 @@ export class Store {
         | "reason"
         | "caption"
         | "cardTitles"
+        // ADAAAA-8318: the card's copy target moves with the surface set.
+        | "postTitle"
         | "colour"
         | "reason_raw"
         | "deferredAttestation"

@@ -21,7 +21,7 @@ import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { CostTimePanel, CostTimeToggle } from "../components/CostTimePanel";
 import { SummaryLadderView } from "../components/SummaryLadder";
-import { batchManifest, captionFromTitle, clipFileName, copyExportLink, copyText, exportUrl, highlightGrounding, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
+import { batchManifest, clipFileName, copyExportLink, copyText, exportUrl, highlightGrounding, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitleOf, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
 import { groundSummaryItems } from "@highlights/events";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
@@ -1344,7 +1344,13 @@ export function HighlightCard({
   // uncorroborated is never seeded as a post or titled "Goal: …".
   const grounding = highlightGrounding(h, summaryLog, fastRail);
   const titles = postTitles(h, summaryLog, grounding);
-  const shownCaption = localCaption ?? (caption || suggestCaption(h, summaryLog, grounding));
+  // ADAAAA-8318 (ADAAAA-8302 Option 2): the COPY TARGET is the post title, and
+  // the announcer play-by-play line becomes the card's collapsed "What happened"
+  // detail. `postTitleOf` reads the server-served value (stored-if-gated, else
+  // the deterministic `LABEL · m:ss · subject`) and never carries a `T+` prefix.
+  const copyTarget = postTitleOf(h);
+  const announcer = suggestCaption(h, summaryLog, grounding);
+  const shownCaption = localCaption ?? (caption || copyTarget);
   // ADAAAA-8178: the notable lane's ONE badge (provisional goal > big play >
   // near miss). `null` on a notable row whose outcome is neither, in which case
   // the card simply carries no badge rather than inventing a label.
@@ -1460,18 +1466,34 @@ export function HighlightCard({
             </label>
           )}
         </div>
-        {/* ADAAAA-7881: suggested caption — one social-ready sentence, seeded
-            deterministically from the summary-log window and editable here. */}
+        {/* ADAAAA-8318 (ADAAAA-8302 Option 2): the COPY TARGET is the short post
+            title (server-served, or the deterministic `LABEL · m:ss` title), not
+            the announcer line. No `T+` prefix, editable here, and the edited
+            value is what the batch export / copy affordances ship. */}
         <label className="mt-3 block">
           <span className="text-xs uppercase tracking-wide text-mut">Suggested caption</span>
           <textarea
             className="mt-1 w-full resize-y rounded-lg border border-neon/30 bg-dusk px-2 py-1 text-xs text-ink"
-            rows={3}
+            rows={2}
             value={shownCaption}
             onChange={(e) => setCaption(e.target.value)}
             data-detail-caption
+            data-detail-copy-target
           />
         </label>
+        {/* ADAAAA-8318: the announcer play-by-play line (ADAAAA-7933, unchanged
+            contract) is kept as collapsed DETAIL on EVERY card, so the short copy
+            target never hides what actually happened. */}
+        {!!announcer && announcer !== copyTarget && (
+          <details className="mt-2" data-detail-announcer>
+            <summary className="cursor-pointer text-xs uppercase tracking-wide text-mut">
+              What happened
+            </summary>
+            <p className="mt-1 text-xs text-ink" data-detail-announcer-line>
+              {announcer}
+            </p>
+          </details>
+        )}
         {/* ADAAAA-7881: one-line post titles. Each chip copies its own text; the
             secondary affordance applies it as the caption. */}
         {titles.length > 0 && (
@@ -1492,7 +1514,7 @@ export function HighlightCard({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCaption(captionFromTitle(title))}
+                  onClick={() => setCaption(title)}
                   aria-label={`Use "${title}" as caption`}
                   className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-neon"
                   data-detail-title-use-caption
@@ -2534,13 +2556,10 @@ export function JobDetail() {
   );
   const captionOf = useCallback(
     (h: JobDetailHighlight) =>
-      captions[h.id] ??
-      suggestCaption(
-        h,
-        detail?.job.summaryLog,
-        highlightGrounding(h, detail?.job.summaryLog, detail ? detail.job.source !== "file" : false)
-      ),
-    [captions, detail]
+      // ADAAAA-8318: the batch manifest / captions.txt ships the COPY TARGET (the
+      // post title), not the announcer line — that line is card detail only.
+      captions[h.id] ?? postTitleOf(h),
+    [captions]
   );
   // ADAAAA-7881: merged-moment groups for the Analysis window list — derived
   // client-side from the payload this page already holds (no extra request).

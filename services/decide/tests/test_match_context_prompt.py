@@ -68,9 +68,12 @@ STORY = "0-0, Portugal dominating the left channel."
 # ADAAAA-8103 (v3 emphasis) re-pinned these: the static preamble moved by
 # +2385 chars, the absent-match-context invariant itself is unchanged (the
 # block still renders nothing — see test_absent_match_context_adds_no_tokens).
+#: ADAAAA-8318 re-pinned ONLY `True` (compact): the fast rail gained the
+#: `postTitle` output field (+145 chars). `False` (the VOD/full prompt) is the
+#: pre-feature value, unchanged — that is the AC8 no-op proof.
 GOLDEN_PROMPT_SHA = {
     False: "677dd76bf678f2a801f9ff81b85397c5a93b0843c797a5fa4120962a1393bbd8",
-    True: "b91668b419efbe3be4fde08523314686fb411b3b1c97c90a64c19c2b89d88e84",
+    True: "936532411d2453b2e97c1839c582b207531523cfcaee35480c62c11a0c6b685b",
 }
 
 PORTUGAL_SPAIN = {
