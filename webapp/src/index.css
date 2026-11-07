@@ -286,3 +286,26 @@ body {
     transition-duration: 0s;
   }
 }
+
+/* ADAAAA-8304 — the goal card's clip rail (alternate celebration clips).
+   The rail is the one horizontally scrolled surface on the detail page, so its
+   native scrollbar is the only chrome the theme does not own yet: colour it
+   with the palette instead of leaving the browser's grey default inside a
+   `.card`. Purple at rest, neon on hover, matching the chip/button accents. */
+[data-detail-clip-rail] {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-purple) transparent;
+}
+[data-detail-clip-rail]::-webkit-scrollbar {
+  height: 6px;
+}
+[data-detail-clip-rail]::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-detail-clip-rail]::-webkit-scrollbar-thumb {
+  background: var(--color-purple);
+  border-radius: 999px;
+}
+[data-detail-clip-rail]::-webkit-scrollbar-thumb:hover {
+  background: var(--color-neon);
+}
