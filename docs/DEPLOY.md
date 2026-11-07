@@ -247,6 +247,20 @@ stopped sidecar must not leave a phantom runner for the 20 s TTL), so the safe
 operator actions are: edit the conf IN PLACE and let the next heartbeat
 re-derive (no restart at all), or recreate the sidecar in a quiet window.
 
+**A deploy rewrites the inode, so recreate the sidecar after it.** The conf is
+bind-mounted INTO the sidecar as a single file; `git fetch` +
+`git reset --hard origin/master` replaces `docker/decide-router.conf` with a new
+inode, and the running sidecar keeps reading the previous file at the old inode
+until it is recreated. Observed 2026-11-07: host conf had three primaries while
+`docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py
+--print-capacity` still answered 4. After any deploy that changes the file:
+
+```sh
+docker compose --env-file .env -f docker-compose.yml up -d --no-deps \
+  --force-recreate registrar-decide
+docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py --print-capacity
+```
+
 `services/server/test/decide-router-upstreams.test.ts` pins
 `registrar capacity === primary_count * 2` (and that `backup` lines are never
 counted), so the two cannot drift silently. `DECIDE_CONCURRENCY` stays the
