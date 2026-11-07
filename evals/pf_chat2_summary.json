@@ -1,0 +1,47 @@
+{
+  "arm": "chat",
+  "threshold": null,
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 2235.9,
+    "p95": 5390.8,
+    "max": 5870.3
+  },
+  "gemmaAccepted": 31,
+  "negativesRejected": {
+    "off_target": 2,
+    "warm_up": 4
+  },
+  "negativesTotal": {
+    "off_target": 3,
+    "warm_up": 6
+  },
+  "negativeClipsEliminated": [
+    "soc-off-02",
+    "soc-warm-02"
+  ],
+  "negativeClipsTotal": 4,
+  "ac1_clipLevel": "2/4",
+  "positiveClipsLost": [],
+  "positiveClipsTotal": 6,
+  "ac2_clipLevel": "6/6",
+  "positivesLost": 11,
+  "positivesTotal": 22,
+  "ac2_candidateLevel": "11/22",
+  "yesRate": {
+    "crowd_eruption": {
+      "positives": "10/22",
+      "negatives": "3/9"
+    },
+    "whistle": {
+      "positives": "7/22",
+      "negatives": "0/9"
+    },
+    "commentary_excited": {
+      "positives": "10/22",
+      "negatives": "5/9"
+    }
+  }
+}

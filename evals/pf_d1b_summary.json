@@ -1,0 +1,103 @@
+{
+  "arm": "d1",
+  "threshold": 0.5,
+  "candidates": 49,
+  "scored": 49,
+  "errors": 0,
+  "latency": {
+    "p50": 2177.8,
+    "p95": 2958.2,
+    "max": 3088.5
+  },
+  "gemmaAccepted": 31,
+  "negativesRejected": {
+    "off_target": 2,
+    "warm_up": 3
+  },
+  "negativesTotal": {
+    "off_target": 3,
+    "warm_up": 6
+  },
+  "negativeClipsEliminated": [
+    "soc-off-02",
+    "soc-warm-02"
+  ],
+  "negativeClipsTotal": 4,
+  "ac1_clipLevel": "2/4",
+  "positiveClipsLost": [],
+  "positiveClipsTotal": 6,
+  "ac2_clipLevel": "6/6",
+  "positivesLost": 9,
+  "positivesTotal": 22,
+  "ac2_candidateLevel": "13/22",
+  "probStats": {
+    "crowd_eruption": {
+      "posMean": 0.559,
+      "negMean": 0.454,
+      "posRange": [
+        0.138,
+        0.854
+      ],
+      "negRange": [
+        0.185,
+        0.782
+      ]
+    },
+    "whistle": {
+      "posMean": 0.364,
+      "negMean": 0.202,
+      "posRange": [
+        0.101,
+        0.667
+      ],
+      "negRange": [
+        0.098,
+        0.522
+      ]
+    },
+    "commentary_excited": {
+      "posMean": 0.431,
+      "negMean": 0.273,
+      "posRange": [
+        0.204,
+        0.857
+      ],
+      "negRange": [
+        0.16,
+        0.441
+      ]
+    }
+  },
+  "thresholdSweep": {
+    "0.3": {
+      "negClipsEliminated": 2,
+      "posClipsLost": 0,
+      "ac1": "2/4",
+      "ac2": "6/6"
+    },
+    "0.4": {
+      "negClipsEliminated": 2,
+      "posClipsLost": 0,
+      "ac1": "2/4",
+      "ac2": "6/6"
+    },
+    "0.5": {
+      "negClipsEliminated": 2,
+      "posClipsLost": 0,
+      "ac1": "2/4",
+      "ac2": "6/6"
+    },
+    "0.6": {
+      "negClipsEliminated": 3,
+      "posClipsLost": 1,
+      "ac1": "3/4",
+      "ac2": "5/6"
+    },
+    "0.7": {
+      "negClipsEliminated": 3,
+      "posClipsLost": 2,
+      "ac1": "3/4",
+      "ac2": "4/6"
+    }
+  }
+}
