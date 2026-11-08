@@ -66,9 +66,13 @@ GOLDEN_V3_FULL = (
 # ADAAAA-8318 re-pins the COMPACT prompt only: the fast rail gained the
 # `postTitle` output field (+145 chars <= +40 input tokens). The FULL/VOD
 # goldens below are UNCHANGED bytes, which is the AC8 guard.
+# ADAAAA-8405 re-pins the COMPACT prompt (and only it): the headline's rule
+# paragraph was rewritten for the Phase C residuals (place phrases 7/255, goal
+# claims on non-scoring windows 5/255, invented names 6/255). The FULL rows
+# below are byte-identical to 8356, which is the VOD-parity proof.
 GOLDEN_V3_COMPACT = (
-    16073,
-    "8da9cb9548d27d1f816e20d2df185ec66c4f5b85666b0fbeaa4d63f92966aeea",
+    16644,
+    "66bd497adcf95c3159d2d0b130f58874c40ac986dfd1c142948bb961b852c74f",
 )
 GOLDEN_V3_FULL_MC_PG = (
     13404,
@@ -367,8 +371,9 @@ def test_compact_golden_hash_pinned():
     citation only: 4547 -> 4640 chars; ADAAAA-8318 added the `postTitle` field:
     4640 -> 4785 chars; ADAAAA-8356 rebuilt the title spec as its own rule
     paragraph: 4785 -> 5678 -> 5782 chars, and the key now precedes
-    the caption)."""
-    assert len(_OUTPUT_CONTRACT_COMPACT) == 5782
+    the caption; ADAAAA-8405 rewrote that paragraph for the Phase C copy
+    residuals: 5782 -> 6353 chars)."""
+    assert len(_OUTPUT_CONTRACT_COMPACT) == 6353
     assert _sha(_OUTPUT_CONTRACT_COMPACT) == _sha(_OUTPUT_CONTRACT_COMPACT)
     # the compact flat prompt is the pinned v3 golden
     compact = build_prompt(

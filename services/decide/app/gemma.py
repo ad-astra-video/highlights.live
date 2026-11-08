@@ -1617,9 +1617,8 @@ _OUTPUT_CONTRACT_COMPACT = (
     # ride IN the shape (the position the model attends to) with the contrast
     # named outright — the caption MUST name a place, the headline MUST NOT.
     "\"postTitle\": \"<the card HEADLINE: exactly WHO + one present-tense VERB + "
-    "WHAT, three slots and no fourth — never a pitch location, clock, second beat "
-    "or score claim unless your own outcome is scoring_play; <=60 chars, "
-    "<=10 words>\", "
+    "WHAT, three slots and no fourth — never WHERE, never a clock, second beat "
+    "or score/goal word; <=60 chars, <=10 words>\", "
     "\"runningSummary\": \"<CAPTION FOR THIS WINDOW ONLY, as ONE line (never append a "
     "second line): total target max 110 chars, HARD MAX 140 (was 220). Shape "
     "'<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. THIS WINDOW ONLY: describe "
@@ -1676,19 +1675,37 @@ _OUTPUT_CONTRACT_COMPACT = (
     # above REQUIRES a place; the headline never names one. A violating headline
     # is discarded at the write seam and the card falls back to a plain
     # `LABEL · m:ss`, so the model is told the rule costs it the field.
+    # ADAAAA-8405 (Phase C residuals, measured on 255 emitted titles): 7/255
+    # headlines still carried a place phrase ("Player falls in box", "Players
+    # move in center"), 5/255 asserted a goal on a not_highlight/big_play row
+    # ("Ordoñez scores"), and 6/255 named a player the row's own copy never
+    # read (a first name invented onto a surname). The paragraph below is the
+    # v3 rewrite of 8356's v2: the place ban names the leak shapes ('in/at/on' +
+    # zone) and the unit fallback, the claim ban is keyed to the OUTCOME value
+    # the model just wrote rather than the word "goal", the name rule pins
+    # EXACT transcription (never a first name added to a surname), and the verb
+    # set is closed so a quiet window cannot reach for "scores".
     "POST TITLE RULES — postTitle is the card's HEADLINE, written FIRST from the "
     "event itself. Fill exactly three slots and nothing else: WHO (a jersey "
-    "number or role, or a name ONLY when THIS window's transcript, OCR or frames "
-    "read it — never from the story or the match context), one present-tense "
-    "VERB, and WHAT (the ball, the goal, the keeper, the opponent). NO fourth "
-    "slot: the caption MUST name a place, the headline NEVER does — no zone, "
-    "area, box, third, wing, channel, circle, half, side, venue or stadium, no "
-    "clock, no second beat, no consequence ('leads to', 'after', 'then'). ONE "
-    "clause, no trailing period, no em-dash, semicolon or comma clause, never "
-    "the bare word Player. No score, goal, level or equalise claim unless YOUR "
-    "OWN outcome here is scoring_play. Never reuse a subject+verb you already "
-    "titled this job. Read the headline once more and delete any word that names "
-    "where the action happened."
+    "number or a role — the keeper, the defender, the striker; a name ONLY when "
+    "THIS window's transcript or OCR spells it, copied EXACTLY as written, never "
+    "adding a first name to a surname and never correcting a spelling — never "
+    "from the story or the match context), one present-tense VERB, and WHAT (the "
+    "ball, a shot, a tackle, the keeper, the whistle). NO fourth slot: the "
+    "caption MUST name a place, the headline NEVER does — no zone, area, box, "
+    "third, wing, channel, circle, half, side, midfield, center, venue or "
+    "stadium, and never 'in', 'at', 'on' or 'from' followed by one, no clock, no "
+    "second beat, no consequence ('leads to', 'after', 'then'). If no player or "
+    "role is readable, name the unit (defence, midfield, attack) — never the "
+    "bare word Player or Players. ONE clause, no trailing period, no em-dash, "
+    "semicolon or comma clause. NO score word at all on a window whose own "
+    "outcome is not_highlight or big_play — not scores, scored, scorer, goal, "
+    "gol, net, equalise, level, lead or a result like 2-1 — and no goal claim "
+    "unless YOUR OWN outcome here is scoring_play with a transcript or "
+    "scoreboard read that says so. Use an action verb: carries, drives, clears, "
+    "tackles, blocks, saves, shoots, passes, contests, loses, signals. Never "
+    "reuse a subject+verb you already titled this job. Read the headline once "
+    "more and delete any word that names where the action happened."
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "

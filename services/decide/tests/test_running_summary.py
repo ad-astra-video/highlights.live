@@ -330,7 +330,9 @@ def test_compact_prompt_delta_is_bounded():
     # a place chain and got 46/54 rows refused, so the rule set has to be stated
     # in full. Prefill only — no output budget moved.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 15700
+    # ADAAAA-8405: +571 chars for the rewritten headline rule paragraph (the
+    # announcer budgets and the field set are untouched — prefill only).
+    assert len(_compact_prompt()) <= 16400
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the

@@ -50,8 +50,10 @@ GOLDEN = {
     # ADAAAA-8356 re-pins the two COMPACT rows again (+893 chars): the title spec
     # is now its own POST TITLE RULES paragraph instead of a parenthetical spliced
     # through the caption description. The FULL rows above stay byte-identical.
-    ("compact", ""): (15393, "070dd7c16b9c1bda3086de9e88f9f116fe7d281a847b0d6f6586955c0d464109"),
-    ("compact", STORY): (15645, "d96314a36882329fa29a691085c389111b39a2d2db92d5628299847e771678fa"),
+    # ADAAAA-8405 re-pins the two COMPACT rows again (+571 chars): the headline
+    # rule paragraph was rewritten for the Phase C residuals. FULL stays identical.
+    ("compact", ""): (15964, "bd55f54974bc0801d2a3f1237a7e3d7f4a8cbdb970655232673d81dd9da81dc5"),
+    ("compact", STORY): (16216, "559aea287ee86e49f65445f8d1f550694c456d2e1db81f79d348e0914c144ca3"),
 }
 
 
