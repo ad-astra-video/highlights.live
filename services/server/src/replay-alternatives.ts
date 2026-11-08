@@ -31,6 +31,10 @@ import {
   type ReplayEvidence,
 } from "@highlights/events";
 import { phashHammingDistance } from "@highlights/events/training";
+// ADAAAA-8366 (Inc 3): reuse the score parser the attestation path already owns
+// rather than growing a second one — the score-bug read only needs to know
+// whether an OCR line carries a score pair.
+import { parseOcrScoreLine } from "./analyzer";
 
 /** Floor/ceiling of the gap between a replay and the moment it repeats. The
  * floor is 20 s because `SHOOTOUT_KICK_DEDUP_S` (8 s) exists precisely because
@@ -91,6 +95,222 @@ export const PHASE_REPLAY_MATCH_BITS = 8;
 export const PHASE_REPLAY_MIN_MATCHES = 2;
 export const PHASE_REPLAY_MIN_MATCH_RATIO = 0.15;
 
+// ---------------------------------------------------------------------------
+// ADAAAA-8366 (Inc 3): score bug / clock presence-gap signal
+// ---------------------------------------------------------------------------
+//
+// The measured problem Inc 1/2 could not solve: the 207 s replay is shot from a
+// DIFFERENT broadcast camera (behind the net vs side-on), so no hash band that
+// keeps AC2 precision admits it, and the decide `phase` verdict read it `live`.
+// The one measured difference between the two windows is the score bug/clock:
+// the 152 s goal frames carry `POR 1 : 1 ESP 43:40` (43:40 -> 43:55 across the
+// window), the 207 s replay frames carry no overlay at all.
+//
+// This signal reads the SAME OCR the decide pass already produced for those
+// anchor frames (perceive's per-frame `ocr` lines — persisted on the job's
+// observation rows so it is available at finalize; no new inference call, no
+// new decode pass, no extra frames, CPU only).
+//
+// Two attach modes, both inside the unchanged 20-300 s band:
+//
+//   1. CLOCK REGRESSION (`clockS` on both anchors). A broadcast match clock only
+//      moves forward, so a LATER window showing an EARLIER clock than an earlier
+//      window is footage of an earlier instant — i.e. a replay/insert. This is
+//      the deterministic mode and it attaches on its own: it needs a clock
+//      stable on >= 2 frames on BOTH anchors (one misread can never attach) and
+//      a regression bounded by `SCOREBUG_MAX_CLOCK_REGRESSION_S`, which is under
+//      a half's length so a legitimate half-time clock reset (45:00 -> 00:00,
+//      a 45-minute jump) can never read as a regression.
+//
+//   2. OVERLAY-FREE CANDIDATE. Absence alone is NEVER sufficient (plan §9: a
+//      hard "no graphic => replay" rule would open the band on operator-cropped,
+//      wide-shot and multi-camera windows). The path exists but is gated OFF by
+//      `overlayFreeAttach`; it may only be enabled for a caller whose
+//      overlay-free precision set has measured 0 false attaches (AC10b). The
+//      shipped default keeps it off, so an overlay-free non-replay window cannot
+//      attach.
+//
+// The `phase` verdict stays corroboration-only: it can never attach here, and it
+// can never suppress a clock regression either (the signal is deterministic).
+
+/** Frames read per anchor window. Bounded: the OCR lines are already stored, so
+ * reading more only costs array work. Matches the decide window's frame count
+ * lander (`REPLAY_MAX_FINGERPRINTS`). */
+export const SCOREBUG_MAX_FRAMES = 12;
+
+/** A clock counts as read only when the same window yields at least this many
+ * monotonic readings (see `scoreBugReading`). One misread minute (`41:40` for
+ * `43:40`) breaks the monotonic run, so it can never manufacture a regression. */
+export const SCOREBUG_CLOCK_MIN_SAMPLES = 2;
+
+/** Largest per-frame clock step a monotonic run may take. At 1 fps sampling a
+ * broadcast clock advances ~1 s per frame; a bigger step is a misread or a cut,
+ * so the run stops there rather than stitching two different clocks together. */
+export const SCOREBUG_MAX_CLOCK_STEP_S = 10;
+
+/** Bounds the regression (owner clock - candidate clock). A replay repeats a
+ * moment seconds-to-minutes earlier; a jump this large or larger is a clock
+ * reset (half-time 45:00 -> 00:00) or an OCR drift, never a replay. */
+export const SCOREBUG_MAX_CLOCK_REGRESSION_S = 180;
+
+/** The owner must carry the bug on at least this many frames for a presence gap
+ * to be measured at all (a single OCR hit is noise, not a score bug). */
+export const SCOREBUG_MIN_OVERLAY_FRAMES = 2;
+
+/** One already-OCR'd frame on the job's content clock. `ocr` is the perceive
+ * per-frame OCR line list the decide pass consumed; empty means the frame
+ * printed nothing (no overlay text). */
+export interface ScoreBugFrame {
+  ts: number;
+  ocr: readonly string[];
+}
+
+/** What one anchor window's frames say about the score bug. */
+export interface ScoreBugReading {
+  /** Frames sampled in `[anchorTs - windowS, anchorTs]`. */
+  frames: number;
+  /** Frames that printed score-bug text (a clock or a score pair). */
+  overlayFrames: number;
+  /** The stable broadcast clock (seconds into the match), when read. */
+  clockS?: number;
+  /** Frames that produced that stable clock value. */
+  clockSamples: number;
+  /** Frames that printed any parseable clock (stable or not). */
+  clockReads: number;
+}
+
+/** Parse a broadcast clock (`43:40`, `1:02:03` -> mm:ss only) out of one OCR
+ * line. Deliberately narrow: two-digit seconds, a colon, and no digits/colons
+ * on either side, so a score pair (`POR 1 : 1 ESP`) and a glued stat
+ * (`43:4012`) never parse as a clock. */
+export function parseBroadcastClock(line: string): number | null {
+  const m = /(?:^|[^\d:])(\d{1,3}):([0-5]\d)(?![\d:])/.exec(String(line ?? ""));
+  if (!m) return null;
+  const minutes = Number(m[1]);
+  const seconds = Number(m[2]);
+  if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return null;
+  // A match clock never exceeds 3 digits of minutes; reject a timestamp that
+  // carries hours (`1:02:03` would otherwise parse as 1:02).
+  if (minutes > 180) return null;
+  return minutes * 60 + seconds;
+}
+
+/** A score pair in the OCR line (`POR 1-1 ESP`, `1 : 1`). Reuses the score
+ * parser the attestation path already owns — no second score parser here. */
+function hasScorePair(line: string): boolean {
+  return parseOcrScoreLine([String(line ?? "")]) !== null;
+}
+
+/**
+ * Read one anchor window's score bug / clock from frames the decide pass already
+ * OCR'd. Frames are the ones in `[anchorTs - windowS, anchorTs]`, evenly capped
+ * at `maxFrames` so the read is deterministic and independent of the frame rate.
+ */
+export function scoreBugReading(
+  frames: readonly ScoreBugFrame[],
+  anchorTs: number,
+  windowS: number,
+  maxFrames = SCOREBUG_MAX_FRAMES
+): ScoreBugReading {
+  const inWindow = frames
+    .filter((f) => Number.isFinite(f.ts) && f.ts >= anchorTs - windowS && f.ts <= anchorTs)
+    .sort((a, b) => a.ts - b.ts);
+  const sampled = windowFingerprintSet(
+    inWindow.map((_, i) => String(i)),
+    Math.max(1, maxFrames)
+  ).map((i) => inWindow[Number(i)]);
+  const reading: ScoreBugReading = { frames: sampled.length, overlayFrames: 0, clockSamples: 0, clockReads: 0 };
+  if (!sampled.length) return reading;
+  // A broadcast clock ADVANCES, so the read is the longest monotonic
+  // (non-decreasing, <= SCOREBUG_MAX_CLOCK_STEP_S per frame) run of parsed
+  // clocks in the window. A misread minute breaks the run, which is what keeps
+  // one bad OCR frame from standing as a window's clock.
+  const clocks: number[] = [];
+  for (const frame of sampled) {
+    const lines = (frame.ocr ?? []).filter((l) => typeof l === "string" && l.trim());
+    let overlay = false;
+    let frameClock: number | null = null;
+    for (const line of lines) {
+      const clock = parseBroadcastClock(line);
+      if (clock !== null) {
+        overlay = true;
+        reading.clockReads += 1;
+        if (frameClock === null) frameClock = clock;
+      }
+      if (hasScorePair(line)) overlay = true;
+    }
+    if (overlay) reading.overlayFrames += 1;
+    if (frameClock !== null) clocks.push(frameClock);
+  }
+  let runStart = 0;
+  let bestStart = 0;
+  let bestLen = 0;
+  for (let i = 1; i <= clocks.length; i++) {
+    const continues =
+      i < clocks.length && clocks[i] >= clocks[i - 1] && clocks[i] - clocks[i - 1] <= SCOREBUG_MAX_CLOCK_STEP_S;
+    if (!continues) {
+      const len = i - runStart;
+      if (len > bestLen) {
+        bestLen = len;
+        bestStart = runStart;
+      }
+      runStart = i;
+    }
+  }
+  if (bestLen >= SCOREBUG_CLOCK_MIN_SAMPLES) {
+    // The window's clock is the EARLIEST reading of the run: the instant the
+    // window opens on, which is what a replay repeats.
+    reading.clockS = clocks[bestStart];
+    reading.clockSamples = bestLen;
+  }
+  return reading;
+}
+
+/** ADAAAA-8366: the score-bug attach a candidate/owner pair supports, or null.
+ * `overlayFreeAttach` enables the second mode only on a caller whose overlay-free
+ * precision set has cleared (AC10b); the shipped default is off. */
+export function scoreBugMatch(
+  candidate: ScoreBugReading | undefined,
+  owner: ScoreBugReading | undefined,
+  opts: { overlayFreeAttach?: boolean } = {}
+): Omit<ReplayMatch, "ownerId" | "ownerAnchorTs" | "gapS"> | null {
+  if (!candidate || !owner) return null;
+  const ownerHasBug = owner.overlayFrames >= SCOREBUG_MIN_OVERLAY_FRAMES;
+  // No bug on the owner = no presence gap to measure (and no clock to regress).
+  if (!ownerHasBug) return null;
+  // 1. Clock regression — the deterministic mode.
+  if (owner.clockS !== undefined && candidate.clockS !== undefined) {
+    const regression = owner.clockS - candidate.clockS;
+    if (regression > 0 && regression <= SCOREBUG_MAX_CLOCK_REGRESSION_S) {
+      return {
+        matches: candidate.clockSamples,
+        compared: candidate.frames,
+        kind: "scorebug_gap",
+        clockOwnerS: owner.clockS,
+        clockCandidateS: candidate.clockS,
+        overlayOwner: true,
+        overlayCandidate: true,
+      };
+    }
+    // A clock that agrees or advances is LIVE footage of this instant: never a
+    // replay, even when the phase verdict says otherwise.
+    return null;
+  }
+  // 2. Overlay-free candidate — absence alone is never evidence. Gated off
+  // unless the overlay-free precision set cleared for this caller.
+  if (candidate.overlayFrames === 0 && candidate.frames > 0 && opts.overlayFreeAttach === true) {
+    return {
+      matches: 0,
+      compared: candidate.frames,
+      kind: "scorebug_gap",
+      clockOwnerS: owner.clockS,
+      overlayOwner: true,
+      overlayCandidate: false,
+    };
+  }
+  return null;
+}
+
 /** One frame's fingerprint on the job's content clock. */
 export interface ReplayFrameFingerprint {
   /** Seconds from stream start (the analyzer's `sampleFps` grid). */
@@ -113,6 +333,9 @@ export interface ReplayLedgerEntry {
    * makes the entry ineligible to OWN (a replay never owns a replay); absent or
    * `live` keeps the strict Inc 1 bar. */
   phase?: "live" | "replay";
+  /** ADAAAA-8366 (Inc 3): the score-bug/clock read of this window's anchor
+   * frames, from OCR the decide pass already produced. */
+  scoreBug?: ScoreBugReading;
 }
 
 /** What the matcher measured. Mirrors `ReplayEvidence` plus the owner. */
@@ -126,6 +349,12 @@ export interface ReplayMatch {
   /** ADAAAA-8325: set to `replay` when the attach needed the phase-corroborated
    * relaxed band (the strict Inc 1 bar was missed). Absent on a strict attach. */
   phase?: "replay";
+  /** ADAAAA-8366 (Inc 3): the score bug/clock readings the attach used. Absent
+   * on a hash attach (whose evidence shape stays byte-identical). */
+  clockOwnerS?: number;
+  clockCandidateS?: number;
+  overlayOwner?: boolean;
+  overlayCandidate?: boolean;
 }
 
 /** Evenly sample at most `max` fingerprints out of a window's frames, keeping
@@ -192,6 +421,10 @@ export function matchReplayOwner(
     minRatio?: number;
     minGapS?: number;
     maxGapS?: number;
+    /** ADAAAA-8366: enable the overlay-free (graphic absence) attach mode. Off
+     * by default — absence alone is never evidence until a caller's overlay-free
+     * precision set has measured 0 false attaches (AC10b). */
+    overlayFreeAttach?: boolean;
   } = {}
 ): ReplayMatch | null {
   // ADAAAA-8325 (Inc 2): a `replay` verdict relaxes the DETERMINISTIC band; it
@@ -203,7 +436,7 @@ export function matchReplayOwner(
   const minRatio = opts.minRatio ?? (phaseRelaxed ? PHASE_REPLAY_MIN_MATCH_RATIO : REPLAY_MIN_MATCH_RATIO);
   const minGap = opts.minGapS ?? REPLAY_MIN_GAP_S;
   const maxGap = opts.maxGapS ?? REPLAY_MAX_GAP_S;
-  if (!newEntry.hashes.length) return null;
+  if (!newEntry.hashes.length && !newEntry.scoreBug) return null;
 
   let best: ReplayMatch | null = null;
   for (const owner of ledger) {
@@ -238,6 +471,34 @@ export function matchReplayOwner(
     ) {
       best = candidate;
     }
+  }
+  // ADAAAA-8366 (Inc 3): the score bug / clock presence-gap signal. It is
+  // independent of the hashes (the cross-camera replay scores 0 at every usable
+  // bit band), so it is evaluated only when no hash attach cleared — a strict
+  // or phase attach keeps its evidence shape byte-identically.
+  if (!best) {
+    let bestBug: ReplayMatch | null = null;
+    for (const owner of ledger) {
+      if (owner.id === newEntry.id) continue;
+      if (owner.replayOf) continue;
+      if (owner.phase === "replay") continue;
+      const gapS = newEntry.anchorTs - owner.anchorTs;
+      if (gapS < minGap || gapS > maxGap) continue;
+      const bug = scoreBugMatch(newEntry.scoreBug, owner.scoreBug, opts);
+      if (!bug) continue;
+      const candidate: ReplayMatch = { ownerId: owner.id, ownerAnchorTs: owner.anchorTs, gapS, ...bug };
+      // A clock regression is the stronger evidence (a broadcast clock cannot
+      // run backwards); a graphic absence is weaker, so it only wins when it is
+      // the only mode available. Within a mode the tighter gap wins.
+      const candRegression = candidate.clockCandidateS !== undefined;
+      const bestRegression = bestBug?.clockCandidateS !== undefined;
+      const stronger =
+        !bestBug ||
+        (candRegression && !bestRegression) ||
+        (candRegression === bestRegression && candidate.gapS < bestBug.gapS);
+      if (stronger) bestBug = candidate;
+    }
+    best = bestBug;
   }
   return best;
 }
@@ -348,7 +609,16 @@ export function ledgerEntryFor(
 export function detectReplayAttachments(
   records: readonly HighlightRecord[],
   frames: readonly ReplayFrameFingerprint[],
-  opts: { windowS?: number } = {}
+  opts: {
+    windowS?: number;
+    /** ADAAAA-8366: the per-frame OCR lines the decide pass already produced for
+     * this job (`store.observationsForJob`), on the content clock. Omitted =>
+     * the score-bug signal is inert and the Inc 1/2 detectors run unchanged. */
+    scoreBugFrames?: readonly ScoreBugFrame[];
+    /** ADAAAA-8366: enable the overlay-free attach mode; off unless the caller
+     * has cleared the overlay-free precision set (AC10b). */
+    overlayFreeAttach?: boolean;
+  } = {}
 ): { id: string; replayOf: string; evidence: ReplayEvidence }[] {
   const windowS = opts.windowS ?? 8;
   // Only real moments can own; a record that is already a replay is never a
@@ -361,7 +631,13 @@ export function detectReplayAttachments(
   const out: { id: string; replayOf: string; evidence: ReplayEvidence }[] = [];
   for (const record of ordered) {
     const entry = ledgerEntryFor(record, frames, windowS);
-    const match = matchReplayOwner(entry, ledger);
+    // ADAAAA-8366 (Inc 3): read the score bug / clock off the OCR the decide
+    // pass already ran for this window's anchor frames. Readings only; no
+    // inference, no decode, no extra frames.
+    if (opts.scoreBugFrames?.length) {
+      entry.scoreBug = scoreBugReading(opts.scoreBugFrames, entry.anchorTs, windowS);
+    }
+    const match = matchReplayOwner(entry, ledger, { overlayFreeAttach: opts.overlayFreeAttach });
     if (match) {
       out.push({
         id: record.id,
@@ -374,6 +650,12 @@ export function detectReplayAttachments(
           // ADAAAA-8325 (Inc 2): record the corroboration that produced the
           // attach — only present when the phase band carried it.
           ...(match.phase ? { phase: match.phase } : {}),
+          // ADAAAA-8366 (Inc 3): the clock/bug readings behind a scorebug attach
+          // — absent on hash attaches, whose shape stays byte-identical.
+          ...(match.clockOwnerS !== undefined ? { clockOwnerS: match.clockOwnerS } : {}),
+          ...(match.clockCandidateS !== undefined ? { clockCandidateS: match.clockCandidateS } : {}),
+          ...(match.overlayOwner !== undefined ? { overlayOwner: match.overlayOwner } : {}),
+          ...(match.overlayCandidate !== undefined ? { overlayCandidate: match.overlayCandidate } : {}),
         },
       });
     }
@@ -458,12 +740,26 @@ export async function attachReplayWindows(opts: {
   /** Seconds of frames ending at a moment's anchor that form its set. Defaults
    * to the analyzer's decide window (24 frames at 3 fps = 8 s). */
   windowS?: number;
+  /** ADAAAA-8366 (Inc 3): the job's per-frame OCR lines, on the content clock —
+   * the same OCR the decide pass consumed (`store.observationsForJob`). Omitted
+   * or empty => the score-bug signal stays inert. */
+  ocrFrames?: readonly ScoreBugFrame[];
+  /** ADAAAA-8366: enable the overlay-free attach mode (off until the caller's
+   * overlay-free precision set clears AC10b). */
+  overlayFreeAttach?: boolean;
   log?: (line: string) => void;
 }): Promise<{ attached: number; measured: ReplayEvidence[] }> {
+  // ADAAAA-8366 (Inc 3): the score-bug signal is OCR-only, so a job whose frames
+  // have already been cleaned can STILL attach on a clock regression. Only the
+  // fingerprint-only path needs the frame dir.
   const frames = await jobFrameFingerprints(opts.ffmpegPath, opts.framesDir, opts.sampleFps);
-  if (!frames.length) return { attached: 0, measured: [] };
+  if (!frames.length && !opts.ocrFrames?.length) return { attached: 0, measured: [] };
   const records = opts.store.highlightsForJob(opts.jobId);
-  const detections = detectReplayAttachments(records, frames, { windowS: opts.windowS });
+  const detections = detectReplayAttachments(records, frames, {
+    windowS: opts.windowS,
+    scoreBugFrames: opts.ocrFrames,
+    overlayFreeAttach: opts.overlayFreeAttach,
+  });
   const measured: ReplayEvidence[] = [];
   for (const d of detections) {
     await opts.store.markReplay(d.id, { replayOf: d.replayOf, replayEvidence: d.evidence });

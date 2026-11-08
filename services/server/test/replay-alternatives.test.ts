@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HighlightRecordSchema, type HighlightRecord } from "@highlights/events";
+import { HighlightRecordSchema, ReplayEvidenceSchema, type HighlightRecord } from "@highlights/events";
 import { perceptualHash } from "@highlights/events/training";
 import { buildPostableHighlights } from "../src/highlight-postable";
 import {
@@ -11,7 +11,13 @@ import {
   REPLAY_MIN_GAP_S,
   REPLAY_MIN_MATCHES,
   REPLAY_MIN_MATCH_RATIO,
+  SCOREBUG_CLOCK_MIN_SAMPLES,
+  SCOREBUG_MAX_CLOCK_REGRESSION_S,
+  SCOREBUG_MIN_OVERLAY_FRAMES,
   ahashFromGray,
+  parseBroadcastClock,
+  scoreBugReading,
+  type ScoreBugFrame,
   detectReplayAttachments,
   fingerprintsNear,
   matchReplayOwner,
@@ -505,5 +511,222 @@ describe("thresholds are the documented ones", () => {
     expect(PHASE_REPLAY_MIN_MATCH_RATIO).toBeLessThan(REPLAY_MIN_MATCH_RATIO);
     // ...but it still needs at least two agreeing pictures — never 0, never 1.
     expect(PHASE_REPLAY_MIN_MATCHES).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// ADAAAA-8366 (Inc 3): the score bug / clock presence-gap signal.
+//
+// The fixtures are the MEASURED reads of the preserved 545be947 artefact frames
+// (46 frames per window at 3 fps, OCR'd with the perceive scoreboard probe on
+// the box, read-only):
+//
+//   goal     seq 456-501 = 152.0-167.0 s -> `POR 1 : 1 ESP 43:40` .. `43:55`
+//            (overlay on every frame; the score flips 1-1 -> 2-1 at 43:54)
+//   replay   seq 600-645 = 200.0-215.0 s -> `FIFA` bumper/logo only, NO score
+//            bug and NO clock on any of the 46 frames
+//   control  seq   0- 45 =   0.0- 15.0 s -> `41:08` .. `41:23`, but frames
+//            1.0-9.0 s (25 of 46) print `FIFA` only — a genuinely OVERLAY-FREE
+//            stretch inside normal live play of the same job.
+//
+// That third window is why the overlay-free mode ships OFF: absence alone would
+// attach a live stretch, which is exactly the AC10b failure mode.
+describe("ADAAAA-8366 score bug / clock presence-gap signal", () => {
+  function clockAt(seconds: number): string {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
+  /** A 3 fps window of already-OCR'd frames, one line list per frame. */
+  function ocrFrames(startTs: number, count: number, lineFor: (i: number) => string[]): ScoreBugFrame[] {
+    return Array.from({ length: count }, (_, i) => ({ ts: startTs + i / 3, ocr: lineFor(i) }));
+  }
+  /** The measured goal window: the bug's clock advances 1 s per 3 frames. */
+  function goalFrames(): ScoreBugFrame[] {
+    return ocrFrames(152, 46, (i) => [`POR 1 : 1 ESP ${clockAt(43 * 60 + 40 + Math.floor(i / 3))}`]);
+  }
+  /** The measured replay window: no score bug, no clock. */
+  function replayFrames(): ScoreBugFrame[] {
+    return ocrFrames(200, 46, () => ["FIFA"]);
+  }
+
+  it("parses a broadcast clock but never a score pair", () => {
+    expect(parseBroadcastClock("POR 1 : 1 ESP 43:40")).toBe(43 * 60 + 40);
+    expect(parseBroadcastClock("POR 1.1 ESP 43:40FIFA")).toBe(43 * 60 + 40);
+    expect(parseBroadcastClock("POR 1 : 1 ESP")).toBeNull();
+    expect(parseBroadcastClock("FIFA")).toBeNull();
+    // A clock glued to a stat is not a clock (`43:4012`).
+    expect(parseBroadcastClock("POR 1 1 ESP 43:4012")).toBeNull();
+    // A score separator that OCR'd with the score's `/` or `.` is not a clock.
+    expect(parseBroadcastClock("POR 1/1 ESP 41/08")).toBeNull();
+  });
+
+  it("reads the measured goal window: overlay on every frame, earliest clock 43:40", () => {
+    const r = scoreBugReading(goalFrames(), 159, 8);
+    expect(r.frames).toBeGreaterThan(0);
+    expect(r.overlayFrames).toBe(r.frames);
+    expect(r.clockS).toBe(43 * 60 + 40);
+    expect(r.clockSamples).toBeGreaterThanOrEqual(SCOREBUG_CLOCK_MIN_SAMPLES);
+  });
+
+  it("reads the measured replay window as no bug at all", () => {
+    const r = scoreBugReading(replayFrames(), 207, 8);
+    expect(r.frames).toBeGreaterThan(0);
+    expect(r.overlayFrames).toBe(0);
+    expect(r.clockS).toBeUndefined();
+  });
+
+  it("attaches on a clock regression inside the 20-300 s band (AC10 clock mode)", () => {
+    const owner = { id: "goal-h1", anchorTs: 159, hashes: [], scoreBug: scoreBugReading(goalFrames(), 159, 8) };
+    // A replay that DOES carry the bug shows the pre-goal clock (43:36).
+    const candidate: ReplayLedgerEntry = {
+      id: "replay-h3",
+      anchorTs: 207,
+      hashes: [],
+      scoreBug: scoreBugReading(
+        ocrFrames(200, 46, () => [`POR 1 : 1 ESP ${clockAt(43 * 60 + 36)}`]),
+        207,
+        8
+      ),
+    };
+    const m = matchReplayOwner(candidate, [owner]);
+    expect(m).not.toBeNull();
+    expect(m!.ownerId).toBe("goal-h1");
+    expect(m!.kind).toBe("scorebug_gap");
+    expect(m!.gapS).toBe(48);
+    expect(m!.clockOwnerS).toBe(43 * 60 + 40);
+    expect(m!.clockCandidateS).toBe(43 * 60 + 36);
+    expect(m!.overlayOwner).toBe(true);
+    expect(m!.overlayCandidate).toBe(true);
+    expect(m!.matches).toBeGreaterThanOrEqual(SCOREBUG_CLOCK_MIN_SAMPLES);
+  });
+
+  it("never attaches a live clock that agrees or advances (no false replay)", () => {
+    const owner = { id: "goal-h1", anchorTs: 159, hashes: [], scoreBug: scoreBugReading(goalFrames(), 159, 8) };
+    for (const candidateClock of [43 * 60 + 40, 43 * 60 + 52, 44 * 60 + 2]) {
+      const candidate: ReplayLedgerEntry = {
+        id: "live-h3",
+        anchorTs: 207,
+        hashes: [],
+        scoreBug: scoreBugReading(ocrFrames(200, 46, () => [`POR 1 : 1 ESP ${clockAt(candidateClock)}`]), 207, 8),
+      };
+      expect(matchReplayOwner(candidate, [owner])).toBeNull();
+    }
+  });
+
+  it("never attaches on a single clock reading (a misread cannot manufacture a regression)", () => {
+    const owner = { id: "goal-h1", anchorTs: 159, hashes: [], scoreBug: scoreBugReading(goalFrames(), 159, 8) };
+    // One frame reads 43:36, the rest read nothing: no monotonic run.
+    const candidate: ReplayLedgerEntry = {
+      id: "one-read",
+      anchorTs: 207,
+      hashes: [],
+      scoreBug: scoreBugReading(ocrFrames(200, 46, (i) => (i === 20 ? ["POR 1-1 ESP 43:36"] : ["FIFA"])), 207, 8),
+    };
+    expect(candidate.scoreBug!.clockSamples).toBeLessThan(SCOREBUG_CLOCK_MIN_SAMPLES);
+    expect(matchReplayOwner(candidate, [owner])).toBeNull();
+  });
+
+  it("does not attach on graphic absence alone (the measured 545be947 replay: AC10a FAIL as specified)", () => {
+    const goal = record({ id: "goal-h1", localizedTs: 159 });
+    const replay = record({
+      id: "play-h3",
+      start: 200,
+      end: 215,
+      localizedTs: 207,
+      eventType: "BIG_PLAY",
+      outcome: "big_play",
+      score: 60,
+    });
+    const scoreBugFrames = [...goalFrames(), ...replayFrames()];
+    // Shipped default: the overlay-free mode is off, so the measured pair — the
+    // replay carries no bug at all — does NOT attach.
+    expect(detectReplayAttachments([goal, replay], [], { windowS: 8, scoreBugFrames })).toHaveLength(0);
+  });
+
+  it("even when enabled, the overlay-free mode records the absence it used", () => {
+    const owner = { id: "goal-h1", anchorTs: 159, hashes: [], scoreBug: scoreBugReading(goalFrames(), 159, 8) };
+    const candidate: ReplayLedgerEntry = { id: "replay-h3", anchorTs: 207, hashes: [], scoreBug: scoreBugReading(replayFrames(), 207, 8) };
+    const m = matchReplayOwner(candidate, [owner], { overlayFreeAttach: true });
+    expect(m).not.toBeNull();
+    expect(m!.kind).toBe("scorebug_gap");
+    expect(m!.overlayOwner).toBe(true);
+    expect(m!.overlayCandidate).toBe(false);
+    expect(m!.matches).toBe(0);
+    // ...and the evidence survives the contract.
+    const parsed = ReplayEvidenceSchema.parse({
+      kind: m!.kind,
+      matches: m!.matches,
+      compared: m!.compared,
+      gapS: m!.gapS,
+      clockOwnerS: m!.clockOwnerS,
+      overlayOwner: m!.overlayOwner,
+      overlayCandidate: m!.overlayCandidate,
+    });
+    expect(parsed.kind).toBe("scorebug_gap");
+  });
+
+  it("keeps the 20-300 s band for the score-bug signal too", () => {
+    const owner = { id: "goal-h1", anchorTs: 159, hashes: [], scoreBug: scoreBugReading(goalFrames(), 159, 8) };
+    const at = (anchorTs: number): ReplayLedgerEntry => ({
+      id: `c-${anchorTs}`,
+      anchorTs,
+      hashes: [],
+      scoreBug: scoreBugReading(ocrFrames(anchorTs - 15, 46, () => ["POR 1 : 1 ESP 43:36"]), anchorTs, 8),
+    });
+    expect(matchReplayOwner(at(178), [owner])).toBeNull(); // 19 s: under the floor
+    expect(matchReplayOwner(at(460), [owner])).toBeNull(); // 301 s: over the ceiling
+    expect(matchReplayOwner(at(179), [owner])?.gapS).toBe(REPLAY_MIN_GAP_S);
+  });
+
+  it("keeps phase as corroboration only: it neither attaches nor vetoes", () => {
+    const scoreBugOwner = scoreBugReading(goalFrames(), 159, 8);
+    const owner = { id: "goal-h1", anchorTs: 159, hashes: [], scoreBug: scoreBugOwner };
+    const replayFramesRead = scoreBugReading(replayFrames(), 207, 8);
+    // Phase alone + no clock + no overlay-free mode: no attach.
+    expect(matchReplayOwner({ id: "p1", anchorTs: 207, hashes: [], phase: "replay", scoreBug: replayFramesRead }, [owner])).toBeNull();
+    // A deterministic clock regression attaches regardless of the verdict: a
+    // `live` phase can never veto it (the phase is corroboration only).
+    const regression = scoreBugReading(ocrFrames(200, 46, () => ["POR 1 : 1 ESP 43:36"]), 207, 8);
+    for (const phase of ["live", "replay", undefined] as const) {
+      const m = matchReplayOwner({ id: "p2", anchorTs: 207, hashes: [], phase, scoreBug: regression }, [owner]);
+      expect(m?.kind).toBe("scorebug_gap");
+      expect(m?.clockCandidateS).toBe(43 * 60 + 36);
+    }
+  });
+
+  it("keeps the score-bug signal out of a strict hash attach's evidence shape", () => {
+    const goal = record({ id: "goal-h1", localizedTs: 159 });
+    const replay = record({ id: "play-h3", start: 200, end: 215, localizedTs: 207, eventType: "BIG_PLAY", outcome: "big_play", score: 60 });
+    const shared = hash(1);
+    const framesOut: ReplayFrameFingerprint[] = [
+      ...Array.from({ length: 24 }, (_, i) => ({ ts: 151 + i / 3, hash: shared })),
+      ...Array.from({ length: 24 }, (_, i) => ({ ts: 199 + i / 3, hash: shared })),
+    ];
+    const out = detectReplayAttachments([goal, replay], framesOut, { windowS: 8, scoreBugFrames: [...goalFrames(), ...replayFrames()] });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence.kind).toBe("footage_match");
+    for (const key of ["clockOwnerS", "clockCandidateS", "overlayOwner", "overlayCandidate"]) {
+      expect(out[0].evidence).not.toHaveProperty(key);
+    }
+  });
+
+  it("never lets a replay own a replay, score-bug entry or not", () => {
+    const owner = { id: "goal-h1", anchorTs: 159, hashes: [], replayOf: "older-goal", scoreBug: scoreBugReading(goalFrames(), 159, 8) };
+    const candidate = { id: "replay-h3", anchorTs: 207, hashes: [], scoreBug: scoreBugReading(ocrFrames(200, 46, () => ["POR 1 : 1 ESP 43:36"]), 207, 8) };
+    expect(matchReplayOwner(candidate, [owner])).toBeNull();
+    // A window whose verdict called it replay footage never owns either.
+    const phaseOwner = { ...owner, replayOf: undefined, phase: "replay" as const };
+    expect(matchReplayOwner(candidate, [phaseOwner])).toBeNull();
+  });
+
+  it("keeps the constants the documented ones (ADAAAA-8366)", () => {
+    expect(SCOREBUG_CLOCK_MIN_SAMPLES).toBeGreaterThanOrEqual(2);
+    // The regression bound stays under a half's length, so a half-time clock
+    // reset (45:00 -> 00:00) can never read as a regression.
+    expect(SCOREBUG_MAX_CLOCK_REGRESSION_S).toBeLessThan(45 * 60);
+    expect(SCOREBUG_MIN_OVERLAY_FRAMES).toBeGreaterThanOrEqual(2);
+    // The hash band is untouched: still 6 bits strict / 8 bits phase.
+    expect(REPLAY_HASH_MATCH_BITS).toBe(6);
+    expect(PHASE_REPLAY_MATCH_BITS).toBe(8);
   });
 });

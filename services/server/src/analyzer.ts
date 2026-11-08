@@ -8710,7 +8710,13 @@ export interface AnalyzeEvent {
     // the moment the live cut patches `clipUri` (and by the stop path), so an
     // open grid / job-detail view repaints the card without a page reload.
     | "clip";
-  observation?: { tracks: TrackObservation[] };
+  observation?: {
+    tracks: TrackObservation[];
+    /** ADAAAA-8366 (Inc 3): the score-bug OCR lines perceive returned for this
+     * frame. Additive optional — rails that relay no OCR omit it; the replay
+     * detector's score-bug signal reads it from the persisted observation. */
+    ocr?: string[];
+  };
   candidate?: { eventType: string; timestamp: number };
   highlight?: HighlightRecord;
   reason?: string;

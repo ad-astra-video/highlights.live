@@ -1484,8 +1484,10 @@ export type HighlightTrigger = z.infer<typeof HighlightTriggerSchema>;
 export const ReplayEvidenceSchema = z.object({
   /** `footage_match` = perceptual-hash set match (the signal Inc 1 produces).
    * `audio_match` is reserved for corroboration; audio is never the sole
-   * signal. */
-  kind: z.enum(["footage_match", "audio_match"]),
+   * signal. `scorebug_gap` = ADAAAA-8366 (Inc 3): the score bug / clock
+   * presence-gap signal — the candidate's and the owner's anchor frames read
+   * through the OCR the decide pass already ran (no new inference). */
+  kind: z.enum(["footage_match", "audio_match", "scorebug_gap"]),
   /** Fingerprints in the new window that matched a ledger fingerprint. */
   matches: z.number().int().min(0),
   /** Fingerprints compared (the new window's set size). */
@@ -1497,6 +1499,21 @@ export const ReplayEvidenceSchema = z.object({
    * pure-hash attach and on any window whose verdict was unknown. The phase is
    * never the sole signal: `matches`/`compared` must still clear the band. */
   phase: z.enum(["live", "replay"]).optional(),
+  /** ADAAAA-8366 (Inc 3): the broadcast clock the OWNER's anchor frames showed
+   * (seconds into the match), when the attach used the score bug/clock signal.
+   * Absent on hash attaches and on windows whose bug read nothing. */
+  clockOwnerS: z.number().min(0).optional(),
+  /** ADAAAA-8366: the broadcast clock the CANDIDATE's anchor frames showed.
+   * `clockOwnerS > clockCandidateS` is the measured regression a clock-bearing
+   * replay attach requires. */
+  clockCandidateS: z.number().min(0).optional(),
+  /** ADAAAA-8366: did the owner's / candidate's anchor window carry the score
+   * bug at all? Set only by the `scorebug_gap` path — a presence gap is
+   * `overlayOwner: true, overlayCandidate: false`, and both are recorded so a
+   * grader can tell a clock regression from a graphic absence without the
+   * frames. */
+  overlayOwner: z.boolean().optional(),
+  overlayCandidate: z.boolean().optional(),
 });
 export type ReplayEvidence = z.infer<typeof ReplayEvidenceSchema>;
 

@@ -18,6 +18,11 @@ import { mergeResumeCheckpoint, type ResumeCheckpointPatch } from "./vod-resume"
 export interface StoredObservation {
   seq: number;
   timestamp: number;
+  /** ADAAAA-8366 (Inc 3): score-bug OCR lines the decide pass already produced
+   * for this frame (absent on legacy rows and on rails that relay no OCR). The
+   * replay detector reads them for the score-bug/clock presence-gap signal — no
+   * new inference, no new decode. */
+  ocr?: string[];
   tracks: TrackObservation[];
 }
 
