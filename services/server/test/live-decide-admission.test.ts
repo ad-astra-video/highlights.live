@@ -153,12 +153,13 @@ describe("LiveObserver admission skip (ADAAAA-7758)", () => {
 describe("LiveDecideAdmission in-flight depth sharing (ADAAAA-7771)", () => {
   it("shares the decide admission across live streams: a lone stream gets the full depth, two get half, three degrade to serial", () => {
     const gate = new LiveDecideAdmission({ enabled: false });
-    // maxPerStream = 4, admission = 2 (the shipped DECIDE_CONCURRENCY default)
+    // maxPerStream = 4, admission = 2 (the fallback when discovery is dark)
     gate.registerLiveJob("job-a");
     expect(gate.activeLiveJobCount()).toBe(1);
-    // a LONE stream keeps the full per-stream depth (queueing above the 2-wide
-    // gate is harmless for one stream and buys coverage)
-    expect(gate.depthFor("job-a", 4, 2)).toBe(4);
+    // ADAAAA-8437 (AC5): the depth follows capacity for EVERY shape, so a lone
+    // stream on a 2-wide admission holds 2 (the shipped 6-wide advertisement
+    // gives it its configured 4 — see the case below).
+    expect(gate.depthFor("job-a", 4, 2)).toBe(2);
     gate.registerLiveJob("job-b");
     // two streams share a 2-wide gate: one each (serial), NOT two each
     expect(gate.depthFor("job-a", 4, 2)).toBe(1);

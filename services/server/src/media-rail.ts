@@ -172,8 +172,11 @@ export interface MediaRailObserverOptions {
   /** ADAAAA-7987: the box's decide admission width (`DECIDE_CONCURRENCY`). The
    *  depth above is a SHARED budget: each live stream gets
    *  `floor(admission / activeLiveStreams)`, clamped to `maxInFlight`, so two
-   *  concurrent shares split the slots instead of oversubscribing them. */
-  decideAdmission?: number;
+   *  concurrent shares split the slots instead of oversubscribing them.
+   *  ADAAAA-8437: pass a GETTER to follow the DISCOVERED effective capacity
+   *  (the fleet advertises 6 on the routed 5090 set) instead of the static
+   *  funded number, so the depth grows with the fleet mid-run. */
+  decideAdmission?: number | (() => number);
   /** ADAAAA-7987: the two-phase decide fork (`decide()` may run K-wide,
    *  `accept()` always in CONTENT order), so the media rail pipelines exactly
    *  like the analyzer live-observe path (ADAAAA-7771/7878). */
@@ -408,7 +411,16 @@ export class MediaRailObserver {
     // SHARED budget (`floor(admission / activeLiveStreams)`), so a second share
     // halves it instead of oversubscribing the decide gate.
     const inFlight = Math.max(1, Math.floor(opts.maxInFlight ?? 1));
-    const admission = Math.max(1, Math.floor(opts.decideAdmission ?? 2));
+    // ADAAAA-8437: the depth budget follows the DISCOVERED effective capacity
+    // when the caller passes a getter, so a probe landing mid-run widens the
+    // pass immediately.
+    const admission = () =>
+      Math.max(
+        1,
+        Math.floor(
+          (typeof opts.decideAdmission === "function" ? opts.decideAdmission() : opts.decideAdmission) ?? 2,
+        ),
+      );
     const staged =
       opts.onDecideStaged && ((opts.observeDecideOffLoop ?? true) || inFlight > 1) ? opts.onDecideStaged : null;
     this.pipelined = !!staged;
@@ -440,7 +452,7 @@ export class MediaRailObserver {
         ? {
             maxInFlight: inFlight,
             ...(inFlight > 1
-              ? { depthBudget: () => liveDecideAdmission.depthFor(this.jobId, inFlight, admission) }
+              ? { depthBudget: () => liveDecideAdmission.depthFor(this.jobId, inFlight, admission()) }
               : {}),
             onDecideStaged: staged,
           }

@@ -24,7 +24,7 @@ const AUDIT: WindowAuditPayload = {
   supplySkippedWindows: 11,
   skippedWindows: 17,
   accountedWindows: 111,
-  decideCapacity: { advertised: 6, funded: 8, effective: 6, probeOk: true, runners: 3, source: "probe" },
+  decideCapacity: { advertised: 6, funded: 8, effective: 6, probeOk: true, runners: 3, source: "probe", cap: 32 },
 };
 
 function render(audit: WindowAuditPayload): string {
@@ -51,6 +51,15 @@ describe("WindowAuditPanel (ADAAAA-8425 AC2/AC3)", () => {
     expect(html).not.toContain("8 / 8");
     expect(html).toContain("data-window-audit-advertised");
     expect(html).toContain("advertised");
+  });
+
+  it("ADAAAA-8437: carries the DECIDE_MAX_ADMISSION cap beside the pair", () => {
+    const html = render(AUDIT);
+    expect(html).toContain("data-window-audit-max-admission");
+    expect(html).toContain("cap");
+    // Absent on a pre-8437 record: no cap, no crash, no fabricated 0.
+    const legacy = render({ ...AUDIT, decideCapacity: { advertised: 6, funded: 8, effective: 6 } });
+    expect(legacy).not.toContain("data-window-audit-max-admission");
   });
 
   it("renders nothing for a record without a stored split", () => {

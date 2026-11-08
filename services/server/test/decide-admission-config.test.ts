@@ -69,20 +69,35 @@ function serviceBlock(name: string): string {
 
 
 describe("decide admission config (ADAAAA-7773)", () => {
-  it("the server ships DECIDE_CONCURRENCY=8 (the pair's 4+4 decide slots)", () => {
+  it("the server ships DECIDE_CONCURRENCY=8 (funded/reporting) and DECIDE_MAX_ADMISSION=32 (safety cap)", () => {
     const server = serviceBlock("server");
+    // ADAAAA-8437: DECIDE_CONCURRENCY is the funded value the snapshot reports
+    // and the dark-discovery fallback — NOT an admission ceiling any more.
     expect(server).toContain("DECIDE_CONCURRENCY=${DECIDE_CONCURRENCY:-8}");
     // …and it is not shadowed by a second definition in the same service.
     expect(server.match(/DECIDE_CONCURRENCY=/g)?.length).toBe(1);
+    // The safety cap ships beside it, exactly once, defaulting to 32.
+    expect(server).toContain("DECIDE_MAX_ADMISSION=${DECIDE_MAX_ADMISSION:-32}");
+    expect(server.match(/DECIDE_MAX_ADMISSION=/g)?.length).toBe(1);
+  });
+
+  it("the stale '8 real decide slots (4 per gemma card)' justification is gone", () => {
+    // ADAAAA-8437: the routed set is the three 5090 workers at 2 seqs each
+    // (3 x 2 = 6) and the x99 pair is `backup`; the comment must not claim the
+    // pre-ADAAAA-8281 4+4 topology, nor that 8 is the admission ceiling.
+    const server = serviceBlock("server");
+    expect(server).not.toContain("--max-num-seqs 4 on");
+    expect(server).not.toContain("admission is 8");
+    expect(server).toContain("NO LONGER the admission\n      # ceiling");
   });
 
   it("the decide runner advertises the ROUTED set: 6 slots, derived from the pool", () => {
     // ADAAAA-8281: the pool's primary upstreams are the three 5090 decide
     // workers at `--max-num-seqs 2` each; the x99 pair is `backup` only, so the
-    // capacity the router actually balances across is 3 x 2 = 6. The funded bar
-    // stays DECIDE_CONCURRENCY=8 — the whole point of the capacity-aware ceiling
-    // is that `effective = min(funded, advertised) = 6` comes from the routed
-    // set, not from the server hardcoding a list.
+    // capacity the router actually balances across is 3 x 2 = 6. ADAAAA-8437:
+    // that 6 IS the admission (`effective`), and the funded DECIDE_CONCURRENCY=8
+    // is only the reporting value / dark-discovery fallback — which is why the
+    // next capacity change is a worker-seqs re-create, not this knob.
     //
     // The number is NOT written in a config file any more: the sidecar derives
     // it from the pool (`RUNNER_CAPACITY=auto`), which is why this test runs the
@@ -125,20 +140,26 @@ describe("decide admission config (ADAAAA-7773)", () => {
     );
   });
 
-  it("an 8-wide admission gives two streams 4 each instead of the serial pass", () => {
-    // The ADAAAA-7771 shared budget: floor(admission / activeStreams), capped by
-    // the per-stream depth (LIVE_OBSERVE_IN_FLIGHT, shipped 4).
+  it("an advertised 6 gives two streams 3 each; a 12-wide advertisement fills the configured 4 (AC5)", () => {
+    // ADAAAA-8437 (AC5): depth = min(LIVE_OBSERVE_IN_FLIGHT, floor(effective /
+    // active streams)). The advertised capacity is what sizes the pass now.
     const gate = new LiveDecideAdmission({ enabled: false });
     gate.registerLiveJob("job-a");
-    expect(gate.depthFor("job-a", 4, 8)).toBe(4); // lone stream: unchanged
+    expect(gate.depthFor("job-a", 4, 6)).toBe(4); // lone stream: byte-identical
     gate.registerLiveJob("job-b");
-    expect(gate.depthFor("job-a", 4, 8)).toBe(4); // 8 / 2 = 4 each = 8 concurrent
-    expect(gate.depthFor("job-b", 4, 8)).toBe(4);
-    // With the OLD 2-wide client gate the same two streams degraded to serial,
-    // which is the regression this pins.
+    expect(gate.depthFor("job-a", 4, 6)).toBe(3); // 6 / 2 = 3 each
+    expect(gate.depthFor("job-b", 4, 6)).toBe(3);
+    expect(gate.depthFor("job-a", 4, 12)).toBe(4); // 12 / 2 = 6, capped at 4
+    gate.registerLiveJob("job-c");
+    expect(gate.depthFor("job-a", 4, 12)).toBe(4); // 12 / 3 = 4 each
+    gate.registerLiveJob("job-d");
+    expect(gate.depthFor("job-a", 4, 12)).toBe(3); // 12 / 4 = 3 each
+    // The OLD 2-wide funded gate is still the serial fallback for two streams.
     expect(gate.depthFor("job-a", 4, 2)).toBe(1);
     expect(gate.depthFor("job-b", 4, 2)).toBe(1);
     gate.releaseLiveJob("job-a");
     gate.releaseLiveJob("job-b");
+    gate.releaseLiveJob("job-c");
+    gate.releaseLiveJob("job-d");
   });
 });

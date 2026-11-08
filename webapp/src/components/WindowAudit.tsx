@@ -79,6 +79,12 @@ export function WindowAuditPanel({ audit }: { audit: WindowAuditPayload }) {
           <span data-window-audit-funded>
             funded <span className="font-mono text-ink">{pair.funded}</span>
           </span>
+          {/* ADAAAA-8437: the safety cap, so a clamped advertisement is visible. */}
+          {audit.decideCapacity?.cap !== undefined ? (
+            <span data-window-audit-max-admission>
+              cap <span className="font-mono text-ink">{audit.decideCapacity.cap}</span>
+            </span>
+          ) : null}
         </div>
       )}
     </section>

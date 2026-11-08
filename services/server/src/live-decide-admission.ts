@@ -152,16 +152,15 @@ export class LiveDecideAdmission {
   }
 
   /**
-   * ADAAAA-7771: in-flight decide depth for ONE stream.
+   * ADAAAA-7771 -> ADAAAA-8437 (AC5): in-flight decide depth for ONE stream.
    *
-   * `admission` is how many decide app-calls the box admits at once
-   * (`DECIDE_CONCURRENCY`, default 2 = the client's own default). Measured on the
-   * deployed box: a LONE stream may safely queue above the admission (depth 4
-   * with a 2-wide gate gave 11.6 s/decide, 31.3 s lag, 56 skipped windows —
-   * better coverage than depth 2 at the same lag), but two streams must split the
-   * admission (2-wide gate: one each = the serial pass, 33 s lag; two each = 41-52 s
-   * lag, a regression). So: a lone stream gets the full per-stream depth, and a
-   * shared box gets `floor(admission / activeStreams)`, never below 1.
+   * `admission` is how many decide app-calls the box admits at once — the
+   * DISCOVERED `effective` capacity when the caller wires the snapshot getter,
+   * else the funded `DECIDE_CONCURRENCY` fallback. The depth is
+   * `min(maxPerStream, floor(admission / activeStreams))`, never below 1: a lone
+   * stream keeps its configured depth whenever the advertised capacity covers it
+   * (shipped 6 > LIVE_OBSERVE_IN_FLIGHT 4, byte-identical), and two streams split
+   * the advertised capacity instead of being pinned at the funded number.
    */
   depthFor(jobId: string, maxPerStream: number, admission: number): number {
     const cap = Math.max(1, Math.floor(maxPerStream));
@@ -169,7 +168,12 @@ export class LiveDecideAdmission {
     // `jobId` is normally registered, so the set size IS the number of streams
     // sharing the admission.
     const active = Math.max(1, this.activeLiveJobs.size);
-    if (active <= 1) return cap;
+    // ADAAAA-8437 (AC5): the depth follows the capacity the fleet advertises for
+    // EVERY stream shape — `min(configured max, floor(effective / streams))`. A
+    // lone stream is byte-identical whenever the advertised capacity covers its
+    // configured depth (the shipped 6 > 4), and a 2-stream box on the shipped
+    // 6-wide advertisement gets 3 each (exactly the advertisement) instead of the
+    // funded 8 split into 4 each, which oversubscribed the routed set.
     const share = Math.max(1, Math.floor(admit / active));
     return Math.max(1, Math.min(cap, share));
   }

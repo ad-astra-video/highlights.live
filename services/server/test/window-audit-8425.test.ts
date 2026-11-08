@@ -148,7 +148,7 @@ describe("windowAuditForJob (ADAAAA-8425 AC2/AC3)", () => {
       throttleSkippedWindows: 4,
       capacityDroppedWindows: 2,
       supplySkippedWindows: 11,
-      decideCapacity: { advertised: 6, funded: 8, effective: 6, probeOk: true, runners: 3, source: "probe" },
+      decideCapacity: { advertised: 6, funded: 8, effective: 6, probeOk: true, runners: 3, source: "probe", cap: 32 },
     },
   };
 
@@ -193,6 +193,9 @@ describe("windowAuditForJob (ADAAAA-8425 AC2/AC3)", () => {
       probeOk: true,
       runners: 3,
       source: "probe",
+      // ADAAAA-8437: the admin live readout carries the safety cap beside the
+      // numbers, so a reader can tell a clamped advertisement from the fleet.
+      cap: 32,
     });
     // The pair a reader quotes is effective/funded, never funded/funded.
     expect(`${audit.decideCapacity!.effective} / ${audit.decideCapacity!.funded}`).toBe("6 / 8");
