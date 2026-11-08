@@ -33,14 +33,15 @@ SHR = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
 # VOD (full) contract then stayed byte-identical through 8318 (the compact one
 # moved by the title field only, and the delta is asserted below).
 # ADAAAA-8325 (Inc 2) deliberately moves the VOD contract once: the `phase`
-# field + its rule (+411 chars, 2423 -> 2834). The bytes are re-pinned here so a
+# field + its rule (+486 chars with the REPLAY cues, 2423 -> 2909). The bytes are
+# re-pinned here so a
 # later edit still cannot ride along, and the delta is bounded below.
-VOD_CONTRACT_V3_SHA = "675a1a11f6815dbaba82c2eb4bad670caf100b93c72e9178da401bc083200be3"
-VOD_CONTRACT_V3_LEN = 2834
+VOD_CONTRACT_V3_SHA = "f61c4c9deeaebc1ee9d7065b95cea8435e9b345bffe41d39a3a33fbc487aeb24"
+VOD_CONTRACT_V3_LEN = 2909
 # ADAAAA-8325 (Inc 2): the exact VOD delta the phase field is allowed (measured:
-# +411 chars, ~+103 input tokens at the contract's own ~4 chars/token ratio).
+# +486 chars, ~+122 input tokens at the contract's own ~4 chars/token ratio).
 # Every VOD window pays it once per decide call; nothing else may add to it.
-PHASE_CONTRACT_DELTA_CHARS = 411
+PHASE_CONTRACT_DELTA_CHARS = 486
 PRE_CHANGE_COMPACT_LEN = 4640
 
 EV = {"trackCount": 3, "scoreBoardChanged": True, "goalCrossed": True}
@@ -67,6 +68,8 @@ def test_vod_contract_is_pinned_with_the_phase_field():
     # restated in the field's own wording.
     assert '"outcome": "scoring_play|near_miss|big_play|not_highlight"' in _OUTPUT_CONTRACT_FULL
     assert "NEVER `scoring_play` for re-showing a goal" in _OUTPUT_CONTRACT_FULL
+    # the tightened rule names the footage cues, not just the concept
+    assert "Cues for `replay`" in _OUTPUT_CONTRACT_FULL
     # and it never asks for a title: VOD rows derive theirs at projection time
     assert "postTitle" not in _OUTPUT_CONTRACT_FULL
     full = build_prompt("GOAL", EV, "soccer", n_frames=8)
@@ -77,9 +80,9 @@ def test_vod_contract_is_pinned_with_the_phase_field():
 def test_phase_addendum_is_within_its_contract_budget():
     """The phase field's VOD cost is a bounded, measured delta: it is the only
     thing that moved the full contract (the sha above pins the bytes), and it
-    stays inside ~+110 input tokens (411 chars at the contract's own ~4
+    stays inside ~+125 input tokens (486 chars at the contract's own ~4
     chars/token ratio). The live rail paid nothing."""
-    assert PHASE_CONTRACT_DELTA_CHARS <= 440
+    assert PHASE_CONTRACT_DELTA_CHARS <= 500
     assert len(_OUTPUT_CONTRACT_FULL) - 2423 == PHASE_CONTRACT_DELTA_CHARS
     assert '"phase"' not in _OUTPUT_CONTRACT_COMPACT
 

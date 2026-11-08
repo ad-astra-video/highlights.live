@@ -349,8 +349,8 @@ VOD_GOLDEN_MATCH_CONTEXT = {
 # It stays pinned so a later caption edit cannot ride along.
 # ADAAAA-8325 (Inc 2) moves it once more: the VOD contract gained the `phase`
 # field + its rule (+411 chars). Re-pinned, not un-pinned.
-VOD_GOLDEN_LEN = 12724
-VOD_GOLDEN_SHA256 = "3e4c137f34cf54c2b79f8a0ce8ff905b9bdb658635d24b9a452910fe2c03ad2e"
+VOD_GOLDEN_LEN = 12799
+VOD_GOLDEN_SHA256 = "38616f507593cd5aa542df64971fd160a25374d538e63c8d83c4439b0e6ff8ad"
 
 
 def _vod_prompt() -> str:

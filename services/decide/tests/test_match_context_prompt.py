@@ -74,7 +74,7 @@ STORY = "0-0, Portugal dominating the left channel."
 #: (+411 chars). The two rows move independently, which is the live-rail parity
 #: proof in both directions.
 GOLDEN_PROMPT_SHA = {
-    False: "642b3b36ff994d4700be18392555270a93b8a965b65cae9c38e635e301f71133",
+    False: "0ba62dff7728e222f50dce4f2927d66698921eb14b52a7fb38cfa475154d6b7b",
     True: "936532411d2453b2e97c1839c582b207531523cfcaee35480c62c11a0c6b685b",
 }
 
