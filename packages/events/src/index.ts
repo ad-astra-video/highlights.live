@@ -579,6 +579,18 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // shortfall. Additive optional.
   droppedFrames: z.number().int().min(0).optional(),
   supplySkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-8351: the decide-side ASR WAIT BUDGET meter. `LIVE_DECIDE_ASR_WAIT_MS`
+  // caps how long a decide waits for the side lane's prefetch before it proceeds
+  // with inline ASR (the prefetch keeps running and still caches its result, so a
+  // re-decide reuses it). `asrWaitMisses` is the counter that proves the budget
+  // actually fired; `asrWaitBudgetMs` / `asrLaneWidth` are the EFFECTIVE values
+  // the run used, recorded here because a leg record must be readable without the
+  // container log. All three are additive optional and are written only when the
+  // budget is configured (unset => the row is byte-identical to today, the
+  // ADAAAA-8219 lesson: an undeclared counter is stripped by `JobSchema.parse`).
+  asrWaitMisses: z.number().int().min(0).optional(),
+  asrWaitBudgetMs: z.number().int().min(0).optional(),
+  asrLaneWidth: z.number().int().min(0).optional(),
   // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
   // ingest delivers ~5 fps while the decide window only carries ~2 fps of
   // content, so the pass now CONSUMES frames at the analysis fps and runs the

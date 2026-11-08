@@ -348,6 +348,18 @@ export interface ServerConfig {
   /** ADAAAA-8081: `LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS`, default 6 000. A hung
    * ASR must degrade to inline ASR, never stall the live pass. */
   liveDecideAsrPrefetchTimeoutMs: number;
+  /** ADAAAA-8300: `LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY`, default 2. The ASR
+   * side lane's in-flight budget (`AsrPrefetcher.maxConcurrent`). The lane used
+   * to hard-code 2 in `analyzer.ts`, so raising it for a leg required a rebuild;
+   * bound it above the fire rate the cell can produce, or a slow spell queues
+   * windows past the prefetch deadline and re-pays them inline. */
+  liveDecideAsrPrefetchConcurrency: number;
+  /** ADAAAA-8351: `LIVE_DECIDE_ASR_WAIT_MS`, default 0 = INERT (today's
+   * behaviour: the decide awaits the whole prefetch). When set, a decide waits at
+   * most this long for the side lane's transcription and then proceeds with its
+   * own inline ASR — the prefetch is NOT aborted, so a slow call still completes
+   * and caches instead of being abandoned and re-paid on the next window. */
+  liveDecideAsrWaitMs: number;
   /** ADAAAA-7777 (lever B, trim 3): run the Stage-2 `/confirm` dive on the LIVE
    * pass. `DECIDE_CONFIRM_ENABLED` stays the master gate; this is the live-rail
    * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
@@ -990,6 +1002,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // config-only rollback to the pre-8081 inline-ASR request.
     liveDecideAsrPrefetch: env.LIVE_DECIDE_ASR_PREFETCH !== "0",
     liveDecideAsrPrefetchTimeoutMs: positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS) ?? 6000,
+    // ADAAAA-8300: the side lane's in-flight budget. Default 2 keeps the lane
+    // byte-identical; a leg that needs more headroom is an env change.
+    liveDecideAsrPrefetchConcurrency:
+      positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY) ?? 2,
+    // ADAAAA-8351: the decide-side WAIT budget, split from the transcription
+    // timeout above. Default 0 = inert (today's behaviour: await the whole
+    // prefetch), so the knob cannot move a cell by accident.
+    liveDecideAsrWaitMs: positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_WAIT_MS) ?? 0,
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",
