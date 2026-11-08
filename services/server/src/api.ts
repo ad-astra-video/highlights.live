@@ -2075,6 +2075,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             seq: ev.seq,
             timestamp: ev.timestamp,
             tracks: ev.observation.tracks,
+            // ADAAAA-8366 (Inc 3): keep the score-bug OCR the decide pass
+            // already paid for, so the replay detector can read the score
+            // bug/clock at finalize without a second inference call.
+            ...(ev.observation.ocr?.length ? { ocr: ev.observation.ocr } : {}),
           })
           .catch((e: any) => console.error(`[obs:${jobId}] persist failed:`, e?.message || e));
       }
@@ -3577,6 +3581,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // The material a decide call had in memory: the rolling cache ends at the
         // moment's anchor and holds `vodDecideWindowN` frames.
         windowS: Math.max(1, cfg.vodDecideWindowN / Math.max(1, sampleFps)),
+        // ADAAAA-8366 (Inc 3): the score-bug/clock signal reads the OCR the
+        // decide pass already produced for these frames (persisted on the
+        // job's observation rows). No inference, no decode, no extra frames.
+        ocrFrames: store
+          .observationsForJob(jobId)
+          .filter((o) => o.ocr?.length)
+          .map((o) => ({ ts: o.timestamp, ocr: o.ocr ?? [] })),
         log: (m) => console.log(m),
       });
       replaysAttached = attach.attached;

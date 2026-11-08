@@ -40,6 +40,34 @@ function parseHighlightRecords(raw: unknown[]): HighlightRecord[] {
   return out;
 }
 
+/**
+ * Project one `job_observations` row into the store shape (both backends).
+ * ADAAAA-8366 (Inc 3): the row carries the score-bug OCR lines the decide pass
+ * already produced; absent on legacy rows (NULL column) and on rails that relay
+ * no OCR, so the replay detector's score-bug signal simply stays inert there.
+ */
+function rowToStoredObservation(row: {
+  seq: number;
+  timestamp: number;
+  tracks: string;
+  ocr?: string | null;
+}): StoredObservation {
+  const out: StoredObservation = {
+    seq: row.seq,
+    timestamp: row.timestamp,
+    tracks: JSON.parse(row.tracks),
+  };
+  if (typeof row.ocr === "string" && row.ocr.length) {
+    try {
+      const parsed = JSON.parse(row.ocr);
+      if (Array.isArray(parsed) && parsed.length) out.ocr = parsed.map((l) => String(l));
+    } catch {
+      /* a corrupt OCR cell is absent evidence, never a throw */
+    }
+  }
+  return out;
+}
+
 export interface User {
   id: string;
   email: string;
@@ -1090,26 +1118,33 @@ export class SqliteDb implements Db {
   async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO job_observations (job_id, seq, timestamp, tracks, created_at)
-         VALUES (?,?,?,?,?)
+        `INSERT INTO job_observations (job_id, seq, timestamp, tracks, ocr, created_at)
+         VALUES (?,?,?,?,?,?)
          ON CONFLICT(job_id, seq) DO UPDATE SET timestamp=excluded.timestamp,
-           tracks=excluded.tracks, created_at=excluded.created_at`
+           tracks=excluded.tracks, ocr=excluded.ocr, created_at=excluded.created_at`
       )
-      .run(jobId, obs.seq, obs.timestamp, JSON.stringify(obs.tracks), new Date().toISOString());
+      .run(
+        jobId,
+        obs.seq,
+        obs.timestamp,
+        JSON.stringify(obs.tracks),
+        obs.ocr?.length ? JSON.stringify(obs.ocr) : null,
+        new Date().toISOString()
+      );
   }
 
   async observationsForJob(jobId: string): Promise<StoredObservation[]> {
     const rows = this.db
-      .prepare("SELECT seq, timestamp, tracks FROM job_observations WHERE job_id = ? ORDER BY seq")
-      .all(jobId) as { seq: number; timestamp: number; tracks: string }[];
-    return rows.map((r) => ({ seq: r.seq, timestamp: r.timestamp, tracks: JSON.parse(r.tracks) }));
+      .prepare("SELECT seq, timestamp, tracks, ocr FROM job_observations WHERE job_id = ? ORDER BY seq")
+      .all(jobId) as { seq: number; timestamp: number; tracks: string; ocr: string | null }[];
+    return rows.map((r) => rowToStoredObservation(r));
   }
 
   async listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]> {
     const rows = this.db
-      .prepare("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq")
-      .all() as { job_id: string; seq: number; timestamp: number; tracks: string }[];
-    return rows.map((r) => ({ jobId: r.job_id, observation: { seq: r.seq, timestamp: r.timestamp, tracks: JSON.parse(r.tracks) } }));
+      .prepare("SELECT job_id, seq, timestamp, tracks, ocr FROM job_observations ORDER BY job_id, seq")
+      .all() as { job_id: string; seq: number; timestamp: number; tracks: string; ocr: string | null }[];
+    return rows.map((r) => ({ jobId: r.job_id, observation: rowToStoredObservation(r) }));
   }
 
   async trimJobObservations(jobId: string, max: number): Promise<void> {
@@ -1923,25 +1958,32 @@ export class PgDb implements Db {
 
   async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
     await this.pool.query(
-      `INSERT INTO job_observations (job_id, seq, timestamp, tracks, created_at)
-       VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO job_observations (job_id, seq, timestamp, tracks, ocr, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (job_id, seq) DO UPDATE SET timestamp=EXCLUDED.timestamp,
-         tracks=EXCLUDED.tracks, created_at=EXCLUDED.created_at`,
-      [jobId, obs.seq, obs.timestamp, JSON.stringify(obs.tracks), new Date().toISOString()]
+         tracks=EXCLUDED.tracks, ocr=EXCLUDED.ocr, created_at=EXCLUDED.created_at`,
+      [
+        jobId,
+        obs.seq,
+        obs.timestamp,
+        JSON.stringify(obs.tracks),
+        obs.ocr?.length ? JSON.stringify(obs.ocr) : null,
+        new Date().toISOString(),
+      ]
     );
   }
 
   async observationsForJob(jobId: string): Promise<StoredObservation[]> {
     const r = await this.pool.query(
-      "SELECT seq, timestamp, tracks FROM job_observations WHERE job_id = $1 ORDER BY seq",
+      "SELECT seq, timestamp, tracks, ocr FROM job_observations WHERE job_id = $1 ORDER BY seq",
       [jobId]
     );
-    return r.rows.map((row) => ({ seq: row.seq, timestamp: row.timestamp, tracks: JSON.parse(row.tracks) }));
+    return r.rows.map((row) => rowToStoredObservation(row));
   }
 
   async listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]> {
-    const r = await this.pool.query("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq");
-    return r.rows.map((row) => ({ jobId: row.job_id, observation: { seq: row.seq, timestamp: row.timestamp, tracks: JSON.parse(row.tracks) } }));
+    const r = await this.pool.query("SELECT job_id, seq, timestamp, tracks, ocr FROM job_observations ORDER BY job_id, seq");
+    return r.rows.map((row) => ({ jobId: row.job_id, observation: rowToStoredObservation(row) }));
   }
 
   async trimJobObservations(jobId: string, max: number): Promise<void> {
@@ -2548,6 +2590,7 @@ const SCHEMA_SQLITE = `
     seq INTEGER NOT NULL,
     timestamp REAL NOT NULL,
     tracks TEXT NOT NULL,
+    ocr TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (job_id, seq)
   );
@@ -2787,6 +2830,7 @@ const SCHEMA_PG = `
     seq INTEGER NOT NULL,
     timestamp REAL NOT NULL,
     tracks TEXT NOT NULL,
+    ocr TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (job_id, seq)
   );
@@ -3114,6 +3158,22 @@ const MIGRATIONS: Migration[] = [
       );
       await exec("CREATE INDEX IF NOT EXISTS highlight_alternatives_job ON highlight_alternatives (job_id)");
       await exec("CREATE INDEX IF NOT EXISTS highlight_alternatives_highlight ON highlight_alternatives (highlight_id)");
+    },
+  },
+  {
+    version: 11,
+    name: "job-observations-ocr",
+    up: async (exec, hasColumn) => {
+      // ADAAAA-8366 (Inc 3): the score-bug / clock presence-gap signal reads the
+      // OCR the decide pass ALREADY ran for each anchor frame. That OCR used to
+      // be dropped after the decide call, so the replay detector (which runs at
+      // finalize) could not see it without a second inference call. The column
+      // keeps the per-frame lines beside the tracks row it already writes; legacy
+      // rows stay NULL and the signal is simply inert for them. The baseline
+      // CREATE covers fresh DBs; this brings existing on-disk DBs up to shape.
+      if (!(await hasColumn("job_observations", "ocr"))) {
+        await exec("ALTER TABLE job_observations ADD COLUMN ocr TEXT");
+      }
     },
   },
 ];
