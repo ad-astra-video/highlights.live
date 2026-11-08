@@ -192,26 +192,94 @@ export function postTitleShapeViolations(text: string): PostTitleViolation[] {
 }
 
 /**
+ * A place phrase at the END of a title (the AC2 "place chain" shape the model
+ * keeps emitting: "Player carries ball in midfield", "Foul in the middle
+ * third"). Kept next to the title bar so an extractive trim can never drift
+ * from the read-time shape check (`hasPlacePhrase`).
+ */
+const TITLE_TRAILING_PLACE = new RegExp(
+  String.raw`\b(?:in|at|from|near|inside|outside|around|on|into)\s+(?:the\s+)?` +
+    String.raw`(?:penalty\s+area|box|goal\s+area|six[- ]yard\s+box|` +
+    String.raw`cent(?:er|re)(?:\s+(?:circle|field|area))?|midfield|middle\s+third|final\s+third|` +
+    String.raw`attacking\s+third|defensive\s+third|near\s+post|far\s+post|close\s+range|` +
+    String.raw`touchline|wing|halves?|half|edge\s+of\s+the\s+(?:box|area)|left|right)\b\.?$`,
+  "iu"
+);
+
+/**
+ * EXTRACTIVE shape repair (ADAAAA-8356): strip a trailing place phrase and a
+ * second clause off a candidate title, deleting text only — never rewriting,
+ * never inventing. Used ONLY when the raw title fails the shape bar, and the
+ * result must pass every bar the raw form is held to (shape AND the evidence
+ * gates), so a claim or an unsourced name survives the trim and is still
+ * refused. A title that cannot be repaired this way is refused as before (the
+ * card falls back to the deterministic `LABEL · m:ss` title).
+ */
+export function trimPostTitleShape(text?: string | null): string {
+  let out = cleanPostTitle(text);
+  if (!out) return "";
+  for (let pass = 0; pass < 3; pass++) {
+    const before = out;
+    // a second clause after a dash, semicolon or sentence break
+    const lead = out.split(/\s+[—–]\s+|;\s+|\.\s+(?=[A-ZÀ-Ý"'(])/u)[0] ?? out;
+    out = tidyTitle(lead);
+    out = tidyTitle(out.replace(TITLE_TRAILING_PLACE, ""));
+    if (out === before) break;
+  }
+  return out;
+}
+
+/**
+ * A title that already appears on this job's cards is a REPEAT, not copy
+ * (ADAAAA-8356 AC6: 23 distinct titles over 25 cards). Session-scoped at the
+ * write seam: the caller passes the titles already stored for this job, and a
+ * duplicate is dropped so the read projection derives the deterministic
+ * `LABEL · m:ss` title instead — distinct by construction, no extra inference.
+ */
+export function uniquePostTitle(
+  title?: string | null,
+  used: readonly (string | null | undefined)[] = []
+): string | null {
+  const cleaned = cleanPostTitle(title);
+  if (!cleaned) return null;
+  const key = cleaned.toLowerCase();
+  for (const other of used) {
+    if (cleanPostTitle(other).toLowerCase() === key) return null;
+  }
+  return cleaned;
+}
+
+/**
  * The WRITE-SEAM gate (v9 grounding, reused): shape + the evidence rules the
  * announcer line already crosses — a goal claim only on a scoring verdict, no
  * absence claim without evidence, names only from the window's own prompt, no
  * internal tokens. Returns the clean title, or `null` when the candidate must
  * fall back to the deterministic title. A refusal is never a partially rewritten
  * title: a half-gated claim is worse than an honest fallback.
+ *
+ * ADAAAA-8356: when the raw title fails the SHAPE bar only, the extractive
+ * `trimPostTitleShape` form is offered as a second candidate and must still pass
+ * every evidence gate. That is a deletion, not a rewrite — the measured defect
+ * was 46/54 rows refused because a model title ended "... in midfield".
  */
 export function gatePostTitleValue(
   raw: string | null | undefined,
   ctx?: CaptionGroundingContext
 ): string | null {
-  const title = cleanPostTitle(raw);
-  if (!title) return null;
-  if (postTitleShapeViolations(title).length) return null;
-  if (ctx) {
-    if (hasGoalClaim(title) && gateGoalClaims(title, ctx) !== title) return null;
-    if (gateAbsenceClaims(title, ctx) !== title) return null;
-    if (groundNames(title, ctx.promptText) !== title) return null;
+  const direct = cleanPostTitle(raw);
+  const trimmed = trimPostTitleShape(raw);
+  const candidates = trimmed && trimmed !== direct ? [direct, trimmed] : [direct];
+  for (const title of candidates) {
+    if (!title) continue;
+    if (postTitleShapeViolations(title).length) continue;
+    if (ctx) {
+      if (hasGoalClaim(title) && gateGoalClaims(title, ctx) !== title) continue;
+      if (gateAbsenceClaims(title, ctx) !== title) continue;
+      if (groundNames(title, ctx.promptText) !== title) continue;
+    }
+    return title;
   }
-  return title;
+  return null;
 }
 
 /** The fields the projection needs from a stored highlight row. */

@@ -148,8 +148,15 @@ describe("gatePostTitleValue (the write seam)", () => {
     expect(gatePostTitleValue("Mbappé strikes from close range", ctx)).toBeNull();
   });
 
-  it("refuses a shape violation instead of rewriting it", () => {
-    expect(gatePostTitleValue("Ordoñez shoots in the penalty area", ctx)).toBeNull();
+  // ADAAAA-8356 SUPERSEDES the 8318 expectation here: a shape violation is now
+  // repaired by DELETION (a trailing place phrase / a second clause), and the
+  // repaired form must still pass every evidence gate. The bar this test holds is
+  // the one that matters: nothing is served that the raw title was refused for.
+  it("repairs a shape violation by deletion, never by rewriting", () => {
+    expect(gatePostTitleValue("Ordoñez shoots in the penalty area", ctx)).toBe("Ordoñez shoots");
+    // a trim that cannot clear the bars still refuses (the card falls back)
+    expect(gatePostTitleValue("Mbappé scores in the penalty area", ctx)).toBeNull();
+    expect(gatePostTitleValue("Player carries ball in midfield", ctx)).toBe("Player carries ball");
     expect(gatePostTitleValue("", ctx)).toBeNull();
   });
 

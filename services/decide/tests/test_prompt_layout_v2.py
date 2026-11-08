@@ -67,8 +67,8 @@ GOLDEN_V3_FULL = (
 # `postTitle` output field (+145 chars <= +40 input tokens). The FULL/VOD
 # goldens below are UNCHANGED bytes, which is the AC8 guard.
 GOLDEN_V3_COMPACT = (
-    15969,
-    "d60fc3222990f474b777bdfb2f9733481914c33617b0cfdb79bf7b0b191dc39f",
+    16073,
+    "8da9cb9548d27d1f816e20d2df185ec66c4f5b85666b0fbeaa4d63f92966aeea",
 )
 GOLDEN_V3_FULL_MC_PG = (
     13404,
@@ -366,8 +366,9 @@ def test_compact_golden_hash_pinned():
     edit cannot silently ride along in this change (v3 added the timestamp
     citation only: 4547 -> 4640 chars; ADAAAA-8318 added the `postTitle` field:
     4640 -> 4785 chars; ADAAAA-8356 rebuilt the title spec as its own rule
-    paragraph: 4785 -> 5678 chars)."""
-    assert len(_OUTPUT_CONTRACT_COMPACT) == 5678
+    paragraph: 4785 -> 5678 -> 5782 chars, and the key now precedes
+    the caption)."""
+    assert len(_OUTPUT_CONTRACT_COMPACT) == 5782
     assert _sha(_OUTPUT_CONTRACT_COMPACT) == _sha(_OUTPUT_CONTRACT_COMPACT)
     # the compact flat prompt is the pinned v3 golden
     compact = build_prompt(

@@ -1543,6 +1543,29 @@ _OUTPUT_CONTRACT_COMPACT = (
     #    one, and the em-dash clause read as apposition — R2).
     # The no-copyable-example rule from c9012ad still holds: the shape is
     # described, never exemplified with a sentence the model can paste.
+    # ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET. The
+    # runningSummary below stays the announcer detail line; this ONE extra field
+    # is the headline a user posts, generated in the SAME reply (no second call).
+    #
+    # ADAAAA-8356 (ADAAAA-8302 Phase B FAIL): 8318 inlined this field MID-WAY
+    # through the runningSummary description, so the caption's COLOR BEAT /
+    # CLOCK / no-invented-names rules dangled after the title key and the title
+    # spec was a 5-clause parenthetical sitting directly under a lead rule that
+    # REQUIRES actor + action + place. Measured on leg 23bb0a61: 341/898 model
+    # titles carried a place chain, 39 asserted a goal on a non-scoring verdict,
+    # 24 named a person/team absent from the row's copy, 24 carried a second
+    # beat; the write seam refused 46/54 rows, so 20/25 served cards fell back to
+    # the deterministic GOAL / m:ss title.
+    #
+    # Fix (v2, probe-measured): the key is declared BEFORE runningSummary, so the
+    # model writes the headline from the event instead of shortening a caption it
+    # has not written yet, and the caption description stays contiguous. The bars
+    # ride IN the shape (the position the model attends to) with the contrast
+    # named outright — the caption MUST name a place, the headline MUST NOT.
+    "\"postTitle\": \"<the card HEADLINE: exactly WHO + one present-tense VERB + "
+    "WHAT, three slots and no fourth — never a pitch location, clock, second beat "
+    "or score claim unless your own outcome is scoring_play; <=60 chars, "
+    "<=10 words>\", "
     "\"runningSummary\": \"<CAPTION FOR THIS WINDOW ONLY, as ONE line (never append a "
     "second line): total target max 110 chars, HARD MAX 140 (was 220). Shape "
     "'<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. THIS WINDOW ONLY: describe "
@@ -1594,39 +1617,24 @@ _OUTPUT_CONTRACT_COMPACT = (
     "'The scene opens on', 'The broadcast cuts to', 'The sequence', 'This window "
     "shows'. Color must be attributable to this window's frames or transcript — no "
     "invented names, scores, kit colours or flags.>\", "
-    # ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET. The
-    # runningSummary above stays the announcer detail line; this ONE extra field
-    # is the title a user posts, generated in the SAME reply (no second call).
-    #
-    # ADAAAA-8356 (ADAAAA-8302 Phase B FAIL): 8318 inlined this field MID-WAY
-    # through the runningSummary description, so the COLOR BEAT / CLOCK /
-    # no-invented-names rules dangled after the title key and the title spec was
-    # a 5-clause parenthetical ("no place words, no goal claim unless a goal")
-    # sitting immediately under a lead rule that REQUIRES actor + action + place.
-    # Measured consequence on leg 23bb0a61: 341/898 model titles carried a place
-    # chain, 39 asserted a goal on a non-scoring verdict, 24 named a person/team
-    # absent from the row's copy, 24 carried a second beat — and the write gate
-    # refused 46/54 rows, so 20/25 cards fell back to the deterministic title.
-    # The field now keeps a one-line placeholder in the shape and gets its own
-    # rule paragraph AFTER the shape (recency, and it cannot be read as a caption
-    # clause). The paragraph names the collision explicitly ("the lead MUST name
-    # a place; the title must NOT"), keys the claim bar to the model's OWN
-    # outcome, ties names to THIS window's reads, and states the discard.
-    "\"postTitle\": \"<the clip card's title — see POST TITLE RULES>\"} "
-    "POST TITLE RULES — postTitle is the clip card's title: a DIFFERENT string "
-    "from runningSummary, never the lead restated. ONE event, ONE clause = "
-    "subject + present-tense verb + object, <=60 chars, <=10 words. The subject "
-    "is a jersey number or role, or a name ONLY when THIS window's transcript, "
-    "OCR or frames read that exact name — never a name, team, score or colour "
-    "taken from the story or the match context. The lead above MUST name a place; "
-    "the title must NOT: no in/on/at/from/near/into/around tail (area, box, "
-    "midfield, third, center, wing, post, half, left, right), no clock, no "
-    "em-dash, semicolon or comma clause, no consequence ('leads to', 'after', "
-    "'then'), no bare 'Player', no trailing period. No score, goal, level or "
-    "equalise claim unless YOUR OWN outcome here is scoring_play. Never reuse a "
-    "subject+verb you already titled this job. A title that breaks any of these "
-    "rules is discarded and the card falls back to a plain label, so write the "
-    "plainest true phrase."
+    # ADAAAA-8356 (v2): the headline's operating rules, placed AFTER the shape
+    # (recency, and they cannot be misread as a caption clause). The caption
+    # above REQUIRES a place; the headline never names one. A violating headline
+    # is discarded at the write seam and the card falls back to a plain
+    # `LABEL · m:ss`, so the model is told the rule costs it the field.
+    "POST TITLE RULES — postTitle is the card's HEADLINE, written FIRST from the "
+    "event itself. Fill exactly three slots and nothing else: WHO (a jersey "
+    "number or role, or a name ONLY when THIS window's transcript, OCR or frames "
+    "read it — never from the story or the match context), one present-tense "
+    "VERB, and WHAT (the ball, the goal, the keeper, the opponent). NO fourth "
+    "slot: the caption MUST name a place, the headline NEVER does — no zone, "
+    "area, box, third, wing, channel, circle, half, side, venue or stadium, no "
+    "clock, no second beat, no consequence ('leads to', 'after', 'then'). ONE "
+    "clause, no trailing period, no em-dash, semicolon or comma clause, never "
+    "the bare word Player. No score, goal, level or equalise claim unless YOUR "
+    "OWN outcome here is scoring_play. Never reuse a subject+verb you already "
+    "titled this job. Read the headline once more and delete any word that names "
+    "where the action happened."
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
