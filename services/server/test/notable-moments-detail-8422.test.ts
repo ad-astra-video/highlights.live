@@ -1,13 +1,19 @@
-// ADAAAA-8422 (N1) — the detail seam: ONE notable card per overlap chain, the
-// cluster's other windows on its clip rail.
+// ADAAAA-8422 (N1) + ADAAAA-8443 (N1b) — the detail seam: ONE notable card per
+// MOMENT (anchor-gap cluster), the cluster's other windows on its clip rail.
 //
 // Measured shape being fixed: live job b55c5781-7976-4777-905c-847a06f3d3a8 had
 // 5 non-scoring windows and 0 accepted goals, so the notable lane shipped 5
-// cards where the board expects 2 moments with 2 and 3 clip options. The
-// projection is read-side only: every option is another STORED row's own
-// already-cut clip, no row is mutated, and every counter is byte-equal.
+// cards where the board expects 2 moments with 2 and 3 clip options. N1 grouped
+// them by strict overlap (4 moments on that geometry), so N1b groups by ANCHOR
+// GAP (`NOTABLE_MOMENT_GAP_S` = 40 s). The projection is read-side only: every
+// option is another STORED row's own already-cut clip, no row is mutated, and
+// every counter is byte-equal.
 import { describe, expect, it } from "vitest";
-import { MAX_ALTERNATIVES_PER_HIGHLIGHT, HighlightRecordSchema } from "@highlights/events";
+import {
+  MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT,
+  NOTABLE_MOMENT_GAP_S,
+  HighlightRecordSchema,
+} from "@highlights/events";
 import { buildTestApp } from "./helpers";
 
 function auth(token: string) {
@@ -47,37 +53,47 @@ async function seed(
   return id;
 }
 
-describe("GET /jobs/:id/detail — notable moments (N1-AC1/AC2/AC3)", () => {
-  it("renders one card per cluster and the siblings as that card's rail options", async () => {
+/** The EXACT five windows QA measured on job b55c5781 (all 15 s clips). */
+const MEASURED_STARTS = [255.4, 306.388, 685.135, 697.93, 725.182];
+
+describe("GET /jobs/:id/detail — notable moments (N1b-AC1/AC2/AC3)", () => {
+  it("renders one card per moment and the siblings as that card's rail options", async () => {
     const t = await buildTestApp();
     try {
       const u = await register(t.app, "notable-moments-8422@test.local");
       const job = await (t.store.createJob({ ownerId: u.id, source: "browser", gameHint: "soccer" } as any) as any);
-      // The reported shape: windows 1-2 overlap (moment A), 3-4-5 overlap
-      // (moment B), and the two groups do not touch.
       const ids = [] as string[];
-      for (const start of [10, 18, 60, 68, 76]) ids.push(await seed(t, job.id, start));
+      for (const start of MEASURED_STARTS) ids.push(await seed(t, job.id, start));
 
       const res = await t.app.inject({ method: "GET", url: `/jobs/${job.id}/detail`, headers: auth(u.token) });
       expect(res.statusCode).toBe(200);
       const body = res.json();
 
-      // AC1: 2 cards, not 5 — one per overlap chain, in time order.
+      // N1b-AC1: 2 cards, not 5 and not N1's 4 — the measured anchor-gap partition.
       const moments = body.notableHighlights as any[];
       expect(moments.length).toBe(2);
       expect(moments.map((m) => m.siblingCount)).toEqual([2, 3]);
       expect(moments.map((m) => (m.siblingClips ?? []).length)).toEqual([1, 2]);
       expect(moments.map((m) => m.siblingClips ?? []).flat().length).toBe(3);
-      // Every option is capped by the shipped rail contract.
-      for (const m of moments) expect((m.siblingClips ?? []).length).toBeLessThanOrEqual(MAX_ALTERNATIVES_PER_HIGHLIGHT);
+      // The rendered membership, by id: [02e9bf4e,5f8d9d07] and
+      // [b7fb1898,128ab571,69118d51] on the live job; same windows seeded here.
+      expect(moments.map((m) => m.id)).toEqual([`hl-255`, `hl-685`]);
+      expect(
+        moments.map((m) => [m.id, ...(m.siblingClips ?? []).map((o: any) => o.id)].sort())
+      ).toEqual([
+        [`hl-255`, `hl-306`],
+        [`hl-685`, `hl-698`, `hl-725`],
+      ]);
+      // Every option is capped by the NOTABLE rail contract (1 + 3).
+      for (const m of moments) expect((m.siblingClips ?? []).length).toBeLessThanOrEqual(MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT);
 
       // AC2: each option carries its OWN stored clip + its own export URL — no
       // re-encode, no new row, and the option is not pickable.
       const options = moments.flatMap((m) => m.siblingClips ?? []);
       expect(options.map((o: any) => o.clipUri)).toEqual([
-        `/clips/${job.id}-18.mp4`,
-        `/clips/${job.id}-68.mp4`,
-        `/clips/${job.id}-76.mp4`,
+        `/clips/${job.id}-306.mp4`,
+        `/clips/${job.id}-698.mp4`,
+        `/clips/${job.id}-725.mp4`,
       ]);
       for (const o of options) {
         expect(o.exportUri).toMatch(new RegExp(`^/clips/${job.id}-\\d+\\.mp4\\?x=`));
@@ -121,17 +137,27 @@ describe("GET /jobs/:id/detail — notable moments (N1-AC1/AC2/AC3)", () => {
     }
   });
 
-  it("a lone notable window keeps a single slide and no options (N1-AC2)", async () => {
+  it("two windows 36 s apart are ONE moment; 400 s apart are two (N1b-AC2)", async () => {
     const t = await buildTestApp();
     try {
       const u = await register(t.app, "notable-moments-8422-b@test.local");
       const job = await (t.store.createJob({ ownerId: u.id, source: "browser", gameHint: "soccer" } as any) as any);
+      // 10-25 and 46-61: anchor distance 21 s (< 40) => same moment.
       await seed(t, job.id, 10);
-      // Touching windows are adjacent moments, not one moment.
-      await seed(t, job.id, 25);
+      await seed(t, job.id, 46);
 
-      const res = await t.app.inject({ method: "GET", url: `/jobs/${job.id}/detail`, headers: auth(u.token) });
-      const moments = res.json().notableHighlights as any[];
+      let res = await t.app.inject({ method: "GET", url: `/jobs/${job.id}/detail`, headers: auth(u.token) });
+      let moments = res.json().notableHighlights as any[];
+      expect(moments.length).toBe(1);
+      expect(moments[0].siblingCount).toBe(2);
+      expect((moments[0].siblingClips ?? []).map((o: any) => o.id)).toEqual(["hl-46"]);
+
+      // 410-425: 385 s past the open moment's end (>= 40) => its own moment.
+      const job2 = await (t.store.createJob({ ownerId: u.id, source: "browser", gameHint: "soccer" } as any) as any);
+      await seed(t, job2.id, 10);
+      await seed(t, job2.id, 410);
+      res = await t.app.inject({ method: "GET", url: `/jobs/${job2.id}/detail`, headers: auth(u.token) });
+      moments = res.json().notableHighlights as any[];
       expect(moments.length).toBe(2);
       expect(moments.every((m) => m.siblingCount === 1)).toBe(true);
       expect(moments.every((m) => !("siblingClips" in m) || (m.siblingClips ?? []).length === 0)).toBe(true);
@@ -140,7 +166,12 @@ describe("GET /jobs/:id/detail — notable moments (N1-AC1/AC2/AC3)", () => {
     }
   });
 
-  it("a rejected row and an absorbed celebration are never options (N1-AC6)", async () => {
+  it("the gap constant is the shipped one QA grades (N1b-AC1)", () => {
+    expect(NOTABLE_MOMENT_GAP_S).toBe(40);
+    expect(MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT).toBe(3);
+  });
+
+  it("a rejected row and an absorbed celebration are never options (N1b-AC3)", async () => {
     const t = await buildTestApp();
     try {
       const u = await register(t.app, "notable-moments-8422-c@test.local");

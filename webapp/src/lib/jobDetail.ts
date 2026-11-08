@@ -385,7 +385,7 @@ export interface JobDetailHighlight {
    * rail (play/download each own clip). Absent on a single-window moment, which
    * renders no rail. Mirrors NotableMomentClipSchema in `@highlights/events`. */
   siblingClips?: JobDetailSiblingClip[];
-  /** ADAAAA-8422 (N1): rows the moment's overlap cluster holds (1 = a lone
+  /** ADAAAA-8422 (N1): rows the moment holds (anchor-gap cluster; 1 = a lone
    * window). Lets a reader tell a rail-capped moment from a dropped row. */
   siblingCount?: number;
   /** ADAAAA-8321 (AC6): the alternative clip this moment SERVES. Absent = its
