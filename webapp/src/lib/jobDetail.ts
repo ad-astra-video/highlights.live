@@ -459,6 +459,61 @@ export interface JobDetailHighlight {
   };
 }
 
+/**
+ * ADAAAA-8425: the observe snapshot's skip split + decide ceiling, as persisted
+ * on a job record (mirrors `ObserveMetricsSnapshotSchema` in @highlights/events).
+ * Additive optional fields: a record written before a counter existed simply has
+ * no value for it, and the audit renders that as "not measured" only when the
+ * whole snapshot is absent.
+ */
+export interface ObserveSkipSplit {
+  decideCalls?: number;
+  /** Content was late past the lag budget (dropped, never decided late). */
+  skippedStaleWindows?: number;
+  /** This stream's own decide queue was full. */
+  backpressureSkippedWindows?: number;
+  /** Another live job held the box's decide slot. */
+  admissionSkippedWindows?: number;
+  /** The funded rate cap dropped the opportunity (a spend decision). */
+  throttleSkippedWindows?: number;
+  /** The RUNNER refused the decide (503 no capacity) — issued, never judged. */
+  capacityDroppedWindows?: number;
+  /** The SUPPLY total the customer chip shows (stale + backpressure + admission). */
+  supplySkippedWindows?: number;
+  /** The decide ceiling the job ran at, latched at job start (ADAAAA-8254/8262). */
+  decideCapacity?: {
+    advertised: number;
+    funded: number;
+    effective: number;
+    probeOk?: boolean;
+    runners?: number;
+    source?: "probe" | "last-known" | "funded";
+  };
+}
+
+/**
+ * ADAAAA-8425: the admin window-audit readout (mirrors `WindowSkipAuditSchema`
+ * in @highlights/events). Server-derived from the stored record; the payload
+ * carries it for an admin caller only.
+ */
+export interface WindowSkipAudit {
+  jobId: string;
+  status: string;
+  source: string;
+  decideCalls: number;
+  /** SUPPLY total = stale + backpressure + admission (the chip's number). */
+  skippedWindows: number;
+  staleSkippedWindows: number;
+  backpressureSkippedWindows: number;
+  admissionSkippedWindows: number;
+  throttleSkippedWindows: number;
+  /** NULL = the record predates the counter: "not recorded", not a measured 0. */
+  capacityDroppedWindows: number | null;
+  /** False = the record has no observe snapshot at all (counts not measured). */
+  observeRecorded: boolean;
+  decideCapacity: ObserveSkipSplit["decideCapacity"] | null;
+}
+
 export interface JobDetail {
   job: {
     id: string;
@@ -533,7 +588,9 @@ export interface JobDetail {
     // snapshot (`observeMetrics.decideCalls`) rather than the job-level
     // `decideCalls` field, which only the VOD path wrote. The header must fall
     // back to it, else a live job with N real decides renders `0`.
-    observeMetrics?: { decideCalls?: number };
+    // ADAAAA-8425: the same snapshot carries the five skip causes + the decide
+    // ceiling. Additive optional — absent on records written before a counter.
+    observeMetrics?: ObserveSkipSplit;
     perceiveSessionS?: number;
     costUsd?: number;
     durationMs?: number;
@@ -566,6 +623,10 @@ export interface JobDetail {
   // ADAAAA-7750: WHY the window list is empty, when it is — derived read-time
   // from stored counters. Additive optional, absent on servers that predate it.
   capture?: LiveCapture;
+  // ADAAAA-8425: the admin-only window audit (five skip causes + decide ceiling).
+  // Absent for a `role=user` caller AND on servers that predate it, so the
+  // customer payload — and the live chip's supply-only semantics — are unchanged.
+  windowAudit?: WindowSkipAudit;
 }
 
 /** ADAAAA-7750: capture-state projection for a zero-window job. Mirrors
