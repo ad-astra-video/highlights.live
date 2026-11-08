@@ -736,6 +736,19 @@ export class LiveObserver {
   private enrichWindows = 0;
   /** ADAAAA-7799: decide opportunities dropped by the rate cap. */
   private throttleSkips = 0;
+  /** ADAAAA-8425: decides the RUNNER refused (503 `no capacity available for
+   *  runner` / an expired queue budget), so the window was issued and never
+   *  judged. Its own counter — a capacity drop is not a stale drop (the content
+   *  was not late), not backpressure (this stream's queue was free), not
+   *  admission (no other live job held the box) and not the rate cap, and the
+   *  PO ruling on ADAAAA-7808 keeps `supplySkippedWindows` meaning exactly the
+   *  three rail shortfalls. It is the failure ADAAAA-8418 could not see: the GPU
+   *  read idle because the runner refused the work. */
+  private capacityDrops = 0;
+  /** ADAAAA-8425: content instant of the last counted drop, so ONE window is
+   *  counted once even if its decide is retried (the same one-per-cadence-window
+   *  discipline as `backpressureSkips`). */
+  private lastCapacityDropTs: number | null = null;
   /** ADAAAA-7799: decide opportunities seen (kept + dropped). */
   private decideOpportunities = 0;
   /** ADAAAA-7799: content ts of the last counted opportunity. One opportunity
@@ -1220,6 +1233,29 @@ export class LiveObserver {
   /** ADAAAA-7799: decide opportunities the rate cap dropped (fixed stride). */
   throttleSkipCount(): number {
     return this.throttleSkips;
+  }
+  /**
+   * ADAAAA-8425: record a decide the RUNNER refused (a `DecideCapacityError`:
+   * 503 no capacity / expired queue budget) for the window centred at
+   * `centerTs`. The window was issued and never judged, so this is a distinct
+   * failure from every other skip counter on this class.
+   *
+   * Counted once per WINDOW, not once per report: the same window's decide can
+   * be reported more than once (a retry re-throws), and the guard is the
+   * window's own content instant — the analogue of `backpressureSkips`'
+   * one-per-cadence-window guard. Two DIFFERENT windows always count, even when
+   * they fall inside one cadence period, because a drop means the decide was
+   * actually issued (which advances the cadence clock).
+   */
+  noteCapacityDropWindow(centerTs: number): void {
+    const ts = Number.isFinite(centerTs) ? centerTs : null;
+    if (ts !== null && this.lastCapacityDropTs !== null && Math.abs(ts - this.lastCapacityDropTs) < 1e-6) return;
+    this.lastCapacityDropTs = ts;
+    this.capacityDrops++;
+  }
+  /** ADAAAA-8425: decides the runner refused — the window was never decided. */
+  capacityDropCount(): number {
+    return this.capacityDrops;
   }
   /** ADAAAA-7771: the last window ISSUED (content ts + measured lag), for the
    *  `[live-lag]` evidence line. Independent of the settle ordering. */

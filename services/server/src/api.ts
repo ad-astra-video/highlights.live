@@ -59,6 +59,7 @@ import {
   DatasetSchema,
   DetectionTrainingSampleSchema,
   JobDetailSchema,
+  WindowSkipAuditSchema,
   postTitleTeamSubject,
   projectAnnouncerCaption,
   projectPostTitle,
@@ -90,7 +91,10 @@ import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
 import { buildStageTimings } from "./vod-stage-timings";
 // ADAAAA-7928: pure admin aggregate behind GET /admin/vod-breakdown.
 import { buildVodBreakdown, type VodBreakdownScopeKind } from "./vod-breakdown";
-import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
+import { isAdminRole, jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
+// ADAAAA-8425: pure stored-record derivation behind the admin window-audit
+// readout (`GET /jobs/:id/window-audit` + the detail payload's `windowAudit`).
+import { windowSkipAudit } from "./window-audit";
 import { appliedDecideWatermark, deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { deriveLiveCapture } from "./live-capture";
 import { appendSummaryEntry } from "./summary-log";
@@ -5560,9 +5564,32 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // of only at stop. Non-browser sources record server-side → undefined.
           recordingBytes: job.source === "browser" ? browserRecordingBytes(job.id) : undefined,
         }),
+        // ADAAAA-8425: the admin window-audit readout (five skip causes side by
+        // side + the decide ceiling the job ran at). Attached ONLY for an admin
+        // caller: the payload is parsed here and role-filtered after, and a
+        // top-level key survives that filter, so the role gate must be at the
+        // source. A `role=user` payload stays byte-identical and the live chip
+        // keeps showing only the supply number.
+        ...(isAdminRole(user.role) ? { windowAudit: windowSkipAudit(job) } : {}),
       }),
       user.role
     );
+  });
+
+  // ADAAAA-8425: the admin window-audit readout for ONE job, from the STORED
+  // record — no decide, no GPU, no shell. It is the answer surface for "why are
+  // live windows skipped while the decide cards read idle": the five skip causes
+  // (stale / backpressure / admission / throttle / capacity-drop) beside the
+  // decide count, the supply total the customer chip shows, and the advertised vs
+  // effective decide ceiling the run latched at job start (ADAAAA-8254/8262).
+  //
+  // Admin-only on purpose: every number here is an ADAAAA-7727 internal pipeline
+  // diagnostic, so a customer session gets 403 exactly like the other admin
+  // read routes, and the customer surfaces are untouched.
+  app.get<{ Params: { id: string } }>("/jobs/:id/window-audit", { preHandler: adminReadOnlyStrictReq }, async (req: any, reply) => {
+    const job = store.getJob(req.params.id);
+    if (!job) return reply.code(404).send({ error: "not found" });
+    return WindowSkipAuditSchema.parse(windowSkipAudit(job));
   });
 
   // ADAAAA-7742: incremental section stream for an OPEN live job-detail page.

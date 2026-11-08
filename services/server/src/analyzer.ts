@@ -3562,6 +3562,14 @@ export interface LiveObserveMetricsSnapshot {
    *  Deliberately EXCLUDES `throttleSkippedWindows`, which is a funded rate
    *  decision and must never be folded into the supply number. */
   supplySkippedWindows?: number;
+  /** ADAAAA-8425: decides the RUNNER refused (503 `no capacity available for
+   *  runner` / expired queue budget). The window was issued on the cadence and
+   *  never judged, so its content is missing while every decide card reads idle.
+   *  Kept OUT of `supplySkippedWindows`: that number is the rail's own shortfall
+   *  (stale + backpressure + admission) and the PO ruling on ADAAAA-7808 fixes
+   *  its meaning. This is the fifth cause the admin window audit shows beside the
+   *  four, so "no supply skips but 3 capacity drops" is readable from the record. */
+  capacityDroppedWindows?: number;
   /** ADAAAA-8351: decide-side ASR wait-budget meter. `asrWaitMisses` counts
    *  decides that stopped waiting for the side lane and transcribed inline;
    *  `asrWaitBudgetMs` / `asrLaneWidth` are the EFFECTIVE values the run used,
@@ -3825,6 +3833,10 @@ export function buildLiveObserveMetrics(
     // throttle is a funded rate decision, so folding it in would read as
     // missing coverage the rail chose to spend less on.
     droppedFrames: obs.staleFrameCount(),
+    // ADAAAA-8425: the fifth cause — decides the runner refused. Not part of the
+    // supply total below (see the field doc); the admin window audit reads it
+    // beside the other four.
+    capacityDroppedWindows: obs.capacityDropCount(),
     supplySkippedWindows:
       obs.skippedStaleWindowCount() + obs.backpressureSkipCount() + obs.admissionSkipCount(),
     // ADAAAA-7774: the ingest -> analysis stride evidence (absent when the pass
@@ -9372,7 +9384,13 @@ export async function analyzeJob(
                       }).catch((err) => {
                         // ADAAAA-8254: a dropped decide leaves no verdict, so the
                         // window is simply not accepted — the pass continues.
+                        // ADAAAA-8425: and it is COUNTED on the observer as its own
+                        // cause, so the refusal is readable on the job record
+                        // instead of only in this log line (the window WAS issued
+                        // on the cadence — nothing judged it, which is exactly the
+                        // "GPU idle, window missing" shape of ADAAAA-8418).
                         if (isDecideCapacityError(err)) {
+                          liveObserver?.noteCapacityDropWindow(payload.centerTs);
                           console.error(
                             `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
                               (err as Error).message
@@ -9400,7 +9418,11 @@ export async function analyzeJob(
                     // exhausted 503 retries) is a bounded, COUNTED loss: log it
                     // and keep the stream running (AC4). Any other error still
                     // aborts the pass exactly as before.
+                    // ADAAAA-8425: counted on the observer (once per window) so the
+                    // runner's refusal rides the persisted observe snapshot as its
+                    // own cause, never folded into the supply total.
                     if (isDecideCapacityError(err)) {
+                      liveObserver?.noteCapacityDropWindow(payload.centerTs);
                       console.error(
                         `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
                           (err as Error).message

@@ -579,6 +579,16 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // shortfall. Additive optional.
   droppedFrames: z.number().int().min(0).optional(),
   supplySkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-8425: decides the RUNNER refused — the 503 `no capacity available for
+  // runner` path (or an expired queue budget). The window was ISSUED on the
+  // cadence and never decided, so its content is missing while every decide card
+  // reads idle: the one failure that looks exactly like a lost window. It is its
+  // own counter because it is none of the other four (the content was not late,
+  // this stream's queue was free, no other live job held the box, no rate cap
+  // dropped it) and folding it into `supplySkippedWindows` would change what that
+  // customer-facing number means (PO ruling on ADAAAA-7808). Additive optional:
+  // absent on records written before this field existed.
+  capacityDroppedWindows: z.number().int().min(0).optional(),
   // ADAAAA-8351: the decide-side ASR WAIT BUDGET meter. `LIVE_DECIDE_ASR_WAIT_MS`
   // caps how long a decide waits for the side lane's prefetch before it proceeds
   // with inline ASR (the prefetch keeps running and still caches its result, so a
@@ -2518,6 +2528,50 @@ export type LiveCapture = z.infer<typeof LiveCaptureSchema>;
 
 
 
+// ADAAAA-8425: the admin window-audit readout — ONE stored-record block that
+// answers "why are live windows missing while the decide cards read idle"
+// without a shell and without a GPU. Derived read-only from the job record; it
+// never re-counts anything.
+//
+// The five skip causes stay side by side on purpose: they are five different
+// failures and the customer-facing aggregate (`skippedWindows`) is only the
+// SUPPLY total (stale + backpressure + admission), which deliberately excludes
+// the throttle (a funded rate decision) and the capacity drop (a runner
+// refusal). Reading them side by side is the whole point: an all-zero supply
+// next to a non-zero `capacityDroppedWindows` is the "GPU idle, window missing"
+// case ADAAAA-8418 could not self-serve.
+export const WindowSkipAuditSchema = z.object({
+  /** The audited job. */
+  jobId: z.string(),
+  status: z.string(),
+  source: z.string(),
+  /** Decide invocations the run actually issued. */
+  decideCalls: z.number().int().min(0),
+  /** SUPPLY skips = stale + backpressure + admission (the number the live chip
+   *  shows). Never includes the throttle or a capacity drop. */
+  skippedWindows: z.number().int().min(0),
+  /** The five causes, in the order the readout renders them. */
+  staleSkippedWindows: z.number().int().min(0),
+  backpressureSkippedWindows: z.number().int().min(0),
+  admissionSkippedWindows: z.number().int().min(0),
+  throttleSkippedWindows: z.number().int().min(0),
+  /** NULL = the row predates the counter (ADAAAA-8425), so this cause was never
+   *  measured on it. A readout must render that as "not recorded", never as a
+   *  measured 0: "no capacity drop" and "nobody counted capacity drops" are
+   *  different answers, and only the first one clears the runner. */
+  capacityDroppedWindows: z.number().int().min(0).nullable(),
+  /** True when the record carries an observe snapshot at all. False means every
+   *  count above is "not measured" (a row written before the snapshot existed),
+   *  NOT a measured zero — the readout must say so. */
+  observeRecorded: z.boolean(),
+  /** The decide ceiling the job actually ran at (ADAAAA-8254/8262, latched at
+   *  job start): `advertised` = what the runner fleet offered, `effective` =
+   *  what the gate admitted, so `advertised=8, effective=6` is "8 funded, 6
+   *  served" without a shell. Null on a record that never carried the snapshot. */
+  decideCapacity: DecideCapacitySnapshotSchema.nullable(),
+});
+export type WindowSkipAudit = z.infer<typeof WindowSkipAuditSchema>;
+
 /** Composite payload of GET /jobs/:id/detail (ADAAAA-6851 Inc 3). */
 export const JobDetailSchema = z.object({
   job: JobSchema,
@@ -2553,6 +2607,10 @@ export const JobDetailSchema = z.object({
   /** ADAAAA-7750: the capture-state projection for a zero-window job (additive
    * optional — absent on servers that predate it). */
   capture: LiveCaptureSchema.optional(),
+  /** ADAAAA-8425: the admin-only window-audit readout (five-way skip split +
+   * decide ceiling). Attached ONLY for an admin caller, so a `role=user` payload
+   * is byte-identical to today and the live chip keeps supply semantics. */
+  windowAudit: WindowSkipAuditSchema.optional(),
 });
 export type JobDetail = z.infer<typeof JobDetailSchema>;
 
