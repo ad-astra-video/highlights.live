@@ -2311,6 +2311,15 @@ export const JobDetailFrameSchema = z.object({
 });
 export type JobDetailFrame = z.infer<typeof JobDetailFrameSchema>;
 
+/** ADAAAA-8419: a frame the live consume stride REFUSED, as audit evidence.
+ *  Timestamp only — a strided frame never had a stored image, so it carries no
+ *  `seq`, `uri` or `tracks` and can never enter the gallery. */
+export const SkippedFrameSchema = z.object({
+  timestamp: z.number(),
+  reason: z.literal("stride"),
+});
+export type SkippedFrame = z.infer<typeof SkippedFrameSchema>;
+
 /** A fixed 3 s bucket of frames + the decide notes whose trigger falls in it. */
 export const FrameSectionSchema = z.object({
   index: z.number().int().min(0),
@@ -2318,6 +2327,12 @@ export const FrameSectionSchema = z.object({
   endS: z.number(),
   frames: z.array(JobDetailFrameSchema).default([]),
   decideNotes: z.array(DecideNoteSchema).default([]),
+  // ADAAAA-8419: frames the consume stride refused inside `[startS, endS)`,
+  // ascending and capped per section. Absent = no skip evidence (unknown, never
+  // a fabricated empty list).
+  skipped: z.array(SkippedFrameSchema).optional(),
+  /** ADAAAA-8419: skipped frames in the window BEFORE the per-section cap. */
+  skippedTotal: z.number().int().min(0).optional(),
 });
 export type FrameSection = z.infer<typeof FrameSectionSchema>;
 

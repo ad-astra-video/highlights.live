@@ -260,6 +260,16 @@ export interface JobDetailFrame {
   tracks: TrackObservation[];
 }
 
+/**
+ * ADAAAA-8419: a frame the live consume stride refused, as audit evidence for the
+ * admin window view. Timestamp only — a skipped frame never had a stored image,
+ * so it carries no `seq`/`uri`/`tracks` and never enters the enlarged gallery.
+ */
+export interface SkippedFrame {
+  timestamp: number;
+  reason: "stride";
+}
+
 /** A fixed 3 s bucket of frames + the decide notes whose trigger falls in it. */
 export interface FrameSection {
   index: number;
@@ -267,6 +277,12 @@ export interface FrameSection {
   endS: number;
   frames: JobDetailFrame[];
   decideNotes: DecideNote[];
+  /** ADAAAA-8419: frames the consume stride refused inside `[startS, endS)`.
+   *  Absent = no skip evidence for this window (unknown — never a fabricated 0). */
+  skipped?: SkippedFrame[];
+  /** ADAAAA-8419: skipped frames in the window BEFORE the per-section cap, so a
+   *  trimmed audit can state `+N more` instead of hiding the remainder. */
+  skippedTotal?: number;
 }
 
 /** One aggregated tracked-object identity for a job. */
@@ -723,6 +739,10 @@ export interface SectionInspect {
   index: number;
   startS: number;
   endS: number;
+  /** ADAAAA-8419: the window's skipped-frame evidence (absent = none recorded),
+   *  so a window opened after the composite read renders its greyed tiles. */
+  skipped?: SkippedFrame[];
+  skippedTotal?: number;
   decideNotes: DecideNote[];
 }
 
@@ -1116,8 +1136,22 @@ export function noteSummaryText(note: DecideNote): string {
  * reads as having no analysis.
  */
 export function sectionSummaryText(s: FrameSection): string {
-  if (s.decideNotes.length === 0) return `${sectionLabel(s)} — no analysis`;
-  return `${sectionLabel(s)} · ${s.decideNotes.map(noteSummaryText).join(" | ")}`;
+  const skippedClause = skippedSummaryClause(s);
+  if (s.decideNotes.length === 0) return `${sectionLabel(s)} — no analysis${skippedClause}`;
+  return `${sectionLabel(s)} · ${s.decideNotes.map(noteSummaryText).join(" | ")}${skippedClause}`;
+}
+
+/**
+ * ADAAAA-8419: the collapsed-window clause naming the frames the consume stride
+ * refused, so a skipped window is visible without expanding it. `+N more` states
+ * the per-section display cap instead of silently hiding the remainder; a window
+ * with no skip evidence adds nothing at all (never `· 0 skipped`).
+ */
+export function skippedSummaryClause(s: FrameSection): string {
+  const shown = s.skipped?.length ?? 0;
+  if (shown === 0) return "";
+  const total = Math.max(shown, Math.round(Number(s.skippedTotal ?? shown) || shown));
+  return ` · ${shown} skipped${total > shown ? ` +${total - shown} more` : ""}`;
 }
 
 /**

@@ -5348,7 +5348,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           ? { frameCount: jobFrameCount(job.id), frameSeqs: jobFrameList(job.id).map((f) => f.seq), sampleFps: 1 }
           : undefined;
 
-    let sectionList = buildSections(obs, candidates, job.id, inventory);
+    let sectionList = buildSections(obs, candidates, job.id, inventory, liveConsumeEvidence(job.id)?.skippedTimestamps);
     // ADAAAA-7285: point each analysis window that captured audio at a real
     // per-window audio resource (re-extracted on demand from the source), so
     // the analysis-window player has something to play. Silent windows (audio
@@ -5574,7 +5574,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
       const obs = store.observationsForJob(job.id);
       const candidates = store.candidatesForJob(job.id);
-      const sectionList = buildSections(obs, candidates, job.id);
+      const sectionList = buildSections(obs, candidates, job.id, undefined, liveConsumeEvidence(job.id)?.skippedTimestamps);
       attachWindowAudioUris(sectionList, job.id);
       // ADAAAA-7838: same payload gating as `/jobs/:id/detail` — a delta poll
       // only carries the per-window internals while the page asked for them.
@@ -5653,7 +5653,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
 
       const obs = store.observationsForJob(job.id);
       const candidates = store.candidatesForJob(job.id);
-      const sectionList = buildSections(obs, candidates, job.id);
+      const sectionList = buildSections(obs, candidates, job.id, undefined, liveConsumeEvidence(job.id)?.skippedTimestamps);
       attachWindowAudioUris(sectionList, job.id);
       const section = sectionList.find((s) => s.index === index);
       if (!section) return reply.code(404).send({ error: "section not found" });
@@ -5663,6 +5663,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         index: section.index,
         startS: section.startS,
         endS: section.endS,
+        // ADAAAA-8419: the window's skipped-frame evidence rides the inspect read
+        // too, so a window opened after the composite read renders its greyed
+        // tiles without a full refetch. Absent = no evidence for this window.
+        ...(section.skipped ? { skipped: section.skipped, skippedTotal: section.skippedTotal } : {}),
         // FULL per-window capture for this bucket only (analysis + confirm).
         decideNotes: section.decideNotes,
       };

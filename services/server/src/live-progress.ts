@@ -112,6 +112,11 @@ export interface LiveConsumeEvidence {
   framesAnalyzed?: number;
   framesStrided?: number;
   analysisFps?: number;
+  /** ADAAAA-8419: content ts of the frames the consume stride REFUSED (newest
+   *  240, ascending). Display evidence for the admin window audit only: no `seq`,
+   *  no stored image, nothing persisted. Server-side only — `deriveLiveProgress`
+   *  never copies it onto the customer `liveProgress` object. */
+  skippedTimestamps?: number[];
   analysedThroughTs?: number;
   tapThroughTs?: number;
 }

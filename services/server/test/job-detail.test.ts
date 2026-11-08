@@ -5,7 +5,7 @@ import path from "node:path";
 import { JobCandidateSchema, type JobCandidate } from "@highlights/events";
 import { SqliteDb } from "../src/db";
 import { Store, type StoredObservation } from "../src/store";
-import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource, SECTION_WINDOW } from "../src/job-detail";
+import { attachWindowAudioUris, buildSections, buildTraces, maxTracesForSource, SECTION_SKIPPED_CAP, SECTION_WINDOW } from "../src/job-detail";
 import type { WindowAnalysis } from "@highlights/events";
 
 // ADAAAA-6851 Inc 1-3: durable per-frame observations + per-candidate decide
@@ -324,3 +324,56 @@ describe("durable observations + candidates survive a restart (ADAAAA-6851 Inc 1
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// ADAAAA-8419: the consume stride's refused frames surface in the window audit
+// as timestamp-only `skipped[]` evidence. The builder must partition them by the
+// SAME 3 s bucket as the frames, keep them ascending, cap them per section, and
+// never invent a seq/uri/tracks (a strided frame has no stored image).
+describe("buildSections skipped-frame evidence (ADAAAA-8419)", () => {
+  it("emits skipped[] in the window that covers each timestamp, ascending", () => {
+    const sections = buildSections([obs(0, 0.4), obs(1, 3.4)], [], "job-1", undefined, [2.2, 0.6, 3.1, 4.9]);
+    const byIndex = new Map(sections.map((s) => [s.index, s]));
+    // Window 0: 0.6, 2.2 (ascending although the input was not).
+    expect(byIndex.get(0)!.skipped).toEqual([
+      { timestamp: 0.6, reason: "stride" },
+      { timestamp: 2.2, reason: "stride" },
+    ]);
+    expect(byIndex.get(0)!.skippedTotal).toBe(2);
+    // Window 1: 3.1, 4.9.
+    expect(byIndex.get(1)!.skipped!.map((s) => s.timestamp)).toEqual([3.1, 4.9]);
+    // A skipped frame carries NO frame fields — audit evidence only.
+    for (const tile of byIndex.get(0)!.skipped!) {
+      expect(Object.keys(tile).sort()).toEqual(["reason", "timestamp"]);
+    }
+  });
+
+  it("emits a skipped-only window when none of its frames survived the gate", () => {
+    // No observation row exists for 6.0-9.0; both frames there were strided.
+    const sections = buildSections([obs(0, 0.4)], [], "job-1", undefined, [6.2, 7.4]);
+    const window2 = sections.find((s) => s.index === 2)!;
+    expect(window2.frames).toEqual([]);
+    expect(window2.skipped!.map((s) => s.timestamp)).toEqual([6.2, 7.4]);
+  });
+
+  it("caps the tiles per section at SECTION_SKIPPED_CAP and states the remainder", () => {
+    const many = Array.from({ length: SECTION_SKIPPED_CAP + 5 }, (_, i) => 1 + i * 0.01);
+    const sections = buildSections([], [], "job-1", undefined, many);
+    const s = sections[0];
+    expect(s.skipped).toHaveLength(SECTION_SKIPPED_CAP);
+    expect(s.skippedTotal).toBe(SECTION_SKIPPED_CAP + 5);
+    expect(s.skipped![0].timestamp).toBeLessThan(s.skipped![SECTION_SKIPPED_CAP - 1].timestamp);
+  });
+
+  it("adds no skipped field at all when no evidence is supplied (never a fabricated 0)", () => {
+    const sections = buildSections([obs(0, 0.4)], [], "job-1");
+    expect(sections[0].skipped).toBeUndefined();
+    expect(sections[0].skippedTotal).toBeUndefined();
+  });
+
+  it("drops non-finite / negative timestamps instead of fabricating tiles", () => {
+    const sections = buildSections([], [], "job-1", undefined, [Number.NaN, -3, 1.5]);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].skipped!.map((s) => s.timestamp)).toEqual([1.5]);
+  });
+});
+

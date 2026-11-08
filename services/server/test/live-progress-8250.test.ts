@@ -16,7 +16,7 @@
 //   AC-4  a terminal job ignores the live block and keeps hiding the chip.
 import { describe, it, expect } from "vitest";
 import { deriveLiveProgress, type LiveProgressInput } from "../src/live-progress";
-import { MediaRailObserver } from "../src/media-rail";
+import { MediaRailObserver, SKIPPED_FRAME_TS_RING_CAP } from "../src/media-rail";
 
 const T0 = Date.parse("2026-11-06T16:40:00.000Z");
 
@@ -166,5 +166,36 @@ describe("live stride count on an in-flight share (ADAAAA-8250)", () => {
     const unset = new MediaRailObserver({ jobId: "job-8250-rail-unset", fps: 3, onDecide: async () => false });
     unset.onObservation({ timestamp: ts0, tracks: [], objects: [], ocr: [] } as any, Buffer.from("jpg").toString("base64"));
     expect(unset.liveConsumeEvidence()).toBeNull();
+  });
+
+  it("keeps a bounded ring of skipped content ts for the window audit (ADAAAA-8419)", () => {
+    const ts0 = Date.now() / 1000;
+    const rail = new MediaRailObserver({
+      jobId: "job-8419-rail",
+      fps: 100,
+      contentFps: 1,
+      windowS: 7,
+      cadenceS: 5,
+      maxFrames: 4,
+      onDecide: async () => false,
+    });
+    // 300 relayed frames 10 ms apart (3 content seconds) at a 1 fps content rate:
+    // ~3 are consumed, the rest are refused by the consume gate.
+    for (let i = 0; i < 300; i++) {
+      rail.onObservation(
+        { timestamp: ts0 + i * 0.01, tracks: [], objects: [], ocr: [] } as any,
+        Buffer.from(`jpeg-${i}`).toString("base64")
+      );
+    }
+    const live = rail.liveConsumeEvidence()!;
+    const skipped = live.skippedTimestamps!;
+    expect(live.framesStrided).toBeGreaterThan(200);
+    // Bounded ring, newest wins, ascending.
+    expect(skipped).toHaveLength(SKIPPED_FRAME_TS_RING_CAP);
+    expect(skipped[0]).toBeLessThan(skipped[skipped.length - 1]);
+    // The ring is evidence, not a position: the analysed clock stays on consumed
+    // frames only, so it can never be dragged forward by a skipped timestamp.
+    expect(live.analysedThroughTs!).toBeLessThan(live.tapThroughTs!);
+    expect(live.skippedTimestamps).not.toBe(rail.liveConsumeEvidence()!.skippedTimestamps);
   });
 });
