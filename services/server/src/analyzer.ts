@@ -2228,6 +2228,12 @@ export interface DecisionResult {
   // expose it. Observability only; no inference change. Absent on legacy
   // verdicts that predate the capture.
   analysis?: WindowAnalysis;
+  /** ADAAAA-8373: the decide service's per-window audio-coverage ledger. The
+   *  server reads ONLY `asrSource` here, to count a bounded-miss window
+   *  (`queue_miss`) on the run's observe snapshot. Optional and additive: a
+   *  verdict from a rule path / an older decide service carries none, and the
+   *  counter then stays 0. */
+  audioContext?: { asrSource?: string; asrRan?: boolean; noAudioReason?: string };
   // ADAAAA-7543: the reviewer-facing rationale the decide pass returned
   // (I1/ADAAAA-6358). The server forwards this whole Stage-1 object on the
   // confirm request, so ``verdict.criteria`` — ballInNet /
@@ -2858,6 +2864,18 @@ export interface AnalyzerConfig {
   /** ADAAAA-8081: per-call timeout for one side-lane transcription (ms).
    * `LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS`, default 6 000. */
   decideAsrPrefetchTimeoutMs?: number;
+  /** ADAAAA-8373: the INLINE-on-miss ASR lane's admission posture, mirrored from
+   * `ASR_MAX_CONCURRENT` (default 0 = unbounded, shipped) / `ASR_QUEUE_MS`
+   * (default 0 = wait as today). The bound is ENFORCED in the decide process
+   * (`services/decide/app/asr_admission.py`); the server only records the
+   * effective values on the observe snapshot and counts the misses the decide
+   * responses report, so the stored row is readable without the container log. */
+  decideAsrMaxConcurrent?: number;
+  decideAsrQueueMs?: number;
+  /** ADAAAA-8373: per-run counter of inline calls that lost the admission slot
+   *  (`asrSource: "queue_miss"` in the decide response). One object per live run,
+   *  created by `buildLiveAnalyzerConfig` — never a module global. */
+  decideAsrQueueStats?: { misses: number };
   /** ADAAAA-8081: ASR base URL (`ASR_URL`) for the side lane. Unset => the lane
    *  cannot run and the decide service transcribes inline as before. */
   asrUrl?: string;
@@ -3518,6 +3536,16 @@ export interface LiveObserveMetricsSnapshot {
    *  Deliberately EXCLUDES `throttleSkippedWindows`, which is a funded rate
    *  decision and must never be folded into the supply number. */
   supplySkippedWindows?: number;
+  /** ADAAAA-8373: the INLINE-on-miss ASR lane's admission meter. `asrQueueMisses`
+   *  counts windows whose inline ASR call lost the admission slot
+   *  (`ASR_MAX_CONCURRENT`) inside `ASR_QUEUE_MS`; they decided FAST on
+   *  text-only evidence and were labelled `asrSource: queue_miss` — a queue
+   *  bound is never counted as ASR absence. Always written on a live record (0
+   *  when the bound is inert). `asrMaxConcurrent` / `asrQueueMs` are the
+   *  EFFECTIVE posture, written only when the bound is configured. */
+  asrQueueMisses?: number;
+  asrMaxConcurrent?: number;
+  asrQueueMs?: number;
   /** ADAAAA-7774: the LIVE perceive stride — the ingest-to-analysis frame rate
    *  the pass consumed at, plus the counts that prove the stride ran:
    *  `perceiveCalls < framesAnalyzed` in a cool region (the cadence skipped
@@ -3695,7 +3723,12 @@ export function buildLiveObserveMetrics(
   confirm?: { calls: number; dives: number; dropped: number },
   /** ADAAAA-8344: the adapter's per-job decide-stage summary. Absent (VOD / a
    * rail that made no instrumented decide) leaves the record byte-identical. */
-  decideStages?: DecideStagesSnapshot
+  decideStages?: DecideStagesSnapshot,
+  /** ADAAAA-8373: the inline-ASR admission posture + the run's queue-miss
+   * counter. Absent leaves the record byte-identical (a caller that has no live
+   * inline lane); a live run always passes it, so `asrQueueMisses` is written
+   * even when the bound is inert (0). */
+  asrQueue?: { maxConcurrent: number; queueMs: number; misses: number }
 ): LiveObserveMetricsSnapshot {
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
@@ -3771,6 +3804,20 @@ export function buildLiveObserveMetrics(
     // timeout / transport / parse). Absent when the lane never ran.
     ...(confirm
       ? { confirmCalls: confirm.calls, confirmDiveCount: confirm.dives, confirmDropped: confirm.dropped }
+      : {}),
+    // ADAAAA-8373: the inline-ASR admission meter. The counter is written even
+    // when the bound is inert (0), so a reader never has to infer absence from a
+    // missing key; the EFFECTIVE posture is written only when a cap is set.
+    ...(asrQueue
+      ? {
+          asrQueueMisses: Math.max(0, Math.floor(asrQueue.misses)),
+          ...(asrQueue.maxConcurrent > 0
+            ? {
+                asrMaxConcurrent: Math.max(0, Math.floor(asrQueue.maxConcurrent)),
+                asrQueueMs: Math.max(0, Math.floor(asrQueue.queueMs)),
+              }
+            : {}),
+        }
       : {}),
   };
 }
@@ -7393,6 +7440,20 @@ export function withWindowFrameRefs(
   return { ...analysis, frames: refs };
 }
 
+/** ADAAAA-8373: a decide response that reports a bounded inline-ASR queue miss. */
+export function isAsrQueueMiss(d: DecisionResult | null | undefined): boolean {
+  // ADAAAA-8373: the decide service labels an inline ASR call that lost the
+  // admission slot (`ASR_MAX_CONCURRENT` / `ASR_QUEUE_MS`) with
+  // `asrSource: "queue_miss"` — ASR never ran, so this is NOT ASR absence. The
+  // server counts it separately from any wait miss (`asrWaitMisses`) so the two
+  // reasons can never be conflated on a stored row.
+  return d?.audioContext?.asrSource === "queue_miss";
+}
+
+function countAsrQueueMiss(cfg: AnalyzerConfig, d: DecisionResult | null | undefined): void {
+  if (cfg.decideAsrQueueStats && isAsrQueueMiss(d)) cfg.decideAsrQueueStats.misses++;
+}
+
 /**
  * ADAAAA-7011 / ADAAAA-7771: the DECIDE half of the shared decide+accept
  * callback. Builds the decide request from an observe window payload, runs the
@@ -7440,6 +7501,10 @@ export async function observeDecideOnly(
     }
     throw e;
   }
+  // ADAAAA-8373: count a bounded inline-ASR queue miss on this decide RESPONSE.
+  // Per response (not per window) is deliberate: an on-demand recall re-decide is
+  // its own call, so a queue bound is counted where it actually fired.
+  countAsrQueueMiss(cfg, decision);
   // ADAAAA-7008 / ADAAAA-7012: on-demand perceive recall. When the verdict asks
   // for MORE evidence for this moment, call perceive on demand (per-frame
   // derived context already computed — no detector re-run), fold it into the
@@ -7455,6 +7520,8 @@ export async function observeDecideOnly(
       evidence = rebuilt.evidence;
       opts = rebuilt.opts;
       decision = await client.decide(evidence, opts);
+      // ADAAAA-8373: the re-decide is its own inline-ASR call — count its miss.
+      countAsrQueueMiss(cfg, decision);
     }
   }
   // ADAAAA-7734: replace the decide service's placeholder frame refs with the
@@ -9262,7 +9329,15 @@ export async function analyzeJob(
             // ADAAAA-8344: the adapter's per-job stage summary (same instant as
             // the counters above). Undefined when no decide was instrumented, so
             // the record stays byte-identical on a rail that made none.
-            decideStageRecorder.summary(cfg.jobId)
+            decideStageRecorder.summary(cfg.jobId),
+            // ADAAAA-8373: this run's inline-ASR admission posture + the
+            // queue-miss counter, read at the same instant. The gate lives in
+            // the decide process; the snapshot records the EFFECTIVE env.
+            {
+              maxConcurrent: Math.max(0, Math.floor(cfg.decideAsrMaxConcurrent ?? 0)),
+              queueMs: Math.max(0, Math.floor(cfg.decideAsrQueueMs ?? 0)),
+              misses: cfg.decideAsrQueueStats?.misses ?? 0,
+            }
           ),
           // ADAAAA-8254: the decide admission counters + capacity snapshot, read
           // off the gate at the same instant.

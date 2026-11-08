@@ -348,6 +348,19 @@ export interface ServerConfig {
   /** ADAAAA-8081: `LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS`, default 6 000. A hung
    * ASR must degrade to inline ASR, never stall the live pass. */
   liveDecideAsrPrefetchTimeoutMs: number;
+  /** ADAAAA-8373: `ASR_MAX_CONCURRENT`, default 0 = UNBOUNDED (shipped). The
+   *  cap on simultaneous INLINE-on-miss ASR calls in the decide process — the
+   *  lane the ADAAAA-8363 grade measured at peak concurrency 4-5. The bound
+   *  itself lives in `services/decide/app/asr_admission.py` (one uvicorn worker
+   *  == one lane); the server reads the same env only to record the EFFECTIVE
+   *  posture on the run's observe snapshot, so the stored row answers "what
+   *  bound produced this tail" without the container. compose maps both sides
+   *  from the same `${ASR_MAX_CONCURRENT:-0}`, so they cannot disagree. */
+  liveAsrMaxConcurrent: number;
+  /** ADAAAA-8373: `ASR_QUEUE_MS`, default 0 = wait as today. How long an inline
+   *  call may wait for a slot before it misses FAST (no ASR text, labelled
+   *  `asr_source: queue_miss`); only binds when `ASR_MAX_CONCURRENT` is set. */
+  liveAsrQueueMs: number;
   /** ADAAAA-7777 (lever B, trim 3): run the Stage-2 `/confirm` dive on the LIVE
    * pass. `DECIDE_CONFIRM_ENABLED` stays the master gate; this is the live-rail
    * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
@@ -990,6 +1003,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // config-only rollback to the pre-8081 inline-ASR request.
     liveDecideAsrPrefetch: env.LIVE_DECIDE_ASR_PREFETCH !== "0",
     liveDecideAsrPrefetchTimeoutMs: positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS) ?? 6000,
+    // ADAAAA-8373: the inline-on-miss lane's admission posture. 0 (unset/empty)
+    // is the shipped behaviour — no bound, wait as today — so compose's `${X:-}`
+    // empty string can never construct one by accident. The gate is enforced in
+    // the decide process; these values are recorded here as the effective
+    // posture on the observe snapshot.
+    liveAsrMaxConcurrent: Math.max(0, Math.floor(finiteNumberOrUndefined(env.ASR_MAX_CONCURRENT) ?? 0)),
+    liveAsrQueueMs: Math.max(0, Math.floor(finiteNumberOrUndefined(env.ASR_QUEUE_MS) ?? 0)),
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",

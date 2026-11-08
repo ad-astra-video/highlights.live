@@ -44,6 +44,7 @@ import re
 import time
 from typing import Optional
 
+from .asr_admission import inline_asr_gate
 from .decider import decide
 from .match_context_prompt import (
     match_context_rule,
@@ -1492,6 +1493,48 @@ def transcribe_audio(
     return text, round(time.monotonic() - t0, 4)
 
 
+def transcribe_inline(
+    url: str,
+    audio_b64: str,
+    sample_rate: int = 16000,
+    timeout_s: float = 20.0,
+    task: str | None = None,
+) -> tuple[str, float, bool]:
+    """Inline ASR behind the ADAAAA-8373 admission gate.
+
+    Returns ``(text, elapsed_seconds, queue_missed)``.
+
+    Inert by default: with ``ASR_MAX_CONCURRENT`` unset the gate constructs no
+    bound, so this is exactly ``transcribe_audio`` with a no-op acquire/release
+    — the shipped inline path, byte-identical request and response.
+
+    Bounded: when the cap is configured, a call that cannot get a slot within
+    ``ASR_QUEUE_MS`` returns IMMEDIATELY with ``queue_missed=True`` and no
+    transcript. The caller then names the miss (``asrSource: "queue_miss"`` /
+    ``noAudioReason: "asr_queue_miss"``) and decides on text-only evidence
+    instead of paying the queue wait and then the transcription behind it.
+    """
+    gate = inline_asr_gate()
+    if not gate.acquire():
+        # Bounded miss: no slot inside ASR_QUEUE_MS. No ASR ran, so the reported
+        # latency is 0 — the miss is counted by the caller, never priced as a
+        # transcription. Logged once per miss so a leg can join the container
+        # log to the stored `asrQueueMisses` counter.
+        log.info(
+            "asr inline queue miss (ASR_MAX_CONCURRENT=%d ASR_QUEUE_MS=%d): deciding without ASR text",
+            gate.max_concurrent,
+            gate.queue_ms,
+        )
+        return "", 0.0, True
+    try:
+        # Return transcribe_audio's OWN measured elapsed unchanged: on the inert
+        # path `asrLatencyS` must be exactly what the shipped call reported.
+        text, asr_s = transcribe_audio(url, audio_b64, sample_rate, timeout_s, task)
+    finally:
+        gate.release()
+    return text, asr_s, False
+
+
 # ADAAAA-7781: COMPACT live verdict contract. The live rail's decide throughput
 # is decode-bound (measured on the box: p50 9.4 s per decide for a ~1340-char
 # verdict, and the box's two gemma cards together decode ~150 tok/s), so total
@@ -2578,6 +2621,7 @@ def _audio_coverage(
     asr_latency_s: float,
     audio_presence: object,
     asr_source: str = "inline",
+    queue_missed: bool = False,
 ) -> tuple[dict, dict]:
     """ADAAAA-8056 (AC-E2): the per-window audio-coverage record.
 
@@ -2621,7 +2665,14 @@ def _audio_coverage(
         else:
             no_audio_reason = "no_audio_clip"
     elif not asr_ran and not send_audio_active:
-        no_audio_reason = "asr_unavailable" if not _asr_url() else "audio_context_off"
+        # ADAAAA-8373: a bounded-miss window is NOT "ASR absent" — the lane
+        # refused it a slot inside ASR_QUEUE_MS. Naming it separately keeps a
+        # queue bound from ever being miscounted as ASR absence (which is what
+        # the AC4/recall argument needs to stay measurable).
+        if queue_missed:
+            no_audio_reason = "asr_queue_miss"
+        else:
+            no_audio_reason = "asr_unavailable" if not _asr_url() else "audio_context_off"
     audio_context = {
         "path": "input_audio" if send_audio_active else ("asr_text" if asr_ran else "none"),
         "transcribed": bool(transcript),
@@ -2631,6 +2682,8 @@ def _audio_coverage(
         # fire-time side lane, i.e. transcribed outside this decide call) or
         # `inline` (this call ran ASR itself, the pre-8081 path). A leg grades the
         # migration from this key, not by inferring it from latency.
+        # ADAAAA-8373: `queue_miss` when the admission gate refused a slot inside
+        # ASR_QUEUE_MS — ASR never ran, so this is NOT ASR absence.
         "asrSource": asr_source,
         "windowAudioPresent": window_audio_present,
         "noAudioReason": no_audio_reason,
@@ -2948,6 +3001,9 @@ def decide_with_gemma(
     # exactly the same `audio commentary transcript (ASR)` line. `asr_ran` stays
     # true (the window WAS transcribed) so the AC-E2 coverage block is intact.
     asr_source = "none"
+    # ADAAAA-8373: whether the admission gate refused this inline call a slot
+    # (set only by the inline branch below; the prefetch branch never queues).
+    queue_missed = False
     if asr_prefetched:
         transcript = usable_transcript(asr_transcript or "")
         asr_latency_s = prefetched_latency_s
@@ -2960,9 +3016,15 @@ def decide_with_gemma(
     ):
         asr_url = _asr_url()
         if asr_url:
-            transcript, asr_latency_s = transcribe_audio(asr_url, audio_b64, audio_sample_rate)
-            asr_ran = True
-            asr_source = "inline"
+            # ADAAAA-8373: inline ASR now goes through the admission gate. With
+            # ASR_MAX_CONCURRENT unset the gate is inert and this is the shipped
+            # call; when it is set, a slot that cannot be had inside ASR_QUEUE_MS
+            # makes this window a FAST, LABELLED queue miss instead of a stall.
+            transcript, asr_latency_s, queue_missed = transcribe_inline(
+                asr_url, audio_b64, audio_sample_rate
+            )
+            asr_ran = not queue_missed
+            asr_source = "queue_miss" if queue_missed else "inline"
     # ADAAAA-8056 (AC-E2): compute the coverage block BEFORE the gemma call so
     # the audit record emitted inside `ask` carries it (the previous placement
     # stamped only the response descriptor, so the on-disk audit trail had no
@@ -2974,6 +3036,7 @@ def decide_with_gemma(
         asr_latency_s=asr_latency_s,
         audio_presence=audio_presence,
         asr_source=asr_source,
+        queue_missed=queue_missed,
     )
     g = ask(
         u,
@@ -3432,8 +3495,14 @@ def decide_group_with_gemma(
     ):
         asr_url = _asr_url()
         if asr_url:
-            transcript, asr_latency_s = transcribe_audio(asr_url, audio_b64, audio_sample_rate)
-            asr_ran = True
+            # ADAAAA-8373: the group call shares the same inline ASR lane, so it
+            # is gated too. A queue miss leaves the transcript empty and the
+            # group verdict is made on text-only evidence (no coverage block is
+            # emitted on this path, so there is nothing else to label).
+            transcript, asr_latency_s, _queue_missed = transcribe_inline(
+                asr_url, audio_b64, audio_sample_rate
+            )
+            asr_ran = not _queue_missed
     g = ask_group(
         u,
         candidates,
