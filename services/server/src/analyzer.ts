@@ -3218,10 +3218,12 @@ export interface AnalyzerConfig {
    * queueing every stream behind a 2-wide gate. Wired from `DECIDE_CONCURRENCY`.
    */
   liveDecideAdmission?: number;
-  /** ADAAAA-7799 (lever C): decide-rate cap. Keep only a fraction (0 < r < 1)
-   *  of the decide opportunities so the decided-window rate and the derived spend
-   *  are bounded; 0.625 = 5 of every 8 windows (~67 of ~108 per 300 s at 2
-   *  streams). `undefined`/1 = off. Wired from `LIVE_DECIDE_KEEP_RATIO`. */
+  /** ADAAAA-7799 (lever C): decide-rate cap, as the fraction of the 104-window /
+   *  300 s convention the funded cell allows. ADAAAA-8431: `LiveObserver`
+   *  resolves it to an absolute rate — `min(66, floor(r x 104))` charged decides
+   *  per 300 s of content clock — so the same keep value holds the same rate on
+   *  a rail offering 73 opportunities as on one offering 104. `undefined`/1 =
+   *  off. Wired from `LIVE_DECIDE_KEEP_RATIO` on both live rails. */
   liveDecideKeepRatio?: number;
   /**
    * ADAAAA-7774: content fps the LIVE observe pass CONSUMES frames at (the
