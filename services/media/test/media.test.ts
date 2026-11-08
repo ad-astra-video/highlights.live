@@ -946,6 +946,37 @@ describe("RTC ingest samples at the FUNDED live baseline, not 1 fps (ADAAAA-7990
     }
   });
 
+  it("carries the configured RTC width into the session at offer time (ADAAAA-8430)", async () => {
+    // LFR-5: MEDIA_RTC_MAX_WIDTH -> MediaServerOptions.rtcMaxWidth -> the
+    // WebRtcIngestSession the browser's offer creates. Before this wire, every
+    // natural browser live job decoded at the hardcoded 480, which is why the
+    // LIVE_FRAME_SCALE flip changed nothing for real users.
+    const g = new FakeOrch("sess-8430-wire");
+    const ms = new MediaServer({ orchBase: "http://orch", reconnectGraceMs: 3000, rtcMaxWidth: 640 }, g as any);
+    const srv = await ms.build();
+    await srv.listen({ port: 0, host: "127.0.0.1" });
+    try {
+      const prov = await srv.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-8430" } });
+      expect(prov.statusCode).toBe(200);
+      const sid = prov.json().sessionId;
+
+      const browserPc = new RTCPeerConnection({ codecs: { video: [useH264()] } } as any);
+      browserPc.addTransceiver(new MediaStreamTrack({ kind: "video" }), { direction: "sendonly" } as any);
+      const offer = await browserPc.createOffer();
+      await browserPc.setLocalDescription(offer);
+      const ans = await srv.inject({ method: "POST", url: `/sessions/${sid}/rtc/offer`, payload: { offer } });
+      expect(ans.statusCode).toBe(200);
+      const session = (ms as any).active.get(sid).rtc.session as WebRtcIngestSession;
+      expect((session as any).opts.maxWidth).toBe(640);
+      await browserPc.close();
+
+      // Inert default: a node built without the option still caps at 480.
+      expect((new MediaServer({ orchBase: "http://orch" }, g as any) as any).rtcMaxWidth).toBe(480);
+    } finally {
+      await srv.close();
+    }
+  });
+
   it("falls back to the funded baseline when a provision carries no rate", async () => {
     const g = new FakeOrch("sess-7990-defaultwire");
     const ms = new MediaServer({ orchBase: "http://orch", reconnectGraceMs: 3000 }, g as any);

@@ -1,5 +1,6 @@
 // Media server env config.
 import { sourceDigest } from "./source-digest";
+import { normalizeRtcMaxWidth } from "./rtc";
 
 export interface MediaConfig {
   port: number;
@@ -56,6 +57,15 @@ export interface MediaConfig {
    * `LIVE_SAMPLE_MAX_FPS` (default 10).
    */
   rtcSampleFps: number;
+  /**
+   * ADAAAA-8430 (LFR-5): max longest-side width of the decoded RTC sample the
+   * media node feeds to perceive/decide. Resolved from `MEDIA_RTC_MAX_WIDTH`
+   * (default 480 = the rail's historical hardcoded cap). This is the knob the
+   * natural browser live path actually reads — the server's `LIVE_FRAME_SCALE`
+   * only covers the ffmpeg rail. Aspect is preserved by
+   * `scale=min(W,iw):-2`, so a 16:10 share at 640 lands 640x400.
+   */
+  rtcMaxWidth: number;
   /**
    * ADAAAA-7990 (delivery follow-up): how long (ms) a published frame may take to
    * produce its observation before the relay abandons it. The media node reads
@@ -172,6 +182,18 @@ export function rtcSampleFpsFromEnv(env: NodeJS.ProcessEnv = process.env): numbe
   return Math.min(ceiling, Math.max(0.25, floor));
 }
 
+/**
+ * ADAAAA-8430 (LFR-5): the RTC decode cap, from `MEDIA_RTC_MAX_WIDTH`.
+ *
+ * This is the width the natural browser live path gets — the control server's
+ * `LIVE_FRAME_SCALE` never reaches it. Default 480 keeps the wire inert; the
+ * LFR-5 flip is `MEDIA_RTC_MAX_WIDTH=640` in `docker/.env` plus a gated media
+ * recreate. Clamped by {@link normalizeRtcMaxWidth} (64..1920, invalid -> 480).
+ */
+export function rtcMaxWidthFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+  return normalizeRtcMaxWidth(env.MEDIA_RTC_MAX_WIDTH);
+}
+
 /** ADAAAA-7990 (delivery follow-up): the media node's observation-delivery
  *  deadline comes from the SAME env name the control plane's media rail uses for
  *  its staleness window (`LIVE_OBSERVE_LAG_BUDGET_S`, default 30 s; see
@@ -205,6 +227,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): MediaConfig {
     // (LIVE_SAMPLE_BASE_FPS=3), never 1 fps, and bounded by the same
     // LIVE_SAMPLE_MAX_FPS ceiling the control plane resolves against.
     rtcSampleFps: rtcSampleFpsFromEnv(env),
+    // ADAAAA-8430 (LFR-5): the RTC decode width the natural browser live path
+    // reads. Default 480 (today's behaviour) until `MEDIA_RTC_MAX_WIDTH` is set.
+    rtcMaxWidth: rtcMaxWidthFromEnv(env),
     // ADAAAA-7990 (delivery follow-up): the relay's delivery deadline is the SAME
     // lag budget the control plane's media rail uses to accept a frame. One env
     // name on both sides, so a node cannot out-wait the rail's staleness window.

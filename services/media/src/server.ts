@@ -19,7 +19,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import { MediaOrchestrator, type ProvisionedSession } from "./orch";
-import { WebRtcIngestSession, normalizeRtcSampleFps, FUNDED_LIVE_SAMPLE_FPS } from "./rtc";
+import { WebRtcIngestSession, normalizeRtcSampleFps, normalizeRtcMaxWidth, FUNDED_LIVE_SAMPLE_FPS } from "./rtc";
 import { AudioRelay, type AudioPcmChunk } from "./audio-relay";
 import { ObservationRelay, DEFAULT_OBSERVE_DEADLINE_MS, type ObservationFrame } from "./observe-relay";
 import { guardStream, safeEnd, safeWrite, sendText } from "./guarded-write";
@@ -116,6 +116,14 @@ export interface MediaServerOptions {
    *  `sampleFps` always wins; this default exists so a media-only / degraded
    *  provision cannot silently pin the rail back to 1 fps. */
   rtcSampleFps?: number;
+  /**
+   * ADAAAA-8430 (LFR-5): max longest-side width of the decoded RTC sample.
+   * `config.ts` resolves it from `MEDIA_RTC_MAX_WIDTH` (default 480). Passed to
+   * every {@link WebRtcIngestSession} at offer time, so the natural browser live
+   * path — the one `LIVE_FRAME_SCALE` never reached — honours the knob. Aspect
+   * is preserved by the ffmpeg filter, so this caps the WIDTH, not the height.
+   */
+  rtcMaxWidth?: number;
   /** ICE servers (STUN/TURN) for WebRTC ingest. A relay (TURN) candidate gives
    *  the browser a reachable media path when the media server's host candidates
    *  are private container IPs behind the public LB (ADAAAA-7304 finding 4).
@@ -231,6 +239,9 @@ export class MediaServer {
   private orch: MediaOrchestrator;
   /** WebRTC ingest JPEG sample cadence (fps) decoded by the media server. */
   private rtcSampleFps: number;
+  /** ADAAAA-8430: max longest-side width of the decoded RTC sample (480 when
+   *  `MEDIA_RTC_MAX_WIDTH` is unset, i.e. the pre-wire behaviour). */
+  private rtcMaxWidth: number;
   /** Node identity + advertised capacity (ADAAAA-6869 Phase 4). */
   private nodeId: string;
   private maxSessions: number;
@@ -269,6 +280,9 @@ export class MediaServer {
     // funded live baseline (LIVE_SAMPLE_BASE_FPS). A per-session value from
     // `POST /sessions` overrides this.
     this.rtcSampleFps = normalizeRtcSampleFps(opts.rtcSampleFps ?? FUNDED_LIVE_SAMPLE_FPS);
+    // ADAAAA-8430 (LFR-5): the decode cap every RTC session this node opens
+    // uses. 480 when unset, so the wire alone is inert.
+    this.rtcMaxWidth = normalizeRtcMaxWidth(opts.rtcMaxWidth);
     this.nodeId = opts.nodeId ?? "media-0";
     this.maxSessions = opts.maxSessions && opts.maxSessions > 0 ? opts.maxSessions : 1;
     this.healthToken = opts.healthToken;
@@ -390,6 +404,10 @@ export class MediaServer {
             // ADAAAA-7990: the per-session resolved rate (control plane) wins
             // over the node fallback (funded 3 fps), never the old implicit 1.
             sampleFps: stream.sampleFps ?? this.rtcSampleFps,
+            // ADAAAA-8430 (LFR-5): the natural browser live path's decode cap.
+            // This is the width perceive/decide actually receives; the server's
+            // LIVE_FRAME_SCALE only covers its own ffmpeg rail.
+            maxWidth: this.rtcMaxWidth,
             iceServers: this.opts.rtcIceServers,
             iceGatherTimeoutMs: this.opts.rtcIceGatherTimeoutMs,
             // Log correlation for the guarded writes (ADAAAA-7591).

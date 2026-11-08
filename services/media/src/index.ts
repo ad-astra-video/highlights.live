@@ -66,6 +66,9 @@ async function main() {
     // ADAAAA-7990: the funded live sampling baseline (LIVE_SAMPLE_BASE_FPS=3).
     // The control plane's per-session resolved rate overrides this.
     rtcSampleFps: cfg.rtcSampleFps,
+    // ADAAAA-8430 (LFR-5): the RTC decode cap (MEDIA_RTC_MAX_WIDTH, default
+    // 480). This is the only knob the natural browser live path reads.
+    rtcMaxWidth: cfg.rtcMaxWidth,
     // ADAAAA-7990 (delivery follow-up): the observation relay's delivery deadline
     // is the control plane's media-rail lag budget (LIVE_OBSERVE_LAG_BUDGET_S).
     observeDeadlineMs: cfg.observeDeadlineMs,
@@ -85,6 +88,12 @@ async function main() {
   await app.listen({ port: cfg.port, host: "0.0.0.0" });
   // eslint-disable-next-line no-console
   console.log(`media server on :${cfg.port} (orchestrator=${cfg.orchBase})`);
+  // ADAAAA-8430 (LFR-5): the RTC decode cap this boot serves — the width the
+  // natural browser live path feeds perceive/decide. Printed like the server's
+  // `[boot] live frame scale:` line so a deploy/rollback is attributable from
+  // the log (and inert-by-default is visible without a shell read of `.env`).
+  // eslint-disable-next-line no-console
+  console.log(`[boot] rtc max width: ${cfg.rtcMaxWidth} (MEDIA_RTC_MAX_WIDTH, default 480)`);
   // ADAAAA-7700: report every session the PREVIOUS boot took down (deploy /
   // crash / docker stop) to the control plane, so a browser share that died with
   // this process becomes `failed` with `failureReason: media-session-lost` and a

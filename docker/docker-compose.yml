@@ -1068,6 +1068,13 @@ services:
       # Max ms to wait for the answerer's ICE gathering to complete before the
       # RTC answer is returned (so it carries a reachable candidate).
       - MEDIA_RTC_ICE_GATHER_TIMEOUT_MS=${MEDIA_RTC_ICE_GATHER_TIMEOUT_MS:-2000}
+      # ADAAAA-8430 (LFR-5): max longest-side width of the RTC-decoded sample —
+      # the width the NATURAL browser live path feeds perceive/decide. The
+      # server's LIVE_FRAME_SCALE never reaches this rail. Unset => 480 (today's
+      # hardcoded cap), so the code is inert until the env line is set; the flip
+      # is `MEDIA_RTC_MAX_WIDTH=640` in docker/.env + a gated `media` recreate.
+      # Boot readout: `[boot] rtc max width: <n> (MEDIA_RTC_MAX_WIDTH, default 480)`.
+      - MEDIA_RTC_MAX_WIDTH=${MEDIA_RTC_MAX_WIDTH:-}
       # ADAAAA-6869 Phase 4 capacity/health + per-node cost attribution. The node
       # id is stored per media session so Livepeer GPU spend is attributable per
       # node (one node today; a fleet just sets distinct MEDIA_NODE_IDs). The
