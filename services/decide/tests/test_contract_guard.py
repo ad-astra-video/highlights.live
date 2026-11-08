@@ -15,9 +15,10 @@ These tests pin:
   text-injected replies + their exact evidence) now returning isHighlight=false
   with a machine-readable contradictedBy;
 * that a genuinely attested goal accept is untouched (no recall regression);
-* that `isHighlight=false` and unverifiable/absent-but-plausible reads are never
-  turned into a rejection, and the confirm-enabled posture (ADAAAA-6973) still
-  defers instead of rejecting;
+* that `isHighlight=false` reads are never touched, and (ADAAAA-8370, v2) that an
+  ACCEPT no measured channel attests is REJECTED and downgraded to
+  `not_highlight` — including when the goal-line claim lives only in the model's
+  structured criteria;
 * the integration: `/highlight` carries the guard outcome on the decision and on
   the audit descriptor's `timings.contractGuard` (AC-G5 — re-gradable from a
   stored decide_audit row without a replay).
@@ -202,8 +203,10 @@ def test_contract_guard_rejects_g1_warm_compact_accept():
     assert rec["attestation"]["attested"] is False
     assert rec["refutingEvidence"]
     assert "ballOutcome" in d["contradictedBy"]
-    # the taxonomy member is preserved (the model's read), the accept is not
-    assert d["outcome"] == "scoring_play"
+    # ADAAAA-8370: the emitted taxonomy member is DOWNGRADED (the accept is not a
+    # scoring_play any more); the model's own read survives on the audit record.
+    assert d["outcome"] == "not_highlight"
+    assert rec["modelOutcome"] == "scoring_play"
     assert d["eventType"] == "GOAL"
     assert d["score"] <= 55.0
     assert "rejected by contract guard" in d["reason"]
@@ -226,8 +229,11 @@ def test_contract_guard_records_the_full_record_for_regrade():
     d = _parsed(WARM_COMPACT_REPLY)
     d, rec = apply_contract_guard(d, _g1_evidence(WARM_LEVELS), "GOAL", transcript=GOAL_SHOUT)
     assert d["contractGuard"] is rec
-    assert rec["version"] == "1"
-    assert set(rec) >= {"version", "outcome", "contradictedBy", "claim", "attestation", "refutingEvidence", "detail"}
+    assert rec["version"] == "2"
+    assert set(rec) >= {
+        "version", "outcome", "contradictedBy", "claim", "attestation",
+        "refutingEvidence", "detail", "downgradeTo", "modelOutcome",
+    }
     assert rec["attestation"]["audioPeak"] == 0.97
     # JSON-serialisable: it is merged into decide_audit.timings verbatim
     assert json.loads(json.dumps(rec))["outcome"] == "rejected"
@@ -322,10 +328,11 @@ def test_reject_reads_are_never_touched():
         assert "contradictedBy" not in d
 
 
-def test_unverifiable_absent_evidence_is_inert_not_a_rejection(monkeypatch):
-    # AC-G4: evidence genuinely absent-but-plausible (no measured channel, and
-    # no commentary-text claim either) is left to the anti-fabrication gate —
-    # the guard never converts an unverifiable read into a false.
+def test_unattested_accept_with_no_refutation_is_rejected(monkeypatch):
+    # ADAAAA-8370 (v2 contract): absent-but-plausible evidence used to leave the
+    # accept untouched (`unverifiable_evidence`, inert). It is now a REJECTION
+    # with its own refutation code — the ADAAAA-8343 eval measured this exact
+    # shape as 13 of the 30 false accepts.
     monkeypatch.delenv("DECIDE_CONFIRM_ENABLED", raising=False)
     d = _parsed(
         json.dumps(
@@ -349,29 +356,93 @@ def test_unverifiable_absent_evidence_is_inert_not_a_rejection(monkeypatch):
         )
     )
     d, rec = apply_contract_guard(d, {}, "GOAL", transcript="")
-    assert rec["outcome"] == "unverifiable_evidence"
-    assert d["isHighlight"] is True
-    assert d["score"] == 80
-    assert "contradictedBy" not in d
+    assert rec["outcome"] == "rejected"
+    assert rec["contradictedBy"] == "unattested_goal_accept"
+    assert rec["downgradeTo"] == "not_highlight"
+    assert d["isHighlight"] is False
+    assert d["outcome"] == "not_highlight"
+    assert d["score"] == 55.0  # capped, never left at the model's 80
+    assert "unattested_goal_accept" in d["contradictedBy"]
     # the tri-state criteria stay null (unverifiable), never coerced to false
     assert d["verdict"]["criteria"]["ballInNet"] is None
 
 
-def test_confirm_enabled_still_rejects_but_stays_stage2_eligible(monkeypatch):
+def test_criteria_goal_line_claim_puts_the_accept_in_scope():
+    # ADAAAA-8370: 17 of the 30 measured false accepts asserted the goal-line /
+    # ball-in-net pair in `verdict.criteria` while phrasing the reason without
+    # the literal "in the net" ("Ball enters net at t=0.51"). They fell through
+    # as `not_a_goal_accept` and were emitted untouched. Criteria are SCOPE only;
+    # with no measured attestation the accept must now be refused.
+    d = _parsed(
+        json.dumps(
+            {
+                "isHighlight": True,
+                "score": 88,
+                "eventType": "SPORTING_EVENT",
+                "outcome": "scoring_play",
+                "reason": "Ball enters net at t=0.51 and scoreboard changes to 1-1.",
+                "verdict": {
+                    "hypothesis": "SPORTING_EVENT",
+                    "criteria": {
+                        "ballCrossedLineBetweenPosts": True,
+                        "ballInNet": True,
+                        "scoreboardChanged": False,
+                        "crowdErupted": False,
+                    },
+                },
+            }
+        )
+    )
+    assert goal_text_claim(d, "")["goal_specific_claim"] is False  # text alone misses it
+    d, rec = apply_contract_guard(d, {"audioLevels": [0.4, 0.9, 1.0]}, "SPORTING_EVENT")
+    assert rec["outcome"] == "rejected"
+    assert rec["contradictedBy"] == "unattested_goal_accept"
+    assert d["isHighlight"] is False
+    assert d["outcome"] == "not_highlight"
+
+
+def test_criteria_goal_line_claim_cannot_attest_a_goal():
+    # The criteria route is scope, not attestation: the same accept WITH one
+    # measured channel is attested and kept, so the change cannot cost recall on
+    # a goal perceive actually saw.
+    d = _parsed(
+        json.dumps(
+            {
+                "isHighlight": True,
+                "score": 88,
+                "eventType": "GOAL",
+                "outcome": "scoring_play",
+                "reason": "Ball enters net at t=0.51.",
+                "verdict": {
+                    "hypothesis": "GOAL",
+                    "criteria": {
+                        "ballCrossedLineBetweenPosts": True,
+                        "ballInNet": True,
+                    },
+                },
+            }
+        )
+    )
+    d, rec = apply_contract_guard(d, {"ballOutcome": "goal"}, "GOAL")
+    assert rec["outcome"] == "attested"
+    assert d["isHighlight"] is True
+    assert d["outcome"] == "scoring_play"
+    assert "contradictedBy" not in d
+
+
+def test_confirm_enabled_still_rejects_and_downgrades(monkeypatch):
     # The served posture has DECIDE_CONFIRM_ENABLED=1. The guard must still
-    # reject at Stage-A (AC-G1) — and the rejection keeps the decision
-    # goal-shaped + un-attested, which is the server's Stage-2 confirm
-    # population (isGateRejectedBareGoal), so a genuine goal whose only support
-    # was commentary is still rescued by the confirm deep-frame dive
-    # (ADAAAA-6973 recall path).
+    # reject at Stage-A (AC-G1) — and ADAAAA-8370 makes that rejection an
+    # EMITTED downgrade: `outcome` no longer says scoring_play, so the refused
+    # accept cannot be counted (or published) as a goal.
     monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
     d = _parsed(WARM_COMPACT_REPLY)
     d, rec = apply_contract_guard(d, _g1_evidence(WARM_LEVELS), "GOAL", transcript=GOAL_SHOUT)
     assert rec["outcome"] == "rejected"
     assert rec["stage2ConfirmEligible"] is True
     assert d["isHighlight"] is False
-    # ... the shape the confirm trigger matches stays intact
-    assert d["outcome"] == "scoring_play"
+    assert d["outcome"] == "not_highlight"
+    # a goal-type event label is preserved (it is the confirm trigger's fallback)
     assert d["eventType"] == "GOAL"
 
 
@@ -543,7 +614,8 @@ def test_highlight_route_returns_guard_fields(monkeypatch):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["isHighlight"] is False
-    assert body["outcome"] == "scoring_play"
+    # ADAAAA-8370: the route emits the downgraded outcome, not the model's claim
+    assert body["outcome"] == "not_highlight"
     assert body["contradictedBy"].startswith("goal_text_without_measurement:")
     assert body["contractGuard"]["outcome"] == "rejected"
     assert body["audit"]["timings"]["contractGuard"]["contradictedBy"] == "goal_text_without_measurement"

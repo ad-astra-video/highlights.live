@@ -237,8 +237,12 @@ def test_highlight_route_returns_null_for_an_absent_phase(monkeypatch):
     try:
         r = TestClient(decide_app).post(
             "/app/highlight",
+            # ADAAAA-8370: a scoring_play accept with no measured attestation is
+            # now refused and downgraded, so this plumbing fixture carries one
+            # (score change) to stay an accept — the assertion is about `phase`.
             json={"sessionId": "phase-2", "eventType": "GOAL", "timestamp": 159.0,
-                  "gameHint": "soccer", "evidence": {"trackCount": 2}},
+                  "gameHint": "soccer",
+                  "evidence": {"trackCount": 2, "scoreBoardChanged": True}},
         )
     finally:
         mock.stop()
