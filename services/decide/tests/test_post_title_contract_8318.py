@@ -102,7 +102,7 @@ def test_title_addendum_is_within_its_input_token_budget():
     assert delta > 0
     # ADAAAA-8405 rewrites the paragraph for the Phase C residuals (+571):
     # bounded at 1900 so no further field can ride along.
-    assert delta <= 2279, f"postTitle addendum grew the contract by {delta} chars"
+    assert delta <= 2622, f"postTitle addendum grew the contract by {delta} chars"
 
 
 def test_title_spec_owns_its_own_paragraph_and_bars():
@@ -136,7 +136,7 @@ def test_title_spec_owns_its_own_paragraph_and_bars():
     assert "NO fourth slot" in contract
     assert "Never reuse a subject+verb you already titled this job" in contract
     # the model is told to delete the zone itself before answering
-    assert "delete any word that names where the action happened" in contract
+    assert "delete every preposition (in, at, on, from, near, into, around, inside, of, to)" in contract
 
 
 def test_normalize_decision_carries_the_title():

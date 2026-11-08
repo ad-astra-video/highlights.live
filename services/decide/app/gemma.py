@@ -1712,8 +1712,12 @@ _OUTPUT_CONTRACT_COMPACT = (
     "scoreboard read that says so. Use an action verb: carries, drives, clears, "
     "tackles, blocks, saves, shoots, passes, contests, loses, signals. Never "
     "reuse a subject+verb you already titled this job. Start with a capital "
-    "letter. Read the headline once more and delete any word that names where "
-    "the action happened."
+    "letter. FINAL CHECK — before you answer, run these three deletions on the "
+    "headline you wrote: 1) delete every preposition (in, at, on, from, near, "
+    "into, around, inside, of, to) and every word after it; 2) delete every "
+    "capitalised person or team name and put the role in its place; 3) delete "
+    "every score word on a window whose outcome is not scoring_play. A headline "
+    "that still carries any of the three is WRONG — fix it, do not send it."
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "

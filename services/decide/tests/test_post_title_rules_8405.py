@@ -82,7 +82,7 @@ def test_closed_verb_set_and_single_clause_kept():
     assert "ONE clause, no trailing period, no em-dash" in c
     assert "Fill exactly three slots and nothing else" in c
     assert "Never reuse a subject+verb you already titled this job" in c
-    assert "delete any word that names where the action happened" in c
+    assert "delete every preposition (in, at, on, from, near, into, around, inside, of, to)" in c
 
 
 def test_caption_contract_is_untouched_by_this_fix():
