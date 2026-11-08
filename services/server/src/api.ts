@@ -1914,6 +1914,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         maxInFlight: cfg.liveObserveInFlight,
         decideAdmission: anaCfg.liveDecideAdmission,
         observeDecideOffLoop: cfg.observeDecideOffLoop,
+        // ADAAAA-8384 (C1): the inline-ASR admission posture + THIS run's counter.
+        // The rail decides through the same `observeDecideOnly`/`anaCfg` pair as
+        // the analyzer pass, so the counter really moves; without this reader the
+        // snapshot dropped it and every browser/WebRTC row lost `asrQueueMisses`
+        // (ADAAAA-8219 class). Read live at snapshot time, never captured.
+        asrQueue: () => ({
+          maxConcurrent: Math.max(0, Math.floor(anaCfg.decideAsrMaxConcurrent ?? 0)),
+          queueMs: Math.max(0, Math.floor(anaCfg.decideAsrQueueMs ?? 0)),
+          misses: anaCfg.decideAsrQueueStats?.misses ?? 0,
+        }),
       },
       shared
     );

@@ -174,6 +174,20 @@ export interface MediaRailObserverOptions {
   /** ADAAAA-7987: `OBSERVE_DECIDE_OFFLOOP=0` keeps the serial in-chain decide at
    *  depth 1 — byte-identical to the pre-7987 media rail. Default ON. */
   observeDecideOffLoop?: boolean;
+  /** ADAAAA-8384 (C1): the INLINE-ASR admission posture + this run's queue-miss
+   *  counter, read AT SNAPSHOT TIME. The rail deliberately holds no analyzer
+   *  config, so the caller hands a reader: the posture is the effective env the
+   *  decide process sees and `misses` is the counter `observeDecideOnly`
+   *  increments on this very rail.
+   *
+   *  Without it this rail COMPUTED the counter and then dropped it: the share's
+   *  decide went through the same `observeDecideOnly` (+ `anaCfg`) as the
+   *  analyzer pass, so `decideAsrQueueStats.misses` moved, but the snapshot was
+   *  built with no `asrQueue` argument and persisted by `finishBrowserJob`. Its
+   *  rows therefore carried no `asrQueueMisses`, which contradicts the schema's
+   *  "a live run always passes it" (ADAAAA-8219 class). Undefined keeps a rail
+   *  that truly has no inline lane byte-identical. */
+  asrQueue?: () => { maxConcurrent: number; queueMs: number; misses: number };
 }
 
 /** Build the per-frame seed context handed to the decide window from one
@@ -353,9 +367,14 @@ export class MediaRailObserver {
   private flushing = false;
   /** ADAAAA-7987: whether this rail runs the pipelined (staged) decide fork. */
   private readonly pipelined: boolean;
+  /** ADAAAA-8384 (C1): the ASR admission reader (posture + this run's counter),
+   *  sampled when the share's snapshot is built so a browser/WebRTC row carries
+   *  the same `asrQueueMisses` the analyzer pass writes. */
+  private readonly asrQueue?: MediaRailObserverOptions["asrQueue"];
 
   constructor(opts: MediaRailObserverOptions, run?: LiveRunShared) {
     this.jobId = opts.jobId;
+    this.asrQueue = opts.asrQueue;
     this.onFrame = opts.onFrame;
     this.lagBudgetMs = Math.max(0, (opts.lagBudgetS ?? LIVE_OBSERVE_LAG_BUDGET_S) * 1000);
     // ADAAAA-8102: the CONTENT consume rate, separate from the ingest clock
@@ -809,7 +828,14 @@ export class MediaRailObserver {
       },
       // ADAAAA-8344: the adapter's per-job decide-stage summary, read at share
       // end like the decide counters. Absent when no decide was instrumented.
-      decideStageRecorder.summary(this.jobId)
+      decideStageRecorder.summary(this.jobId),
+      // ADAAAA-8384 (C1): the inline-ASR admission posture + this run's counter,
+      // read through the caller's reader at the SAME instant as the counters
+      // above. A media-rail decide runs the same `observeDecideOnly` path the
+      // analyzer pass does, so this share's counter is real — dropping it here
+      // (the pre-fix behaviour) left every browser/WebRTC row without
+      // `asrQueueMisses` and made AC3 unreadable on that rail.
+      this.asrQueue?.()
     );
     // ADAAAA-8102: prove the consume rate from the JOB RECORD, not from
     // `printenv`. Before this the media rail published no `perceive` block at all

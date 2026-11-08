@@ -31,6 +31,7 @@ import {
   type DecisionResult,
 } from "../src/analyzer";
 import { LiveObserver, type ObserveDecidePayload } from "../src/observe-loop";
+import { MediaRailObserver } from "../src/media-rail";
 import { buildLiveAnalyzerConfig } from "../src/api";
 import { loadConfig } from "../src/config";
 import { JobSchema, ObserveMetricsSnapshotSchema } from "@highlights/events";
@@ -228,5 +229,64 @@ describe("ADAAAA-8373 compose (deploy cannot disagree with the code)", () => {
       expect(block).toContain("ASR_MAX_CONCURRENT=${ASR_MAX_CONCURRENT:-0}");
       expect(block).toContain("ASR_QUEUE_MS=${ASR_QUEUE_MS:-0}");
     }
+  });
+});
+
+// ADAAAA-8384 (C1): the browser/WebRTC media-rail share COMPUTED the counter and
+// then dropped it. `api.ts` decides through the same `observeDecideOnly`/`anaCfg`
+// pair as the analyzer pass, so `decideAsrQueueStats.misses` moved — but
+// `media-rail.ts` built the snapshot with no `asrQueue` argument and
+// `finishBrowserJob` persisted that, so every media-rail row carried no
+// `asrQueueMisses` / `asrMaxConcurrent` / `asrQueueMs` (ADAAAA-8219 class).
+describe("ADAAAA-8384 C1 — a media-rail share row carries the ASR posture", () => {
+  const railWith = (asrQueue?: () => { maxConcurrent: number; queueMs: number; misses: number }, contentFps?: number) =>
+    new MediaRailObserver({
+      jobId: "job-8384-rail",
+      fps: 2,
+      windowS: 10,
+      cadenceS: 3,
+      maxFrames: 4,
+      ...(contentFps !== undefined ? { contentFps } : {}),
+      onDecide: async () => false,
+      ...(asrQueue ? { asrQueue } : {}),
+    });
+
+  it("inert share writes asrQueueMisses: 0 and NO posture keys", () => {
+    const metrics = railWith(() => ({ maxConcurrent: 0, queueMs: 0, misses: 0 })).observeMetrics();
+    expect(metrics.asrQueueMisses).toBe(0);
+    expect(metrics).not.toHaveProperty("asrMaxConcurrent");
+    expect(metrics).not.toHaveProperty("asrQueueMs");
+    // A rail built with no reader stays byte-identical (no asrQueue field at all).
+    expect(railWith().observeMetrics()).not.toHaveProperty("asrQueueMisses");
+  });
+
+  it("bounded share writes the EFFECTIVE cap + queue and THIS run's counter, read live", () => {
+    const stats = { misses: 0 };
+    const rail = railWith(() => ({ maxConcurrent: 2, queueMs: 150, misses: stats.misses }));
+    // 0 misses at share start is still written — the field is never conditionally absent.
+    expect(rail.observeMetrics()).toMatchObject({ asrQueueMisses: 0, asrMaxConcurrent: 2, asrQueueMs: 150 });
+    // Read at snapshot time: the counter the decide path increments later is visible.
+    stats.misses = 2;
+    const metrics = rail.observeMetrics();
+    expect(metrics).toMatchObject({ asrQueueMisses: 2, asrMaxConcurrent: 2, asrQueueMs: 150 });
+    // Survives the persistence parse (`store.patchJob` -> JobSchema).
+    const job = JobSchema.parse({
+      id: "job-8384-rail-row",
+      status: "done",
+      createdAt: new Date().toISOString(),
+      source: "browser",
+      observeMetrics: metrics,
+    });
+    expect(job.observeMetrics).toMatchObject({ asrQueueMisses: 2, asrMaxConcurrent: 2, asrQueueMs: 150 });
+  });
+
+  it("keeps the posture on the perceive-bearing path (contentFps set)", () => {
+    const stats = { misses: 1 };
+    const metrics = railWith(
+      () => ({ maxConcurrent: 2, queueMs: 150, misses: stats.misses }),
+      1 // contentFps > 0 => observeMetrics spreads the `perceive` block over it
+    ).observeMetrics();
+    expect(metrics.perceive).toBeTruthy();
+    expect(metrics).toMatchObject({ asrQueueMisses: 1, asrMaxConcurrent: 2, asrQueueMs: 150 });
   });
 });

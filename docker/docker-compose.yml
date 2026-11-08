@@ -394,9 +394,14 @@ services:
       # so queue time is what turns a call into a wait-miss. `ASR_MAX_CONCURRENT`
       # caps simultaneous inline ASR calls (0 = unbounded = shipped) and
       # `ASR_QUEUE_MS` caps how long one may wait for a slot before it misses
-      # FAST, labelled `asr_queue_miss` (0 = wait as today). The gate is enforced
-      # in this container (one uvicorn worker == one lane); the server reads the
-      # same two values only to record the effective posture on the run's row.
+      # FAST, labelled `asr_queue_miss` (0 = wait as today).
+      # ADAAAA-8384: SET THE TWO KNOBS TOGETHER. A cap with no queue knob is a
+      # stall mode that does not exist today (no cap => never queues): the gate
+      # then applies the 6 000 ms wait budget as its deadline and logs a WARNING.
+      # Scope: this bounds the DECIDE process's inline call sites only — the
+      # Stage-2 /confirm dive (app/confirm.py) and the server-side prefetch lane
+      # (services/server/src/asr-prefetch.ts, another process) stay ungated, so
+      # `ASR_MAX_CONCURRENT=2` is NOT "ASR endpoint concurrency <= 2".
       - ASR_MAX_CONCURRENT=${ASR_MAX_CONCURRENT:-0}
       - ASR_QUEUE_MS=${ASR_QUEUE_MS:-0}
       - AUDIO_CONTEXT=${AUDIO_CONTEXT:-1}
@@ -817,8 +822,11 @@ services:
       # ADAAAA-8373: the inline-on-miss lane's admission posture. The bound runs
       # in highlights-decide (same two env values there); the server records the
       # EFFECTIVE posture on the run's observe snapshot (`asrMaxConcurrent` /
-      # `asrQueueMs` / `asrQueueMisses`). Defaults 0 = shipped behaviour: no cap,
-      # wait as today.
+      # `asrQueueMs` / `asrQueueMisses`) for EVERY live rail, including a
+      # browser/WebRTC media-rail share (ADAAAA-8384 C1). Defaults 0 = shipped
+      # behaviour: no cap, wait as today. Set both knobs together (C3); the cap
+      # bounds the decide process's inline call sites only, not the ASR endpoint
+      # (C2).
       - ASR_MAX_CONCURRENT=${ASR_MAX_CONCURRENT:-0}
       - ASR_QUEUE_MS=${ASR_QUEUE_MS:-0}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}

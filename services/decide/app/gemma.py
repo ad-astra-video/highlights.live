@@ -1513,6 +1513,8 @@ def transcribe_inline(
     transcript. The caller then names the miss (``asrSource: "queue_miss"`` /
     ``noAudioReason: "asr_queue_miss"``) and decides on text-only evidence
     instead of paying the queue wait and then the transcription behind it.
+    A cap with ``ASR_QUEUE_MS`` unset gets the 6 000 ms wait budget as its
+    deadline (ADAAAA-8384, C3), so a bounded lane can never queue indefinitely.
     """
     gate = inline_asr_gate()
     if not gate.acquire():
@@ -1521,7 +1523,7 @@ def transcribe_inline(
         # transcription. Logged once per miss so a leg can join the container
         # log to the stored `asrQueueMisses` counter.
         log.info(
-            "asr inline queue miss (ASR_MAX_CONCURRENT=%d ASR_QUEUE_MS=%d): deciding without ASR text",
+            "asr inline queue miss (ASR_MAX_CONCURRENT=%d, queue deadline %d ms): deciding without ASR text",
             gate.max_concurrent,
             gate.queue_ms,
         )
