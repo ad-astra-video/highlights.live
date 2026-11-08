@@ -88,6 +88,17 @@ export interface CaptionGroundingContext {
    * line), never invented.
    */
   place?: string | null;
+  /**
+   * ADAAAA-8411: the row's OWN copy for this window — the model's sentence for
+   * the decision (the gated line plus, when it differs, the raw line). Set by the
+   * write seam only. The post-title gate holds a headline's names to this string
+   * exactly as the READ seam holds a stored title's names to `postTitleRowCopy`
+   * (ADAAAA-8405 S3), so a name the model read off the ASR transcript on a
+   * different play (`the ASR names the player in a save; the title attributes a
+   * score`) can no longer be emitted as the headline. Absent -> prompt-only
+   * grounding, unchanged.
+   */
+  ownCopy?: string | null;
 }
 
 /**
@@ -1876,6 +1887,16 @@ export function servedShapeViolations(
       ) {
         continue;
       }
+      // ADAAAA-8411: the row's own LEDGER FRAME is the sanctioned lead when the
+      // text it drops is PROVENANCE ONLY — the window audit marker and the
+      // attestation clause that cites a channel:
+      //
+      //     Scoreboard changes to 2-2 | at t=-3.3s and ASR confirms 'il gol!'
+      //
+      // No customer fact is lost (the remainder is the model citing its own
+      // evidence, never copy), the candidate is a real clause boundary and keeps
+      // the row's own ledger words verbatim. Any other remainder is a prefix cut.
+      if (terminal && FRAME_LEDGER.test(text) && remainderIsProvenanceOnly(remainder)) continue;
       out.push("prefix-cut");
       if (!terminal) out.push("open-clause");
     } else if (stored.startsWith(normalized) && !terminal) {
@@ -2829,6 +2850,153 @@ const CLAUSE_CONNECTOR = /\b(?:as|while|when|and|but)\b/i;
 /** The determiner + outcome verb `quietShape` appends to a cut claim clause. */
 const SUBSTITUTED_QUIET_TAIL =
   /\s+(?:a|an|the)\s+(?:shoots|is\s+saved|is\s+blocked|is\s+cleared|goes\s+wide)$/i;
+
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8411 — the CLOCK-BRACKETED ATTESTATION sentence.
+ *
+ * Measured defect (Phase D on the served build, job 755fd1f5, row f4407757 /
+ * card `GOAL · 2:38`): a scoring row's ONLY model sentence was
+ *
+ *     Scoreboard changes to 2-2 at t=-3.3s and ASR confirms 'il gol!'
+ *
+ * The sentence is an ATTESTATION, not a description: it cites the window clock
+ * (`at t=-3.3s`) and the ASR read, and the ledger frame is the only customer
+ * fact in it. `stripInternalTokens` strips the `T+` clock form only, so the
+ * `at t=` marker survives; `storedCardSurface` refuses the line,
+ * `storedReasonViolations` refuses it (`audit-marker`), `ledgerScoreLines` needs
+ * a `from X to Y` transition this line does not carry, and `quietStoredCopy`
+ * refuses provenance — so the row stored NO copy and the detail route served the
+ * post TITLE as the announcer line (`caption == postTitle`).
+ *
+ * The function below derives the row's own FACT sentence by DELETION only:
+ *
+ *   1. the sentence is split at its own clause boundaries; ATTESTATION clauses
+ *      (a channel word + a reporting verb: `ASR confirms …`, `commentary says
+ *      …`, `confirmed by …`) and QUOTED reads are dropped whole — they cite
+ *      evidence for the model, they are not copy, and a quote is an OCR/ASR
+ *      string;
+ *   2. the window-relative audit marker (`at t=-3.3s`, `at 19s`, a
+ *      `… to 0.0s` range) is deleted from whatever survives;
+ *   3. the survivor must be a complete clause with its own verb, one score fact
+ *      at most, no claim this window cannot carry, no internal token, no
+ *      parenthetical;
+ *   4. a score fact must be MEASURED: at the write seam this window's prompt
+ *      must carry the same scoreline (`promptHas`) and `gateScores` must return
+ *      the line unchanged; on the read path (no prompt to consult) the row's own
+ *      stored verdict must be `scoring_play`, so a scoreline is never served on
+ *      a non-scoring row;
+ *   5. the survivor crosses the SAME gate order every stored copy crosses
+ *      (claim -> absence -> names) and the store-time post-condition
+ *      (`storedReasonViolations` against this row's own stored sentence), and is
+ *      a fixed point of it.
+ *
+ * `""` means the window has no honest residue: the caller keeps its own
+ * fallback (the read path's deterministic fact sentence, see
+ * `projectAnnouncerCaption`) and never serves the sentence as written.
+ * ------------------------------------------------------------------------- */
+
+/** The window-relative AUDIT marker the model cites for its own evidence. */
+const ATTESTATION_MARKER_TEST = /\bat\s+t=-?[\d.]+\s*s\b/i;
+
+/** A channel word (`ASR`, `commentary`, `OCR` …) — evidence, never copy. */
+const ATTESTATION_CHANNEL =
+  /\b(?:asr|commentary|commentator|replay|audio|timeline|perceive|ocr|score ?bug|scoreboard\s+read(?:ing)?s?)\b/i;
+/** A reporting verb: what turns a channel word into an attestation clause. */
+const ATTESTATION_REPORT =
+  /\b(?:confirms?|confirmed|says?|said|notes?|noted|indicates?|indicated|shows?|showed|reads?|reading|reports?|reported|mentions?)\b/i;
+
+/**
+ * ADAAAA-8411: is `remainder` (the text a candidate clause drops from its own
+ * stored sentence) PROVENANCE ONLY — the window audit marker and the attestation
+ * clauses that cite a channel? Used by `servedShapeViolations` so the row's own
+ * LEDGER FRAME can be served as a clause-precise lead instead of being refused as
+ * a prefix cut. `true` only when nothing customer-readable is dropped.
+ */
+function remainderIsProvenanceOnly(remainder: string): boolean {
+  const text = (remainder ?? "").trim();
+  if (!text) return true;
+  const clauses = text
+    .split(/\s*(?:[—–;,]|\b(?:and|as|while|when|but)\b)\s*/i)
+    .map((c) => c.trim())
+    .filter(Boolean);
+  for (const clauseRaw of clauses) {
+    const clause = dropAttestationMarker(clauseRaw);
+    if (!clause) continue;
+    // `servedShapeViolations` compares NORMALISED strings, so the remainder it
+    // hands here has already lost the marker's punctuation (`at t 3 3s`). The
+    // residue carries no words, only the clock digits.
+    const residue = clause.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    if (/^at\s+(?:t\s+)?[\d\s.]+s?$/.test(residue) || /^t\s+[\d\s.]+s?$/.test(residue)) continue;
+    if (ATTESTATION_CHANNEL.test(clause) && ATTESTATION_REPORT.test(clause)) continue;
+    if (PROVENANCE_CLAUSE.test(clause)) continue;
+    return false;
+  }
+  return true;
+}
+
+function dropAttestationMarker(clause: string): string {
+  return clause
+    // `at t=-3.3s`, optionally a range (`at t=-3.3s to 0.0s`)
+    .replace(/\s*\bat\s+t=-?[\d.]+\s*s(?:\s*(?:to|-|–|—)\s*(?:t=)?-?[\d.]+\s*s)?/gi, " ")
+    // `at 19s` / `at 19:00` — the same provenance in the other clock form
+    .replace(/\s*\bat\s+(?:\d{1,3}:\d{2}|\d+(?:\.\d+)?\s*s)\b/gi, " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+}
+
+export function attestationDetailCopy(
+  raw: string | null | undefined,
+  ctx?: CaptionGroundingContext
+): string {
+  const src = stripInternalTokens(raw ?? "").trim();
+  if (!src) return "";
+  // ONLY the clock-bracketed attestation shape: a sentence that cites its own
+  // window-relative marker. Every other sentence is the card gate's business.
+  if (!ATTESTATION_MARKER_TEST.test(src)) return "";
+  const clauses = src
+    .split(/\s*(?:[—–;,]|\b(?:and|as|while|when|but)\b)\s*/i)
+    .map((c) => c.trim())
+    .filter(Boolean);
+  for (const clauseRaw of clauses) {
+    const clause = dropAttestationMarker(clauseRaw);
+    if (!clause) continue;
+    // An attestation clause and a quoted read are the model citing evidence.
+    if (ATTESTATION_CHANNEL.test(clause) && ATTESTATION_REPORT.test(clause)) continue;
+    if (PROVENANCE_CLAUSE.test(clause)) continue;
+    if (/['"‘’“”]/.test(clause)) continue;
+    if (/\(/.test(clause)) continue;
+    if (wordCount(clause) < 3) continue;
+    const candidate = restoreTerminalPunctuation(clause.replace(/^[a-z]/, (m) => m.toUpperCase()));
+    if (!candidate) continue;
+    // Extractive only: the gate may REFUSE this clause, never rewrite it.
+    if (gateGoalClaims(candidate, ctx) !== candidate) continue;
+    if (gateAbsenceClaims(candidate, ctx) !== candidate) continue;
+    if (groundNames(candidate, ctx?.promptText) !== candidate) continue;
+    if (hasGoalClaim(candidate) || hasAbsenceClaim(candidate)) continue;
+    if (stripInternalTokens(candidate) !== candidate) continue;
+    if (!VERBISH.test(candidate)) continue;
+    const scores = findScoreClaims(candidate);
+    if (scores.length > 1) continue;
+    const promptKnown = typeof ctx?.promptText === "string";
+    if (scores.length === 1) {
+      if (promptKnown) {
+        // A string prompt is the evidence: an EMPTY one fails closed like no
+        // evidence at all (an unmeasured scoreline is a claim).
+        if (!promptHas(ctx?.promptText as string, scores[0])) continue;
+        if (gateScores(candidate, ctx?.promptText as string) !== candidate) continue;
+      } else if ((ctx?.verdict ?? "").trim().toLowerCase() !== "scoring_play") {
+        // No prompt to corroborate a scoreline: only the row's own scoring
+        // verdict may carry one (S2 — a score claim on a non-scoring row is the
+        // defect the claim bar exists to stop).
+        continue;
+      }
+    }
+    if (storedReasonViolations(candidate, [wholeStoredSentence(src)]).length > 0) continue;
+    return candidate;
+  }
+  return "";
+}
 
 /** The gate order + post-conditions ONE quiet candidate must pass (AC1/AC2). */
 function serveQuietCandidate(

@@ -184,7 +184,12 @@ describe("GET /jobs/:id/detail — the announcer detail never disappears", () =>
       expect(row).toBeTruthy();
       expect(typeof row.caption).toBe("string");
       expect(row.caption.trim().length).toBeGreaterThan(0);
-      expect(row.caption).toBe("BIG PLAY · 1:12");
+      // ADAAAA-8411: the announcer line never degrades to the headline. A row
+      // with NO stored copy at all now serves its own FACT sentence (its stored
+      // verdict + window instant) instead of the title, so the card's "What
+      // happened" line is never byte-identical to its headline.
+      expect(row.caption).toBe("Big play at 1:12.");
+      expect(row.caption).not.toBe(row.postTitle);
       // beside it, the deterministic copy target
       expect(row.postTitle).toBe("BIG PLAY · 1:12");
     } finally {
