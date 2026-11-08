@@ -71,8 +71,8 @@ GOLDEN_V3_FULL = (
 # claims on non-scoring windows 5/255, invented names 6/255). The FULL rows
 # below are byte-identical to 8356, which is the VOD-parity proof.
 GOLDEN_V3_COMPACT = (
-    17234,
-    "8f019d83d3ffe286ddf98b81dafff895d5119a494c0e73f0ea163d31429058f1",
+    17110,
+    "1d4f99e422f2b20e78ddd79d8bc3ef8d94dbff52111b8d05eeab616b5515175d",
 )
 GOLDEN_V3_FULL_MC_PG = (
     13404,
@@ -373,7 +373,7 @@ def test_compact_golden_hash_pinned():
     paragraph: 4785 -> 5678 -> 5782 chars, and the key now precedes
     the caption; ADAAAA-8405 rewrote that paragraph for the Phase C copy
     residuals: 5782 -> 6353 chars)."""
-    assert len(_OUTPUT_CONTRACT_COMPACT) == 6943
+    assert len(_OUTPUT_CONTRACT_COMPACT) == 6819
     assert _sha(_OUTPUT_CONTRACT_COMPACT) == _sha(_OUTPUT_CONTRACT_COMPACT)
     # the compact flat prompt is the pinned v3 golden
     compact = build_prompt(

@@ -80,7 +80,7 @@ GOLDEN_PROMPT_SHA = {
     False: "0ba62dff7728e222f50dce4f2927d66698921eb14b52a7fb38cfa475154d6b7b",
     #: ADAAAA-8405 re-pins ONLY `True` again: the headline rule paragraph moved
     #: for the Phase C copy residuals. The absent-context invariant is unchanged.
-    True: "6b7e9ca4b881124cd8106cfa228e4b9513569e7a1f4e36de82b01cb7e375798b",
+    True: "a7c8df3e177cb3b2c448452ba6f49af963ae62088be91d7184326bfaad486f38",
 }
 
 PORTUGAL_SPAIN = {
