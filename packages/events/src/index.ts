@@ -631,6 +631,18 @@ export const ObserveMetricsSnapshotSchema = z.object({
       // object STRIPS undeclared keys (the `perceiveSource` lesson above).
       analysedThroughTs: z.number().min(0).optional(),
       tapThroughTs: z.number().min(0).optional(),
+      // ADAAAA-8397: the ROI second-pass counters the perceive runner reports
+      // per request (the ADAAAA-8395 instrument). Declared here because a zod
+      // object STRIPS undeclared keys: without these four lines the analyzer /
+      // media rail COMPUTE `roiPasses` and `JobSchema.parse` drops it at
+      // persist time, so a stored leg row reads "unmeasured" while the counter
+      // was in fact measured (the `perceiveSource` lesson above). Additive
+      // optional: absent on a runner that does not report the pass, so an old
+      // record stays byte-identical.
+      roiPasses: z.number().int().min(0).optional(),
+      roiTiles: z.number().int().min(0).optional(),
+      roiPassesPerAnalysedFrame: z.number().min(0).optional(),
+      roiEnabled: z.boolean().optional(),
     })
     .optional(),
   // Worst / mean wall-clock content-vs-wall lag (ms) seen on a dropped frame,
