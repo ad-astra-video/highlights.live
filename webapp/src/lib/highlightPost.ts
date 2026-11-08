@@ -336,9 +336,14 @@ export function withinPostTitleBar(title: string): boolean {
  */
 export function postTitleOf(
   h: Pick<JobDetailHighlight, "eventType" | "outcome" | "reason" | "caption"> &
-    Pick<Partial<JobDetailHighlight>, "postTitle" | "localizedTs" | "start">
+    Pick<Partial<JobDetailHighlight>, "postTitle" | "localizedTs" | "start"> & {
+      /** ADAAAA-8405 S3: the audit copy, part of the row's own evidence. */
+      reason_raw?: string | null;
+    }
 ): string {
-  return projectPostTitle(h);
+  // ADAAAA-8405: the SAME read gate the server projects with, so a rendered card
+  // can never disagree with a served one (`servedPostTitleViolations`).
+  return projectPostTitle({ ...h, reasonRaw: h.reason_raw ?? null });
 }
 
 /** Longest post title the card will suggest. Retained for `captionFromTitle`

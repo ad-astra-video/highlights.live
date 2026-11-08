@@ -5320,7 +5320,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // time, never empty. The subject is only ever a team the row's own stored copy
     // names from the job's `matchContext`, so no name is invented here.
     const copyTargetFor = (h: HighlightRecord): string =>
-      projectPostTitle(h, { subject: postTitleTeamSubject(h, job.matchContext) });
+      // ADAAAA-8405 S3: the READ gate re-checks a stored title's names against
+      // the row's OWN copy, so the audit line the write seam kept must ride along.
+      projectPostTitle(
+        { ...h, reasonRaw: h.reason_raw ?? null },
+        { subject: postTitleTeamSubject(h, job.matchContext) }
+      );
     // ADAAAA-8328 (Defect 2, ADAAAA-8319 QA FAIL of AC4): the announcer DETAIL
     // never goes missing. The write seam legitimately refuses copy it cannot
     // gate (a score claim this window never measured), so a row can carry

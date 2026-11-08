@@ -347,10 +347,53 @@ export interface PostTitleRow {
   postTitle?: string | null;
   caption?: string | null;
   reason?: string | null;
+  /** ADAAAA-8405 (S3): the audit copy the write seam preserved when it refused
+   * the model's sentence — part of "the row's own copy". */
+  reasonRaw?: string | null;
   eventType?: string | null;
   outcome?: string | null;
   localizedTs?: number | null;
   start?: number | null;
+}
+
+/** The row's OWN copy — the only evidence a read-time gate has. */
+export function postTitleRowCopy(row: PostTitleRow): string {
+  return [row.postTitle, row.caption, row.reason, row.reasonRaw]
+    .map((v) => (v ?? "").trim())
+    .filter(Boolean)
+    .join(" \n ");
+}
+
+/**
+ * ADAAAA-8405 (PO ruling 2026-11-08, ship bar S1-S3/S5): the READ-SEAM bar.
+ *
+ * The write seam refuses a title it cannot gate, but a row written BEFORE that
+ * gate existed still carries such a title — measured on the 13 post-deploy
+ * rows: 3 served `David Saez scores` where the row's copy names Carlos Javier,
+ * and 7 more rows refused `goal-claim` at write time. The card is the customer
+ * surface, so the projection re-checks the stored value against the facts the
+ * row itself carries:
+ *
+ *   - the shape bar (S1 place chain, S5 length/words/`T+`), as before;
+ *   - S2: no score/goal claim when the STORED verdict is not `scoring_play`;
+ *   - S3: every person/team name in the title must occur, as a whole phrase, in
+ *     the row's own copy (`postTitle`/`caption`/`reason`/`reasonRaw`).
+ *
+ * This is a TIGHTENING of the read gate, never a loosening: a title that passes
+ * is one the write gate would also accept, and a title that fails serves the
+ * deterministic `LABEL · m:ss` fallback instead.
+ */
+export function servedPostTitleViolations(title: string, row: PostTitleRow): PostTitleViolation[] {
+  const out = postTitleShapeViolations(title);
+  const verdict = (row.outcome ?? "").trim().toLowerCase();
+  if (verdict && verdict !== "scoring_play" && hasGoalClaim(title)) out.push("goal-claim");
+  const copy = postTitleRowCopy({ ...row, postTitle: null });
+  // No copy at all is NOT evidence against the title: a row whose only stored
+  // text is the title was already gated by the write seam against this window's
+  // prompt, and the read path has nothing to contradict it. The check fires only
+  // when the row carries copy that does not name what the title names.
+  if (copy.trim() && groundNames(title, copy) !== title) out.push("ungrounded-name");
+  return out;
 }
 
 /**
@@ -367,7 +410,7 @@ export function projectPostTitle(
   opts?: { subject?: string | null }
 ): string {
   const stored = cleanPostTitle(row.postTitle);
-  if (stored && postTitleShapeViolations(stored).length === 0) return stored;
+  if (stored && servedPostTitleViolations(stored, row).length === 0) return stored;
   const windowTs =
     typeof row.localizedTs === "number" && Number.isFinite(row.localizedTs)
       ? row.localizedTs
