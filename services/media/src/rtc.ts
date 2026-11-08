@@ -53,6 +53,35 @@ export const RTC_SAMPLE_MAX_FPS = 10;
 /** Lowest cadence the rail will honour (a resolved rate can never be 0). */
 export const RTC_SAMPLE_MIN_FPS = 0.25;
 
+/** ADAAAA-8430: default cap on the decoded sample's longest side. 480 is the
+ *  pre-existing hardcoded value (`maxWidth ?? 480`), kept as the default so the
+ *  wire alone changes no behaviour (the LFR-5 flip is an env line). */
+export const RTC_MAX_WIDTH_DEFAULT = 480;
+/** Lowest cap the rail will honour: below this the sample is too small for the
+ *  decide prompt's tile budget, so a mistyped env degrades to the floor instead
+ *  of pinning the rail to a handful of pixels. */
+export const RTC_MAX_WIDTH_MIN = 64;
+/** Ceiling for the cap. The browser share is decoded by one-shot CPU ffmpeg, so
+ *  an unbounded value is an operator foot-gun (an accidental `64000` would make
+ *  every sample a full-resolution decode). 1920 covers a 1080p-plus share. */
+export const RTC_MAX_WIDTH_MAX = 1920;
+
+/** ADAAAA-8430: resolve the RTC sample's max longest-side width.
+ *  Mirrors {@link normalizeRtcSampleFps}: absent (`undefined`), empty
+ *  (`""`, the shape compose's `${MEDIA_RTC_MAX_WIDTH:-}` produces when the knob
+ *  is unset) or non-numeric -> the default 480; a finite number is rounded and
+ *  clamped into [64, 1920]. Never returns NaN/Infinity. */
+export function normalizeRtcMaxWidth(
+  width?: number | string | null,
+  fallback = RTC_MAX_WIDTH_DEFAULT,
+): number {
+  const raw = typeof width === "string" ? width.trim() : width;
+  if (raw === undefined || raw === null || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(RTC_MAX_WIDTH_MAX, Math.max(RTC_MAX_WIDTH_MIN, Math.round(n)));
+}
+
 /** Clamp a requested RTC sample cadence into the funded live envelope.
  *  Absent/invalid -> the funded baseline (3 fps), NOT 1. */
 export function normalizeRtcSampleFps(fps?: number, maxFps = RTC_SAMPLE_MAX_FPS): number {
@@ -575,7 +604,10 @@ export class WebRtcIngestSession extends EventEmitter {
   private async decodeAndEmit(ts: number, rtpTs: number): Promise<void> {
     const bin = this.opts.ffmpegBin ?? "ffmpeg";
     const q = this.opts.jpegQuality ?? 5;
-    const maxW = this.opts.maxWidth ?? 480;
+    // ADAAAA-8430: the cap is now configurable end to end (MEDIA_RTC_MAX_WIDTH
+    // -> MediaServerOptions.rtcMaxWidth -> this option). Default stays 480, so
+    // an unset knob decodes exactly as it did before the wire.
+    const maxW = normalizeRtcMaxWidth(this.opts.maxWidth);
     const segment = this.buildSegment();
     // NOTE: the comma inside min() must be escaped (`\\,`) or ffmpeg's filter
     // graph parser splits `scale=min(maxW,iw)` into two filters and fails with
