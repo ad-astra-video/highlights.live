@@ -1,0 +1,638 @@
+{
+ "cells": [
+  {
+   "cell": "live_ctrl_280_320x180",
+   "rail": "live",
+   "budget": 280,
+   "scale": "320x180",
+   "windows": 37,
+   "n_img": 31,
+   "raw": {
+    "tp": 7,
+    "fp": 6,
+    "fn": 8,
+    "tn": 16,
+    "goals": 15,
+    "precision": 0.5385,
+    "recall": 0.4667,
+    "precision_ci95": [
+     0.2914,
+     0.7679
+    ],
+    "recall_ci95": [
+     0.2481,
+     0.6988
+    ],
+    "confusion": {
+     "goal|not_highlight": 8,
+     "goal|scoring_play": 7,
+     "no_shot|near_miss": 1,
+     "no_shot|not_highlight": 7,
+     "no_shot|scoring_play": 4,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "ks-n-0162",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=11.55, confirmed by the keeper's position and the ball's trajectory.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=16:51, confirmed by scoreboard change and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=22:11 and the scoreboard updates to 2-2.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball clearly enters the net at t=25, followed by a keeper diving and a celebration.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.78 and the keeper falls, confirmed by the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=25, confirmed by the keeper's position and crowd reaction.",
+      "guard_outcome": "unverifiable_evidence"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield area with no shot or goal occurring."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty shootout with no ball entering the net."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player standing still with the ball; no scoring action occurs."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and a celebration, but no goal is scored."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddling and celebrating, but no goal occurred."
+     }
+    ]
+   },
+   "guard": {
+    "tp": 7,
+    "fp": 6,
+    "fn": 8,
+    "tn": 16,
+    "goals": 15,
+    "precision": 0.5385,
+    "recall": 0.4667,
+    "precision_ci95": [
+     0.2914,
+     0.7679
+    ],
+    "recall_ci95": [
+     0.2481,
+     0.6988
+    ],
+    "confusion": {
+     "goal|not_highlight": 8,
+     "goal|scoring_play": 7,
+     "no_shot|near_miss": 1,
+     "no_shot|not_highlight": 7,
+     "no_shot|scoring_play": 4,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "ks-n-0162",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=11.55, confirmed by the keeper's position and the ball's trajectory.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=16:51, confirmed by scoreboard change and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=22:11 and the scoreboard updates to 2-2.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball clearly enters the net at t=25, followed by a keeper diving and a celebration.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.78 and the keeper falls, confirmed by the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=25, confirmed by the keeper's position and crowd reaction.",
+      "guard_outcome": "unverifiable_evidence"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield area with no shot or goal occurring."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty shootout with no ball entering the net."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player standing still with the ball; no scoring action occurs."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and a celebration, but no goal is scored."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddling and celebrating, but no goal occurred."
+     }
+    ]
+   },
+   "latency": {
+    "prompt_tokens_median": 12650,
+    "prompt_tokens_min": 12389,
+    "prompt_tokens_max": 12760,
+    "ttft_s_median": 6.207,
+    "wall_s_median": 9.132,
+    "payload_mb_median": 0.446,
+    "errors": 0
+   }
+  },
+  {
+   "cell": "live_280_768x432",
+   "rail": "live",
+   "budget": 280,
+   "scale": "768x432",
+   "windows": 37,
+   "n_img": 31,
+   "raw": {
+    "tp": 6,
+    "fp": 5,
+    "fn": 9,
+    "tn": 17,
+    "goals": 15,
+    "precision": 0.5455,
+    "recall": 0.4,
+    "precision_ci95": [
+     0.2801,
+     0.7873
+    ],
+    "recall_ci95": [
+     0.1982,
+     0.6425
+    ],
+    "confusion": {
+     "goal|not_highlight": 9,
+     "goal|scoring_play": 6,
+     "no_shot|not_highlight": 9,
+     "no_shot|scoring_play": 3,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=00:51, confirmed by scoreboard change and crowd eruption.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "Scoreboard changes from 2-1 to 2-2 at t=22:12 and ball enters net.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's dive and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's position and the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper's dive and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "ks-g-0280",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in open play and does not enter the net."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a player taking a penalty kick that is saved by the keeper."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player preparing for a free kick, not a goal or notable play."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and the ball being saved by the keeper."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddled together, not a goal or scoring play."
+     }
+    ]
+   },
+   "guard": {
+    "tp": 6,
+    "fp": 5,
+    "fn": 9,
+    "tn": 17,
+    "goals": 15,
+    "precision": 0.5455,
+    "recall": 0.4,
+    "precision_ci95": [
+     0.2801,
+     0.7873
+    ],
+    "recall_ci95": [
+     0.1982,
+     0.6425
+    ],
+    "confusion": {
+     "goal|not_highlight": 9,
+     "goal|scoring_play": 6,
+     "no_shot|not_highlight": 9,
+     "no_shot|scoring_play": 3,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=00:51, confirmed by scoreboard change and crowd eruption.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "Scoreboard changes from 2-1 to 2-2 at t=22:12 and ball enters net.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's dive and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's position and the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper's dive and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "ks-g-0280",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in open play and does not enter the net."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a player taking a penalty kick that is saved by the keeper."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player preparing for a free kick, not a goal or notable play."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and the ball being saved by the keeper."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddled together, not a goal or scoring play."
+     }
+    ]
+   },
+   "latency": {
+    "prompt_tokens_median": 12650,
+    "prompt_tokens_min": 12389,
+    "prompt_tokens_max": 12760,
+    "ttft_s_median": 6.405,
+    "wall_s_median": 9.556,
+    "payload_mb_median": 1.602,
+    "errors": 0
+   }
+  }
+ ],
+ "comparison": {
+  "control_cell": "live_ctrl_280_320x180",
+  "match_cell": "live_280_768x432",
+  "lost_by_match": [
+   "ks-g-0280"
+  ],
+  "gained_by_match": [],
+  "discordant": {
+   "lost": 1,
+   "gained": 0
+  },
+  "mcnemar_exact_p": 1.0,
+  "per_mode": {
+   "raw": {
+    "lost_by_match": [
+     "ks-g-0280"
+    ],
+    "gained_by_match": [],
+    "discordant": {
+     "lost": 1,
+     "gained": 0
+    },
+    "mcnemar_exact_p": 1.0
+   },
+   "guard": {
+    "lost_by_match": [
+     "ks-g-0280"
+    ],
+    "gained_by_match": [],
+    "discordant": {
+     "lost": 1,
+     "gained": 0
+    },
+    "mcnemar_exact_p": 1.0
+   }
+  },
+  "delta": {
+   "raw": {
+    "precision_ctrl": 0.5385,
+    "precision_match": 0.5455,
+    "precision_delta": 0.007,
+    "precision_delta_ci95": [
+     -0.3438,
+     0.3527
+    ],
+    "recall_ctrl": 0.4667,
+    "recall_match": 0.4,
+    "recall_delta": -0.0667,
+    "recall_delta_ci95": [
+     -0.3743,
+     0.2598
+    ]
+   },
+   "guard": {
+    "precision_ctrl": 0.5385,
+    "precision_match": 0.5455,
+    "precision_delta": 0.007,
+    "precision_delta_ci95": [
+     -0.3438,
+     0.3527
+    ],
+    "recall_ctrl": 0.4667,
+    "recall_match": 0.4,
+    "recall_delta": -0.0667,
+    "recall_delta_ci95": [
+     -0.3743,
+     0.2598
+    ]
+   }
+  },
+  "power": {
+   "n_goal_windows": 15,
+   "discordance_8343": 0.2667,
+   "power_at_observed_n": 0.0304,
+   "power_at_60": 0.4377,
+   "n_needed_for_80pct": 126
+  }
+ },
+ "verdict": {
+  "raw": {
+   "control_tp_lost": [
+    "ks-g-0280"
+   ],
+   "no_control_tp_lost": false,
+   "precision_ge_control": true,
+   "recall_ge_control": false,
+   "mcnemar_exact_p": 1.0,
+   "pass_ac6": false
+  },
+  "guard": {
+   "control_tp_lost": [
+    "ks-g-0280"
+   ],
+   "no_control_tp_lost": false,
+   "precision_ge_control": true,
+   "recall_ge_control": false,
+   "mcnemar_exact_p": 1.0,
+   "pass_ac6": false
+  },
+  "goal_window_count_ge_40": false,
+  "adopted_lever": "PASS only per AC6; anything else FAIL and the lever is closed"
+ },
+ "guard": {
+  "gemma_py_md5": "3797ff73a476d620d5762d395a199f04",
+  "decide_image": "sha256:1c416c3ce1d1eb20358629f6ad6a5ffd72af8cf5a90fd031b7d99a401bdcca6b",
+  "confirm_env": "DECIDE_CONFIRM_ENABLED=1"
+ },
+ "event_type_used": "SPORTING_EVENT",
+ "manifest": {
+  "path": "label-manifest-8371-carried37.json",
+  "sha256": "ab97d5eb930e1aa5445dd590d9225d269d705010c18e72b31e24e0108e17fed9",
+  "windows": 37
+ },
+ "rows": {
+  "file": "rows.jsonl",
+  "used": 74,
+  "total": 180
+ },
+ "register": {
+  "guard:not_a_goal_accept": 18,
+  "attest_ok:True": 74,
+  "guard:unverifiable_evidence": 6,
+  "guard:not_an_accept": 50
+ }
+}
