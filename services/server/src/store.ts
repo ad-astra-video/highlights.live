@@ -439,6 +439,8 @@ export class Store {
         | "cardTitles"
         // ADAAAA-8318: the card's copy target moves with the surface set.
         | "postTitle"
+        // ADAAAA-8356: and its audit token (why the seam accepted/refused it).
+        | "postTitleGate"
         | "colour"
         | "reason_raw"
         | "deferredAttestation"

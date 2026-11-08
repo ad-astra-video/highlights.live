@@ -9,7 +9,7 @@ import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDe
 import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-timings";
 import {
   captionColour,
-  gatePostTitleValue,
+  gatePostTitleDetail,
   uniquePostTitle,
   groundCaption,
   isQuietVerdict,
@@ -958,6 +958,8 @@ export interface DeferredGoalAttestation {
    * pre-downgrade verdict, so a re-attested GOAL restores copy gated for the
    * lane it enters. Absent when the gate refused it. */
   postTitle?: string;
+  /** ADAAAA-8356: the write gate's decision on the pre-downgrade title. */
+  postTitleGate?: string;
   colour?: ColourSignal;
   reasonRaw?: string;
   /** ADAAAA-8134 read counts the gate measured for this window (AC-R4). ADAAAA-8139:
@@ -978,6 +980,10 @@ export interface StoredSurfaceFields {
    * model produced none or the gate refused it — the read projection then derives
    * the deterministic title. */
   postTitle?: string;
+  /** ADAAAA-8356 (PO constraint 1): the gate's decision on the model's title —
+   * `accepted` / `trimmed` / `refused:<violations>` / `absent` — stored on the
+   * row so a grade can attribute a residual to prompt vs gate. Audit only. */
+  postTitleGate?: string;
   reason_raw?: string;
 }
 
@@ -5751,6 +5757,30 @@ function withAudioSeries(
   return { ...analysis, audioSeries: series };
 }
 
+/**
+ * ADAAAA-8356: the corroboration the write seam hands the copy gate
+ * (`captionGroundingForWindow`).
+ *
+ * §3.4 fails closed on `corroborated: false`, so this input decides whether a
+ * row's OWN caption/title may assert a goal. The three sources are, in order:
+ * the Stage-2 confirm dive, its `confirmed_goal` verdict, and — new here — the
+ * LANE-1 measured attestation that kept a live GOAL in the scoring lane. That
+ * third source is the same independent measurement (scoreboard delta / goal-line
+ * / net outcome / score reads) the ADAAAA-7996 demotion gate requires, so a row
+ * the pipeline certified as a GOAL is corroborated for its own copy.
+ */
+export function writeSeamCorroborated(input: {
+  confirmCorroborated?: boolean | null;
+  goalConfirmed?: string | null;
+  laneOneAttested?: boolean;
+}): boolean {
+  return (
+    input.confirmCorroborated === true ||
+    (input.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal" ||
+    input.laneOneAttested === true
+  );
+}
+
 /** ADAAAA-7965 (contract v5 §3.1/§3.2/§3.4/§3.5) + ADAAAA-8006: the ONE
  * write-seam derivation of a highlight's stored, customer-readable surface.
  *
@@ -5844,12 +5874,19 @@ export function storedSurfaceFor(
   // period). A refusal stores NOTHING: the read projection derives the
   // deterministic `LABEL · m:ss · subject` title from stored facts, which is
   // always better than a half-gated claim on a customer card.
-  const postTitle = gatePostTitleValue(decision.postTitle, grounding) ?? undefined;
+  // ADAAAA-8356 (PO acceptance addendum, constraint 1): the gate also NAMES its
+  // decision (`accepted` / `trimmed` / `refused:<violations>` / `absent`) so the
+  // row carries the accept/reject reason. Without it a grade can only see a
+  // missing title and cannot tell a prompt miss from a gate refusal — which is
+  // exactly the attribution Phase B could not make from `postTitle` alone.
+  const postTitleGate = gatePostTitleDetail(decision.postTitle, grounding);
+  const postTitle = postTitleGate.title ?? undefined;
   return {
     ...(storedReason ? { reason: storedReason } : {}),
     ...(grounding?.colourSignal && captionColour(storedReason) ? { colour: grounding.colourSignal } : {}),
     ...(card.caption ? { caption: card.caption, cardTitles: card.cardTitles } : {}),
     ...(postTitle ? { postTitle } : {}),
+    ...(grounding ? { postTitleGate: postTitleGate.gate } : {}),
     ...(grounding && storedReason !== decision.reason && (decision.reason ?? "").trim() ? { reason_raw: decision.reason } : {}),
   };
 }
@@ -6075,11 +6112,19 @@ export async function acceptVideoDecision(
     scoreReads: candidate.scoreReads,
     transitionKey: candidateTransitionKey,
   });
-  if (
+  // ADAAAA-8356: LANE-1 attestation is this window's corroboration. The measured
+  // gate below is what decides whether a GOAL accept may stay in the scoring
+  // lane, and `shouldRunConfirm` short-circuits on exactly that independent
+  // attestation, so a lane-1 GOAL almost never gets a Stage-2 dive — leaving
+  // `confirm` absent and `selfCorroborated` false. The copy gates then refused
+  // every goal claim in the row's own sentence and title: on leg 5c09695c a
+  // scoreboard-attested GOAL stored `Ball shoots on the left.` and 0/3 cards
+  // carried model copy. A GOAL the gate itself certified is corroborated.
+  const laneOneAttested =
     isGoalAccept &&
-    cfg.liveObserveLoop &&
+    !!cfg.liveObserveLoop &&
     cfg.decideWindowN === undefined &&
-    !liveGoalHasMeasuredEvidence({
+    liveGoalHasMeasuredEvidence({
       // ADAAAA-8140: the flat counts on the record are NOT the diagnostics the
       // gate reads, so the gate input is built explicitly.
       scoreBoardChanged: attestationUsed.scoreBoardChanged,
@@ -6091,8 +6136,8 @@ export async function acceptVideoDecision(
       // `1-1 -> 1-1` no-op or a `2-2 -> 1-1` backward read attests nothing.
       scoreBoardDelta: candidate.scoreBoardDelta,
       scoreReads: candidate.scoreReads,
-    })
-  ) {
+    });
+  if (isGoalAccept && cfg.liveObserveLoop && cfg.decideWindowN === undefined && !laneOneAttested) {
     console.error(
       `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
         `(trigger ${trigger.kind}) to a celebration: no measured attestation in the window ` +
@@ -6206,8 +6251,25 @@ export async function acceptVideoDecision(
   // final (sink.final already carries the downgraded verdict), and the same
   // context then gates the story-log line in `observeAcceptOnly` — one gate, one
   // evidence set, so the stored set and the page can never disagree.
-  const selfCorroborated =
-    confirm?.corroborated === true || (confirm?.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal";
+  const selfCorroborated = writeSeamCorroborated({
+    confirmCorroborated: confirm?.corroborated === true,
+    goalConfirmed: confirm?.goalConfirmed ?? null,
+    // ADAAAA-8356 (PO acceptance addendum, constraint 2 — the ONE gate input
+    // this fix changes, enumerated): a LIVE GOAL that the ADAAAA-7996 measured
+    // gate KEPT in the scoring lane was certified by a measured attestation, and
+    // `captionGroundingForWindow` fed it `corroborated: false`, so §3.4 failed
+    // closed and REFUSED every goal claim the row's own caption/title made. On
+    // leg 5c09695c a scoreboard-attested GOAL stored `Ball shoots on the left.`
+    // and 0/3 cards carried model copy. This is not a loosening of the claim bar:
+    // `goalAllowed` still requires the verdict, and `laneOneAttested` is the SAME
+    // independent measured attestation (scoreboard delta / goal-line / net
+    // outcome / score reads) the demotion gate above requires to keep the row a
+    // GOAL at all — the flag gains the corroboration that gate already measured.
+    // Every other condition is untouched: the demotion gate, the claim bar, the
+    // name bar, the absence bar and the shape bar are byte-identical, and a
+    // demoted (unattested) GOAL still gets `corroborated: false`.
+    laneOneAttested,
+  });
   // ADAAAA-8216: the prompt is a property of the WINDOW, not of the verdict the
   // transform chain handed us. `stageAnalysis` IS this window's capture (taken
   // from `stage1` at entry, before the confirm reconcile / scoring-lane demotion
@@ -6365,6 +6427,14 @@ export async function acceptVideoDecision(
     surface.postTitle,
     run.highlights.map((h) => h.postTitle)
   );
+  // ADAAAA-8356 (PO constraint 1): name WHY this row has or has not model copy.
+  // A repeat is its own refusal class (`refused:duplicate`) so it cannot be
+  // mistaken for a prompt miss (`absent`) or a barred title (`refused:<bar>`).
+  const rowPostTitleGate = rowPostTitle
+    ? surface.postTitleGate
+    : surface.postTitle
+      ? "refused:duplicate"
+      : surface.postTitleGate;
 
   const rec: HighlightRecord = {
     id: randomUUID(),
@@ -6446,6 +6516,8 @@ export async function acceptVideoDecision(
     ...(surface.caption ? { caption: surface.caption, cardTitles: surface.cardTitles } : {}),
     // ADAAAA-8318: the copy target rides the row beside the announcer caption.
     ...(rowPostTitle ? { postTitle: rowPostTitle } : {}),
+    // ADAAAA-8356: and the gate's accept/reject reason rides WITH it (audit only).
+    ...(rowPostTitleGate ? { postTitleGate: rowPostTitleGate } : {}),
     ...(surface.reason_raw ? { reason_raw: surface.reason_raw } : {}),
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
     // distinctly via the outcome/nearMiss flag.
@@ -6505,6 +6577,7 @@ export async function acceptVideoDecision(
       caption: scoringSurface.caption,
       cardTitles: scoringSurface.cardTitles,
       postTitle: scoringSurface.postTitle,
+      postTitleGate: scoringSurface.postTitleGate,
       colour: scoringSurface.colour,
       reasonRaw: scoringSurface.reason_raw,
       // ADAAAA-8139: the read counts the gate measured, so the persisted-frame

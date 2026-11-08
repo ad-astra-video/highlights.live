@@ -266,20 +266,80 @@ export function gatePostTitleValue(
   raw: string | null | undefined,
   ctx?: CaptionGroundingContext
 ): string | null {
-  const direct = cleanPostTitle(raw);
-  const trimmed = trimPostTitleShape(raw);
-  const candidates = trimmed && trimmed !== direct ? [direct, trimmed] : [direct];
-  for (const title of candidates) {
-    if (!title) continue;
-    if (postTitleShapeViolations(title).length) continue;
-    if (ctx) {
-      if (hasGoalClaim(title) && gateGoalClaims(title, ctx) !== title) continue;
-      if (gateAbsenceClaims(title, ctx) !== title) continue;
-      if (groundNames(title, ctx.promptText) !== title) continue;
-    }
-    return title;
+  return gatePostTitleDetail(raw, ctx).title;
+}
+
+/** What the write seam did with a candidate title, as one audit token. */
+export type PostTitleGate =
+  | "absent"
+  | "accepted"
+  /** accepted only after the extractive `trimPostTitleShape` deletion */
+  | "trimmed"
+  /** refused: the candidate (and its trimmed form) failed these bars */
+  | `refused:${string}`;
+
+export interface PostTitleGateDecision {
+  /** The value the write seam may store; null => the deterministic title serves. */
+  title: string | null;
+  /** Audit token persisted beside the row: prompt-vs-gate attribution. */
+  gate: PostTitleGate;
+  /** Every bar the raw title failed (shape + evidence, union of both candidates). */
+  violations: PostTitleViolation[];
+}
+
+/**
+ * Every reason THIS candidate may not be served, shape AND evidence.
+ *
+ * Shape is the bar the read projection re-checks on stored values; evidence is
+ * the bar only the write seam can run (it owns this window's prompt and verdict).
+ */
+export function postTitleViolations(title: string, ctx?: CaptionGroundingContext): PostTitleViolation[] {
+  const out = postTitleShapeViolations(title);
+  if (ctx) {
+    if (hasGoalClaim(title) && gateGoalClaims(title, ctx) !== title) out.push("goal-claim");
+    if (gateAbsenceClaims(title, ctx) !== title) out.push("absence-claim");
+    if (groundNames(title, ctx.promptText) !== title) out.push("ungrounded-name");
   }
-  return null;
+  return out;
+}
+
+/**
+ * ADAAAA-8356 (PO acceptance addendum, constraint 1): the SAME gate, but it
+ * names its decision.
+ *
+ * Phase B measured the defect classes on a build whose PROMPT already asked for
+ * the clean shape (341/898 place chains, 24/898 second beats, 39 goal claims on
+ * non-scoring verdicts), so prompt wording alone is not the fix — the writer
+ * must deterministically reject or repair, and the row must carry WHY. The
+ * `gate` token makes the next grade attribute a residual without another paid
+ * leg: `absent` is a prompt miss (the model emitted no title), `refused:*` is a
+ * gate refusal (the model emitted a title the bars refuse), `trimmed` is the
+ * extractive repair, `accepted` is model copy served as written.
+ */
+export function gatePostTitleDetail(
+  raw: string | null | undefined,
+  ctx?: CaptionGroundingContext
+): PostTitleGateDecision {
+  const direct = cleanPostTitle(raw);
+  if (!direct) return { title: null, gate: "absent", violations: ["empty"] };
+  const trimmed = trimPostTitleShape(raw);
+  const candidates: { title: string; trimmed: boolean }[] =
+    trimmed && trimmed !== direct
+      ? [
+          { title: direct, trimmed: false },
+          { title: trimmed, trimmed: true },
+        ]
+      : [{ title: direct, trimmed: false }];
+  const refused: PostTitleViolation[] = [];
+  for (const candidate of candidates) {
+    if (!candidate.title) continue;
+    const violations = postTitleViolations(candidate.title, ctx);
+    if (violations.length === 0) {
+      return { title: candidate.title, gate: candidate.trimmed ? "trimmed" : "accepted", violations: [] };
+    }
+    for (const violation of violations) if (!refused.includes(violation)) refused.push(violation);
+  }
+  return { title: null, gate: `refused:${refused.join(",")}`, violations: refused };
 }
 
 /** The fields the projection needs from a stored highlight row. */
