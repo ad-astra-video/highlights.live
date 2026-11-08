@@ -60,6 +60,7 @@ import {
   DetectionTrainingSampleSchema,
   JobDetailSchema,
   postTitleTeamSubject,
+  projectAnnouncerCaption,
   projectPostTitle,
   type Dataset,
   type DetectionTrainingSample,
@@ -5342,8 +5343,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // call, never empty, and it asserts nothing this window did not store. A
     // stored caption is served byte-for-byte.
     const announcerDetailFor = (h: HighlightRecord): string => {
-      const stored = (h.caption ?? "").trim();
-      return stored || copyTargetFor(h);
+      // ADAAAA-8405 S4: the detail route mirrors the write seam. A row written
+      // before that seam change stores its gated announcer sentence as `reason`
+      // and no `caption`, so serving the title here collapsed 6 of 10 postable
+      // stored cards onto `caption == postTitle` — a headline, not announcer
+      // copy. Serve the row's own gated sentence; the title stays the last
+      // resort for a row with no sentence at all (only `reason_raw`).
+      return projectAnnouncerCaption(
+        { ...h, reasonRaw: h.reason_raw ?? null },
+        copyTargetFor(h)
+      );
     };
     const postableHighlights = postable.highlights.map((h) => {
       // ADAAAA-8321 (AC6): a moment that has a picked alternative serves THAT

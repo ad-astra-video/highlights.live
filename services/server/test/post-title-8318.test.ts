@@ -52,6 +52,7 @@ async function seedRow(
     localizedTs?: number;
     postTitle?: string;
     caption?: string;
+    reason?: string;
     jobId?: string;
   }
 ) {
@@ -72,6 +73,7 @@ async function seedRow(
     status: "accepted",
     ...(opts.postTitle !== undefined ? { postTitle: opts.postTitle } : {}),
     ...(opts.caption !== undefined ? { caption: opts.caption } : {}),
+    ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
     createdAt: new Date().toISOString(),
   } as any);
   return job;
@@ -217,6 +219,36 @@ describe("GET /jobs/:id/detail — every card carries a copy target (AC5)", () =
       const row = (res.json().highlights as any[]).find((h) => h.id.startsWith("hl-"));
       expect(row.postTitle).toBe("GOAL · 1:12 · Real Madrid");
       expect(row.postTitle.length).toBeLessThanOrEqual(40);
+    } finally {
+      await t.app.close();
+    }
+  });
+
+  // ADAAAA-8405 S4: the detail route mirrors the write seam. A row written
+  // BEFORE the caption fix stores its gated announcer sentence as `reason` and
+  // no `caption`; serving the title there is the `copyTargetFor` degrade the PO
+  // bar exists to catch (measured 6 of 10 postable stored cards).
+  it("serves a legacy row's own gated sentence as the caption, never the title", async () => {
+    const t = await buildTestApp();
+    try {
+      const u = await register(t.app, "post-title-8405-served-caption@test.local");
+      const job = await seedRow(t, {
+        ownerId: u.id,
+        eventType: "GOAL",
+        outcome: "scoring_play",
+        start: 140,
+        localizedTs: 158,
+        postTitle: "David Saez scores",
+        reason: "Ball shoots on the left.",
+      });
+      const res = await t.app.inject({ method: "GET", url: `/jobs/${job.id}/detail`, headers: auth(u.token) });
+      expect(res.statusCode).toBe(200);
+      const row = (res.json().highlights as any[]).find((h) => h.id.startsWith("hl-"));
+      // S3 refuses the invented name, so the card title falls back...
+      expect(row.postTitle).toBe("GOAL · 2:38");
+      // ...while the announcer detail is the row's own gated sentence.
+      expect(row.caption).toBe("Ball shoots on the left.");
+      expect(row.caption).not.toBe(row.postTitle);
     } finally {
       await t.app.close();
     }
