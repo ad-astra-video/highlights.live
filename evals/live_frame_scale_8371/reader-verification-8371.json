@@ -1,0 +1,926 @@
+{
+ "issue": "ADAAAA-8392 (stage B for ADAAAA-8371)",
+ "purpose": "frame-verify the 34 cg-g-* compilation goal anchors with a reader independent of the model under test",
+ "reader": {
+  "model": "allenai/Molmo2-4B",
+  "quantisation": "bnb-4bit-nf4",
+  "compute_dtype": "bfloat16",
+  "double_quant": true,
+  "device": "cuda:1",
+  "decoding": "greedy",
+  "max_new_tokens": 96,
+  "vram_alloc_GiB": 4.87,
+  "model_load_s": 5.2,
+  "independent_of": "deployed gemma/decide replica (never called)",
+  "clip_sha256": {
+   "kids-soccer": "420c7e7d8aed3d1610e2bb51cce9e66b46aa3bbe47d5c45d0a9fadfb38c13e63",
+   "goals-compilation": "3b8649650285b92ab7c410e6fb6b42ad46ee8c05c379197eaed01a36e546d778"
+  },
+  "frame_offsets_s": [
+   -2,
+   0,
+   2,
+   4
+  ],
+  "frame_seek": "ffmpeg input-side -ss (keyframe-accurate, ~0.2 s)"
+ },
+ "protocols": {
+  "v1_permissive": {
+   "prompt": "You are looking at ONE still frame from a soccer match video. Answer with four short lines, each starting with the label:\nNET: YES if the ball is inside the goal net, else NO\nCELEBRATION: YES if players are celebrating a goal (arms raised, huddle, running together, scorer pointing), else NO\nGRAPHIC: YES if a goal graphic, replay banner, scorer caption or a changed scoreboard is shown, else NO\nVERDICT: GOAL if any of the three above is YES, otherwise NO_GOAL\nAnswer only from what is clearly visible in this frame.",
+   "frames_read": 360,
+   "windows_read": 90,
+   "tallies": {
+    "any_cue": {
+     "pos_called_goal": "11/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "19/41",
+     "neg_first10_called_goal": "3/10",
+     "neg_pass_8_of_10": false,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0705"
+     ],
+     "neg_false_goal": [
+      "ks-n-0054",
+      "ks-n-0178",
+      "ks-n-0244",
+      "ks-n-0402",
+      "ks-n-0622",
+      "ks-n-0628",
+      "ks-n-0696",
+      "ks-n-0722",
+      "ks-n-0760",
+      "ks-n2-0008",
+      "cg-n-02",
+      "cg-n-12",
+      "cg-n-14",
+      "cg-n-17",
+      "cg-n-19",
+      "cg-n-20",
+      "cg-n-22",
+      "cg-n-24",
+      "cg-n-28"
+     ]
+    },
+    "net_or_celebration": {
+     "pos_called_goal": "10/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "10/41",
+     "neg_first10_called_goal": "0/10",
+     "neg_pass_8_of_10": true,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0643",
+      "ks-g-0705"
+     ],
+     "neg_false_goal": [
+      "ks-n-0402",
+      "ks-n-0622",
+      "cg-n-02",
+      "cg-n-12",
+      "cg-n-17",
+      "cg-n-19",
+      "cg-n-20",
+      "cg-n-22",
+      "cg-n-24",
+      "cg-n-28"
+     ]
+    },
+    "verdict_only": {
+     "pos_called_goal": "11/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "19/41",
+     "neg_first10_called_goal": "3/10",
+     "neg_pass_8_of_10": false,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0705"
+     ],
+     "neg_false_goal": [
+      "ks-n-0054",
+      "ks-n-0178",
+      "ks-n-0244",
+      "ks-n-0402",
+      "ks-n-0622",
+      "ks-n-0628",
+      "ks-n-0696",
+      "ks-n-0722",
+      "ks-n-0760",
+      "ks-n2-0008",
+      "cg-n-02",
+      "cg-n-12",
+      "cg-n-14",
+      "cg-n-17",
+      "cg-n-19",
+      "cg-n-20",
+      "cg-n-22",
+      "cg-n-24",
+      "cg-n-28"
+     ]
+    },
+    "celebration_only": {
+     "pos_called_goal": "8/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "7/41",
+     "neg_first10_called_goal": "0/10",
+     "neg_pass_8_of_10": true,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0643",
+      "ks-g-0662",
+      "ks-g-0705",
+      "ks-g-0719"
+     ],
+     "neg_false_goal": [
+      "ks-n-0402",
+      "ks-n-0622",
+      "cg-n-02",
+      "cg-n-19",
+      "cg-n-20",
+      "cg-n-24",
+      "cg-n-28"
+     ]
+    }
+   },
+   "fitness": {
+    "any_rule_passes_both_gates": false,
+    "best_pos": "11/15",
+    "verdict": "UNFIT"
+   },
+   "anchors_34": {
+    "cg-g-00": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       4
+      ],
+      "celebration": [
+       -2
+      ],
+      "verdict_goal": [
+       -2,
+       4
+      ]
+     }
+    },
+    "cg-g-01": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       0
+      ],
+      "celebration": [
+       2,
+       4
+      ],
+      "verdict_goal": [
+       0,
+       2,
+       4
+      ]
+     }
+    },
+    "cg-g-02": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       0
+      ],
+      "celebration": [
+       4
+      ],
+      "verdict_goal": [
+       0,
+       4
+      ]
+     }
+    },
+    "cg-g-03": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       4
+      ]
+     }
+    },
+    "cg-g-04": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "graphic": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    },
+    "cg-g-05": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       0,
+       4
+      ],
+      "verdict_goal": [
+       0,
+       4
+      ]
+     }
+    },
+    "cg-g-06": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       0
+      ],
+      "celebration": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    },
+    "cg-g-07": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       4
+      ],
+      "celebration": [
+       -2
+      ],
+      "verdict_goal": [
+       -2,
+       4
+      ]
+     }
+    },
+    "cg-g-08": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    },
+    "cg-g-09": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       -2,
+       2
+      ],
+      "verdict_goal": [
+       -2,
+       2
+      ]
+     }
+    },
+    "cg-g-10": {
+     "frames_read": 4,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-11": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       -2,
+       4
+      ],
+      "verdict_goal": [
+       -2,
+       4
+      ]
+     }
+    },
+    "cg-g-12": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       2
+      ],
+      "verdict_goal": [
+       2
+      ]
+     }
+    },
+    "cg-g-13": {
+     "frames_read": 4,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-14": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       0,
+       2,
+       4
+      ],
+      "verdict_goal": [
+       0,
+       2,
+       4
+      ]
+     }
+    },
+    "cg-g-15": {
+     "frames_read": 4,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-16": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    },
+    "cg-g-17": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       -2
+      ],
+      "celebration": [
+       -2
+      ],
+      "graphic": [
+       -2
+      ],
+      "verdict_goal": [
+       -2
+      ]
+     }
+    },
+    "cg-g-18": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    },
+    "cg-g-19": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    },
+    "cg-g-20": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       -2
+      ],
+      "celebration": [
+       -2,
+       4
+      ],
+      "verdict_goal": [
+       -2,
+       4
+      ]
+     }
+    },
+    "cg-g-21": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       0
+      ],
+      "celebration": [
+       0,
+       2,
+       4
+      ],
+      "graphic": [
+       -2,
+       0
+      ],
+      "verdict_goal": [
+       -2,
+       0,
+       2,
+       4
+      ]
+     }
+    },
+    "cg-g-22": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    },
+    "cg-g-23": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       4
+      ],
+      "celebration": [
+       -2,
+       4
+      ],
+      "verdict_goal": [
+       -2,
+       4
+      ]
+     }
+    },
+    "cg-g-24": {
+     "frames_read": 4,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-25": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       4
+      ],
+      "celebration": [
+       2,
+       4
+      ],
+      "graphic": [
+       0,
+       2
+      ],
+      "verdict_goal": [
+       0,
+       2,
+       4
+      ]
+     }
+    },
+    "cg-g-26": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       2
+      ],
+      "celebration": [
+       2
+      ],
+      "verdict_goal": [
+       2
+      ]
+     }
+    },
+    "cg-g-27": {
+     "frames_read": 4,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-28": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       2,
+       4
+      ],
+      "verdict_goal": [
+       2,
+       4
+      ]
+     }
+    },
+    "cg-g-29": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       0,
+       4
+      ],
+      "verdict_goal": [
+       0,
+       4
+      ]
+     }
+    },
+    "cg-g-30": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       0
+      ],
+      "celebration": [
+       2,
+       4
+      ],
+      "verdict_goal": [
+       0,
+       2,
+       4
+      ]
+     }
+    },
+    "cg-g-31": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       2
+      ],
+      "graphic": [
+       -2
+      ],
+      "verdict_goal": [
+       -2,
+       2
+      ]
+     }
+    },
+    "cg-g-32": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "net": [
+       4
+      ],
+      "celebration": [
+       -2,
+       0
+      ],
+      "verdict_goal": [
+       -2,
+       0,
+       4
+      ]
+     }
+    },
+    "cg-g-33": {
+     "frames_read": 4,
+     "any_cue_goal": true,
+     "cues_fired_at_offsets": {
+      "celebration": [
+       0
+      ],
+      "verdict_goal": [
+       0
+      ]
+     }
+    }
+   }
+  },
+  "v2_strict": {
+   "prompt": "You are reviewing ONE still frame from a soccer match video. Answer with four short lines:\nNET: YES only if the ball itself is visibly inside the goal net, else NO\nCELEBRATION: YES only if players are clearly celebrating a goal that has just been scored (arms raised, running to a corner, group pile-on), else NO\nGRAPHIC: YES only if a goal-specific graphic is on screen (a GOAL caption, a scorer card naming the scorer, or a full-screen replay wipe labelled as the goal), else NO \u2014 a normal persistent scoreboard alone is NOT a goal graphic\nVERDICT: GOAL if any of the three above is YES, else NO_GOAL\nAnswer only from what this single frame clearly shows; do not guess.",
+   "frames_read": 224,
+   "windows_read": 56,
+   "tallies": {
+    "any_cue": {
+     "pos_called_goal": "3/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "2/41",
+     "neg_first10_called_goal": "1/10",
+     "neg_pass_8_of_10": true,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0413",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0584",
+      "ks-g-0602",
+      "ks-g-0616",
+      "ks-g-0643",
+      "ks-g-0662",
+      "ks-g-0678",
+      "ks-g-0705",
+      "ks-g-0341"
+     ],
+     "neg_false_goal": [
+      "ks-n-0054",
+      "cg-n-28"
+     ]
+    },
+    "net_or_celebration": {
+     "pos_called_goal": "2/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "1/41",
+     "neg_first10_called_goal": "0/10",
+     "neg_pass_8_of_10": true,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0413",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0584",
+      "ks-g-0602",
+      "ks-g-0616",
+      "ks-g-0643",
+      "ks-g-0662",
+      "ks-g-0678",
+      "ks-g-0705",
+      "ks-g-0719",
+      "ks-g-0341"
+     ],
+     "neg_false_goal": [
+      "cg-n-28"
+     ]
+    },
+    "verdict_only": {
+     "pos_called_goal": "3/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "2/41",
+     "neg_first10_called_goal": "1/10",
+     "neg_pass_8_of_10": true,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0413",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0584",
+      "ks-g-0602",
+      "ks-g-0616",
+      "ks-g-0643",
+      "ks-g-0662",
+      "ks-g-0678",
+      "ks-g-0705",
+      "ks-g-0341"
+     ],
+     "neg_false_goal": [
+      "ks-n-0054",
+      "cg-n-28"
+     ]
+    },
+    "celebration_only": {
+     "pos_called_goal": "2/15",
+     "pos_pass_12_of_15": false,
+     "neg_called_goal_false": "1/41",
+     "neg_first10_called_goal": "0/10",
+     "neg_pass_8_of_10": true,
+     "both_pass": false,
+     "pos_missed": [
+      "ks-g-0280",
+      "ks-g-0413",
+      "ks-g-0435",
+      "ks-g-0541",
+      "ks-g-0584",
+      "ks-g-0602",
+      "ks-g-0616",
+      "ks-g-0643",
+      "ks-g-0662",
+      "ks-g-0678",
+      "ks-g-0705",
+      "ks-g-0719",
+      "ks-g-0341"
+     ],
+     "neg_false_goal": [
+      "cg-n-28"
+     ]
+    }
+   },
+   "fitness": {
+    "any_rule_passes_both_gates": false,
+    "best_pos": "3/15",
+    "verdict": "UNFIT"
+   },
+   "anchors_34": {
+    "cg-g-00": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-01": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-02": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-03": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-04": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-05": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-06": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-07": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-08": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-09": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-10": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-11": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-12": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-13": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-14": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-15": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-16": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-17": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-18": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-19": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-20": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-21": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-22": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-23": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-24": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-25": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-26": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-27": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-28": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-29": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-30": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-31": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-32": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    },
+    "cg-g-33": {
+     "frames_read": 0,
+     "any_cue_goal": false,
+     "cues_fired_at_offsets": {}
+    }
+   }
+  }
+ },
+ "conclusion": {
+  "verified_manifest_written": false,
+  "reason": "no protocol meets both control gates: v1 over-calls (19/41 no_goal windows read goal; permissive cue text lets a persistent scoreboard/replay banner satisfy GRAPHIC) and its best positive tally is 11/15 (bar 12/15); v2 under-calls (2-3/15 positives). net_or_celebration under v1 does pass the negative gate (10/10 first-10) but only reaches 10/15 positives. A reader that cannot clear both sides cannot arbitrate the anchors, and the ticket forbids padding the set with unverified windows.",
+  "consequence": "the 34 cg-g-* anchors stay UNVERIFIED; the AC1 bar of >=40 verified goal windows is NOT demonstrated. The eval is reported on the 49 labelled windows (34 unverified) and on the 15 frame-verified carried windows.",
+  "next_reader_candidates": [
+   "scoreboard-change OCR within each compilation segment (the manifest records that tesseract on this compilation returns digit noise)",
+   "a dedicated ball-in-net detector (perceive florence/SAM3 is NOT usable: it generates the evidence the eval scores)",
+   "contact-sheet review by a human/board pass"
+  ]
+ }
+}

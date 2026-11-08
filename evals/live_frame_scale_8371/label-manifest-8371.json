@@ -1,0 +1,1305 @@
+{
+ "$comment": "ADAAAA-8371 increment 1 on the ADAAAA-8343 frozen set. Windows with increment '8371-goal-1' are new goal events from a public all-goals compilation; windows with '8371-no-goal-1' are new no_goal windows from kids-soccer sampled outside every labelled goal zone of the exhaustive census. The 37 original windows are carried VERBATIM (same ids, same times, same labels) so the control cell must reproduce 8343.",
+ "version": "8371-increment-1",
+ "parent_manifest": {
+  "path": "/home/brad/highlights.live/evals/kids_soccer_near_miss/label-manifest.json",
+  "sha256": "f6bea8ec97352b3385feac634a7c1c6e8461e01719f79db3c68a061140047ccf"
+ },
+ "video": {
+  "id": "kids-soccer",
+  "path": "/data/uploads/3f8e8d8d-f00d-410c-b4c1-1a781b2fffc7/kids-soccer.mp4",
+  "duration_s": 777,
+  "frame_source": "highlights.live job frames at 3 fps (frameScale 640:360, seq = round(3 * t))",
+  "labels_by": "Developer (Paperclip run e34a4597-93a8-4d6b-bc25-56f1337c52e8)",
+  "labelled_at": "2026-10-30",
+  "label_method": "contact sheets at 1 s steps per window + full-resolution single frames for every disputed call; evidence cites the frame timestamps that carry the proof",
+  "confidence_note": "Goal instants are \u00b11 s (1 s frame grid). Windows labelled 'none' rule out a goal inside the stated bounds; they do not claim a shot occurred."
+ },
+ "clips": [
+  {
+   "id": "kids-soccer",
+   "path": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "sha256": "420c7e7d8aed3d1610e2bb51cce9e66b46aa3bbe47d5c45d0a9fadfb38c13e63"
+  },
+  {
+   "id": "goals-compilation",
+   "path": "/home/brad/hl8371/clips/src_goals.webm",
+   "sha256": "3b8649650285b92ab7c410e6fb6b42ad46ee8c05c379197eaed01a36e546d778",
+   "source": "https://www.youtube.com/watch?v=_eKwiiYihxg",
+   "title": "EVERY 2024/25 GOAL | 120 GOALS! | Chelsea FC Goals Compilation",
+   "fetched_at": "2026-11-08",
+   "fetched_by": "ADAAAA-8371 run 885b33c6 via yt-dlp 2026.08.19",
+   "provenance_note": "third-party broadcast footage, used only for offline $0 label+evaluate; not redistributed"
+  }
+ ],
+ "coverage": {
+  "goal_windows": 49,
+  "non_goal_windows": 41,
+  "carried_from_8343": 37,
+  "new_goal": 34,
+  "new_no_goal_kids": 7,
+  "new_no_goal_compilation": 12
+ },
+ "windows": [
+  {
+   "id": "ks-g-0117",
+   "t_start": 114,
+   "t_end": 126,
+   "instant": 117,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=119-121 players celebrating plus the 'LAMINE YAMAL NASRAOUI' scorer graphic; ball in the net at t=125",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0280",
+   "t_start": 277,
+   "t_end": 284,
+   "instant": 280,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=280 ball in net; scoreboard 0-0 at t=274 -> 1-0 at t=282",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0413",
+   "t_start": 410,
+   "t_end": 418,
+   "instant": 413,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=413 ball in net, white player celebrating; scoreboard 0-0 before -> 1-0 after",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0435",
+   "t_start": 431,
+   "t_end": 437,
+   "instant": 435,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=434 shot on target, t=435 ball in net and scoreboard -> 1-0",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0541",
+   "t_start": 537,
+   "t_end": 544,
+   "instant": 541,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=538 scoreboard 0-0 -> t=542 scoreboard 1-0 with celebration close-ups at t=539-543",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0584",
+   "t_start": 581,
+   "t_end": 588,
+   "instant": 584,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=584 broadcast 'GOL' graphic; t=586 ball visible inside the net with the keeper beaten",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0602",
+   "t_start": 600,
+   "t_end": 606,
+   "instant": 602,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=602 'GOL' graphic with the ball near/in the net; t=603 ball at the net; scoreboard 1-1",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-g-0616",
+   "t_start": 612,
+   "t_end": 620,
+   "instant": 616,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "full-res t=616: ball inside the goal net, keeper diving; t=618 sideline reaction shot",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0643",
+   "t_start": 638,
+   "t_end": 646,
+   "instant": 643,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=638-639 Real Madrid celebration; t=642 ball in net on the replay; scoreboard 1-2 -> 2-2 at t=643",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0662",
+   "t_start": 660,
+   "t_end": 665,
+   "instant": 662,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=662 ball visibly inside the goal net; scoreboard 2-3 at t=663",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0678",
+   "t_start": 675,
+   "t_end": 684,
+   "instant": 678,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "t=678 'GOL' graphic; t=681-682 celebration; scoreboard 3-3 at t=683",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0705",
+   "t_start": 700,
+   "t_end": 710,
+   "instant": 705,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "penalty shoot-out conversion between t=702 (scoreboard 3-4) and t=709 (4-4); t=701 keeper in the goal, t=700 ball held by the taker",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-g-0719",
+   "t_start": 714,
+   "t_end": 722,
+   "instant": 719,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "scoreboard 4-4 at t=709-711 -> 4-5 at t=725; t=721-722 show the red-card aftermath, no ball in net inside the gap",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-g-0770",
+   "t_start": 767,
+   "t_end": 774,
+   "instant": 770,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "scoreboard 4-5 from t=765; Barcelona celebration from t=768-771",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0054",
+   "t_start": 51,
+   "t_end": 57,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=54 open play, ball at a player's feet; scoreboard 01:52 0-0; no net, no GOL graphic",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0090",
+   "t_start": 87,
+   "t_end": 93,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=90 midfield open play, goal net empty on the far right; scoreboard 04:06 0-0",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0105",
+   "t_start": 102,
+   "t_end": 108,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=105 open play, player running with the ball; scoreboard 04:24 0-0; no GOL graphic",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0130",
+   "t_start": 126,
+   "t_end": 133,
+   "ground_truth": "no_goal",
+   "evidence": "saved",
+   "frames": "t=127-133 keeper in the goal, at t=132 he has the ball in his hands; no net bulge, no celebration; scoreboard 1-1",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-n-0144",
+   "t_start": 141,
+   "t_end": 147,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=144 wide midfield view, no goalmouth action; scoreboard 06:07 0-1",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0162",
+   "t_start": 159,
+   "t_end": 165,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=162 white attacker running at a ball with the keeper nearby, ball outside the net; scoreboard 11:56 1-1",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-n-0178",
+   "t_start": 171,
+   "t_end": 186,
+   "ground_truth": "no_goal",
+   "evidence": "blocked",
+   "frames": "t=175-177 and t=179-185: sliding challenge near the byline, no goal net in play; full-res t=178/t=180/t=184 all show open play with scoreboard RMA 1-1 BAR at 06:50-06:57",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0201",
+   "t_start": 196,
+   "t_end": 211,
+   "ground_truth": "no_goal",
+   "evidence": "saved",
+   "frames": "t=196-202 ball out by the advertising boards and a player down; full-res t=201 keeper lying on the ground after a dive with the ball outside the net by the left post; scoreboard 08:12 1-1",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0237",
+   "t_start": 234,
+   "t_end": 240,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=237 dribble/tackle in midfield, goal frame empty; scoreboard 09:43 1-1",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-n-0244",
+   "t_start": 244,
+   "t_end": 252,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=244-252 empty net and midfield play; scoreboard 09:36 1-1",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0254",
+   "t_start": 254,
+   "t_end": 262,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=254-262 empty net, midfield play; scoreboard 2-1",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0282",
+   "t_start": 279,
+   "t_end": 285,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=282 open play, ball on the field; scoreboard 15:00 1-1",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-n-0312",
+   "t_start": 294,
+   "t_end": 333,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=294-333 open play, referee/player close-ups, ball boy; scoreboard RMA 1-1 BAR unchanged",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-n-0351",
+   "t_start": 348,
+   "t_end": 356,
+   "ground_truth": "no_goal",
+   "evidence": "saved",
+   "frames": "t=350-351 white attacker shoots, blue keeper dives; t=352 attacker and keeper both on the ground, ball not in the net; scoreboard 1-3",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0359",
+   "t_start": 357,
+   "t_end": 366,
+   "ground_truth": "no_goal",
+   "evidence": "saved",
+   "frames": "t=352-354 goalmouth action with players down, no ball in the net; t=360-366 midfield play; scoreboard 1-0 unchanged",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-n-0402",
+   "t_start": 395,
+   "t_end": 409,
+   "ground_truth": "no_goal",
+   "evidence": "saved",
+   "frames": "t=397-401 keeper saves and holds the ball; t=403-405 still holding it; t=406 keeper close-up; scoreboard 1-0 both ends",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0426",
+   "t_start": 421,
+   "t_end": 428,
+   "ground_truth": "no_goal",
+   "evidence": "saved",
+   "frames": "t=426 shot is saved/wide, ball not in the net at t=427; scoreboard 0-0 until the separate goal at t=435",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0622",
+   "t_start": 618,
+   "t_end": 624,
+   "ground_truth": "no_goal",
+   "evidence": "saved",
+   "frames": "t=622 keeper diving to his left, attacker on the ground near the goal, no ball in the net; t=623-624 close-ups of the empty net",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0628",
+   "t_start": 626,
+   "t_end": 632,
+   "ground_truth": "no_goal",
+   "evidence": "wide",
+   "frames": "t=627-630 Real Madrid penalty taken, keeper standing at t=631; scoreboard 1-2 unchanged at 87:31",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-n-0696",
+   "t_start": 689,
+   "t_end": 703,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=689-703 no ball in the net (t=701 keeper in the goal, no ball); scoreboard 3-4 pending the penalty conversion that lands at t=~705",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0722",
+   "t_start": 717,
+   "t_end": 731,
+   "ground_truth": "no_goal",
+   "evidence": "blocked",
+   "frames": "t=721-722 red card shown to a Barcelona player, not a goal; t=729 keeper in front of the empty net; scoreboard 4-5",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n-0760",
+   "t_start": 755,
+   "t_end": 766,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "t=755-766 penalty shoot-out build-up, keeper in the goal, no ball in the net; scoreboard RMA 4-4 BAR, PENALTIS 4-4",
+   "confidence": "medium"
+  },
+  {
+   "id": "ks-g-0341",
+   "t_start": 339,
+   "t_end": 346,
+   "instant": 341,
+   "ground_truth": "goal",
+   "evidence": "scoreboard_change",
+   "frames": "scoreboard RMA 1-1 BAR at t=340 -> RMA 2-1 BAR at t=341 (frame diff confirms the digit flip); scorer graphic '11 MANUEL ORDO\u00d1EZ, GOLES: 1' at t=344; players celebrating t=341-343. Discovered by the 336-777s exhaustive catalogue (scoreboard-digit diff detector + 1 s frame verification).",
+   "confidence": "high"
+  },
+  {
+   "id": "ks-n2-0008",
+   "t_start": 8.0,
+   "t_end": 20.0,
+   "instant": 14.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "new increment: sampled outside every labelled goal zone (exhaustive goal census, 15 goals in 777 s) and outside every existing window span",
+   "confidence": "high",
+   "clip": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "increment": "8371-no-goal-1"
+  },
+  {
+   "id": "ks-n2-0060",
+   "t_start": 60.0,
+   "t_end": 72.0,
+   "instant": 66.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "new increment: sampled outside every labelled goal zone (exhaustive goal census, 15 goals in 777 s) and outside every existing window span",
+   "confidence": "high",
+   "clip": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "increment": "8371-no-goal-1"
+  },
+  {
+   "id": "ks-n2-0214",
+   "t_start": 214.0,
+   "t_end": 226.0,
+   "instant": 220.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "new increment: sampled outside every labelled goal zone (exhaustive goal census, 15 goals in 777 s) and outside every existing window span",
+   "confidence": "high",
+   "clip": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "increment": "8371-no-goal-1"
+  },
+  {
+   "id": "ks-n2-0374",
+   "t_start": 374.0,
+   "t_end": 386.0,
+   "instant": 380.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "new increment: sampled outside every labelled goal zone (exhaustive goal census, 15 goals in 777 s) and outside every existing window span",
+   "confidence": "high",
+   "clip": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "increment": "8371-no-goal-1"
+  },
+  {
+   "id": "ks-n2-0450",
+   "t_start": 450.0,
+   "t_end": 462.0,
+   "instant": 456.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "new increment: sampled outside every labelled goal zone (exhaustive goal census, 15 goals in 777 s) and outside every existing window span",
+   "confidence": "high",
+   "clip": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "increment": "8371-no-goal-1"
+  },
+  {
+   "id": "ks-n2-0484",
+   "t_start": 484.0,
+   "t_end": 496.0,
+   "instant": 490.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "new increment: sampled outside every labelled goal zone (exhaustive goal census, 15 goals in 777 s) and outside every existing window span",
+   "confidence": "high",
+   "clip": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "increment": "8371-no-goal-1"
+  },
+  {
+   "id": "ks-n2-0734",
+   "t_start": 734.0,
+   "t_end": 746.0,
+   "instant": 740.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "new increment: sampled outside every labelled goal zone (exhaustive goal census, 15 goals in 777 s) and outside every existing window span",
+   "confidence": "high",
+   "clip": "/home/brad/videojev-pilot/clips/kids-soccer.mp4",
+   "increment": "8371-no-goal-1"
+  },
+  {
+   "id": "cg-n-02",
+   "t_start": 1545.5,
+   "t_end": 1557.5,
+   "instant": 1551.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 30; build-up 14-26 s before the segment's roar peak (goal anchor at 1571.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 30,
+    "seg_start": 1520.12,
+    "seg_end": 1617.38,
+    "goal_instant": 1571.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-03",
+   "t_start": 150.5,
+   "t_end": 162.5,
+   "instant": 156.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 3; build-up 14-26 s before the segment's roar peak (goal anchor at 176.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 3,
+    "seg_start": 75.0,
+    "seg_end": 196.38,
+    "goal_instant": 176.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-08",
+   "t_start": 2923.0,
+   "t_end": 2935.0,
+   "instant": 2929.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 67; build-up 14-26 s before the segment's roar peak (goal anchor at 2949.0s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 67,
+    "seg_start": 2914.62,
+    "seg_end": 3014.62,
+    "goal_instant": 2949.0
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-12",
+   "t_start": 3195.0,
+   "t_end": 3207.0,
+   "instant": 3201.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 72; build-up 14-26 s before the segment's roar peak (goal anchor at 3221.0s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 72,
+    "seg_start": 3171.12,
+    "seg_end": 3245.5,
+    "goal_instant": 3221.0
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-14",
+   "t_start": 1122.5,
+   "t_end": 1134.5,
+   "instant": 1128.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 22; build-up 14-26 s before the segment's roar peak (goal anchor at 1148.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 22,
+    "seg_start": 1026.88,
+    "seg_end": 1212.12,
+    "goal_instant": 1148.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-17",
+   "t_start": 2079.5,
+   "t_end": 2091.5,
+   "instant": 2085.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 46; build-up 14-26 s before the segment's roar peak (goal anchor at 2105.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 46,
+    "seg_start": 2052.25,
+    "seg_end": 2132.38,
+    "goal_instant": 2105.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-19",
+   "t_start": 844.5,
+   "t_end": 856.5,
+   "instant": 850.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 19; build-up 14-26 s before the segment's roar peak (goal anchor at 870.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 19,
+    "seg_start": 829.12,
+    "seg_end": 900.62,
+    "goal_instant": 870.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-20",
+   "t_start": 2567.0,
+   "t_end": 2579.0,
+   "instant": 2573.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 58; build-up 14-26 s before the segment's roar peak (goal anchor at 2593.0s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 58,
+    "seg_start": 2539.12,
+    "seg_end": 2624.62,
+    "goal_instant": 2593.0
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-22",
+   "t_start": 2468.5,
+   "t_end": 2480.5,
+   "instant": 2474.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 56; build-up 14-26 s before the segment's roar peak (goal anchor at 2494.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 56,
+    "seg_start": 2468.25,
+    "seg_end": 2519.12,
+    "goal_instant": 2494.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-24",
+   "t_start": 585.5,
+   "t_end": 597.5,
+   "instant": 591.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 13; build-up 14-26 s before the segment's roar peak (goal anchor at 611.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 13,
+    "seg_start": 582.25,
+    "seg_end": 664.75,
+    "goal_instant": 611.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-28",
+   "t_start": 2344.5,
+   "t_end": 2356.5,
+   "instant": 2350.5,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 53; build-up 14-26 s before the segment's roar peak (goal anchor at 2370.5s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 53,
+    "seg_start": 2337.12,
+    "seg_end": 2396.5,
+    "goal_instant": 2370.5
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-n-31",
+   "t_start": 1307.0,
+   "t_end": 1319.0,
+   "instant": 1313.0,
+   "ground_truth": "no_goal",
+   "evidence": "none",
+   "frames": "compilation segment 26; build-up 14-26 s before the segment's roar peak (goal anchor at 1333.0s), so the goal instant lies outside the window",
+   "confidence": "high",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 26,
+    "seg_start": 1305.12,
+    "seg_end": 1379.5,
+    "goal_instant": 1333.0
+   },
+   "increment": "8371-no-goal-2"
+  },
+  {
+   "id": "cg-g-00",
+   "t_start": 2747.5,
+   "t_end": 2759.5,
+   "instant": 2750.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 62; instant = interior crowd-roar peak (+14.8 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 62,
+    "seg_start": 2744.75,
+    "seg_end": 2788.12,
+    "peak_delta_db": 14.8
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-01",
+   "t_start": 1491.5,
+   "t_end": 1503.5,
+   "instant": 1494.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 29; instant = interior crowd-roar peak (+14.5 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 29,
+    "seg_start": 1469.75,
+    "seg_end": 1520.12,
+    "peak_delta_db": 14.5
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-02",
+   "t_start": 1568.5,
+   "t_end": 1580.5,
+   "instant": 1571.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 30; instant = interior crowd-roar peak (+13.7 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 30,
+    "seg_start": 1520.12,
+    "seg_end": 1617.38,
+    "peak_delta_db": 13.7
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-03",
+   "t_start": 173.5,
+   "t_end": 185.5,
+   "instant": 176.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 3; instant = interior crowd-roar peak (+12.2 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 3,
+    "seg_start": 75.0,
+    "seg_end": 196.38,
+    "peak_delta_db": 12.2
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-04",
+   "t_start": 926.0,
+   "t_end": 938.0,
+   "instant": 929.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 20; instant = interior crowd-roar peak (+11.7 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 20,
+    "seg_start": 904.5,
+    "seg_end": 976.5,
+    "peak_delta_db": 11.7
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-05",
+   "t_start": 1624.5,
+   "t_end": 1636.5,
+   "instant": 1627.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 31; instant = interior crowd-roar peak (+11.3 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 31,
+    "seg_start": 1617.38,
+    "seg_end": 1653.5,
+    "peak_delta_db": 11.3
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-06",
+   "t_start": 1225.5,
+   "t_end": 1237.5,
+   "instant": 1228.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 23; instant = interior crowd-roar peak (+11.0 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 23,
+    "seg_start": 1212.12,
+    "seg_end": 1246.62,
+    "peak_delta_db": 11.0
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-07",
+   "t_start": 1278.5,
+   "t_end": 1290.5,
+   "instant": 1281.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 25; instant = interior crowd-roar peak (+11.0 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 25,
+    "seg_start": 1276.88,
+    "seg_end": 1305.12,
+    "peak_delta_db": 11.0
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-08",
+   "t_start": 2946.0,
+   "t_end": 2958.0,
+   "instant": 2949.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 67; instant = interior crowd-roar peak (+11.0 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 67,
+    "seg_start": 2914.62,
+    "seg_end": 3014.62,
+    "peak_delta_db": 11.0
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-09",
+   "t_start": 2317.0,
+   "t_end": 2329.0,
+   "instant": 2320.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 52; instant = interior crowd-roar peak (+10.7 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 52,
+    "seg_start": 2315.12,
+    "seg_end": 2337.12,
+    "peak_delta_db": 10.7
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-10",
+   "t_start": 1932.5,
+   "t_end": 1944.5,
+   "instant": 1935.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 40; instant = interior crowd-roar peak (+10.6 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 40,
+    "seg_start": 1932.25,
+    "seg_end": 1954.5,
+    "peak_delta_db": 10.6
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-11",
+   "t_start": 251.0,
+   "t_end": 263.0,
+   "instant": 254.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 6; instant = interior crowd-roar peak (+10.5 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 6,
+    "seg_start": 244.0,
+    "seg_end": 396.12,
+    "peak_delta_db": 10.5
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-12",
+   "t_start": 3218.0,
+   "t_end": 3230.0,
+   "instant": 3221.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 72; instant = interior crowd-roar peak (+10.4 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 72,
+    "seg_start": 3171.12,
+    "seg_end": 3245.5,
+    "peak_delta_db": 10.4
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-13",
+   "t_start": 2207.5,
+   "t_end": 2219.5,
+   "instant": 2210.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 49; instant = interior crowd-roar peak (+9.1 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 49,
+    "seg_start": 2187.88,
+    "seg_end": 2261.0,
+    "peak_delta_db": 9.1
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-14",
+   "t_start": 1145.5,
+   "t_end": 1157.5,
+   "instant": 1148.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 22; instant = interior crowd-roar peak (+8.9 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 22,
+    "seg_start": 1026.88,
+    "seg_end": 1212.12,
+    "peak_delta_db": 8.9
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-15",
+   "t_start": 1982.0,
+   "t_end": 1994.0,
+   "instant": 1985.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 43; instant = interior crowd-roar peak (+8.4 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 43,
+    "seg_start": 1980.38,
+    "seg_end": 2003.12,
+    "peak_delta_db": 8.4
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-16",
+   "t_start": 534.5,
+   "t_end": 546.5,
+   "instant": 537.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 11; instant = interior crowd-roar peak (+8.0 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 11,
+    "seg_start": 530.5,
+    "seg_end": 552.62,
+    "peak_delta_db": 8.0
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-17",
+   "t_start": 2102.5,
+   "t_end": 2114.5,
+   "instant": 2105.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 46; instant = interior crowd-roar peak (+7.9 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 46,
+    "seg_start": 2052.25,
+    "seg_end": 2132.38,
+    "peak_delta_db": 7.9
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-18",
+   "t_start": 2141.0,
+   "t_end": 2153.0,
+   "instant": 2144.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 47; instant = interior crowd-roar peak (+7.8 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 47,
+    "seg_start": 2140.38,
+    "seg_end": 2165.5,
+    "peak_delta_db": 7.8
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-19",
+   "t_start": 867.5,
+   "t_end": 879.5,
+   "instant": 870.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 19; instant = interior crowd-roar peak (+7.5 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 19,
+    "seg_start": 829.12,
+    "seg_end": 900.62,
+    "peak_delta_db": 7.5
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-20",
+   "t_start": 2590.0,
+   "t_end": 2602.0,
+   "instant": 2593.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 58; instant = interior crowd-roar peak (+7.3 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 58,
+    "seg_start": 2539.12,
+    "seg_end": 2624.62,
+    "peak_delta_db": 7.3
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-21",
+   "t_start": 1697.5,
+   "t_end": 1709.5,
+   "instant": 1700.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 33; instant = interior crowd-roar peak (+7.1 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 33,
+    "seg_start": 1677.75,
+    "seg_end": 1734.88,
+    "peak_delta_db": 7.1
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-22",
+   "t_start": 2491.5,
+   "t_end": 2503.5,
+   "instant": 2494.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 56; instant = interior crowd-roar peak (+7.1 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 56,
+    "seg_start": 2468.25,
+    "seg_end": 2519.12,
+    "peak_delta_db": 7.1
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-23",
+   "t_start": 3314.0,
+   "t_end": 3326.0,
+   "instant": 3317.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 76; instant = interior crowd-roar peak (+7.1 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 76,
+    "seg_start": 3307.75,
+    "seg_end": 3329.5,
+    "peak_delta_db": 7.1
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-24",
+   "t_start": 608.5,
+   "t_end": 620.5,
+   "instant": 611.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 13; instant = interior crowd-roar peak (+6.8 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 13,
+    "seg_start": 582.25,
+    "seg_end": 664.75,
+    "peak_delta_db": 6.8
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-25",
+   "t_start": 3038.0,
+   "t_end": 3050.0,
+   "instant": 3041.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 69; instant = interior crowd-roar peak (+6.6 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 69,
+    "seg_start": 3037.5,
+    "seg_end": 3067.5,
+    "peak_delta_db": 6.6
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-26",
+   "t_start": 33.0,
+   "t_end": 45.0,
+   "instant": 36.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 2; instant = interior crowd-roar peak (+5.9 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 2,
+    "seg_start": 30.5,
+    "seg_end": 75.0,
+    "peak_delta_db": 5.9
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-27",
+   "t_start": 992.0,
+   "t_end": 1004.0,
+   "instant": 995.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 21; instant = interior crowd-roar peak (+5.9 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 21,
+    "seg_start": 976.5,
+    "seg_end": 1026.88,
+    "peak_delta_db": 5.9
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-28",
+   "t_start": 2367.5,
+   "t_end": 2379.5,
+   "instant": 2370.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 53; instant = interior crowd-roar peak (+5.0 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 53,
+    "seg_start": 2337.12,
+    "seg_end": 2396.5,
+    "peak_delta_db": 5.0
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-29",
+   "t_start": 414.5,
+   "t_end": 426.5,
+   "instant": 417.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 7; instant = interior crowd-roar peak (+4.9 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 7,
+    "seg_start": 396.12,
+    "seg_end": 492.75,
+    "peak_delta_db": 4.9
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-30",
+   "t_start": 1866.5,
+   "t_end": 1878.5,
+   "instant": 1869.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 37; instant = interior crowd-roar peak (+4.8 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 37,
+    "seg_start": 1845.38,
+    "seg_end": 1898.0,
+    "peak_delta_db": 4.8
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-31",
+   "t_start": 1330.0,
+   "t_end": 1342.0,
+   "instant": 1333.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 26; instant = interior crowd-roar peak (+4.2 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 26,
+    "seg_start": 1305.12,
+    "seg_end": 1379.5,
+    "peak_delta_db": 4.2
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-32",
+   "t_start": 2262.0,
+   "t_end": 2274.0,
+   "instant": 2265.0,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 50; instant = interior crowd-roar peak (+4.1 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 50,
+    "seg_start": 2261.0,
+    "seg_end": 2285.88,
+    "peak_delta_db": 4.1
+   },
+   "increment": "8371-goal-1"
+  },
+  {
+   "id": "cg-g-33",
+   "t_start": 2634.5,
+   "t_end": 2646.5,
+   "instant": 2637.5,
+   "ground_truth": "goal",
+   "evidence": "ball_in_net",
+   "frames": "compilation segment 59; instant = interior crowd-roar peak (+4.1 dB over segment median); frame verification pending",
+   "confidence": "pending-frame-check",
+   "clip": "/home/brad/hl8371/clips/src_goals.webm",
+   "anchor": {
+    "seg": 59,
+    "seg_start": 2624.62,
+    "seg_end": 2647.88,
+    "peak_delta_db": 4.1
+   },
+   "increment": "8371-goal-1"
+  }
+ ]
+}
