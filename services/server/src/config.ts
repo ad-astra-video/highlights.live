@@ -457,14 +457,22 @@ export interface ServerConfig {
    * stream wait, which needs CEO-approved customer wording (ADAAAA-7757), so the
    * shipped default is OFF. `LIVE_DECIDE_ADMISSION=1`. */
   liveDecideAdmission: boolean;
-  /** ADAAAA-7799 (lever C): the decide-rate CAP. Spend is a pure function of
-   * decided windows ($/h/stream = `decideCalls * 12 * DECIDE_FEE`), so at the
-   * measured $0.0033 per decide the funded $2.75 ceiling is ~69 decides per
-   * 300 s per stream. This keeps only a FRACTION of the decide opportunities
-   * instead of deciding every cadence tick: at 2 streams with the levers-B trims
-   * the pass sees ~108 opportunities per 300 s per stream (104 cadence windows
-   * plus trigger-anchored windows), so 5 of every 8 kept (0.625) is ~67 decides
-   * = $2.67/h. The dropped windows are counted as
+  /** ADAAAA-7799 (lever C): the decide-rate CAP, stated as the fraction of the
+   * 104-window / 300 s opportunity CONVENTION the funded cell allows. Spend is a
+   * pure function of decided windows ($/h/stream = `decideCalls * DECIDE_FEE`),
+   * so at the measured $0.003321 per decide the funded $2.75 ceiling is ~69
+   * decides per 300 s per stream.
+   *
+   * ADAAAA-8431: the fraction is resolved ONCE, per rail, into an ABSOLUTE rate
+   * — `min(66, floor(keep x 104))` charged decides per 300 s of CONTENT clock —
+   * instead of being spent per opportunity. A fraction is a function of a rail's
+   * opportunity density, and the rails differ (~104 / 300 s on the analyzer /
+   * file-sim leg, 72.76 / 300 s on the natural browser leg): keep 0.64 wired as
+   * a fraction charged 66.6 on the former and 46.6 on the latter, below the
+   * 63-decide coverage floor. 0.64 -> 66 / 300 s = $2.6302/h/stream, inside the
+   * 63..69 band the PO ruling on ADAAAA-8427 funds. Trigger-anchored and
+   * end-of-stream force fires bypass the rate (they repay as debt) so the live
+   * 1-5 s trigger lens is untouched. The dropped windows are counted as
    * `observeMetrics.throttleSkippedWindows`. It does NOT change the cadence, the
    * window span or the audio noise-change trigger. Unset/1 = off
    * (byte-identical). `LIVE_DECIDE_KEEP_RATIO`. */
