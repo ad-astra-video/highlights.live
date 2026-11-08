@@ -1979,6 +1979,42 @@ export const HighlightWithAlternativesSchema = HighlightRecordSchema.extend({
 });
 export type HighlightWithAlternatives = z.infer<typeof HighlightWithAlternativesSchema>;
 
+// --- ADAAAA-8422 (N1): a notable moment's SIBLING CLIPS ---------------------
+// A notable moment (a non-scoring overlap chain) is presented as ONE card whose
+// clip rail offers the cluster's other windows as options. An option is NOT a
+// delivered alternative (`highlight_alternatives` is for celebrations/replays of
+// an accepted GOAL) and it is NOT pickable yet (ADAAAA-8422 P2): it is another
+// STORED highlight row of the same moment, served read-only for play/download
+// from its own already-cut `clipUri`. Nothing is re-cut, re-encoded or re-decided.
+export const NotableMomentClipSchema = z.object({
+  /** The sibling's own stored highlight row id (never a new row). */
+  id: z.string(),
+  /** The sibling's own clip window (its own footage, not the moment's window). */
+  start: z.number(),
+  end: z.number(),
+  clipUri: z.string(),
+  clipError: z.string().optional(),
+  /** The row's stored event type — operator-only label, never customer copy. */
+  eventType: z.string().optional(),
+  /** Per-caller export URL for THIS clip (ADAAAA-8178 semantics: minted per
+   * caller, verified against the highlight id, marks the row on fetch). */
+  exportUri: z.string().optional(),
+});
+export type NotableMomentClip = z.infer<typeof NotableMomentClipSchema>;
+
+/** A notable row as DELIVERED on the detail payload: the stored record plus the
+ * moment projection (its option clips and how many rows the moment holds). */
+export const NotableMomentSchema = HighlightRecordSchema.extend({
+  /** The moment's other windows, time-ordered, capped at
+   * `MAX_ALTERNATIVES_PER_HIGHLIGHT`. Absent on a single-window moment, which
+   * renders no rail. */
+  siblingClips: z.array(NotableMomentClipSchema).optional(),
+  /** Rows in the overlap cluster (1 = a lone window). Lets a grader tell a
+   * moment whose rail is capped apart from one that lost footage. */
+  siblingCount: z.number().int().min(1).optional(),
+});
+export type NotableMoment = z.infer<typeof NotableMomentSchema>;
+
 // --- job detail / per-candidate decide persistence (ADAAAA-6851) ------------
 // Every decide evaluation is persisted (accepted highlight, burst-suppressed,
 // near-miss, not-highlight) so the full-screen Job detail can show the decide
@@ -2495,8 +2531,10 @@ export const JobDetailSchema = z.object({
   /** ADAAAA-7621: "notable, not a goal" lane — non-rejected near_miss /
    * big_play clips, which are never postable as a GOAL.
    * ADAAAA-8321: never carries a record whose `replayOf` is set — an attached
-   * replay is delivered under its owner's `alternatives`, not as a card. */
-  notableHighlights: z.array(HighlightRecordSchema).default([]),
+   * replay is delivered under its owner's `alternatives`, not as a card.
+   * ADAAAA-8422 (N1): ONE entry per overlap-chain moment (not per window); a
+   * moment with more than one window carries `siblingClips` for its clip rail. */
+  notableHighlights: z.array(NotableMomentSchema).default([]),
   /** ADAAAA-8321: how many replay windows this job attached as alternatives.
    * Additive optional; absent on payloads that predate the detector. */
   replaysAttached: z.number().int().min(0).optional(),

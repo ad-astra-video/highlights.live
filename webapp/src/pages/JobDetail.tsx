@@ -9,6 +9,7 @@ import {
   clipRailClampIndex,
   clipRailDefaultIndex,
   clipRailIdentityLabel,
+  clipRailOptionLabel,
   clipRailPickerLabel,
   clipRailIndexFromScroll,
   clipRailScrollLeft,
@@ -1115,12 +1116,16 @@ function ClipRail({
   admin,
   onPick,
   pendingPick = null,
+  notable = false,
 }: {
   highlight: JobDetailHighlight;
   admin: boolean;
   /** ADAAAA-8321 (AC6): serve an alternative's clip (`null` = original). */
   onPick?: (alternativeId: string | null) => void;
   pendingPick?: string | null;
+  /** ADAAAA-8422 (N1/AC4): the card is a NOTABLE moment — the identity line says
+   * `Moment` / `Clip` (never `Highlight`), and a sibling slide is read-only. */
+  notable?: boolean;
 }) {
   const slides = useMemo(() => clipRailSlides(h), [h]);
   const count = slides.length;
@@ -1193,6 +1198,8 @@ function ClipRail({
         data-detail-clip-rail
         data-clip-count={count}
         data-clip-active-index={shown}
+        {...(notable ? { "data-detail-clip-rail-notable": true } : {})}
+        {...(count > 1 ? { "data-clip-options": count - 1 } : {})}
         role={count > 1 ? "group" : undefined}
         aria-label={count > 1 ? `Clip rail, ${count} clips, showing ${shown + 1}` : undefined}
         tabIndex={count > 1 ? 0 : -1}
@@ -1209,6 +1216,7 @@ function ClipRail({
               ? { "data-detail-alternative": true }
               : {})}
             {...(slide.kind === "replay" ? { "data-detail-replay": true } : {})}
+            {...(slide.kind === "sibling" ? { "data-detail-sibling-clip": true } : {})}
           >
             <VideoClip
               src={slide.src}
@@ -1227,12 +1235,39 @@ function ClipRail({
                   slide.kind === "highlight" ? "text-neon" : "text-purple"
                 }`}
               >
-                {clipRailIdentityLabel(slide).split(" · ")[0]}
+                {clipRailIdentityLabel(slide, notable).split(" · ")[0]}
               </span>
               <span className="font-mono text-slate-ink" data-detail-clip-range>
                 {`· ${momentRangeLabel(slide.start, slide.end)}`}
               </span>
             </div>
+            {/* ADAAAA-8422 (N1/AC2): a notable moment's SIBLING clip is an option
+                on the SAME rail, read-only. It carries the shipped pick-label
+                marker (so QA grades one contract on both lanes) plus its own
+                option marker, and downloads ITS OWN stored cut — nothing is
+                re-encoded and no pick is offered (P2). */}
+            {slide.kind === "sibling" && (
+              <div
+                className="flex items-center justify-between gap-2 bg-dusk/90 px-3 py-1.5 text-xs"
+                data-detail-clip-option
+              >
+                <span className="text-mut" data-detail-clip-pick-label data-detail-clip-option-label>
+                  {clipRailOptionLabel(slide)}
+                </span>
+                {slide.exportUri && (
+                  <a
+                    className="inline-flex items-center gap-1 rounded-full border border-purple/60 px-2 py-0.5 font-bold uppercase tracking-wide text-purple transition hover:border-neon hover:text-neon focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                    href={exportUrl({ exportUri: slide.exportUri, clipUri: slide.src })}
+                    download={clipFileName({ id: slide.siblingClipId ?? "", eventType: slide.eventType, start: slide.start })}
+                    aria-label="Download this clip"
+                    data-detail-clip-option-download
+                  >
+                    <Download className="h-3 w-3" aria-hidden />
+                    Download
+                  </a>
+                )}
+              </div>
+            )}
             {/* ADAAAA-8321 (AC6): an alternative is pickable — choosing it makes
                 the posted/public clip carry THIS footage; clearing restores the
                 original. The original stays the default until a pick is made. */}
@@ -1424,6 +1459,7 @@ export function HighlightCard({
       <ClipRail
         highlight={h}
         admin={admin}
+        notable={notable}
         onPick={onClipChoice ? (alternativeId) => onClipChoice(h, alternativeId) : undefined}
         pendingPick={pendingClipChoice}
       />

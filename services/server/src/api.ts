@@ -5448,16 +5448,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // per caller for EVERY row (the /clips/* export path verifies the token
     // against the highlight id and marks it; it has no postability gate), so a
     // notable clip downloads and marks exactly like a postable one.
-    const notableHighlights = postable.notable.map((h) => {
-      const served = { ...h, clipUri: servedClipUri(h) };
+    const notableHighlights = postable.notableMoments.moments.map((m) => {
+      const served = { ...m.owner, clipUri: servedClipUri(m.owner) };
+      // ADAAAA-8422 (N1): the cluster's other windows are the moment's clip
+      // options. Each is its OWN stored row, served from its own already-cut
+      // `clipUri` (no re-encode, no decide), with a per-caller export URL minted
+      // against that row's id — read-only in P1 (pick/serve is the follow-on).
+      const siblingClips = m.options.map((o) => {
+        const row = { ...o, clipUri: servedClipUri(o) };
+        return {
+          id: row.id,
+          start: row.start,
+          end: row.end,
+          clipUri: row.clipUri,
+          ...(row.clipError ? { clipError: row.clipError } : {}),
+          ...(row.eventType ? { eventType: row.eventType } : {}),
+          exportUri: exportUriForHighlight(row, user.id),
+        };
+      });
       return {
         ...served,
         // ADAAAA-8318: the notable lane mounts the same card, so it needs the same
         // copy target (the deterministic title for a non-goal moment).
-        postTitle: copyTargetFor(h),
+        postTitle: copyTargetFor(m.owner),
         // ADAAAA-8328: and the same never-empty announcer detail.
-        caption: announcerDetailFor(h),
+        caption: announcerDetailFor(m.owner),
         exportUri: exportUriForHighlight(served, user.id),
+        // One card per moment: how many windows the moment holds, and the sibling
+        // windows offered on its clip rail (absent on a lone window).
+        siblingCount: m.memberCount,
+        ...(siblingClips.length ? { siblingClips } : {}),
       };
     });
 
@@ -5596,9 +5616,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-8178: the delta stream carries the notable cards' export URLs too,
       // so an open live page does not lose Download / Copy Link on the notable
       // lane when it appends windows (same per-caller minting as above).
-      const notableHighlights = postable.notable.map((h) => ({
-        ...h,
-        exportUri: exportUriForHighlight(h, user.id),
+      // ADAAAA-8422 (N1): the delta carries the SAME one-card-per-moment grouping
+      // as the composite read, so an appended refresh can never re-split a moment
+      // into one card per window.
+      const notableHighlights = postable.notableMoments.moments.map((m) => ({
+        ...m.owner,
+        exportUri: exportUriForHighlight(m.owner, user.id),
+        siblingCount: m.memberCount,
+        ...(m.options.length
+          ? {
+              siblingClips: m.options.map((o) => ({
+                id: o.id,
+                start: o.start,
+                end: o.end,
+                clipUri: o.clipUri,
+                ...(o.clipError ? { clipError: o.clipError } : {}),
+                ...(o.eventType ? { eventType: o.eventType } : {}),
+                exportUri: exportUriForHighlight(o, user.id),
+              })),
+            }
+          : {}),
       }));
       const summaryLadder = buildSummaryLadder({
         summaryLog: job.summaryLog,
