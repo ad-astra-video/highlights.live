@@ -312,7 +312,10 @@ export interface JobDetailAlternative {
   /** ADAAAA-8321: set on a replay alternative — the moment it repeats. */
   replayOf?: string;
   /** ADAAAA-8321: the detector's measured evidence behind the attach. */
-  replayEvidence?: { kind: string; matches: number; compared: number; gapS: number };
+  replayEvidence?: { kind: string; matches: number; compared: number; gapS: number; phase?: "live" | "replay" };
+  /** ADAAAA-8325 (Inc 2): the alternative window's footage phase from the decide
+   * verdict. Operator-facing provenance only. */
+  phase?: "live" | "replay";
   /** ADAAAA-8321: the stored replay window this alternative came from. */
   sourceHighlightId?: string;
 }

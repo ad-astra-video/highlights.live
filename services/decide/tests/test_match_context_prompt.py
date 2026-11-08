@@ -69,10 +69,12 @@ STORY = "0-0, Portugal dominating the left channel."
 # +2385 chars, the absent-match-context invariant itself is unchanged (the
 # block still renders nothing — see test_absent_match_context_adds_no_tokens).
 #: ADAAAA-8318 re-pinned ONLY `True` (compact): the fast rail gained the
-#: `postTitle` output field (+145 chars). `False` (the VOD/full prompt) is the
-#: pre-feature value, unchanged — that is the AC8 no-op proof.
+#: `postTitle` output field (+145 chars).
+#: ADAAAA-8325 (Inc 2) re-pins ONLY `False` (VOD/full): the phase field + rule
+#: (+411 chars). The two rows move independently, which is the live-rail parity
+#: proof in both directions.
 GOLDEN_PROMPT_SHA = {
-    False: "677dd76bf678f2a801f9ff81b85397c5a93b0843c797a5fa4120962a1393bbd8",
+    False: "642b3b36ff994d4700be18392555270a93b8a965b65cae9c38e635e301f71133",
     True: "936532411d2453b2e97c1839c582b207531523cfcaee35480c62c11a0c6b685b",
 }
 

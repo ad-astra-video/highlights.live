@@ -296,6 +296,11 @@ export const HighlightDecisionSchema = z.object({
   // near miss is notable but NOT a scoring play — surfaced at a lower score and
   // flagged so downstream highlight assembly labels it distinctly.
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  // ADAAAA-8325 (Inc 2): the footage phase the VOD decide verdict reported —
+  // `live` action or a `replay` of earlier action. Additive optional metadata
+  // beside `outcome`; absent = UNKNOWN (never inferred as "live"). Used only as
+  // corroboration for a replay attach, never as the sole attach signal.
+  phase: z.enum(["live", "replay"]).optional(),
   nearMiss: z.boolean().optional(),
   snapshot: ContextSnapshotSchema.optional(),
 });
@@ -1477,9 +1482,9 @@ export type HighlightTrigger = z.infer<typeof HighlightTriggerSchema>;
  * attach is auditable from the row alone (the falsifier the spec asks for:
  * how many fingerprints matched, out of how many compared, at what gap). */
 export const ReplayEvidenceSchema = z.object({
-  /** `footage_match` = perceptual-hash set match (the only signal Inc 1
-   * produces). `audio_match` is reserved for corroboration; audio is never the
-   * sole signal. */
+  /** `footage_match` = perceptual-hash set match (the signal Inc 1 produces).
+   * `audio_match` is reserved for corroboration; audio is never the sole
+   * signal. */
   kind: z.enum(["footage_match", "audio_match"]),
   /** Fingerprints in the new window that matched a ledger fingerprint. */
   matches: z.number().int().min(0),
@@ -1487,6 +1492,11 @@ export const ReplayEvidenceSchema = z.object({
   compared: z.number().int().min(0),
   /** Seconds between the replay's anchor and the moment it repeats. */
   gapS: z.number().min(0),
+  /** ADAAAA-8325 (Inc 2): the decide verdict's footage phase for the attached
+   * window when the attach used it as corroboration (`replay`). Absent on a
+   * pure-hash attach and on any window whose verdict was unknown. The phase is
+   * never the sole signal: `matches`/`compared` must still clear the band. */
+  phase: z.enum(["live", "replay"]).optional(),
 });
 export type ReplayEvidence = z.infer<typeof ReplayEvidenceSchema>;
 
@@ -1656,6 +1666,12 @@ export const HighlightRecordSchema = z.object({
   // distinct label downstream); a scoring play is the full highlight score.
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
   nearMiss: z.boolean().optional(),
+  // ADAAAA-8325 (Inc 2): the footage phase the decide verdict reported for THIS
+  // window (`live` action or a `replay` of earlier action). Persisted on the
+  // decided record and echoed by GET /jobs/:id/detail. Additive optional —
+  // absent means UNKNOWN (a non-VOD rail or a reply without the field), never
+  // an inferred "live".
+  phase: z.enum(["live", "replay"]).optional(),
   // Stage-2 confirmation-pass verdict (ADAAAA-6797): set on a goal-type
   // highlight that went through the /confirm deep frame dive. null on the
   // passthrough path. Additive + optional.
@@ -1891,6 +1907,10 @@ export const HighlightAlternativeSchema = z.object({
   replayOf: z.string().optional(),
   /** ADAAAA-8321: the detector's measurement behind the attach. */
   replayEvidence: ReplayEvidenceSchema.optional(),
+  /** ADAAAA-8325 (Inc 2): the decide verdict's footage phase for the alternative's
+   * own window, so the picker can name the provenance that offered it
+   * ("Replay @ 207 s · phase"). Absent = unknown. */
+  phase: z.enum(["live", "replay"]).optional(),
   /** ADAAAA-8321: the stored replay window this alternative was derived from;
    * `id` equals it. Absent for a celebration alternative. */
   sourceHighlightId: z.string().optional(),
@@ -1997,6 +2017,8 @@ export const AnalysisResponseSchema = z.object({
   eventType: z.string().optional(),
   reason: z.string().optional(),
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  // ADAAAA-8325 (Inc 2): the footage phase retained with the raw decide reply.
+  phase: z.enum(["live", "replay"]).optional(),
   nearMiss: z.boolean().optional(),
   reasoning: z.string().optional(),
   verdict: z.unknown().optional(),
@@ -2102,6 +2124,9 @@ export const JobCandidateSchema = z.object({
   isHighlight: z.boolean(),
   /** Outcome taxonomy from the decide verdict (mirrors HighlightDecision.outcome). */
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  /** ADAAAA-8325 (Inc 2): the footage phase the decide verdict reported for this
+   * window (mirrors HighlightDecision.phase). Absent = unknown, never "live". */
+  phase: z.enum(["live", "replay"]).optional(),
   nearMiss: z.boolean().optional(),
   reason: z.string().optional(),
   /** Why this evaluation did/didn't become a highlight record:
@@ -2225,6 +2250,9 @@ export const DecideNoteSchema = z.object({
   eventType: z.string(),
   score: z.number().min(0).max(100),
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
+  /** ADAAAA-8325 (Inc 2): footage phase from the decide verdict (mirrors the
+   * stored candidate row). Absent = unknown, never "live". */
+  phase: z.enum(["live", "replay"]).optional(),
   nearMiss: z.boolean().optional(),
   isHighlight: z.boolean(),
   status: z.enum(["accepted", "suppressed", "rejected"]),

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -396,6 +396,12 @@ class HighlightDecision(BaseModel):
     # near miss is notable but NOT a scoring play, surfaced at a lower score and
     # flagged `nearMiss` so downstream highlight assembly labels it distinctly.
     outcome: str = "not_highlight"
+    # ADAAAA-8325 (Inc 2): the footage phase from the VOD decide reply —
+    # `live` action or a `replay` of earlier action. Additive metadata beside
+    # `outcome`; None means UNKNOWN (absent/malformed/non-VOD rail), never a
+    # silent "live". Declared here because the response model is extra="ignore"
+    # (an undeclared field would be parsed and then dropped at the boundary).
+    phase: Optional[Literal["live", "replay"]] = None
     nearMiss: bool = False
     # Rule-path classifiers (pre-I1; returned by the deterministic rule so the
     # response contract stays backward compatible now that /highlight declares a
