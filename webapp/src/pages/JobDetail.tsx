@@ -18,6 +18,7 @@ import {
   pauseClipRailPlayers,
 } from "../lib/clipRail";
 import { JobDetailMetrics } from "../components/JobMetrics";
+import { WindowAuditReadout } from "../components/WindowAudit";
 import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { CostTimePanel, CostTimeToggle } from "../components/CostTimePanel";
@@ -3024,6 +3025,12 @@ export function JobDetail() {
                   component are internal diagnostics — admin only. */}
               <JobDetailMetrics job={detail.job} frameCount={frameCount} partition={partition} admin={admin} />
             </div>
+            {/* ADAAAA-8425: the admin window audit. Five causes side by side +
+                decideCalls/supply + the effective/funded decide ceiling, read
+                from the stored record (one GET, zero GPU). Admin only — a
+                customer session renders nothing and the route answers 403. The
+                live chip above keeps its supply semantics. */}
+            <WindowAuditReadout jobId={detail.job.id} admin={admin} />
             {/* ADAAAA-7623: the summary ladder — match rollup + chapters over
                 the stored summary log, above the flat log itself. Absent on
                 legacy jobs (component renders nothing). */}

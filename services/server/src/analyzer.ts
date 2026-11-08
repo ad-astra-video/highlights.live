@@ -3562,6 +3562,14 @@ export interface LiveObserveMetricsSnapshot {
    *  Deliberately EXCLUDES `throttleSkippedWindows`, which is a funded rate
    *  decision and must never be folded into the supply number. */
   supplySkippedWindows?: number;
+  /** ADAAAA-8425: decide windows the runner REFUSED for capacity
+   *  (`isDecideCapacityError`: the admission queue budget expired or every 503
+   *  retry was exhausted). The decide produced no verdict, so the window is
+   *  silently not accepted — the failure that reads as "GPU idle, window
+   *  missing". Persisted next to the other four causes so the split is readable
+   *  off the record. Excluded from `supplySkippedWindows` (the ADAAAA-7808
+   *  supply definition is unchanged); it is its own cause. */
+  capacityDroppedWindows?: number;
   /** ADAAAA-8351: decide-side ASR wait-budget meter. `asrWaitMisses` counts
    *  decides that stopped waiting for the side lane and transcribed inline;
    *  `asrWaitBudgetMs` / `asrLaneWidth` are the EFFECTIVE values the run used,
@@ -3827,6 +3835,10 @@ export function buildLiveObserveMetrics(
     droppedFrames: obs.staleFrameCount(),
     supplySkippedWindows:
       obs.skippedStaleWindowCount() + obs.backpressureSkipCount() + obs.admissionSkipCount(),
+    // ADAAAA-8425: the runner-capacity refusal cause. Written next to the other
+    // four so the decomposition is on the persisted record; NOT folded into
+    // `supplySkippedWindows` above (that definition is a PO ruling, unchanged).
+    capacityDroppedWindows: obs.capacityDropCount(),
     // ADAAAA-7774: the ingest -> analysis stride evidence (absent when the pass
     // ran no stride — e.g. the media-rail share, perceived in the media node).
     ...(stride ? { perceive: { ...stride } } : {}),
@@ -9304,6 +9316,11 @@ export async function analyzeJob(
           // prefetcher's own default (2) is unchanged when it is unset.
           maxConcurrent: cfg.decideAsrPrefetchConcurrency,
         });
+  // ADAAAA-8425: the decide-capacity drop hook. The decide closures below are
+  // built INSIDE the LiveObserver options (before the observer binding exists),
+  // so they report a capacity drop through this indirection; it is bound the
+  // moment the observer is constructed, and no decide can fire before then.
+  const capacityDropHook: { note: ((centerTs: number) => void) | null } = { note: null };
   const liveObserver =
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
       ? new LiveObserver({
@@ -9373,6 +9390,10 @@ export async function analyzeJob(
                         // ADAAAA-8254: a dropped decide leaves no verdict, so the
                         // window is simply not accepted — the pass continues.
                         if (isDecideCapacityError(err)) {
+                          // ADAAAA-8425: one count per window on the observe
+                          // snapshot (staged depth: the verdict stays null, so
+                          // the window is simply not accepted).
+                          capacityDropHook.note?.(payload.centerTs);
                           console.error(
                             `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
                               (err as Error).message
@@ -9401,6 +9422,10 @@ export async function analyzeJob(
                     // and keep the stream running (AC4). Any other error still
                     // aborts the pass exactly as before.
                     if (isDecideCapacityError(err)) {
+                      // ADAAAA-8425: the serial depth-1 live path counts the
+                      // refusal on the observer's own snapshot (no verdict, so
+                      // the window is not accepted).
+                      capacityDropHook.note?.(payload.centerTs);
                       console.error(
                         `[live:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s dropped by admission: ${
                           (err as Error).message
@@ -9413,6 +9438,9 @@ export async function analyzeJob(
               }),
         })
       : null;
+  // ADAAAA-8425: bind the drop hook now that the observer exists. Every decide
+  // issued after this line reports its capacity refusal to the snapshot.
+  if (liveObserver) capacityDropHook.note = (centerTs: number) => liveObserver.noteCapacityDrop(centerTs);
   let framesAnalyzed = 0;
   let planApplied = false;
   // ADAAAA-7676: bound the LIVE observe lag against the WALL clock. A frame's
@@ -9998,6 +10026,10 @@ export async function analyzeJob(
         `[live-lag:${cfg.jobId}] summary droppedFrames=${staleFrameDrops} skippedStaleWindows=${liveObserver!.skippedStaleWindowCount()} ` +
           `decides=${liveObserver!.decideCalls()} throttleSkippedWindows=${liveObserver!.throttleSkipCount()} ` +
           `supplySkippedWindows=${supplySkippedWindows} ` +
+          // ADAAAA-8425: the runner-capacity refusal is its own cause (a decide
+          // that was issued and refused, so it is not a supply skip under the
+          // ADAAAA-7808 ruling). Printed so a log reader sees all five.
+          `capacityDroppedWindows=${liveObserver!.capacityDropCount()} ` +
           `supplyBreakdown=stale:${supplyStaleSkips},backpressure:${supplyBackpressureSkips},admission:${supplyAdmissionSkips} ` +
           `maxLag=${(liveObserver!.maxObservedLagMs() / 1000).toFixed(1)}s budget=${lagBudgetS}s frames=${framesAnalyzed} ` +
           // ADAAAA-7774: the perceive stride. `frames` is what the pass consumed
