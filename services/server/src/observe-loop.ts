@@ -715,6 +715,16 @@ export class LiveObserver {
    *  was not late. */
   private backpressureSkips = 0;
   private lastBackpressureSkipTs: number | null = null;
+  /** ADAAAA-8425: cadence windows whose decide the runner REFUSED for capacity
+   *  (`DecideCapacityError` — the queue budget expired or the 503 retries were
+   *  exhausted). Before this the window was only logged and silently not
+   *  accepted, which is the one failure that looks exactly like "GPU idle,
+   *  window missing". Counted once per cadence window (like `backpressureSkips`)
+   *  and kept apart from every other cause: the content was not late, the
+   *  depth was not full and the rate cap did not drop it — the decide pool
+   *  itself had no slot for it. */
+  private capacityDroppedWindows = 0;
+  private lastCapacityDropTs: number | null = null;
   /** ADAAAA-7799 (lever C): decide-rate CAP. Spend is a pure function of decided
    *  windows (`decideCalls * 12 * 0.0033` $/h/stream), so the funded ceiling is
    *  held by KEEPING only a fraction of the decide opportunities instead of
@@ -1216,6 +1226,24 @@ export class LiveObserver {
   /** ADAAAA-7771: windows not issued because the in-flight queue was full. */
   backpressureSkipCount(): number {
     return this.backpressureSkips;
+  }
+  /**
+   * ADAAAA-8425: count one decide window the runner refused for capacity. The
+   * decide produced no verdict, so the window is left undecided — a SUPPLY loss
+   * that used to be invisible outside the container log. One count per WINDOW
+   * (the window's own `centerTs`), so a retry that reports the same window
+   * cannot inflate it; a distinct center is a distinct lost window.
+   */
+  noteCapacityDrop(centerTs: number): void {
+    const ts = Number.isFinite(centerTs) ? centerTs : 0;
+    if (this.lastCapacityDropTs === null || ts !== this.lastCapacityDropTs) {
+      this.capacityDroppedWindows++;
+      this.lastCapacityDropTs = ts;
+    }
+  }
+  /** ADAAAA-8425: windows dropped by runner capacity (no verdict, no accept). */
+  capacityDropCount(): number {
+    return this.capacityDroppedWindows;
   }
   /** ADAAAA-7799: decide opportunities the rate cap dropped (fixed stride). */
   throttleSkipCount(): number {

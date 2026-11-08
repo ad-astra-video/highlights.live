@@ -579,6 +579,16 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // shortfall. Additive optional.
   droppedFrames: z.number().int().min(0).optional(),
   supplySkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-8425: decide windows the runner REFUSED for capacity — the
+  // `isDecideCapacityError` path (queue budget expired / 503 retries
+  // exhausted). The decide produced no verdict, so the window was silently not
+  // accepted; this is the one cause that used to be visible only in the
+  // container log. Additive optional, and declared HERE because a zod object
+  // strips undeclared keys: without this the server would compute the counter
+  // and `JobSchema.parse` would drop it before persistence (the
+  // `perceiveSource` / `decideStages` lesson). Excluded from
+  // `supplySkippedWindows` — that ADAAAA-7808 definition is unchanged.
+  capacityDroppedWindows: z.number().int().min(0).optional(),
   // ADAAAA-8351: the decide-side ASR WAIT BUDGET meter. `LIVE_DECIDE_ASR_WAIT_MS`
   // caps how long a decide waits for the side lane's prefetch before it proceeds
   // with inline ASR (the prefetch keeps running and still caches its result, so a

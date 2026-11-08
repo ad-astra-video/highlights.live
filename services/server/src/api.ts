@@ -95,6 +95,9 @@ import { appliedDecideWatermark, deriveLiveProgress, newestObservationTs } from 
 import { deriveLiveCapture } from "./live-capture";
 import { appendSummaryEntry } from "./summary-log";
 import { recordDecideAudit } from "./decide-audit";
+// ADAAAA-8425: pure projection behind GET /admin/jobs/:id/window-audit (the
+// skipped-window cause split + the decide ceiling the job ran at).
+import { windowAuditForJob } from "./window-audit";
 import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, failureReasonFor, type JobFailureReason, type JobOutcome } from "./job-failure";
 import {
   accruedSecondsSince,
@@ -5728,6 +5731,28 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const groupKey = (req.query as any).groupKey as string | undefined;
       const rows = groupKey ? all.filter((a) => a.groupKey === groupKey) : all;
       return { jobId: job.id, groupKey: groupKey ?? null, audits: rows };
+    }
+  );
+
+  // ADAAAA-8425: the admin window audit — WHY this live pass left windows
+  // undecided, as the five causes side by side (stale / backpressure /
+  // admission / throttle / capacity-drop) plus `decideCalls` and the
+  // ADAAAA-7808 `supplySkippedWindows`, and the decide pool ceiling the job
+  // actually ran at (`advertised` vs `effective`). Read-only over the stored
+  // record: zero decide calls, zero GPU, no write, no live leg needed.
+  //
+  // Admin (or the admin_readonly measurement token) only: these are the
+  // pipeline/spend internals ADAAAA-7727 keeps out of the customer projection.
+  // A customer session gets 403, so the per-cause counters never appear on a
+  // `role=user` payload. The customer live chip is untouched and keeps the
+  // supply semantics (`supplySkippedWindows` only).
+  app.get<{ Params: { id: string } }>(
+    "/admin/jobs/:id/window-audit",
+    { preHandler: adminReadOnlyStrictReq },
+    async (req: any, reply) => {
+      const job = store.getJob(req.params.id);
+      if (!job) return reply.code(404).send({ error: "not found" });
+      return windowAuditForJob(job as any);
     }
   );
 
