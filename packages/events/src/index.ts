@@ -1941,6 +1941,30 @@ export const HIGHLIGHT_ALTERNATIVE_RELATION = "alternative_of" as const;
 /** Hard cap per owning highlight (board decision: "2 per goal cap makes sense"). */
 export const MAX_ALTERNATIVES_PER_HIGHLIGHT = 2;
 
+// --- ADAAAA-8443 (N1b): the NOTABLE lane's moment grouping + rail cap --------
+// A notable moment is a PROXIMITY grouping, not an overlap grouping. The board's
+// expectation on job b55c5781 ("the first two are clip options for the first
+// highlight, the next three for the second") only reproduces under anchor gap:
+// the five reported windows are 35.988 s apart (255.400 / 306.388) and 12.252 s
+// apart (725.182 after the 697.930-712.930 window), and never overlap across the
+// two moments. Strict overlap yields 4 moments there, gap grouping yields 2.
+//
+// One moment = windows whose `start` is within this gap of the RUNNING MAX END of
+// the open moment. Measured band that reproduces the reported partition on that
+// job is [35.988 s, 363.747 s); 40 is the chosen centre. This is a PRESENTATION
+// grouping only: it never changes `highlightsFound`, `postableHighlights`,
+// `notScoringHighlights`, `alternativeClipsDelivered`, never mutates a row and
+// never cuts a clip (every option is an existing row's own `clipUri`). The
+// postable lane keeps its strict-overlap rule (`collapseOverlappingWindows`).
+export const NOTABLE_MOMENT_GAP_S = 40;
+
+/** ADAAAA-8443 (N1b): how many sibling clips a notable moment's rail carries.
+ * The board asked for three options on the 3-window moment of job b55c5781, so
+ * the notable cap is 1 owner + 3 options. Deliberately separate from
+ * {@link MAX_ALTERNATIVES_PER_HIGHLIGHT} (the GOAL/celebration rail stays at 2).
+ * A moment larger than this still reports the overflow (`optionsSuppressed`). */
+export const MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT = 3;
+
 export const HighlightAlternativeSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -2001,12 +2025,13 @@ export const HighlightWithAlternativesSchema = HighlightRecordSchema.extend({
 export type HighlightWithAlternatives = z.infer<typeof HighlightWithAlternativesSchema>;
 
 // --- ADAAAA-8422 (N1): a notable moment's SIBLING CLIPS ---------------------
-// A notable moment (a non-scoring overlap chain) is presented as ONE card whose
-// clip rail offers the cluster's other windows as options. An option is NOT a
-// delivered alternative (`highlight_alternatives` is for celebrations/replays of
-// an accepted GOAL) and it is NOT pickable yet (ADAAAA-8422 P2): it is another
-// STORED highlight row of the same moment, served read-only for play/download
-// from its own already-cut `clipUri`. Nothing is re-cut, re-encoded or re-decided.
+// A notable moment (a non-scoring anchor-gap cluster, ADAAAA-8443) is presented
+// as ONE card whose clip rail offers the cluster's other windows as options. An
+// option is NOT a delivered alternative (`highlight_alternatives` is for
+// celebrations/replays of an accepted GOAL) and it is NOT pickable yet (ADAAAA-8422
+// P2): it is another STORED highlight row of the same moment, served read-only for
+// play/download from its own already-cut `clipUri`. Nothing is re-cut, re-encoded
+// or re-decided.
 export const NotableMomentClipSchema = z.object({
   /** The sibling's own stored highlight row id (never a new row). */
   id: z.string(),
@@ -2027,11 +2052,11 @@ export type NotableMomentClip = z.infer<typeof NotableMomentClipSchema>;
  * moment projection (its option clips and how many rows the moment holds). */
 export const NotableMomentSchema = HighlightRecordSchema.extend({
   /** The moment's other windows, time-ordered, capped at
-   * `MAX_ALTERNATIVES_PER_HIGHLIGHT`. Absent on a single-window moment, which
-   * renders no rail. */
+   * `MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT` (ADAAAA-8443: 3). Absent on a
+   * single-window moment, which renders no rail. */
   siblingClips: z.array(NotableMomentClipSchema).optional(),
-  /** Rows in the overlap cluster (1 = a lone window). Lets a grader tell a
-   * moment whose rail is capped apart from one that lost footage. */
+  /** Rows in the notable MOMENT (anchor-gap cluster; 1 = a lone window). Lets a
+   * grader tell a moment whose rail is capped apart from one that lost footage. */
   siblingCount: z.number().int().min(1).optional(),
 });
 export type NotableMoment = z.infer<typeof NotableMomentSchema>;

@@ -34,7 +34,11 @@
 //      duplicate lane with `duplicateOf`. A true non-goal notable (near miss, a
 //      score-steady big play, the clip-loop tail reads) keeps its own row: only
 //      the narrow, goal-bounded class above is absorbable.
-import { MAX_ALTERNATIVES_PER_HIGHLIGHT, type HighlightRecord } from "@highlights/events";
+import {
+  MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT,
+  NOTABLE_MOMENT_GAP_S,
+  type HighlightRecord,
+} from "@highlights/events";
 
 /**
  * Reason phrases that refute a goal. The persisted `reason` on an accepted
@@ -90,9 +94,10 @@ export interface PostableHighlights {
   /** "Notable, not a goal" lane: non-rejected near_miss / big_play clips, kept
    * out of the postable list by rule 2. Never a GOAL label. */
   notable: HighlightRecord[];
-  /** ADAAAA-8422 (N1): the SAME notable rows, grouped by overlap chain — one
-   * card per moment with its siblings as clip options. Presentation only: the
-   * membership is exactly `notable`, so no count depends on it. */
+  /** ADAAAA-8422 (N1), ADAAAA-8443 (N1b): the SAME notable rows, grouped into
+   * proximity moments by anchor gap — one card per moment with its siblings as
+   * clip options. Presentation only: the membership is exactly `notable`, so no
+   * count depends on it. */
   notableMoments: NotableMoments;
   /** Merged-away duplicates, each carrying `duplicateOf`. Excluded from
    * `highlights` so the postable list has zero overlapping windows. */
@@ -325,7 +330,7 @@ export interface CollapsedMoments {
 }
 
 // ---------------------------------------------------------------------------
-// ADAAAA-8422 (N1): ONE notable card per overlap chain, siblings as options
+// ADAAAA-8422 (N1) + ADAAAA-8443 (N1b): ONE notable card per MOMENT
 // ---------------------------------------------------------------------------
 //
 // The notable lane used to ship one card per window, because only postable
@@ -335,9 +340,21 @@ export interface CollapsedMoments {
 // b55c5781-7976-4777-905c-847a06f3d3a8 carried 5 non-scoring windows that read
 // as 5 cards where the board expects 2 moments with 2 and 3 clip options.
 //
+// N1 grouped them with the postable lane's strict-overlap chain and QA measured
+// that WRONG on the same job: those five windows overlap only inside the second
+// group (685.135-700.135 vs 697.930-712.930); the 725.182 window starts 12.252 s
+// after that chain ends, and the first two windows (255.400 / 306.388) are
+// 35.988 s apart and never overlap. Strict overlap yields 4 moments; the board's
+// reading is 2. A notable moment is PROXIMITY: each candidate is a 15 s window
+// cut around the same play, so the anchor gap (`NOTABLE_MOMENT_GAP_S`) is what
+// groups them.
+//
 // This projection clusters the SURVIVING notable rows (after the precision gate
-// AND the ADAAAA-8199 goal-shaped absorb) with the same transitive chain test,
-// so one card owns one moment and its sibling rows become that card's options.
+// AND the ADAAAA-8199 goal-shaped absorb) by anchor gap, so one card owns one
+// moment and its sibling rows become that card's options. It deliberately does
+// NOT touch `overlapChainClusters` / `collapseOverlappingWindows`: the postable
+// lane's dedupe and the quota basis stay strict-overlap.
+//
 // Every option is another stored row's own already-cut `clipUri`: nothing is
 // re-encoded, no decide runs, no row is mutated, and no count moves (the rows
 // are the same rows — only the presentation changes).
@@ -347,9 +364,9 @@ export interface CollapsedMoments {
 export interface NotableMomentCluster {
   /** The row that owns the card (best footage, then best quality/score/earliest). */
   owner: HighlightRecord;
-  /** Sibling rows of the same moment, time-ordered, capped at the rail contract
-   * (`MAX_ALTERNATIVES_PER_HIGHLIGHT` options). Each is its own stored row with
-   * its own already-cut clip. */
+  /** Sibling rows of the same moment, time-ordered, capped at the notable rail
+   * contract (`MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT` options). Each is its own
+   * stored row with its own already-cut clip. */
   options: HighlightRecord[];
   /** Rows in the cluster: 1 + options + (optionsSuppressed for this moment). */
   memberCount: number;
@@ -377,21 +394,55 @@ function footageTier(h: HighlightRecord): number {
 }
 
 /**
- * ADAAAA-8422 (N1): cluster notable rows into moments. Pure and deterministic:
- * no row is mutated, and the returned lists hold the caller's own records.
+ * ADAAAA-8443 (N1b): group notable rows into moments by ANCHOR GAP. Pure and
+ * deterministic: no row is mutated, and the returned lists hold the caller's own
+ * records.
+ *
+ * A row joins the open moment when its start is within `gap` of that moment's
+ * RUNNING MAX END (`start - maxEnd < gap`, so a real overlap — a negative
+ * distance — always joins). Otherwise it opens a new moment. Rows are taken in
+ * start order, so membership is order-independent.
+ */
+export function anchorGapClusters<T extends Pick<HighlightRecord, "start" | "end">>(
+  rows: T[],
+  gap: number = NOTABLE_MOMENT_GAP_S
+): T[][] {
+  const ordered = [...rows].sort((a, b) => a.start - b.start);
+  const clusters: T[][] = [];
+  let open: T[] = [];
+  let maxEnd = Number.NEGATIVE_INFINITY;
+  for (const h of ordered) {
+    if (open.length > 0 && h.start - maxEnd < gap) {
+      open.push(h);
+      maxEnd = Math.max(maxEnd, h.end);
+      continue;
+    }
+    if (open.length > 0) clusters.push(open);
+    open = [h];
+    maxEnd = h.end;
+  }
+  if (open.length > 0) clusters.push(open);
+  return clusters;
+}
+
+/**
+ * ADAAAA-8422 (N1) / ADAAAA-8443 (N1b): cluster notable rows into moments. Pure
+ * and deterministic: no row is mutated, and the returned lists hold the caller's
+ * own records.
  *
  * Owner = the row whose footage the card shows: a row with a clip first, then
  * the existing quality ranking (corroborated + score, then score, then the
  * earlier window). Options = the remaining rows of the cluster in time order,
- * capped at {@link MAX_ALTERNATIVES_PER_HIGHLIGHT} (the shipped rail contract:
- * 1 + up to 2 options). A single-window cluster renders no rail at all.
+ * capped at {@link MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT} (the notable rail
+ * contract: 1 + up to 3 options). A single-window cluster renders no rail.
  */
 export function clusterNotableWindows(
   rows: HighlightRecord[],
-  cap: number = MAX_ALTERNATIVES_PER_HIGHLIGHT
+  cap: number = MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT,
+  gap: number = NOTABLE_MOMENT_GAP_S
 ): NotableMoments {
   const sorted = [...rows].sort((a, b) => a.start - b.start);
-  const clusters = overlapChainClusters(sorted);
+  const clusters = anchorGapClusters(sorted, gap);
   const moments: NotableMomentCluster[] = [];
   let optionsSuppressed = 0;
   for (const cluster of clusters) {

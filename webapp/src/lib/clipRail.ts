@@ -11,8 +11,12 @@ import { momentRangeLabel } from "./highlightPost";
  * slide first, one slide per clip.
  *
  * The index/scroll math lives here (pure, node-env testable) because this
- * package has no jsdom: the component is graded with `react-dom/server`
- * markup tests, and the interactive rules are pinned on these helpers.
+ * package has no jsdom: the component is graded with `react-dom/server` markup
+ * tests, and the interactive rules are pinned on these helpers.
+ *
+ * ADAAAA-8443 (N1b): a NOTABLE moment's sibling clips ride the same rail, capped
+ * server-side at `MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT` (3) — the notable lane
+ * is separate from the GOAL/celebration rail above, whose cap stays 2.
  */
 
 export type ClipRailSlideKind = "highlight" | "celebration" | "replay" | "sibling";
