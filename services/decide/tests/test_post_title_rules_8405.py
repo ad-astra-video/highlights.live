@@ -58,14 +58,22 @@ def test_claim_ban_is_keyed_to_the_outcome_value_and_lists_the_vocabulary():
     assert "unless YOUR OWN outcome here is scoring_play with a transcript or scoreboard read that says so" in c
 
 
-def test_name_rule_pins_exact_transcription():
+def test_name_rule_closes_the_headline_to_names():
+    """Four probe iterations on the deployed build still produced a player name
+    read off an on-screen scorebug ("Manuel Ordonez scores") on a window whose
+    transcript and OCR were both empty — the exact AC3 class, and not fixable by
+    asking: the vision model treats the graphic as a read. The headline is now
+    closed to names (WHO is a jersey number or a role), so 0 absent names holds
+    by construction; the CAPTION still names the player, grounded by the write
+    seam's name gate."""
     c = _OUTPUT_CONTRACT_COMPACT
-    # the 3/255 class: a first name invented onto a surname the copy DID read
-    assert "copied EXACTLY as written, never adding a first name to a surname" in c
-    assert "never correcting a spelling" in c
-    # the 6/255 class: a name the window never read
-    assert "a name ONLY when THIS window's transcript spells it (never a name you read off a scorebug" in c
-    assert "never from the story or the match context" in c
+    assert "NEVER a player or team name, on any window" in c
+    assert "not from a scorebug or graphic in the frames" in c
+    assert "the CAPTION names the player, the " in c
+    assert "headline does not" in c
+    # the role vocabulary is spelled out so the model has a substitute
+    for role in ("keeper", "defender", "midfielder", "striker", "winger", "referee"):
+        assert role in c
 
 
 def test_closed_verb_set_and_single_clause_kept():

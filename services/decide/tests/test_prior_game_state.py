@@ -52,8 +52,8 @@ GOLDEN = {
     # through the caption description. The FULL rows above stay byte-identical.
     # ADAAAA-8405 re-pins the two COMPACT rows again (+571 chars): the headline
     # rule paragraph was rewritten for the Phase C residuals. FULL stays identical.
-    ("compact", ""): (16554, "c7b64bdbff32f3c92d140b5f69ee8bb43f1cd935e041b57522e0e1dfc44794f3"),
-    ("compact", STORY): (16806, "66f21c3a5df833144f6bc882b87232d9aaa6bb671129a0457061e9fbd5eb516f"),
+    ("compact", ""): (16430, "bd9d774c7157e7ab682e8830962e375f8ee423970b03845fce896ac09c49e9fa"),
+    ("compact", STORY): (16682, "ffd0ca4133dc905ae07bd40a78013c051fb7a14ca3c0fab61d21901cf5f16fca"),
 }
 
 
