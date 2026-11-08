@@ -10,6 +10,7 @@ import {
   isTicketParamsExpiredText,
   summarizeDecideDiscovery,
   type DecideAdmissionMetrics,
+  type DecideAttemptTiming,
   type DecideCapacityProbeResult,
   type LivePayment,
   type RemotePaymentStateSig,
@@ -17,6 +18,9 @@ import {
 } from "@highlights/livepeer-session";
 import type { ServerConfig } from "./config";
 import { createPaymentRefresher, type PaymentRefresher } from "./payment";
+// ADAAAA-8344: the decide-call stage instrument (payload/serialize/probe/signer/
+// paid/parse + the bounded per-job summary the job record exposes).
+import { decideStageRecorder, type DecideStageTimings } from "./decide-stage-timings";
 import type { PerceiveSessionLedger } from "./perceive-ledger";
 
 /**
@@ -110,6 +114,13 @@ export interface PaidOrchestratorOptions {
    * expired payment params with HTTP 400 `TicketParams expired` (default 1000).
    * Gives the orchestrator time to cycle its params before the re-sign/retry. */
   ticketParamsRetryBackoffMs?: number;
+  /** ADAAAA-8344: opt-in per-decide stage-timing sink. Fires once per decide
+   * call AFTER the verdict is obtained (or after the call throws), with the
+   * measured securing leg (probe + signer + paid) separated from the payload and
+   * parse stages. Purely observational — it cannot change the verdict, the
+   * payload or the number of billable calls. Unset => the adapter still feeds the
+   * bounded per-job recorder that `observeMetrics.decideStages` reads. */
+  onDecideStages?: (timing: DecideStageTimings) => void;
 }
 
 export class OrchestratorAdapter implements PipelineClient {
@@ -124,6 +135,11 @@ export class OrchestratorAdapter implements PipelineClient {
   /** Durable ledger of funded sessions (survives a server restart). */
   private ledger?: PerceiveSessionLedger;
   private ticketParamsRetryBackoffMs: number;
+  /** ADAAAA-8344: opt-in stage-timing sink (see PaidOrchestratorOptions). */
+  private onDecideStages?: (timing: DecideStageTimings) => void;
+  /** ADAAAA-8344: the most recent decide call's stage breakdown (a private
+   * convenience field; the durable copy lives in the per-job recorder). */
+  lastDecideStages?: DecideStageTimings;
 
   constructor(cfg: ServerConfig, opts: PaidOrchestratorOptions = {}) {
     this.cfg = cfg;
@@ -165,6 +181,7 @@ export class OrchestratorAdapter implements PipelineClient {
     this.paymentIntervalMs = opts.paymentIntervalMs ?? 10_000;
     this.ledger = opts.ledger;
     this.ticketParamsRetryBackoffMs = opts.ticketParamsRetryBackoffMs ?? 1000;
+    this.onDecideStages = opts.onDecideStages;
   }
 
   /** ADAAAA-8254: start-of-job hook for the decide admission gate (resets the
@@ -309,9 +326,15 @@ export class OrchestratorAdapter implements PipelineClient {
     probeUnpaid: () => Promise<unknown>,
     initial: { b64: string; manifestID?: string },
     signOpts: { app: string; type: "live" | "lv2v" | "fixed" },
-    runPaid: (headers: Record<string, string>) => Promise<unknown>
+    runPaid: (headers: Record<string, string>) => Promise<unknown>,
+    /** ADAAAA-8344: optional stage accumulator. The signer mint wall (incl. the
+     * 480 recovery) and the re-mint count are added here so the securing leg is
+     * measurable without changing any branch of this recovery. */
+    acc?: { signerMs: number; signerRetries: number }
   ): Promise<unknown> {
+    const tSign = Date.now();
     const first = await this.generateLivePaymentRecovering480(initial.b64, initial.manifestID, signOpts);
+    if (acc) acc.signerMs += Date.now() - tSign;
     try {
       return await runPaid({ "Livepeer-Payment": first.pmt.payment, "Livepeer-Segment": first.pmt.segCreds });
     } catch (err) {
@@ -332,7 +355,12 @@ export class OrchestratorAdapter implements PipelineClient {
       const freshManifest = (fresh as PaymentRequiredError).challenge?.manifestId;
       if (freshB64 && freshManifest) {
         await sleepMs(this.ticketParamsRetryBackoffMs);
+        const tReSign = Date.now();
         const again = await this.generateLivePaymentRecovering480(freshB64, freshManifest, signOpts);
+        if (acc) {
+          acc.signerMs += Date.now() - tReSign;
+          acc.signerRetries += 1;
+        }
         return await runPaid({ "Livepeer-Payment": again.pmt.payment, "Livepeer-Segment": again.pmt.segCreds });
       }
       throw err;
@@ -664,6 +692,9 @@ export class OrchestratorAdapter implements PipelineClient {
       asr?: { transcript: string; latencyS: number; ran: boolean };
     }
   ): Promise<DecisionResult> {
+    // ADAAAA-8344: the call clock starts at ADAPTER ENTRY so the payload build is
+    // measured as its own stage and the stage sum closes on this number.
+    const decideStartedAt = Date.now();
     const payerAddress = this.payerAddress;
     const payload = {
       // ADAAAA-7626: job-scoped audit identity. `sessionId` used to be the
@@ -713,6 +744,57 @@ export class OrchestratorAdapter implements PipelineClient {
           }
         : {}),
     };
+    // ADAAAA-8344: stage clocks. Every value below is measured off work the
+    // decide path already does; nothing here alters the payload, the headers, the
+    // attempt count or the billable-call count.
+    const payloadBuildMs = Date.now() - decideStartedAt;
+    /** Unpaid 402-probe attempts on this call (1 = the shipped unpaid-first flow;
+     * 2 when a TicketParams expiry forced a fresh challenge). */
+    const probeAttempts: DecideAttemptTiming[] = [];
+    /** Paid re-POST attempts (>=1; a 503/404 retry adds one). */
+    const paidAttempts: DecideAttemptTiming[] = [];
+    const signerAcc = { signerMs: 0, signerRetries: 0 };
+    let probeMs = 0;
+    let probeStatus = 0;
+    let paidWallMs = 0;
+    const publishStages = (probeSkipped: boolean): void => {
+      const totalMs = Date.now() - decideStartedAt;
+      const sum = (xs: number[]): number => xs.reduce((a, b) => a + Number(b || 0), 0);
+      const firstAttempt = paidAttempts[0] ?? probeAttempts[0];
+      const timing: DecideStageTimings = {
+        jobId: opts?.jobId,
+        groupKey: opts?.groupKey,
+        payloadBytes: firstAttempt?.sentBytes ?? 0,
+        payloadBuildMs,
+        serializeMs: firstAttempt?.serializeMs ?? 0,
+        probeMs,
+        probeStatus,
+        probeSkipped,
+        signerMs: signerAcc.signerMs,
+        signerRetries: signerAcc.signerRetries,
+        paidMs: paidWallMs,
+        paidTtfbMs: sum(paidAttempts.map((a) => a.ttfbMs)),
+        paidQueueMs: sum(paidAttempts.map((a) => a.queueMs)),
+        paidBodyMs: sum(paidAttempts.map((a) => a.bodyMs)),
+        paidParseMs: sum(paidAttempts.map((a) => a.parseMs)),
+        probeCount: probeAttempts.length,
+        paidRetries: paidAttempts.length,
+        totalMs,
+        residualMs: 0,
+      };
+      timing.residualMs =
+        timing.totalMs -
+        (timing.payloadBuildMs + timing.serializeMs + timing.probeMs + timing.signerMs + timing.paidMs);
+      this.lastDecideStages = timing;
+      decideStageRecorder.record(timing);
+      if (this.onDecideStages) {
+        try {
+          this.onDecideStages(timing);
+        } catch {
+          /* instrumentation must never fail a decide */
+        }
+      }
+    };
     // The decide runner is a fixed-price single-shot live runner; the first
     // unpaid call 402s with a payment challenge. On-chain (signer + payer
     // address) we forward the challenge's orchestrator info to the remote signer
@@ -721,21 +803,53 @@ export class OrchestratorAdapter implements PipelineClient {
     // "live" (per-second). This path is what made go-livepeer return
     // `402 invalid live runner payment signer address` for a VOD job at
     // live-runner decide time (6c723cd only paid the persistent perceive reserve).
-    const run = async (paymentHeaders?: Record<string, string>) => {
+    const run = async (paymentHeaders?: Record<string, string>, sink?: DecideAttemptTiming[]) => {
       const { status, data } = await this.client.decide("highlight", payload, {
         payerAddress: payerAddress || undefined,
         paymentHeaders,
+        ...(sink ? { onAttempt: (t: DecideAttemptTiming) => sink.push(t) } : {}),
       });
       const err = this.httpError(status, data, "decide");
       if (status >= 400) throw err;
       return data as DecisionResult;
     };
+    /** The unpaid probe: wall + terminal status recorded, error rethrown intact. */
+    const probeRun = async (): Promise<DecisionResult> => {
+      const t = Date.now();
+      try {
+        const r = await run(undefined, probeAttempts);
+        probeStatus = 200;
+        return r;
+      } catch (e) {
+        probeStatus = e instanceof PaymentRequiredError ? 402 : 0;
+        throw e;
+      } finally {
+        probeMs += Date.now() - t;
+      }
+    };
+    /** The paid re-POST: wall recorded, verdict/error untouched. */
+    const paidRun = async (headers: Record<string, string>): Promise<unknown> => {
+      const t = Date.now();
+      try {
+        return await run(headers, paidAttempts);
+      } finally {
+        paidWallMs += Date.now() - t;
+      }
+    };
     try {
-      return await run();
+      const first = await probeRun();
+      publishStages(false);
+      return first;
     } catch (err) {
-      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) throw err;
+      if (!(err instanceof PaymentRequiredError) || !this.signer || !payerAddress) {
+        // A non-payment failure still publishes its stages (the securing leg may
+        // be the reason it failed) and rethrows untouched.
+        publishStages(false);
+        throw err;
+      }
       const b64 = err.challenge?.paymentParams;
       if (!b64) {
+        publishStages(false);
         throw new Error(
           "on-chain decide 402 challenge carried no payment_params (orchestrator info) to forward to the signer; cannot obtain tickets"
         );
@@ -748,12 +862,21 @@ export class OrchestratorAdapter implements PipelineClient {
       // `TicketParams expired` recovery: re-issue WITHOUT payment headers for a
       // fresh 402 challenge and re-sign once so the stale OrchestratorInfo is
       // never reused (retryPaidSingleShot).
-      const res = await this.retryPaidSingleShot(
-        () => this.client.decide("highlight", payload, { payerAddress: payerAddress || undefined }),
-        { b64, manifestID: manifestID || undefined },
-        { app: ROUTES.decide, type: "fixed" },
-        (h) => run(h)
-      );
+      let res: unknown;
+      try {
+        res = await this.retryPaidSingleShot(
+          // ADAAAA-8344: the fresh-challenge probe goes through `probeRun` so a
+          // TicketParams-expiry recovery (a SECOND unpaid probe) is counted and
+          // timed like the first one.
+          () => probeRun(),
+          { b64, manifestID: manifestID || undefined },
+          { app: ROUTES.decide, type: "fixed" },
+          (h) => paidRun(h),
+          signerAcc
+        );
+      } finally {
+        publishStages(false);
+      }
       return res as DecisionResult;
     }
   }

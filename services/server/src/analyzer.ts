@@ -6,6 +6,7 @@ import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { DecideAdmissionMetrics } from "@highlights/livepeer-session";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
+import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-timings";
 import {
   captionColour,
   gatePostTitleValue,
@@ -3420,6 +3421,13 @@ export interface LiveObserveMetricsSnapshot {
   meanE2eMs: number;
   /** Max decide gemma end-to-end latency (ms). */
   maxE2eMs: number;
+  /** ADAAAA-8344: the per-decide STAGE breakdown — securing leg (unpaid 402
+   * probe + remote-signer ticket mint) separated from payload build, serialize,
+   * the paid request (TTFB / admission queue / body / parse) and the residual.
+   * Aggregated by `decide-stage-timings.ts` over the run's last ~100 calls.
+   * Additive optional: absent when the adapter ran no instrumented decide (or on
+   * every record written before the field existed). */
+  decideStages?: DecideStagesSnapshot;
   /** Mean content-time cadence between consecutive fired ticks (ms). */
   meanCadenceMs: number;
   /** Max content-time cadence between consecutive fired ticks (ms). */
@@ -3676,7 +3684,10 @@ export function liveLagReserveS(maxE2eMs: number, meanE2eMs: number, budgetS: nu
 export function buildLiveObserveMetrics(
   obs: LiveObserver,
   stride?: LivePerceiveStrideSnapshot,
-  confirm?: { calls: number; dives: number; dropped: number }
+  confirm?: { calls: number; dives: number; dropped: number },
+  /** ADAAAA-8344: the adapter's per-job decide-stage summary. Absent (VOD / a
+   * rail that made no instrumented decide) leaves the record byte-identical. */
+  decideStages?: DecideStagesSnapshot
 ): LiveObserveMetricsSnapshot {
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
@@ -3692,6 +3703,7 @@ export function buildLiveObserveMetrics(
     maxFrames: obs.maxFrameCount(),
     meanE2eMs: Number(obs.meanE2eMs().toFixed(1)),
     maxE2eMs: Number(obs.maxE2eMs().toFixed(1)),
+    ...(decideStages ? { decideStages } : {}),
     meanCadenceMs: Number(avg(cadences).toFixed(1)),
     maxCadenceMs: cadences.length ? Number(Math.max(...cadences).toFixed(1)) : 0,
     triggerFires: obs.triggerFireCount(),
@@ -9222,7 +9234,11 @@ export async function analyzeJob(
             // ADAAAA-8205: the async confirm lane's meter, read at the same
             // instant as the decide counters so the cost term and the meter
             // describe one point in the run.
-            { calls: run.confirmDiveCalls(), dives: run.confirmDiveCount(), dropped: run.confirmDiveDropped() }
+            { calls: run.confirmDiveCalls(), dives: run.confirmDiveCount(), dropped: run.confirmDiveDropped() },
+            // ADAAAA-8344: the adapter's per-job stage summary (same instant as
+            // the counters above). Undefined when no decide was instrumented, so
+            // the record stays byte-identical on a rail that made none.
+            decideStageRecorder.summary(cfg.jobId)
           ),
           // ADAAAA-8254: the decide admission counters + capacity snapshot, read
           // off the gate at the same instant.

@@ -6,7 +6,7 @@ import os
 import time
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 log = logging.getLogger("highlights.decide")
@@ -729,7 +729,14 @@ def create_app() -> FastAPI:
         }
 
     @router.post("/highlight", response_model=HighlightDecision)
-    async def highlight(req: HighlightRequest):
+    async def highlight(req: HighlightRequest, request: Request):
+        # ADAAAA-8344: arrival -> parsed-body wall for this decide. The middleware
+        # below stamps the request's arrival instant; everything between it and
+        # this line is body transfer + pydantic validation, which is exactly the
+        # `timings.requestParseMs` stage the decide-internal split reports. Best
+        # effort: an unstamped request (a direct in-process call) reads None.
+        arrived_at = getattr(request.state, "hl_arrived_at", None)
+        request_parse_ms = max(0.0, (time.time() - arrived_at) * 1000.0) if arrived_at else None
         # Group mode (ADAAAA-6935): when the server's live analyzer grouped the
         # Stage-A candidates inside a 3 s frame window into a single merged call
         # (`candidates` non-empty), run ONE review for the whole group and return
@@ -781,6 +788,7 @@ def create_app() -> FastAPI:
                 asr_prefetched=bool(req.asrPrefetched),
                 asr_transcript=(req.asrTranscript or "") if isinstance(req.asrTranscript, str) else "",
                 asr_latency_s=_safe_float(req.asrLatencyS),
+                request_parse_ms=request_parse_ms,
             )
             # Decide-leg I2 (ADAAAA-6359): HARD GATE over the perceived
             # goal-line ground-truth signal. A non-"goal" ballOutcome forces
@@ -1047,6 +1055,16 @@ def create_app() -> FastAPI:
         return ConfirmDecision(**result)
 
     app = FastAPI(title="highlights-decide", version="0.1.0")
+
+    @app.middleware("http")
+    async def _stamp_arrival(request: Request, call_next):
+        """ADAAAA-8344: stamp the instant a decide request ARRIVES. The route
+        handler runs after the body is transferred and validated, so
+        `handler_entry - hl_arrived_at` is the request-parse/transfer stage the
+        audit record reports as `timings.requestParseMs`. Cost: one clock read
+        per request; no behavior change."""
+        request.state.hl_arrived_at = time.time()
+        return await call_next(request)
     # Canonical at root (go-livepeer strips `/app`); `/app/*` alias for direct calls.
     app.include_router(router)
     sub = FastAPI()
