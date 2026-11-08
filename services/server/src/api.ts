@@ -131,7 +131,13 @@ import {
 } from "./dataset-lifecycle";
 import { LiveIngest, type LiveKind } from "./live";
 import { extractVodAudioChunks } from "./vod-audio";
-import { createVodMatchContextResolver, matchContextEnabled, type MatchContextResolver } from "./match-context";
+import {
+  createLiveMatchContextWriter,
+  createVodMatchContextResolver,
+  matchContextEnabled,
+  type LiveMatchContextWriter,
+  type MatchContextResolver,
+} from "./match-context";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { acceptanceLaneRow, acceptanceLaneCounts, buildDeletedJobTombstone } from "./acceptance-lane";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
@@ -773,6 +779,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       settlement?: () => LiveSettlementSnapshot;
     }
   >();
+  // ADAAAA-8408 (W2): the live rail's once-per-run match-context writer, keyed
+  // by job id so the terminal transition (which happens outside the rail's own
+  // function for the browser/media share) can drain its in-flight folds before
+  // the row is marked done. Absent = no context is written (pre-feature).
+  const liveMatchWriters = new Map<string, LiveMatchContextWriter>();
   // ADAAAA-6625: VOD `file` job cancellation. `POST /jobs/:id/stop` adds the
   // job here and aborts its controller, so (a) a decode already running inside
   // extractFrames is killed, (b) runVodJob unwinds at the next phase boundary,
@@ -1576,6 +1587,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // FAILURE — do not spend a tail decide on a session that is already gone.
       if (bj.rail && outcome.status === "done") {
         await bj.rail.finish().catch((e) => console.error(`[media-rail:${jobId}] finish failed:`, e?.message || e));
+        // ADAAAA-8408 (W2): settle the share's in-flight match-context folds
+        // BEFORE the job is marked done — the perceive session is still alive
+        // here, and a fold that lands after the terminal patch would be lost.
+        const matchWriter = liveMatchWriters.get(jobId);
+        if (matchWriter) {
+          await matchWriter
+            .finish()
+            .catch((e) => console.error(`[match-context:live:${jobId}] finish failed:`, e?.message || e));
+          liveMatchWriters.delete(jobId);
+        }
         // ADAAAA-7734: settle every queued frame write before the job is marked
         // done — a reader polling right after POST /stop must find the frames the
         // share analysed on disk (the writes are off the observe callback's path).
@@ -1735,7 +1756,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // ADAAAA-6867). Lazily created on the first relayed observation/audio chunk.
   async function ensureMediaRail(
     job: { id: string; ownerId?: string; gameHint?: string; preferLabels?: string[]; cameraId?: string; perceiveSessionId?: string },
-    bj: { rail?: MediaRailObserver; mediaSessionId?: string; frames?: LiveFrameWriter; analysedTs?: number }
+    bj: {
+      rail?: MediaRailObserver;
+      mediaSessionId?: string;
+      frames?: LiveFrameWriter;
+      analysedTs?: number;
+      /** ADAAAA-8408: the share's perceive session (the match-context writer's
+       *  fold target); present on the `browserJobs` entry this rail serves. */
+      sessionId?: string;
+    }
   ): Promise<MediaRailObserver | null> {
     if (bj.rail) return bj.rail;
     // Same rollout switch as the live rail's decide-observer.
@@ -1748,6 +1777,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // ADAAAA-8005 (gate 3): carry the job id so the delivery metric's per-row
     // evidence line names the share it belongs to.
     const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id });
+    // ADAAAA-8408 (W2): write the match context the decide prompt reads. The
+    // share already produces both inputs (per-window ASR transcript + perceive's
+    // scorebug/kit evidence), so this adds 4 CPU-only folds per run and no
+    // decide call; the read below picks the persisted context up on the NEXT
+    // window. Best-effort: an unwired writer leaves today's empty context.
+    const matchWriter = matchContextEnabled()
+      ? createLiveMatchContextWriter({
+          jobId: job.id,
+          client: adapter,
+          getSessionId: () => bj.sessionId ?? job.perceiveSessionId ?? "",
+          hints: { title: store.getJob(job.id)?.title, gameHint: job.gameHint || cfg.gameHintDefault },
+          getJob: (id) => store.getJob(id),
+          patchJob: (id, patch) => store.patchJob(id, patch),
+        })
+      : null;
+    if (matchWriter) liveMatchWriters.set(job.id, matchWriter);
     const anaCfg: AnalyzerConfig = buildLiveAnalyzerConfig({
       cfg,
       job,
@@ -1761,6 +1806,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7856: the live rail reads the SAME persisted context the VOD pass
       // reads — one storage read per window, never a resolver/GPU call.
       getMatchContext: () => store.getJob(job.id)?.matchContext,
+      // ADAAAA-8408 (W2): every decided window hands its commentary + content
+      // clock to the writer (bookkeeping only; the fold is off the decide path).
+      ...(matchWriter
+        ? { onObserveWindowEvidence: (input) => matchWriter.noteWindow(input) }
+        : {}),
       onRunningSummary: (summary, meta) =>
         appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
           console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
@@ -2171,6 +2221,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // receive it as a plain function reference, so an unbound method loses
       // `this` and throws (job->failed) the moment a highlight needs a clip.
       const cut = (ts: number) => ingest.cut(ts);
+      // ADAAAA-8408 (W2): the live rail's match-context writer (see the media
+      // rail above for the shape). Session read lazily: the pass may re-reserve.
+      const matchWriter = matchContextEnabled()
+        ? createLiveMatchContextWriter({
+            jobId: job.id,
+            client: adapter,
+            getSessionId: () => slot.current?.sessionId ?? job.perceiveSessionId ?? "",
+            hints: { title: store.getJob(job.id)?.title, gameHint: job.gameHint || cfg.gameHintDefault },
+            getJob: (id) => store.getJob(id),
+            patchJob: (id, patch) => store.patchJob(id, patch),
+          })
+        : null;
+      if (matchWriter) liveMatchWriters.set(job.id, matchWriter);
       const anaCfg: AnalyzerConfig = buildLiveAnalyzerConfig({
         cfg,
         job,
@@ -2185,6 +2248,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         getRunningSummary: () => store.getJob(job.id)?.runningSummary ?? "",
         // ADAAAA-7856: live window inspections name the stored teams too.
         getMatchContext: () => store.getJob(job.id)?.matchContext,
+        // ADAAAA-8408 (W2): hand each decided window's commentary + content
+        // clock to the writer (bookkeeping only; the fold is off the decide path).
+        ...(matchWriter
+          ? { onObserveWindowEvidence: (input) => matchWriter.noteWindow(input) }
+          : {}),
         onRunningSummary: (summary, meta) =>
           appendSummaryEntry(store, job.id, summary, meta).catch((e: any) =>
             console.error(`[running-summary:${job.id}] persist failed:`, String(e?.message || e))
@@ -2304,6 +2372,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           observeSnapshot = get;
         },
       });
+      // ADAAAA-8408 (W2): drain the folds the pass fired (they run off the decide
+      // path) before the session teardown + terminal patch below.
+      if (matchWriter) {
+        await matchWriter
+          .finish()
+          .catch((e) => console.error(`[match-context:live:${job.id}] finish failed:`, e?.message || e));
+      }
       // Terminate ingest (kills both ffmpeg procs); the audio tap drains and
       // the loop resolves any in-flight candidates. Highlights from BOTH legs
       // (video + audio) were already persisted + billed at DECISION time via
@@ -2436,6 +2511,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       await ingest.stop();
       liveSessions.delete(job.id);
       livePerceiveSlots.delete(job.id);
+      liveMatchWriters.delete(job.id);
     }
   }
 
@@ -7202,6 +7278,8 @@ export interface LiveAnalyzerConfigDeps {
   liveFrameReread?: AnalyzerConfig["liveFrameReread"];
   /** ADAAAA-8205: the async confirm lane's pending-dive handoff. */
   onConfirmDivePending?: AnalyzerConfig["onConfirmDivePending"];
+  /** ADAAAA-8408 (W2): the live match-context writer's per-window hook. */
+  onObserveWindowEvidence?: AnalyzerConfig["onObserveWindowEvidence"];
 }
 
 /**
@@ -7256,6 +7334,7 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     onDeferredGoalAttested,
     liveFrameReread,
     onConfirmDivePending,
+    onObserveWindowEvidence,
   } = deps;
   return {
     jobId: job.id,
@@ -7371,6 +7450,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     getRunningSummary,
     // ADAAAA-7856: pass the persisted match-context reader straight through.
     getMatchContext,
+    // ADAAAA-8408 (W2): the live writer's per-window evidence hook (undefined
+    // for the VOD pass, which runs its own file-based resolver).
+    onObserveWindowEvidence,
     onRunningSummary,
     // ADAAAA-8006: pass the deferred-attestation persist seam straight through
     // (the live rails re-attest a demoted goal on a later scoreboard read).

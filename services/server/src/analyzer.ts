@@ -3268,6 +3268,15 @@ export interface AnalyzerConfig {
    * Absent (or a context with nothing usable) => the decide request carries no
    * matchContext and the prompt is byte-identical to today (AC6). */
   getMatchContext?: () => unknown;
+  /**
+   * ADAAAA-8408 (W2): hand EVERY observe window's own commentary + content clock
+   * to the live match-context writer. Pure bookkeeping on this path — the writer
+   * accumulates the transcript and, at its bounded checkpoints, queues ONE
+   * CPU-only perceive fold off the decide path (never an extra decide call, never
+   * awaited here). Wired only by the two LIVE rails; the VOD pass keeps its own
+   * file-based resolver. Absent => nothing changes.
+   */
+  onObserveWindowEvidence?: (input: { centerTs: number; transcript: string }) => void;
   /** ADAAAA-7111 (Increment D): persist the updated running video summary after
    * a cadence decide, so the job-detail endpoint + web UI surface it growing.
    * Best-effort: a throwing callback is caught + logged, never a pipeline
@@ -7672,6 +7681,21 @@ export async function observeDecideOnly(
         ? `lane=waitmiss waitMs=${waitBudgetMs}`
         : "lane=inline";
     console.error(`[live-asr:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s ${lane}`);
+  }
+  // ADAAAA-8408 (W2): offer this window's commentary + content clock to the live
+  // match-context writer. Synchronous bookkeeping only — the writer accumulates
+  // the transcript and queues ONE CPU-only perceive fold when the clock crosses
+  // a checkpoint; it never adds a decide call and is never awaited here, so the
+  // decide path is unchanged. A throwing hook cannot take the decide down.
+  if (cfg.onObserveWindowEvidence) {
+    try {
+      cfg.onObserveWindowEvidence({
+        centerTs: payload.centerTs,
+        transcript: prefetched?.transcript ?? "",
+      });
+    } catch (e: any) {
+      console.error(`[match-context:live:${cfg.jobId}] window evidence hook failed:`, String(e?.message || e));
+    }
   }
   let { evidence, opts } = buildObserveDecideRequest(cfg, run, payload, prefetched);
   let decision: DecisionResult;
