@@ -401,6 +401,36 @@ export interface DecideCapacitySnapshot {
   source: DecideCapacitySource;
 }
 
+/**
+ * ADAAAA-8344: the transport stages of ONE decide app-call attempt, measured at
+ * the client (the only layer that can separate admission queue wait, send,
+ * time-to-first-byte, body transfer and reply parse). All values are measured
+ * wall clock in ms; `sentBytes` is the serialized request body length.
+ *
+ * This is instrumentation only: it rides `onDecideAttempt` and never changes the
+ * payload, the headers, the attempt count or the billable-call count.
+ */
+export interface DecideAttemptTiming {
+  /** 0-based attempt index inside one decide CALL (503/404 retries increment). */
+  attempt: number;
+  /** HTTP status the attempt settled on (0 when the transport threw). */
+  status: number;
+  /** Wall wait in the client's admission queue (slot grant), ms. */
+  queueMs: number;
+  /** JSON.stringify of the request body, ms (the body the transport sent). */
+  serializeMs: number;
+  /** Serialized request body length in BYTES (UTF-8). */
+  sentBytes: number;
+  /** Time to the response HEADERS (fetch resolves on headers = TTFB), ms. */
+  ttfbMs: number;
+  /** Reading the response body text, ms. */
+  bodyMs: number;
+  /** JSON.parse of the response body, ms. */
+  parseMs: number;
+  /** The attempt threw at the transport (network/TLS/reset) — no status. */
+  transportError?: boolean;
+}
+
 /** Result of one signer discovery, reduced to the decide-relevant numbers. */
 export interface DecideCapacityProbeResult {
   /** Sum of `capacity` (falling back to `capacity_available`) over the decide
@@ -563,6 +593,13 @@ export class LivepeerClient {
       /** ADAAAA-8254: fires when a capacity probe fails (error/timeout), so the
        * server can log it. Never rethrows. */
       onDecideCapacityError?: (err: unknown) => void;
+      /** ADAAAA-8344: fires once per decide APP-CALL ATTEMPT with the transport
+       * stages of that attempt (admission queue wait, request serialize, TTFB,
+       * body read, JSON parse, bytes sent). Purely observational: it is invoked
+       * after the response is handled and a throwing hook is swallowed, so it can
+       * neither change a verdict nor add a retry / a billable call. Unset (the
+       * default) leaves the decide path byte-identical. */
+      onDecideAttempt?: (timing: DecideAttemptTiming) => void;
     } = {}
   ) {
     this.capacitySnapshot = {
@@ -679,7 +716,15 @@ export class LivepeerClient {
   async decide(
     path: string,
     body: unknown,
-    opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
+    opts?: {
+      headers?: Record<string, string>;
+      payerAddress?: string;
+      paymentHeaders?: Record<string, string>;
+      /** ADAAAA-8344: per-CALL attempt-timing sink (overrides the client-level
+       * `onDecideAttempt`). Concurrency-safe: an in-flight decide carries its own
+       * sink, so several streams on one client cannot cross their samples. */
+      onAttempt?: (timing: DecideAttemptTiming) => void;
+    }
   ): Promise<{ status: number; data: unknown }> {
     return this.decideAdmitted(path, body, opts);
   }
@@ -1074,7 +1119,12 @@ export class LivepeerClient {
   private async decideAdmitted(
     path: string,
     body: unknown,
-    opts?: { headers?: Record<string, string>; payerAddress?: string; paymentHeaders?: Record<string, string> }
+    opts?: {
+      headers?: Record<string, string>;
+      payerAddress?: string;
+      paymentHeaders?: Record<string, string>;
+      onAttempt?: (timing: DecideAttemptTiming) => void;
+    }
   ): Promise<{ status: number; data: unknown }> {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(opts?.headers || {}) };
     if (opts?.payerAddress) headers["Livepeer-Payer-Address"] = opts.payerAddress;
@@ -1088,6 +1138,7 @@ export class LivepeerClient {
     const seq = this.decideSeq++;
     let lastStatus = 0;
     for (let attempt = 0; ; attempt++) {
+      const attemptStart = Date.now();
       // ADAAAA-8254: refresh the advertised capacity on the decide path too, at
       // most every DECIDE_CAPACITY_REFRESH_S. NEVER awaited: a slow signer cannot
       // add latency and a failing one cannot throw into decide (AC2).
@@ -1095,40 +1146,95 @@ export class LivepeerClient {
         void this.refreshDecideCapacity();
       }
       const grant = await this.acquireDecideSlot(deadline, callStartedAt, seq);
+      // ADAAAA-8344: per-attempt transport stages. Every clock read is a plain
+      // `Date.now()` around work the client already does, so the decide path is
+      // byte-identical and the hook is the only addition.
+      const queueMs = Date.now() - attemptStart;
       let retryable = false;
       try {
-        const res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
-          headers,
-          body: JSON.stringify(body),
-        });
+        const tSerialize = Date.now();
+        const bodyText = JSON.stringify(body);
+        const serializeMs = Date.now() - tSerialize;
+        const sentBytes = bodyText.length ? Buffer.byteLength(bodyText, "utf8") : 0;
+        let ttfbMs = 0;
+        let bodyMs = 0;
+        let parseMs = 0;
+        // Emit the attempt's stages exactly once, whichever way it settles
+        // (200/402/503/404/transport throw). A throwing hook is swallowed: the
+        // instrumentation can never fail or retry a decide.
+        const sink = opts?.onAttempt ?? this.opts.onDecideAttempt;
+        const noteAttempt = (status: number): void => {
+          if (!sink) return;
+          try {
+            sink({
+              attempt,
+              status,
+              queueMs,
+              serializeMs,
+              sentBytes,
+              ttfbMs,
+              bodyMs,
+              parseMs,
+            });
+          } catch {
+            /* instrumentation must never fail a decide */
+          }
+        };
+        const tRequest = Date.now();
+        let res: Awaited<ReturnType<Transport["request"]>>;
+        try {
+          res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
+            headers,
+            body: bodyText,
+          });
+        } catch (e) {
+          // Network/TLS failure: recorded as a transport error, then rethrown so
+          // the decide path behaves exactly as before.
+          ttfbMs = Date.now() - tRequest;
+          noteAttempt(0);
+          throw e;
+        }
+        // fetch() resolves when the response HEADERS arrive, so this delta IS
+        // the request's time-to-first-byte (send + orchestrator admission +
+        // runner dispatch + model prefill start).
+        ttfbMs = Date.now() - tRequest;
         // Read the body up front: needed both to detect the transient
         // "runner not found" / "session not found" 404 and to parse the 402
         // payment challenge, and to drain the socket on retried transients.
+        const tBody = Date.now();
         const text = await res.text().catch(() => "");
+        bodyMs = Date.now() - tBody;
         const runnerNotFound = res.status === 404 && /(runner not found|session not found)/i.test(text);
         if (res.status !== 503 && !runnerNotFound) {
           if (res.status === 402) {
             let body2: unknown = {};
+            const tParse = Date.now();
             try {
               body2 = text ? JSON.parse(text) : {};
             } catch {
               body2 = {};
             }
+            parseMs = Date.now() - tParse;
+            noteAttempt(res.status);
             throw new PaymentRequiredError(body2, livePaymentChallengeFromBody(body2));
           }
           // A completed call proves the runner has capacity: close any pause.
           this.noteDecideSucceeded();
           let data: unknown = null;
+          const tParse = Date.now();
           try {
             data = text ? JSON.parse(text) : null;
           } catch {
             data = text;
           }
+          parseMs = Date.now() - tParse;
+          noteAttempt(res.status);
           return { status: res.status, data };
         }
         lastStatus = res.status;
         if (res.status === 503) this.noteDecide503();
         retryable = true;
+        noteAttempt(res.status);
       } finally {
         // Clear the single-flight probe marker before handing the slot back so
         // the next window can grant its own probe (or normal admission).
