@@ -106,6 +106,19 @@ describe("decide stage instrument (ADAAAA-8344)", () => {
     expect(xs[xs.length - 1].groupKey).toBe(`g${DECIDE_STAGE_RING + 24}`);
   });
 
+  it("never persists a negative residual (the stop-patch regression)", () => {
+    // Leg `ab00b316` failed its stop patch because one call's stage clocks
+    // overlapped its outer wall by a few ms and `residualMs` came out negative,
+    // which `min(0)` rejected for the WHOLE record (job stayed `active`).
+    // Clamping is asserted here, and the over-count is reported by closure > 1.
+    const rec = new DecideStageRecorder();
+    rec.record(sample({ totalMs: 10, payloadBuildMs: 8, serializeMs: 3, probeMs: 5, signerMs: 1, paidMs: 2 }));
+    const s = rec.summary("job-stages")!;
+    expect(s.stages.residualMs.max).toBe(0);
+    expect(s.stages.residualMs.p50).toBe(0);
+    expect(s.closureP50).toBeGreaterThan(1);
+  });
+
   it("returns undefined for a job with no instrumented decide", () => {
     expect(new DecideStageRecorder().summary("job-nope")).toBeUndefined();
   });

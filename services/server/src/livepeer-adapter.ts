@@ -782,9 +782,17 @@ export class OrchestratorAdapter implements PipelineClient {
         totalMs,
         residualMs: 0,
       };
-      timing.residualMs =
+      // The named stages are clocked with separate `Date.now()` reads, so their
+      // sum can exceed the outer wall by a millisecond or two. The residual is
+      // the UNATTRIBUTED remainder, clamped at 0 — a negative value would fail
+      // the job-record schema (`min(0)`) and cost the whole record on stop
+      // (verified on leg `ab00b316`: the stop patch was rejected and the job
+      // stayed `active`). Overlap is reported by `closureP50 >= 1` instead.
+      timing.residualMs = Math.max(
+        0,
         timing.totalMs -
-        (timing.payloadBuildMs + timing.serializeMs + timing.probeMs + timing.signerMs + timing.paidMs);
+          (timing.payloadBuildMs + timing.serializeMs + timing.probeMs + timing.signerMs + timing.paidMs)
+      );
       this.lastDecideStages = timing;
       decideStageRecorder.record(timing);
       if (this.onDecideStages) {
