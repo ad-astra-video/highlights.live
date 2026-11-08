@@ -216,6 +216,25 @@ describe("live decide payload carries the side-lane transcript (ADAAAA-8081)", (
     expect(analyzer.asrUrl).toBe("http://asr:8082");
     expect(analyzer.decideAsrPrefetch).toBe(true);
     expect(analyzer.decideAsrPrefetchTimeoutMs).toBe(6000);
+    // ADAAAA-8300: the lane's in-flight budget defaults to the pre-8300 source
+    // constant (2) and is now env-tunable, so a wider lane is not a rebuild.
+    expect(analyzer.decideAsrPrefetchConcurrency).toBe(2);
+  });
+
+  it("LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY raises the lane budget (ADAAAA-8300)", () => {
+    const cfg = loadConfig({
+      PERCEIVE_URL: "http://p",
+      DECIDE_URL: "http://d",
+      ASR_URL: "http://asr:8082",
+      LIVE_OBSERVE_LOOP: "1",
+      LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY: "4",
+    });
+    const analyzer = buildLiveAnalyzerConfig({
+      cfg,
+      job: { id: "job-8300", gameHint: "soccer" },
+      clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
+    });
+    expect(analyzer.decideAsrPrefetchConcurrency).toBe(4);
   });
 
   it("LIVE_DECIDE_ASR_PREFETCH=0 is a config-only rollback", () => {
@@ -251,6 +270,11 @@ describe("live decide payload carries the side-lane transcript (ADAAAA-8081)", (
     expect(server).toContain("LIVE_DECIDE_ASR_PREFETCH=${LIVE_DECIDE_ASR_PREFETCH:-1}");
     expect(server).toContain(
       "LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS=${LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS:-6000}"
+    );
+    // ADAAAA-8300: the lane's in-flight budget ships with the same default as
+    // the prefetcher's own constant, so the deploy cannot disagree with the code.
+    expect(server).toContain(
+      "LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY=${LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY:-2}"
     );
   });
 });
