@@ -69,6 +69,28 @@ export const REPLAY_MIN_MATCH_RATIO = 0.35;
  * and independent of the frame count. */
 export const REPLAY_MAX_FINGERPRINTS = 12;
 
+/**
+ * ADAAAA-8325 (Inc 2): the RELAXED band a `phase: "replay"` verdict opens for
+ * the deterministic set match — and the ONLY thing the phase signal may do.
+ *
+ * A broadcast replay is shot from a different camera, so the strict bar above
+ * (4 matches at 6 bits / 0.35) misses it: measured on job 545be947 the true
+ * replay->goal pair scores BELOW the unrelated-pair median at every threshold
+ * (see ADAAAA-8321's falsifier). A window whose decide verdict says it is
+ * replay footage is therefore allowed a weaker agreement — but still a bounded
+ * one, so the phase is corroboration and NEVER the attach on its own:
+ *
+ *   * at least `PHASE_REPLAY_MIN_MATCHES` fingerprints must match (a phase-only
+ *     window with no agreeing picture produces no attach — unit-tested);
+ *   * at least `PHASE_REPLAY_MIN_MATCH_RATIO` of the compared set must match;
+ *   * the distance band widens from 6 to 8 bits of 64 (still a near-duplicate
+ *     picture, never a loose "same scene" match);
+ *   * gap 20-300 s and the no-chain / owner-phase guards are unchanged.
+ */
+export const PHASE_REPLAY_MATCH_BITS = 8;
+export const PHASE_REPLAY_MIN_MATCHES = 2;
+export const PHASE_REPLAY_MIN_MATCH_RATIO = 0.15;
+
 /** One frame's fingerprint on the job's content clock. */
 export interface ReplayFrameFingerprint {
   /** Seconds from stream start (the analyzer's `sampleFps` grid). */
@@ -86,6 +108,11 @@ export interface ReplayLedgerEntry {
   /** Set when this moment is ITSELF a replay — such an entry is never an owner
    * (no chains: replay of a replay). */
   replayOf?: string;
+  /** ADAAAA-8325 (Inc 2): the decide verdict's footage phase for this moment's
+   * window. `replay` opens the relaxed corroboration band for an attach and
+   * makes the entry ineligible to OWN (a replay never owns a replay); absent or
+   * `live` keeps the strict Inc 1 bar. */
+  phase?: "live" | "replay";
 }
 
 /** What the matcher measured. Mirrors `ReplayEvidence` plus the owner. */
@@ -96,6 +123,9 @@ export interface ReplayMatch {
   compared: number;
   gapS: number;
   kind: ReplayEvidence["kind"];
+  /** ADAAAA-8325: set to `replay` when the attach needed the phase-corroborated
+   * relaxed band (the strict Inc 1 bar was missed). Absent on a strict attach. */
+  phase?: "replay";
 }
 
 /** Evenly sample at most `max` fingerprints out of a window's frames, keeping
@@ -164,9 +194,13 @@ export function matchReplayOwner(
     maxGapS?: number;
   } = {}
 ): ReplayMatch | null {
-  const bits = opts.bits ?? REPLAY_HASH_MATCH_BITS;
-  const minMatches = opts.minMatches ?? REPLAY_MIN_MATCHES;
-  const minRatio = opts.minRatio ?? REPLAY_MIN_MATCH_RATIO;
+  // ADAAAA-8325 (Inc 2): a `replay` verdict relaxes the DETERMINISTIC band; it
+  // never replaces it. With no agreeing fingerprint the counts below still fail,
+  // so a phase-only window produces no attach (unit-tested).
+  const phaseRelaxed = newEntry.phase === "replay";
+  const bits = opts.bits ?? (phaseRelaxed ? PHASE_REPLAY_MATCH_BITS : REPLAY_HASH_MATCH_BITS);
+  const minMatches = opts.minMatches ?? (phaseRelaxed ? PHASE_REPLAY_MIN_MATCHES : REPLAY_MIN_MATCHES);
+  const minRatio = opts.minRatio ?? (phaseRelaxed ? PHASE_REPLAY_MIN_MATCH_RATIO : REPLAY_MIN_MATCH_RATIO);
   const minGap = opts.minGapS ?? REPLAY_MIN_GAP_S;
   const maxGap = opts.maxGapS ?? REPLAY_MAX_GAP_S;
   if (!newEntry.hashes.length) return null;
@@ -176,6 +210,9 @@ export function matchReplayOwner(
     if (owner.id === newEntry.id) continue;
     // No chains: a replay (or a moment already known to be one) never owns.
     if (owner.replayOf) continue;
+    // ADAAAA-8325: a window its own verdict called replay footage never owns a
+    // later replay — the owner must be live action (or an unjudged older row).
+    if (owner.phase === "replay") continue;
     const gapS = newEntry.anchorTs - owner.anchorTs;
     if (gapS < minGap || gapS > maxGap) continue;
     const matches = setMatchCount(newEntry.hashes, owner.hashes, bits);
@@ -190,6 +227,9 @@ export function matchReplayOwner(
       compared,
       gapS,
       kind: "footage_match",
+      // Only the phase band records the phase provenance; a strict attach keeps
+      // its pre-Inc-2 shape byte-identically.
+      ...(phaseRelaxed ? { phase: "replay" as const } : {}),
     };
     if (
       !best ||
@@ -255,6 +295,9 @@ export function replayAlternativeFrom(record: HighlightRecord, ownerClipEndS?: n
     outcome,
     replayOf: record.replayOf,
     replayEvidence: record.replayEvidence,
+    // ADAAAA-8325 (Inc 2): the alternative's own footage phase, so the rail can
+    // name the provenance ("Replay @ 207 s · phase") the attach used.
+    ...(record.phase ? { phase: record.phase } : {}),
     sourceHighlightId: record.id,
     windowAnchorTs: anchor,
     distanceToGoalEndS:
@@ -282,7 +325,7 @@ export function replayAnchorTs(
 
 /** Build the ledger entry for one decided moment from the job's fingerprints. */
 export function ledgerEntryFor(
-  record: Pick<HighlightRecord, "id" | "start" | "end" | "localizeEvidenceTs" | "localizedTs" | "replayOf">,
+  record: Pick<HighlightRecord, "id" | "start" | "end" | "localizeEvidenceTs" | "localizedTs" | "replayOf" | "phase">,
   frames: readonly ReplayFrameFingerprint[],
   windowS: number
 ): ReplayLedgerEntry {
@@ -292,6 +335,10 @@ export function ledgerEntryFor(
     anchorTs,
     hashes: fingerprintsNear(frames, anchorTs, windowS),
     replayOf: record.replayOf,
+    // ADAAAA-8325 (Inc 2): the decided window's footage phase rides the ledger
+    // so the matcher can open the corroboration band — and refuse to let a
+    // replay window own a later replay.
+    ...(record.phase ? { phase: record.phase } : {}),
   };
 }
 
@@ -324,6 +371,9 @@ export function detectReplayAttachments(
           matches: match.matches,
           compared: match.compared,
           gapS: Math.round(match.gapS * 1000) / 1000,
+          // ADAAAA-8325 (Inc 2): record the corroboration that produced the
+          // attach — only present when the phase band carried it.
+          ...(match.phase ? { phase: match.phase } : {}),
         },
       });
     }

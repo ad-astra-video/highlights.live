@@ -56,9 +56,12 @@ AUDIT_DIR = "/tmp/test-decide-audit-7993"
 # ADAAAA-8103 deliberately rewords the static block, so the prompt goldens were
 # re-pinned from the v3 code and the CONTEXT goldens were kept at their v2 values
 # (they still match — the reword touches no per-window text).
+# ADAAAA-8325 (Inc 2) adds the `phase` field + its rule to the FULL (VOD) contract
+# only: the FULL rows below move by exactly +411 chars and the COMPACT rows are
+# byte-identical, which is the live-rail parity proof.
 GOLDEN_V3_FULL = (
-    12714,
-    "6807ddd7bf000fcc8efa6a694695b6e153d766b2164331745f6e0a0b4bf1408c",
+    13125,
+    "9e2d262f7eb7352724adac3fe3b62b958ff11f25489c82eb360c5845fa899794",
 )
 # ADAAAA-8318 re-pins the COMPACT prompt only: the fast rail gained the
 # `postTitle` output field (+145 chars <= +40 input tokens). The FULL/VOD
@@ -68,8 +71,8 @@ GOLDEN_V3_COMPACT = (
     "089c351e8dc0ec5dd07c06d5652c15df0eb34ee40c61b0712db36731f3e89222",
 )
 GOLDEN_V3_FULL_MC_PG = (
-    12918,
-    "067c6eeb74fbbd87468bcfbb80404383cac6870d49e07922d832b07523eb1ed5",
+    13329,
+    "d743c0a2d6124c66e0af2102824520ba83d09cda767b2ad6fe213ade9d849ffb",
 )
 # the per-window Context block, pinned at its v2 bytes (ADAAAA-7993) — identical in v3
 GOLDEN_CONTEXT = (

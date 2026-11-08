@@ -27,6 +27,9 @@ export interface Section {
     eventType: string;
     score: number;
     outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
+    /** ADAAAA-8325 (Inc 2): footage phase from the decide verdict (absent =
+     * unknown, never "live"). */
+    phase?: "live" | "replay";
     nearMiss?: boolean;
     isHighlight: boolean;
     status: "accepted" | "suppressed" | "rejected";
@@ -133,6 +136,9 @@ export function buildSections(
       score: c.score,
       outcome: c.outcome,
       nearMiss: c.nearMiss,
+      // ADAAAA-8325 (Inc 2): the footage phase from the stored candidate row, so
+      // the per-window decide note shows live vs replay. Absent = unknown.
+      ...(c.phase ? { phase: c.phase } : {}),
       isHighlight: c.isHighlight,
       status: c.status,
       reason: c.reason,

@@ -128,6 +128,10 @@ class Decision:
     reason: str
     event_class: str = "ordinary"
     corroborated: bool = False
+    # ADAAAA-8325 (Inc 2): footage phase. The deterministic rule reads scalar
+    # signals only — it has no footage read — so a CPU-host fallback returns None
+    # (unknown) rather than guessing "live". Mirrors the decide response field.
+    phase: str | None = None
 
 
 def apply_gate(
@@ -198,4 +202,6 @@ def decide(
         reason=reason,
         event_class=cls,
         corroborated=has_corroboration(track_count, max_velocity, ocr_hits, reaction, score_board_changed),
+        # ADAAAA-8325 (Inc 2): explicit — the rule never knows the footage phase.
+        phase=None,
     )

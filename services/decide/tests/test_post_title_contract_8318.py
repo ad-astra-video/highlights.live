@@ -30,10 +30,17 @@ client = TestClient(decide_app)
 SHR = lambda s: hashlib.sha256(s.encode()).hexdigest()  # noqa: E731
 
 # Captured from the code BEFORE ADAAAA-8318 touched the compact contract. The
-# VOD (full) contract must never move; the compact one moved by the title field
-# only, and the delta is asserted below.
-VOD_CONTRACT_V3_SHA = "19a001493d5851a3cd348a5d4e6cb4fb9082b542152cf6eadff675ad34719352"
-VOD_CONTRACT_V3_LEN = 2423
+# VOD (full) contract then stayed byte-identical through 8318 (the compact one
+# moved by the title field only, and the delta is asserted below).
+# ADAAAA-8325 (Inc 2) deliberately moves the VOD contract once: the `phase`
+# field + its rule (+411 chars, 2423 -> 2834). The bytes are re-pinned here so a
+# later edit still cannot ride along, and the delta is bounded below.
+VOD_CONTRACT_V3_SHA = "675a1a11f6815dbaba82c2eb4bad670caf100b93c72e9178da401bc083200be3"
+VOD_CONTRACT_V3_LEN = 2834
+# ADAAAA-8325 (Inc 2): the exact VOD delta the phase field is allowed (measured:
+# +411 chars, ~+103 input tokens at the contract's own ~4 chars/token ratio).
+# Every VOD window pays it once per decide call; nothing else may add to it.
+PHASE_CONTRACT_DELTA_CHARS = 411
 PRE_CHANGE_COMPACT_LEN = 4640
 
 EV = {"trackCount": 3, "scoreBoardChanged": True, "goalCrossed": True}
@@ -49,15 +56,32 @@ def test_fast_rail_asks_for_post_title():
     assert '"runningSummary"' in prompt
 
 
-def test_vod_contract_is_byte_identical():
-    """AC8: the long-form/VOD prompt is untouched, byte for byte."""
+def test_vod_contract_is_pinned_with_the_phase_field():
+    """AC8 (8318) + ADAAAA-8325: the long-form/VOD prompt carries exactly the
+    `phase` field and its rule, and nothing else moved."""
     assert len(_OUTPUT_CONTRACT_FULL) == VOD_CONTRACT_V3_LEN
     assert SHR(_OUTPUT_CONTRACT_FULL) == VOD_CONTRACT_V3_SHA
+    assert '"phase": "live|replay"' in _OUTPUT_CONTRACT_FULL
+    # the field is additive metadata: the outcome ladder it sits beside is
+    # unchanged, and the standing "a replay is never scoring_play" rule is
+    # restated in the field's own wording.
+    assert '"outcome": "scoring_play|near_miss|big_play|not_highlight"' in _OUTPUT_CONTRACT_FULL
+    assert "NEVER `scoring_play` for re-showing a goal" in _OUTPUT_CONTRACT_FULL
     # and it never asks for a title: VOD rows derive theirs at projection time
     assert "postTitle" not in _OUTPUT_CONTRACT_FULL
     full = build_prompt("GOAL", EV, "soccer", n_frames=8)
     assert "postTitle" not in full
     assert "~1800 chars max" in full
+
+
+def test_phase_addendum_is_within_its_contract_budget():
+    """The phase field's VOD cost is a bounded, measured delta: it is the only
+    thing that moved the full contract (the sha above pins the bytes), and it
+    stays inside ~+110 input tokens (411 chars at the contract's own ~4
+    chars/token ratio). The live rail paid nothing."""
+    assert PHASE_CONTRACT_DELTA_CHARS <= 440
+    assert len(_OUTPUT_CONTRACT_FULL) - 2423 == PHASE_CONTRACT_DELTA_CHARS
+    assert '"phase"' not in _OUTPUT_CONTRACT_COMPACT
 
 
 def test_title_addendum_is_within_its_input_token_budget():
