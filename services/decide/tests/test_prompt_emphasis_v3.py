@@ -202,10 +202,10 @@ def test_static_block_budget():
     # so another field cannot ride along.
     assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 260
     # ADAAAA-8325 (Inc 2): the VOD (FULL) contract gained the `phase` field and
-    # its rule (+411 chars); bounded so a later edit cannot inflate every VOD
+    # its rule (+486 chars with the REPLAY cues); bounded so a later edit cannot inflate every VOD
     # window's prefill any further. The COMPACT bound above is untouched — the
     # live rail did not gain a character.
-    assert len(_OUTPUT_CONTRACT_FULL) - V2_FULL_CONTRACT_CHARS <= 480
+    assert len(_OUTPUT_CONTRACT_FULL) - V2_FULL_CONTRACT_CHARS <= 560
 
 
 # --- AC4: retained semantics ------------------------------------------------

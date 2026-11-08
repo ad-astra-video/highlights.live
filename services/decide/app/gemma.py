@@ -1647,10 +1647,18 @@ _OUTPUT_CONTRACT_FULL = (
         # inline `<...>` inside the JSON shape) so a strict JSON emitter cannot
         # paste prose into the value. Bounded on purpose — measured delta reported
         # in the ticket; the compact contract above is untouched.
-        "\nPHASE (the `phase` field): `live` = this window's frames show the action "
-        "as it happened; `replay` = the window re-shows EARLIER action (a broadcast "
-        "replay, a slow-motion repeat, or a replay bug/logo overlay). Judge the "
-        "FOOTAGE: a replay window is still judged on what it shows and is NEVER "
+        #
+        # MEASURED (deployed build, real 545be947 windows at 3 fps through
+        # /app/highlight): the field is emitted on 24/24 replies but the bare rule
+        # below never fired `replay` — the replay window read `live` in every
+        # probe window shape. Tightened ONCE with explicit REPLAY cues (what the
+        # footage looks like when it is a re-show) instead of relying on the model
+        # to infer the concept; the second measurement is in the ticket comment.
+        "\nPHASE (the `phase` field): `live` = the frames show the action happening; "
+        "`replay` = they re-show EARLIER action. Cues for `replay`: score bug/clock "
+        "missing or frozen, ball already in the net at the first frame, players "
+        "celebrating instead of contesting, a cut to another camera, slow motion, a "
+        "replay bumper. A replay is still judged on what it shows and is NEVER "
         "`scoring_play` for re-showing a goal. Omit `phase` when the frames cannot "
         "tell live from replay."
 )
