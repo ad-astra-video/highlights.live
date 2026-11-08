@@ -336,6 +336,26 @@ export interface JobDetailAlternative {
   sourceHighlightId?: string;
 }
 
+/**
+ * ADAAAA-8422 (N1): a sibling clip of a notable moment — another STORED,
+ * already-cut window of the same moment. Read-only on the card's clip rail in
+ * P1: it plays and downloads its own footage, and it is not pickable (pick/serve
+ * for a notable moment is the P2 follow-on). Mirrors NotableMomentClipSchema in
+ * `@highlights/events`.
+ */
+export interface JobDetailSiblingClip {
+  /** The sibling's own stored highlight row id. */
+  id: string;
+  start: number;
+  end: number;
+  clipUri: string;
+  clipError?: string;
+  /** Operator-only label; never customer copy. */
+  eventType?: string;
+  /** Per-caller export URL for THIS clip (playback stays `clipUri`). */
+  exportUri?: string;
+}
+
 export interface JobDetailHighlight {
   id: string;
   jobId: string;
@@ -361,6 +381,13 @@ export interface JobDetailHighlight {
   /** ADAAAA-7984: the celebration/replay clips delivered as alternatives OF this
    * highlight (grouped by the payload). Absent when none were delivered. */
   alternatives?: JobDetailAlternative[];
+  /** ADAAAA-8422 (N1): the moment's other windows, offered read-only on the clip
+   * rail (play/download each own clip). Absent on a single-window moment, which
+   * renders no rail. Mirrors NotableMomentClipSchema in `@highlights/events`. */
+  siblingClips?: JobDetailSiblingClip[];
+  /** ADAAAA-8422 (N1): rows the moment's overlap cluster holds (1 = a lone
+   * window). Lets a reader tell a rail-capped moment from a dropped row. */
+  siblingCount?: number;
   /** ADAAAA-8321 (AC6): the alternative clip this moment SERVES. Absent = its
    * own original cut. The payload's `clipUri` already resolves the pick, so the
    * card, download and post all serve the chosen footage. */

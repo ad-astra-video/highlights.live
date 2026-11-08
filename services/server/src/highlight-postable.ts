@@ -34,7 +34,7 @@
 //      duplicate lane with `duplicateOf`. A true non-goal notable (near miss, a
 //      score-steady big play, the clip-loop tail reads) keeps its own row: only
 //      the narrow, goal-bounded class above is absorbable.
-import type { HighlightRecord } from "@highlights/events";
+import { MAX_ALTERNATIVES_PER_HIGHLIGHT, type HighlightRecord } from "@highlights/events";
 
 /**
  * Reason phrases that refute a goal. The persisted `reason` on an accepted
@@ -90,6 +90,10 @@ export interface PostableHighlights {
   /** "Notable, not a goal" lane: non-rejected near_miss / big_play clips, kept
    * out of the postable list by rule 2. Never a GOAL label. */
   notable: HighlightRecord[];
+  /** ADAAAA-8422 (N1): the SAME notable rows, grouped by overlap chain — one
+   * card per moment with its siblings as clip options. Presentation only: the
+   * membership is exactly `notable`, so no count depends on it. */
+  notableMoments: NotableMoments;
   /** Merged-away duplicates, each carrying `duplicateOf`. Excluded from
    * `highlights` so the postable list has zero overlapping windows. */
   duplicates: PostableHighlight[];
@@ -189,7 +193,11 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
   counts.notScoring = Math.max(0, counts.notScoring - absorbed.absorbed);
   const duplicates = [...collapsed.duplicates, ...absorbed.duplicates].sort((a, b) => a.start - b.start);
   counts.postable = collapsed.moments.length;
-  return { highlights: collapsed.moments, notable: notableRows, duplicates, counts };
+  // ADAAAA-8422 (N1): the surviving notable rows grouped into moments. Pure
+  // presentation over the SAME rows — counts above are already final and never
+  // read this projection.
+  const notableMoments = clusterNotableWindows(notableRows);
+  return { highlights: collapsed.moments, notable: notableRows, notableMoments, duplicates, counts };
 }
 
 /**
@@ -316,6 +324,115 @@ export interface CollapsedMoments {
   merged: number;
 }
 
+// ---------------------------------------------------------------------------
+// ADAAAA-8422 (N1): ONE notable card per overlap chain, siblings as options
+// ---------------------------------------------------------------------------
+//
+// The notable lane used to ship one card per window, because only postable
+// candidates were clustered (`collapseOverlappingWindows` above) and clip
+// options were only ever minted for an ACCEPTED scoring GOAL
+// (`celebration-alternatives.ts`). Measured shape: live job
+// b55c5781-7976-4777-905c-847a06f3d3a8 carried 5 non-scoring windows that read
+// as 5 cards where the board expects 2 moments with 2 and 3 clip options.
+//
+// This projection clusters the SURVIVING notable rows (after the precision gate
+// AND the ADAAAA-8199 goal-shaped absorb) with the same transitive chain test,
+// so one card owns one moment and its sibling rows become that card's options.
+// Every option is another stored row's own already-cut `clipUri`: nothing is
+// re-encoded, no decide runs, no row is mutated, and no count moves (the rows
+// are the same rows — only the presentation changes).
+
+/** One notable moment: the row that owns the card plus the sibling rows of the
+ * same moment offered as clip options. */
+export interface NotableMomentCluster {
+  /** The row that owns the card (best footage, then best quality/score/earliest). */
+  owner: HighlightRecord;
+  /** Sibling rows of the same moment, time-ordered, capped at the rail contract
+   * (`MAX_ALTERNATIVES_PER_HIGHLIGHT` options). Each is its own stored row with
+   * its own already-cut clip. */
+  options: HighlightRecord[];
+  /** Rows in the cluster: 1 + options + (optionsSuppressed for this moment). */
+  memberCount: number;
+  /** Sibling rows beyond the rail cap. Never silently dropped: counted here so a
+   * job whose cluster is larger than the rail can be told apart from one that
+   * lost footage. */
+  optionsSuppressed: number;
+}
+
+export interface NotableMoments {
+  /** One entry per distinct notable moment, time-ordered. */
+  moments: NotableMomentCluster[];
+  /** Option rows beyond the rail cap across all moments. */
+  optionsSuppressed: number;
+}
+
+/** Does the row carry footage to show? Prefers a clip when picking the card
+ * owner, so a moment whose best-quality row never got a cut still renders a
+ * playable card (and its footage is not hidden behind a text-only row). */
+function hasFootage(h: HighlightRecord): boolean {
+  return !!(h.clipUri || h.clipError);
+}
+
+/**
+ * ADAAAA-8422 (N1): cluster notable rows into moments. Pure and deterministic:
+ * no row is mutated, and the returned lists hold the caller's own records.
+ *
+ * Owner = the row whose footage the card shows: a row with a clip first, then
+ * the existing quality ranking (corroborated + score, then score, then the
+ * earlier window). Options = the remaining rows of the cluster in time order,
+ * capped at {@link MAX_ALTERNATIVES_PER_HIGHLIGHT} (the shipped rail contract:
+ * 1 + up to 2 options). A single-window cluster renders no rail at all.
+ */
+export function clusterNotableWindows(
+  rows: HighlightRecord[],
+  cap: number = MAX_ALTERNATIVES_PER_HIGHLIGHT
+): NotableMoments {
+  const sorted = [...rows].sort((a, b) => a.start - b.start);
+  const clusters = overlapChainClusters(sorted);
+  const moments: NotableMomentCluster[] = [];
+  let optionsSuppressed = 0;
+  for (const cluster of clusters) {
+    const owner = cluster.reduce((best, h) => {
+      const fa = hasFootage(best) ? 1 : 0;
+      const fb = hasFootage(h) ? 1 : 0;
+      if (fa !== fb) return fa > fb ? best : h;
+      return betterMoment(best as PostableHighlight, h as PostableHighlight) === h ? h : best;
+    });
+    const siblings = cluster.filter((h) => h.id !== owner.id).sort((a, b) => a.start - b.start);
+    const limit = Math.max(0, cap);
+    const options = siblings.slice(0, limit);
+    const suppressed = siblings.length - options.length;
+    optionsSuppressed += suppressed;
+    moments.push({ owner, options, memberCount: cluster.length, optionsSuppressed: suppressed });
+  }
+  moments.sort((a, b) => a.owner.start - b.owner.start);
+  return { moments, optionsSuppressed };
+}
+
+/**
+ * Transitive OVERLAP CHAINS over `rows` (a overlaps b, b overlaps c => one
+ * moment). The component build is shared by the postable dedupe below and the
+ * notable moment projection (ADAAAA-8422), so both agree on what ONE moment is.
+ * Input order decides the cluster order (callers sort for their own ranking);
+ * membership is the same either way.
+ */
+export function overlapChainClusters<T extends Pick<HighlightRecord, "start" | "end">>(rows: T[]): T[][] {
+  const clusters: T[][] = [];
+  // Greedy component build: each new window joins every moment it overlaps
+  // (transitively), so a chain of overlapping clips collapses to one moment.
+  for (const h of rows) {
+    const hit = clusters.filter((c) => c.some((m) => windowsOverlap(m, h)));
+    if (hit.length === 0) {
+      clusters.push([h]);
+      continue;
+    }
+    const merged = [h, ...hit.flat()];
+    for (const c of hit) clusters.splice(clusters.indexOf(c), 1);
+    clusters.push(merged);
+  }
+  return clusters;
+}
+
 /**
  * Collapse OVERLAP CHAINS (a overlaps b, b overlaps c => one moment) over a set
  * of already-gated candidate rows, so the result can never carry a transitive
@@ -327,19 +444,7 @@ export function collapseOverlappingWindows(candidates: HighlightRecord[]): Colla
   const ordered = [...candidates].sort((a, b) => qualityRank(b) - qualityRank(a) || a.start - b.start);
   const moments: PostableHighlight[] = [];
   const duplicates: PostableHighlight[] = [];
-  // Greedy component build: each new window joins every moment it overlaps
-  // (transitively), so a chain of overlapping clips collapses to one moment.
-  const clusters: HighlightRecord[][] = [];
-  for (const h of ordered) {
-    const hit = clusters.filter((c) => c.some((m) => windowsOverlap(m, h)));
-    if (hit.length === 0) {
-      clusters.push([h]);
-      continue;
-    }
-    const merged = [h, ...hit.flat()];
-    for (const c of hit) clusters.splice(clusters.indexOf(c), 1);
-    clusters.push(merged);
-  }
+  const clusters = overlapChainClusters(ordered);
   let mergedCount = 0;
   for (const cluster of clusters) {
     if (cluster.length === 1) {

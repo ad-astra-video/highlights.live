@@ -15,7 +15,7 @@ import { momentRangeLabel } from "./highlightPost";
  * markup tests, and the interactive rules are pinned on these helpers.
  */
 
-export type ClipRailSlideKind = "highlight" | "celebration" | "replay";
+export type ClipRailSlideKind = "highlight" | "celebration" | "replay" | "sibling";
 
 export interface ClipRailSlide {
   kind: ClipRailSlideKind;
@@ -41,6 +41,10 @@ export interface ClipRailSlide {
   /** ADAAAA-8325: TRUE when the attach needed the phase-corroborated band (the
    * Inc 1 hash bar alone missed it), so the picker names that provenance. */
   phaseCorroborated?: boolean;
+  /** ADAAAA-8422 (N1): a notable moment's SIBLING clip — the same moment's other
+   * window, read-only (no pick). Carries that row's own id + export URL. */
+  siblingClipId?: string;
+  exportUri?: string;
 }
 
 /**
@@ -77,6 +81,23 @@ export function clipRailSlides(h: JobDetailHighlight): ClipRailSlide[] {
       ...(a.replayEvidence?.phase === "replay" ? { phaseCorroborated: true } : {}),
     });
   }
+  // ADAAAA-8422 (N1): a notable moment's other windows ride the SAME rail — one
+  // read-only slide per sibling, each playing/downloading its OWN already-cut
+  // clip. No `alternativeId`, because a notable option is not (yet) pickable:
+  // pick/serve parity for a notable moment is the P2 follow-on.
+  for (const s of h.siblingClips ?? []) {
+    slides.push({
+      kind: "sibling",
+      siblingClipId: s.id,
+      key: `sibling:${s.id}`,
+      src: s.clipUri,
+      error: s.clipError,
+      start: s.start,
+      end: s.end,
+      eventType: s.eventType,
+      ...(s.exportUri ? { exportUri: s.exportUri } : {}),
+    });
+  }
   return slides;
 }
 
@@ -110,10 +131,25 @@ export function clipRailBadgeLabel(count: number): string | null {
 /**
  * The per-slide identity line. Customer-safe: it names the ROLE of the clip and
  * its own moment range, never the pipeline event type, score or outcome code.
+ *
+ * ADAAAA-8422 (AC4): on a NOTABLE card the role words change. `Highlight` would
+ * assert a confirmed score the window never measured, so a notable moment's own
+ * slide reads `Moment` and its siblings read `Clip`. The postable feed keeps the
+ * shipped `Highlight` / `Celebration` / `Replay` labels byte-for-byte.
  */
-export function clipRailIdentityLabel(slide: ClipRailSlide): string {
+export function clipRailIdentityLabel(slide: ClipRailSlide, notable = false): string {
+  if (notable) {
+    const role = slide.kind === "sibling" ? "Clip" : "Moment";
+    return `${role} · ${momentRangeLabel(slide.start, slide.end)}`;
+  }
   const role = slide.kind === "highlight" ? "Highlight" : slide.kind === "replay" ? "Replay" : "Celebration";
   return `${role} · ${momentRangeLabel(slide.start, slide.end)}`;
+}
+
+/** ADAAAA-8422 (N1): the read-only option line on a notable card's sibling slide
+ * — the same moment, another cut, named by its own window. Never a goal claim. */
+export function clipRailOptionLabel(slide: ClipRailSlide): string {
+  return `Same moment · ${momentRangeLabel(slide.start, slide.end)}`;
 }
 
 /** Clamp a requested slide index into the rail. Out-of-range is a no-op at the
