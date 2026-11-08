@@ -10,6 +10,7 @@ import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-t
 import {
   captionColour,
   gatePostTitleValue,
+  uniquePostTitle,
   groundCaption,
   isQuietVerdict,
   regateServedSentence,
@@ -6356,6 +6357,15 @@ export async function acceptVideoDecision(
         }
       : undefined;
 
+  // ADAAAA-8356: the card's copy target must be DISTINCT across the job's cards
+  // (AC6 measured 23 distinct titles over 25 cards). `run.highlights` holds the
+  // rows already accepted for this job, so a repeat is dropped here and the read
+  // projection derives the deterministic `LABEL · m:ss` title instead.
+  const rowPostTitle = uniquePostTitle(
+    surface.postTitle,
+    run.highlights.map((h) => h.postTitle)
+  );
+
   const rec: HighlightRecord = {
     id: randomUUID(),
     jobId: cfg.jobId,
@@ -6435,7 +6445,7 @@ export async function acceptVideoDecision(
     ...(surface.colour ? { colour: surface.colour } : {}),
     ...(surface.caption ? { caption: surface.caption, cardTitles: surface.cardTitles } : {}),
     // ADAAAA-8318: the copy target rides the row beside the announcer caption.
-    ...(surface.postTitle ? { postTitle: surface.postTitle } : {}),
+    ...(rowPostTitle ? { postTitle: rowPostTitle } : {}),
     ...(surface.reason_raw ? { reason_raw: surface.reason_raw } : {}),
     // Increment F / ADAAAA-6465: near-miss surface at a lower score, labeled
     // distinctly via the outcome/nearMiss flag.

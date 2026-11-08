@@ -2917,6 +2917,14 @@ const NAME_STOPWORDS = new Set(
     "box","net","wide","blocked","cleared","crowd","bench","play","break","chance",
     "pressure","tension","substitute","sub","var","replay","cross","header","volley",
     "striker","winger","keeper","defender","midfielder","no","number","side","sides",
+    // ADAAAA-8356: a ROLE noun is not a proper name. The gate already carried
+    // striker/winger/keeper/defender/midfielder; the card headline's WHO slot
+    // reads "Goalkeeper holds ball" / "Children stand together" on a window with
+    // no readable name, and refusing those cost model copy on honest rows.
+    "goalkeeper","goalie","attacker","attackers","forward","forwards","centreback",
+    "centerback","centre-back","center-back","fullback","full-back","wingback",
+    "wing-back","defenders","midfielders","strikers","wingers","keepers","children",
+    "kids","boys","girls","teammate","teammates","squad",
     "team","teams","player","players","coach","manager","fans","keeper's","saturday",
     "sunday","monday","tuesday","wednesday","thursday","friday","january","february",
     "march","april","may","june","july","august","september","october","november",
