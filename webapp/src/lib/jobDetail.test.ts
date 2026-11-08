@@ -16,6 +16,7 @@ import {
   sectionKinds,
   noteSummaryText,
   sectionSummaryText,
+  skippedSummaryClause,
   sectionMatchesFilter,
   sectionMatchesSearch,
   sectionMatches,
@@ -185,6 +186,27 @@ describe("sectionSummaryText / noteSummaryText (collapsed summary)", () => {
 
   it("reads as having no analysis for a window with no decide notes", () => {
     expect(sectionSummaryText(section(0, [frame(0, 0.2)], []))).toContain("no analysis");
+  });
+
+  // ADAAAA-8419: the audit summary names the frames the consume stride refused,
+  // and states the per-section cap instead of hiding the trimmed remainder.
+  it("names the skipped frames on the collapsed summary (ADAAAA-8419)", () => {
+    const s = { ...section(0, [frame(0, 0.2)], []), skipped: [{ timestamp: 0.4, reason: "stride" as const }, { timestamp: 2.1, reason: "stride" as const }], skippedTotal: 2 };
+    expect(sectionSummaryText(s)).toContain("· 2 skipped");
+    expect(sectionSummaryText(s)).not.toContain("more");
+    expect(skippedSummaryClause(s)).toBe(" · 2 skipped");
+  });
+
+  it("states the trimmed remainder when the per-section cap applies (ADAAAA-8419)", () => {
+    const shown = Array.from({ length: 30 }, (_, i) => ({ timestamp: i * 0.1, reason: "stride" as const }));
+    const s = { ...section(0, [frame(0, 0.2)], []), skipped: shown, skippedTotal: 35 };
+    expect(sectionSummaryText(s)).toContain("· 30 skipped +5 more");
+  });
+
+  it("adds no skipped clause when a window has no skip evidence (never `0 skipped`)", () => {
+    const s = section(0, [frame(0, 0.2)], []);
+    expect(skippedSummaryClause(s)).toBe("");
+    expect(sectionSummaryText(s)).not.toContain("skipped");
   });
 });
 

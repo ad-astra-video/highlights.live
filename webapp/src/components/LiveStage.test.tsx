@@ -158,7 +158,9 @@ describe("LiveStage analyse position (ADAAAA-8121)", () => {
     const html = render(view(), progress);
     expect(html).toContain("data-analyze-position");
     expect(html).toContain("Analysing T+3:35 · 8 s behind live");
-    expect(html).toContain("708 frames skipped (stride 1 fps)");
+    // ADAAAA-8419: the stride count is no longer printed on the live chip.
+    expect(html).not.toMatch(/frames? skipped|stride \d+ fps|no stride data/);
+    expect(html).toContain('data-analyze-position-skipped="708"');
     // order: the position chip follows the lag chip inside the status row
     expect(html.indexOf("data-live-progress")).toBeLessThan(html.indexOf("data-analyze-position"));
   });

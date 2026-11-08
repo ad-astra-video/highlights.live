@@ -233,6 +233,28 @@ function FrameTile({ frame, token, selectMode, selected, onFrameClick }: FrameTi
 }
 
 /**
+ * ADAAAA-8419: one greyed `skipped` tile — a frame the live consume stride
+ * refused. It is audit evidence, not a frame: no image is fetched (a strided
+ * frame never had a stored JPEG), it carries no `seq`/`uri`, it is not a button,
+ * so it can never be selected or enter the enlarged gallery. The timestamp is the
+ * frame's content clock, read from the server's `skipped[]` record.
+ */
+function SkippedFrameTile({ timestamp }: { timestamp: number }) {
+  return (
+    <div
+      data-detail-frame-skipped
+      data-skipped-ts={timestamp.toFixed(3)}
+      data-skipped-reason="stride"
+      title={`Skipped by the consume stride at T+${timestamp.toFixed(1)}s — no frame was analysed`}
+      className="flex h-24 w-40 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-mut/30 bg-black/20 text-mut opacity-50"
+    >
+      <span className="text-xs font-bold uppercase tracking-wide">skipped</span>
+      <span className="text-xs">T+{timestamp.toFixed(1)}s</span>
+    </div>
+  );
+}
+
+/**
  * ADAAAA-8287: lane accents for the row-body confirmation line (token-only).
  * A measured (lane-1) accept reads green, a Stage-2 dive reads pink (the same
  * tone its confirm panel uses), a demoted dive reads yellow, and an accepted row
@@ -719,6 +741,15 @@ export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs
   const [open, setOpen] = useState(defaultOpen);
   if (!admin) return <CustomerAnalysisWindow section={section} />;
   const kinds = sectionKinds(section);
+  // ADAAAA-8419: the audit filmstrip interleaves the frames that were USED with
+  // the frames the consume stride refused (greyed `skipped` tiles), ordered by
+  // content timestamp so a dropped frame sits beside its neighbours. A window
+  // with no evidence has an empty list — no tile, no invented zero.
+  const skippedTiles = section.skipped ?? [];
+  const filmstrip = [
+    ...dedupeFrames(section.frames).map((frame) => ({ timestamp: frame.timestamp, frame })),
+    ...skippedTiles.map((skipped) => ({ timestamp: skipped.timestamp, skipped })),
+  ].sort((a, b) => a.timestamp - b.timestamp);
   return (
     <section className="rounded-xl border border-purple/30 bg-black/30" data-analysis-window data-section-index={section.index}>
       <button
@@ -751,20 +782,24 @@ export function AnalysisWindow({ section, token, jobId, selectMode, selectedSeqs
               ))}
             </div>
           )}
-          <div className="flex flex-wrap gap-1.5">
-            {section.frames.length === 0 ? (
+          <div className="flex flex-wrap gap-1.5" data-analysis-window-filmstrip>
+            {section.frames.length === 0 && skippedTiles.length === 0 ? (
               <div className="text-xs text-mut">No frames in this section.</div>
             ) : (
-              dedupeFrames(section.frames).map((f) => (
-                <FrameTile
-                  key={f.seq}
-                  frame={f}
-                  token={token}
-                  selectMode={selectMode}
-                  selected={selectedSeqs.has(f.seq)}
-                  onFrameClick={onFrameClick}
-                />
-              ))
+              filmstrip.map((item) =>
+                "frame" in item ? (
+                  <FrameTile
+                    key={`f-${item.frame.seq}`}
+                    frame={item.frame}
+                    token={token}
+                    selectMode={selectMode}
+                    selected={selectedSeqs.has(item.frame.seq)}
+                    onFrameClick={onFrameClick}
+                  />
+                ) : (
+                  <SkippedFrameTile key={`s-${item.skipped.timestamp}`} timestamp={item.skipped.timestamp} />
+                )
+              )
             )}
           </div>
         </div>

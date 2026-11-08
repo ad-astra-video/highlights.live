@@ -13,10 +13,10 @@ import { analysePositionLabel } from "../lib/liveProgress";
  * nothing ticks off the wall clock.
  *
  * A strided window is content the analysis never reached, so it can never be a
- * position: `strideFramesSkipped` is rendered as a COUNT beside the position,
- * never as a marker on the track (AC-3). When the record carries no stride
- * evidence at all (the content-fps knob was unset on that run) the chip says
- * "no stride data" instead of inventing a position (AC-6).
+ * position (AC-3 of ADAAAA-8121). ADAAAA-8419: the chip no longer PRINTS the
+ * stride count — that evidence moved to the admin window audit as greyed
+ * `skipped` tiles. The machine attributes below (`data-analyze-position-stride`
+ * / `-skipped`) and the `title` keep the counts readable for QA.
  *
  * Terminal jobs and jobs with no decided window render NOTHING (AC-4): a frozen
  * or zero position on screen would be a fabricated reading.

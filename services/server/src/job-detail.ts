@@ -9,6 +9,11 @@ import type { StoredObservation } from "./store";
 /** Fixed section length (s). Section index = floor(timestamp / SECTION_WINDOW). */
 export const SECTION_WINDOW = 3;
 
+/** ADAAAA-8419: max skipped-frame tiles rendered per 3 s section. The audit is
+ *  evidence, not a dump: a window that lost more than 30 frames names 30 tiles
+ *  plus the trimmed remainder (`skippedTotal`), so the cap is stated, not hidden. */
+export const SECTION_SKIPPED_CAP = 30;
+
 export interface SectionFrame {
   seq: number;
   timestamp: number;
@@ -21,6 +26,15 @@ export interface Section {
   startS: number;
   endS: number;
   frames: SectionFrame[];
+  /** ADAAAA-8419: frames the consume stride REFUSED inside `[startS, endS)`,
+   *  ascending, capped at `SECTION_SKIPPED_CAP`. Display evidence only: no
+   *  `seq`, no `uri`, no `tracks` — a skipped frame has no stored image and must
+   *  never enter the gallery or be selectable. Absent when no skip evidence was
+   *  supplied for this window (unknown, never a fabricated empty list). */
+  skipped?: { timestamp: number; reason: "stride" }[];
+  /** ADAAAA-8419: how many frames the stride refused in this window, BEFORE the
+   *  per-section cap. Only present with `skipped`. */
+  skippedTotal?: number;
   decideNotes: {
     seq: number;
     timestamp: number;
@@ -82,7 +96,11 @@ export function buildSections(
   observations: StoredObservation[],
   candidates: JobCandidate[],
   jobId: string,
-  inventory?: FrameInventory
+  inventory?: FrameInventory,
+  /** ADAAAA-8419: content ts of frames the live consume stride refused (the
+   *  rail's bounded evidence ring). Absent = no skip evidence (never a fabricated
+   *  0); each ts lands in the section that covers its content instant. */
+  skippedTimestamps?: number[]
 ): Section[] {
   const sections = new Map<number, Section>();
   const sectionOf = (ts: number): number => Math.floor(ts / SECTION_WINDOW);
@@ -152,6 +170,28 @@ export function buildSections(
       // panel used to be the only signal). Pure derivation over stored fields.
       confirmation: deriveConfirmation(c),
     });
+  }
+  // ADAAAA-8419: attach the skipped-frame evidence to the window that covers its
+  // content instant. A skipped frame carries no seq/uri/tracks: it was refused by
+  // the consume gate before persistence, so it is audit evidence only. This runs
+  // BEFORE the section list is materialized so a window whose every frame was
+  // refused still shows up (as a skipped-only window), not just ones that happen
+  // to hold a persisted observation.
+  const skippedTs = (skippedTimestamps ?? []).filter((ts) => Number.isFinite(ts) && ts >= 0);
+  if (skippedTs.length > 0) {
+    const bySection = new Map<number, number[]>();
+    for (const ts of skippedTs) {
+      const index = sectionOf(ts);
+      const bucket = bySection.get(index);
+      if (bucket) bucket.push(ts);
+      else bySection.set(index, [ts]);
+    }
+    for (const [index, bucket] of bySection) {
+      bucket.sort((a, b) => a - b);
+      const s = getSection(index);
+      s.skippedTotal = bucket.length;
+      s.skipped = bucket.slice(0, SECTION_SKIPPED_CAP).map((timestamp) => ({ timestamp, reason: "stride" as const }));
+    }
   }
   const list = [...sections.values()].sort((a, b) => a.index - b.index);
   // Deterministic frame order inside a window (seq ascending) regardless of

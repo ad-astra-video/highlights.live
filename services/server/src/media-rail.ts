@@ -241,6 +241,12 @@ export const LIVE_MEDIA_STRIDE_CREDIT_MAX = 30;
  *  content origin. */
 export const MIN_EPOCH_SECONDS = 1_000_000;
 
+/** ADAAAA-8419: how many skipped content timestamps the rail keeps in memory so
+ *  the window audit can name the frames the consume stride refused. Bounded ring
+ *  (the newest wins): a strided frame never had a stored JPEG and the evidence is
+ *  display-only audit context, so nothing is persisted and no DB column is added. */
+export const SKIPPED_FRAME_TS_RING_CAP = 240;
+
 /** Per-share decide traffic the completion report reads. */
 export interface MediaRailStats {
   /** Observations relayed by the media node (frames with pixels). */
@@ -339,6 +345,10 @@ export class MediaRailObserver {
    *  content clock skipped. Published as `observeMetrics.perceive`. */
   private framesSeen = 0;
   private framesStrided = 0;
+  /** ADAAAA-8419: content ts of the frames the stride refused, newest-in ring
+   *  (cap `SKIPPED_FRAME_TS_RING_CAP`). Display evidence for the window audit
+   *  only — no image bytes, no `seq`, nothing persisted. */
+  private skippedTs: number[] = [];
   /** ADAAAA-8395 (LFR-1 AC-5): the perceive runner's bounded ROI-pass fires,
    *  summed over the frames this rail CONSUMED (a strided/evidence-only relay is
    *  not in the analysed set, so `roiPasses <= framesAnalyzed` holds by
@@ -526,6 +536,10 @@ export class MediaRailObserver {
       framesAnalyzed: this.frames,
       framesStrided: this.framesStrided,
       analysisFps: this.contentFps,
+      // ADAAAA-8419: the frames the consume gate refused, as content ts — the
+      // window audit renders one greyed tile per entry inside its window. A copy
+      // so the caller can never mutate the rail's ring.
+      skippedTimestamps: [...this.skippedTs].sort((a, b) => a - b),
       analysedThroughTs: Number(this.lastConsumedTs.toFixed(3)),
       tapThroughTs: Number(this.lastSeenTs.toFixed(3)),
     };
@@ -586,6 +600,11 @@ export class MediaRailObserver {
     this.framesSeen++;
     if (this.contentFps > 0 && !this.takeContentCredit(ts)) {
       this.framesStrided++;
+      // ADAAAA-8419: keep the refused frame's content ts (bounded, newest wins)
+      // so the window audit can list it as a greyed `skipped` tile.
+      this.skippedTs.push(ts);
+      const overflow = this.skippedTs.length - SKIPPED_FRAME_TS_RING_CAP;
+      if (overflow > 0) this.skippedTs.splice(0, overflow);
       return;
     }
     // ADAAAA-7734: the rail allocates a DENSE global position for every accepted
