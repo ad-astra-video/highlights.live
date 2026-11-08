@@ -971,6 +971,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       bj.mediaSessionId = body.sessionId;
       bj.mediaWsUrl = wsUrl;
       bj.mediaIceServers = body.iceServers;
+      // ADAAAA-8431: the SERVED window opens with the media session, which is
+      // ~30 s before the publisher's first frame. Anchor the decide-rate credit
+      // clock here so that head banks and the charged rate holds at 66 per
+      // SERVED 300 s (the §1 denominator) instead of 66 per content 300 s.
+      bj.rail?.noteServedClockStart();
     }
     return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin: browserOrigin, iceServers: body.iceServers };
   }
@@ -6266,6 +6271,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const { wsUrl, mediaSessionId, mediaOrigin, iceServers } = await provisionMedia(req.params.id);
       bj.mediaWsUrl = wsUrl;
       bj.mediaSessionId = mediaSessionId;
+      // ADAAAA-8431: the rail is often built before the session is provisioned,
+      // so the served-clock anchor is also taken here (idempotent — a reconnect
+      // that reuses the session must not re-anchor).
+      bj.rail?.noteServedClockStart();
       // WebRTC ingest (C1): the browser signals to the media server via
       // POST {mediaOrigin}/sessions/{mediaSessionId}/rtc/offer instead of
       // posting sampled frames over the WS. wsUrl is kept for the WS fallback.

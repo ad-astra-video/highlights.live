@@ -135,8 +135,14 @@ export interface MediaRailObserverOptions {
   signalGate?: boolean;
   signalGateOpts?: SignalGateOptions;
   /** ADAAAA-7799 (lever C): decide-rate cap for this rail — keep only a
-   *  fraction (0 < r < 1) of the decide opportunities. Undefined = off. */
+   *  fraction (0 < r < 1) of the decide opportunities. Undefined = off.
+   *  ADAAAA-8431: the fraction is resolved into charged decides per 300 s of
+   *  SERVED clock, so this knob binds the RATE, not a share of this rail's
+   *  opportunity count. */
   decideKeepRatio?: number;
+  /** ADAAAA-8431: the SERVED clock the decide-rate budget accrues on (epoch ms).
+   *  Defaults to `Date.now`; tests inject a simulated clock. */
+  wallClock?: () => number;
   /** ADAAAA-8108 (AC-E3): the enrichment arm for this rail — `on` (default) sends
    *  the per-window `perceiveTimeline`, `off` omits it, `alternate` alternates per
    *  DECIDED window in content order starting OFF. Undefined = the shipped `on`,
@@ -432,6 +438,7 @@ export class MediaRailObserver {
       signalGate: opts.signalGate ?? false,
       signalGateOpts: opts.signalGateOpts,
       decideKeepRatio: opts.decideKeepRatio,
+      ...(opts.wallClock ? { wallClock: opts.wallClock } : {}),
       // ADAAAA-8108 (AC-E3): the enrichment arm, so the OFF arm is reachable on
       // the media rail the 7 s / 5 s cell is graded on. Undefined = shipped `on`.
       enrichment: opts.enrichment,
@@ -700,6 +707,18 @@ export class MediaRailObserver {
       }
       await this.live.maybeFire(ts, false, lagMs);
     });
+  }
+
+  /**
+   * ADAAAA-8431: anchor the decide-rate credit clock at the SERVED window's open
+   * (the media session handshake). A browser share's session opens ~30 s before
+   * the publisher's first frame, so this head banks one decide's worth of credit
+   * per ~4.5 served seconds and is spent once content arrives — that is what
+   * holds the charged rate at 66 per SERVED 300 s (the §1 denominator) instead of
+   * 66 per content 300 s. Idempotent: a reconnecting share must not re-anchor.
+   */
+  noteServedClockStart(nowMs: number = Date.now()): void {
+    this.live.startDecideRateClock(nowMs);
   }
 
   /**
