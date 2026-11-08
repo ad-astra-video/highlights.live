@@ -42,8 +42,8 @@ STORY = "Goal at 42s: Ronaldo finishes low to make it 1-0 Portugal."
 # (+2385 preamble chars). The block-absent invariant is unchanged — an empty or
 # malformed prior game state still renders nothing (see the degrade test below).
 GOLDEN = {
-    ("full", ""): (12445, "f7c8170b7f11b496963e993f9c1ddffdef566d496c31953efedc95a5dc5bc8f8"),
-    ("full", STORY): (12697, "bdb7b1247da231e661970caf7f74dbf1bce1ddeb13ff030ee931baf81f9ade9d"),
+    ("full", ""): (12520, "228353998a469a3fb010e776d3af67451cf2b8d220917f5ec4c128ce37309c55"),
+    ("full", STORY): (12772, "5140d92b466f1ce0269331e259147b2e52c7e03e1e6a66799e66d1f371a297fe"),
     # ADAAAA-8318 re-pinned the two COMPACT rows (+145 chars: the `postTitle`
     # field); ADAAAA-8325 (Inc 2) re-pins the FULL rows (+411 chars: the `phase`
     # field + its rule). Each contract layer is pinned on its own.

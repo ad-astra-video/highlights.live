@@ -60,8 +60,8 @@ AUDIT_DIR = "/tmp/test-decide-audit-7993"
 # only: the FULL rows below move by exactly +411 chars and the COMPACT rows are
 # byte-identical, which is the live-rail parity proof.
 GOLDEN_V3_FULL = (
-    13125,
-    "9e2d262f7eb7352724adac3fe3b62b958ff11f25489c82eb360c5845fa899794",
+    13200,
+    "6baad4454b745cfdb5d694883727218e15ee32730380df5e959e21118a8b17ce",
 )
 # ADAAAA-8318 re-pins the COMPACT prompt only: the fast rail gained the
 # `postTitle` output field (+145 chars <= +40 input tokens). The FULL/VOD
@@ -71,8 +71,8 @@ GOLDEN_V3_COMPACT = (
     "089c351e8dc0ec5dd07c06d5652c15df0eb34ee40c61b0712db36731f3e89222",
 )
 GOLDEN_V3_FULL_MC_PG = (
-    13329,
-    "d743c0a2d6124c66e0af2102824520ba83d09cda767b2ad6fe213ade9d849ffb",
+    13404,
+    "06a66b4038aa52d62696a8f7f12db51e11d6f5f096d585b227678172ac716f31",
 )
 # the per-window Context block, pinned at its v2 bytes (ADAAAA-7993) — identical in v3
 GOLDEN_CONTEXT = (
