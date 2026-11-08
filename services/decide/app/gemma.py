@@ -1618,7 +1618,9 @@ _OUTPUT_CONTRACT_COMPACT = (
     # named outright — the caption MUST name a place, the headline MUST NOT.
     "\"postTitle\": \"<the card HEADLINE: exactly WHO + one present-tense VERB + "
     "WHAT, three slots and no fourth — never WHERE, never a clock, second beat "
-    "or score/goal word; <=60 chars, <=10 words>\", "
+    "or score/goal word. WHO is a jersey number or a role; a NAME only when the "
+    "transcript spells it, else the role, never a name off the picture; <=60 "
+    "chars, <=10 words>\", "
     "\"runningSummary\": \"<CAPTION FOR THIS WINDOW ONLY, as ONE line (never append a "
     "second line): total target max 110 chars, HARD MAX 140 (was 220). Shape "
     "'<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. THIS WINDOW ONLY: describe "
