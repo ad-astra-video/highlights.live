@@ -1578,14 +1578,6 @@ _OUTPUT_CONTRACT_COMPACT = (
     "A celebration or replay window NEVER states the goal again, whatever the "
     "scoreboard shows — the goal belongs to the window where the ball first "
     "entered the net and is not re-said afterwards. "
-    # ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET. The
-    # runningSummary above stays the announcer detail line; this ONE extra field
-    # is the title a user posts, generated in the SAME reply (no second call).
-    # The addendum is budgeted: <= +40 input tokens / <= +25 output tokens per
-    # decide, so the bars are inlined tersely instead of restating the contract.
-    "\"postTitle\": \"<ONE clause, <=60 chars, <=10 words, simple tense; no "
-    "place words, no clock, no em-dash, no goal claim unless a goal, no "
-    "period>\", "
     "COLOR BEAT — a "
     "SEPARATE CHANNEL, NEVER the play: on a highlight window the em-dash clause "
     "may carry ONLY crowd or stand reaction, players' body language or posture, "
@@ -1601,7 +1593,40 @@ _OUTPUT_CONTRACT_COMPACT = (
     "video shows', 'The video begins', 'The video starts with', 'In this segment', "
     "'The scene opens on', 'The broadcast cuts to', 'The sequence', 'This window "
     "shows'. Color must be attributable to this window's frames or transcript — no "
-    "invented names, scores, kit colours or flags.>\"}"
+    "invented names, scores, kit colours or flags.>\", "
+    # ADAAAA-8318 (ADAAAA-8302 Option 2): the clip card's COPY TARGET. The
+    # runningSummary above stays the announcer detail line; this ONE extra field
+    # is the title a user posts, generated in the SAME reply (no second call).
+    #
+    # ADAAAA-8356 (ADAAAA-8302 Phase B FAIL): 8318 inlined this field MID-WAY
+    # through the runningSummary description, so the COLOR BEAT / CLOCK /
+    # no-invented-names rules dangled after the title key and the title spec was
+    # a 5-clause parenthetical ("no place words, no goal claim unless a goal")
+    # sitting immediately under a lead rule that REQUIRES actor + action + place.
+    # Measured consequence on leg 23bb0a61: 341/898 model titles carried a place
+    # chain, 39 asserted a goal on a non-scoring verdict, 24 named a person/team
+    # absent from the row's copy, 24 carried a second beat — and the write gate
+    # refused 46/54 rows, so 20/25 cards fell back to the deterministic title.
+    # The field now keeps a one-line placeholder in the shape and gets its own
+    # rule paragraph AFTER the shape (recency, and it cannot be read as a caption
+    # clause). The paragraph names the collision explicitly ("the lead MUST name
+    # a place; the title must NOT"), keys the claim bar to the model's OWN
+    # outcome, ties names to THIS window's reads, and states the discard.
+    "\"postTitle\": \"<the clip card's title — see POST TITLE RULES>\"} "
+    "POST TITLE RULES — postTitle is the clip card's title: a DIFFERENT string "
+    "from runningSummary, never the lead restated. ONE event, ONE clause = "
+    "subject + present-tense verb + object, <=60 chars, <=10 words. The subject "
+    "is a jersey number or role, or a name ONLY when THIS window's transcript, "
+    "OCR or frames read that exact name — never a name, team, score or colour "
+    "taken from the story or the match context. The lead above MUST name a place; "
+    "the title must NOT: no in/on/at/from/near/into/around tail (area, box, "
+    "midfield, third, center, wing, post, half, left, right), no clock, no "
+    "em-dash, semicolon or comma clause, no consequence ('leads to', 'after', "
+    "'then'), no bare 'Player', no trailing period. No score, goal, level or "
+    "equalise claim unless YOUR OWN outcome here is scoring_play. Never reuse a "
+    "subject+verb you already titled this job. A title that breaks any of these "
+    "rules is discarded and the card falls back to a plain label, so write the "
+    "plainest true phrase."
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "
