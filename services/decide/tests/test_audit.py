@@ -123,7 +123,7 @@ def test_ask_emits_one_record_and_replay_byte_matches():
             res = ask(
                 url,
                 "GOAL",
-                {"trackCount": 1, "maxVelocity": 0.5},
+                {"trackCount": 1, "maxVelocity": 0.5, "scoreBoardChanged": True},
                 game_hint="soccer",
                 frames=[{"role": "t", "base64": "aGVsbG8="}],
                 audit_ctx={"sessionId": "job", "groupKey": "g1", "frameCount": 1, "candidateCount": 1},
@@ -166,7 +166,7 @@ def test_audit_descriptor_emitted_compact_on_decision():
             res = ask(
                 url,
                 "GOAL",
-                {"trackCount": 2, "maxVelocity": 0.5},
+                {"trackCount": 2, "maxVelocity": 0.5, "scoreBoardChanged": True},
                 game_hint="soccer",
                 frames=[{"role": "t", "base64": "aGVsbG8="}],
                 audit_ctx={"sessionId": "job-1", "jobId": "job-1", "groupKey": "g5", "frameCount": 1, "candidateCount": 1},

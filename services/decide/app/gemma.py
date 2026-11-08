@@ -884,24 +884,52 @@ def apply_goal_attestation_gate(
 #   ball_before_goal_line : measured geometry puts the ball before the goal line
 #       (`goalLineDelta` < 0) with no other measured attestation.
 #
-# The guard is deliberately INERT in every other case, so the audited contract
-# does not move:
+# ADAAAA-8370 (VERSION 2): a goal accept that no measured channel attests is
+# never EMITTED. Version 1 stopped at the flag: the accept whose evidence was
+# merely absent-but-plausible recorded `unverifiable_evidence` and survived as
+# `scoring_play`, and an accept whose goal-line claim lived only in the model's
+# structured criteria (not in the reason text) recorded `not_a_goal_accept` and
+# was never even in scope. The ADAAAA-8343 eval measured the cost: 30 false
+# accepts across 8 cells, 30/30 flagged by v1 in exactly those two inert
+# outcomes, all 30 still counted as `scoring_play`. So:
+#   - SCOPE now also reads the model's own structured criteria
+#     (`verdict.criteria.ballCrossedLineBetweenPosts` / `ballInNet`) as a goal
+#     claim. Criteria are used for SCOPE only, never as attestation — the
+#     measured channels above remain the only thing that can attest a goal.
+#   - An in-scope accept with NO measured attestation is REJECTED whatever the
+#     evidence state: absent-but-plausible becomes the refutation code
+#     `unattested_goal_accept` instead of a silent pass.
+#   - The rejected outcome is downgraded to `not_highlight` (see
+#     `GOAL_REJECT_OUTCOME` for why suppression, not `near_miss`). The wire
+#     tri-state criteria are still never coerced, so the audit keeps saying
+#     "unverifiable" about the frames while the DECISION stops claiming a goal.
+#
+# Still deliberately INERT, so the audited contract does not move:
 #   - `isHighlight=false` and `null` are never touched (`null` = unverifiable,
 #     and the wire verdict keeps its tri-state criteria — the guard never turns
-#     an unverifiable read into a rejection);
-#   - an accept that no measured channel attests AND that carries no goal-text
-#     claim is left to the existing anti-fabrication gate (ADAAAA-6610), which
-#     owns that class; the guard records `outcome="inert"` and does nothing;
-#   - when the Stage-2 confirm pass is enabled (ADAAAA-6973) a rejection still
-#     leaves the decision goal-shaped + un-attested, so the server's confirm
-#     deep-frame dive runs for it (`isGateRejectedBareGoal`) and can re-attest a
-#     genuine goal — the guard records `stage2ConfirmEligible` rather than
-#     silently passing the accept.
+#     an unverifiable READ into a rejection; it only refuses an ACCEPT);
+#   - a scoring_play accept in another sport (a DUNK) with no goal-line claim in
+#     its reason or criteria stays out of scope (`not_a_goal_accept`).
 #
 # Everything the guard decides is recorded on the decision (`contractGuard`) and
 # merged into the decide audit row's `timings.contractGuard`, so a stored job can
 # be re-graded without a replay (ADAAAA-8120 AC-G5).
-CONTRACT_GUARD_VERSION = "1"
+CONTRACT_GUARD_VERSION = "2"
+
+# The outcome a guard-rejected goal accept is downgraded to (ADAAAA-8370).
+#
+# `not_highlight`, not `near_miss`. A near miss asserts that a shot was
+# goal-bound and stopped, which requires its own measured signal
+# (`ballOutcome=blocked|off_target`, reconciled BEFORE this guard into
+# `near_miss`); by construction these windows carry no such measured signal —
+# that absence is exactly why the accept is un-attested. Downgrading them to
+# `near_miss` would invent a near-miss population out of refuted goal accepts
+# and move the separate near_miss precision/recall contract without measuring
+# it. The measured asymmetry agrees: on the live rail all 12 FN of the 140 cell
+# were `not_highlight` and 0 `near_miss` — this pipeline suppresses rather than
+# downgrades, and suppression is the metric-neutral choice (neither class counts
+# as `scoring_play`, so goal precision rises and goal recall is untouched).
+GOAL_REJECT_OUTCOME = "not_highlight"
 CONTRACT_GUARD_SCORE_CAP = 55.0
 
 # A goal shout in the commentary transcript. Noun/verb family only — a bare
@@ -1064,6 +1092,28 @@ def goal_text_claim(decision: dict, transcript: str = "") -> dict:
     }
 
 
+def verdict_claims_goal_line(decision: dict) -> bool:
+    """Whether the model's own structured CRITERIA claim the goal line (ADAAAA-8370).
+
+    Scope only — NEVER attestation. The accept path's scope used to read the
+    reason text alone, so a reply that asserted ``ballCrossedLineBetweenPosts``
+    and ``ballInNet`` in ``verdict.criteria`` while phrasing its reason without
+    the literal "in the net" ("Ball enters net at t=0.51", "Scoreboard updates
+    and ball crosses the line") fell through as ``not_a_goal_accept`` and was
+    emitted untouched. ADAAAA-8343 measured 17 of the 30 false accepts in
+    exactly that shape. Reading the criteria here only decides WHETHER to check
+    the measured channels; it can never satisfy them.
+    """
+    v = decision.get("verdict")
+    criteria = v.get("criteria") if isinstance(v, dict) else None
+    if not isinstance(criteria, dict):
+        return False
+    return (
+        criteria.get("ballCrossedLineBetweenPosts") is True
+        or criteria.get("ballInNet") is True
+    )
+
+
 def apply_contract_guard(
     decision: dict,
     evidence: Optional[dict] = None,
@@ -1071,14 +1121,15 @@ def apply_contract_guard(
     transcript: str = "",
     perceive_window: object = None,
 ) -> tuple[dict, dict]:
-    """Reject a goal-type `scoring_play` accept that commentary text alone carries.
+    """Reject a goal accept that no measured channel attests (ADAAAA-8370).
 
-    Mutates ``decision`` (forces ``isHighlight=false``, caps the score, appends
-    the contradicting evidence to ``reason``, stamps ``contradictedBy`` +
-    ``contractGuard``) and returns ``(decision, guard_record)``. A no-op on
-    everything outside its narrow scope, so `isHighlight=false`/`null` reads, a
-    genuinely absent-but-plausible accept, and the confirm-enabled posture are
-    all untouched. See the section comment above for the rules.
+    Mutates ``decision`` (forces ``isHighlight=false``, downgrades ``outcome`` to
+    `GOAL_REJECT_OUTCOME`, caps the score, appends the contradicting evidence to
+    ``reason``, stamps ``contradictedBy`` + ``contractGuard``) and returns
+    ``(decision, guard_record)``. A no-op on everything outside its scope, so
+    `isHighlight=false`/`null` reads and a scoring_play accept of another sport
+    are untouched. See the section comment above for the rules and the v2
+    (ADAAAA-8370) change from flag to rejection.
     """
     record: dict = {
         "version": CONTRACT_GUARD_VERSION,
@@ -1099,9 +1150,12 @@ def apply_contract_guard(
     # accept whose own reason/transcript makes a goal-SPECIFIC claim — the live
     # rail's candidate label is a trigger (AUDIO_BURST / SPORTING_EVENT / MOTION),
     # so the goal class lives on the accept's claim, not on the trigger label.
+    # ADAAAA-8370: the claim is read from the reason text OR the model's own
+    # structured criteria, so a goal-line assertion phrased without the literal
+    # "in the net" is still in scope.
     if not is_goal_accept(decision, event_type) and not (
         str(decision.get("outcome") or "").strip().lower() == "scoring_play"
-        and claim["goal_specific_claim"]
+        and (claim["goal_specific_claim"] or verdict_claims_goal_line(decision))
     ):
         record["outcome"] = "not_a_goal_accept"
         return decision, record
@@ -1115,13 +1169,20 @@ def apply_contract_guard(
         return decision, record
 
     record["claim"] = claim
-    # Recall path (ADAAAA-6973): a guard rejection leaves the decision
-    # goal-shaped and un-attested (outcome scoring_play / GOAL label,
-    # isHighlight=false), which is exactly the server's Stage-2 confirm
-    # population (`isGateRejectedBareGoal` in analyzer.ts). The confirm deep-frame
-    # dive still runs and can re-attest a genuine goal, so rejecting here does
-    # NOT drop the confirm rescue — unlike a silent Stage-A pass, it records the
-    # contradiction the dive has to overturn.
+    # Recall path (ADAAAA-6973): the rejection is recorded as Stage-2 eligible
+    # whenever the confirm pass is enabled, so a reviewer can see that a genuine
+    # goal could still be re-attested by the deep-frame dive.
+    #
+    # ADAAAA-8370 note: the dive's own trigger (`isGateRejectedBareGoal` ->
+    # `isGoalShaped`) keys on `outcome === "scoring_play"` OR a goal-type
+    # `eventType`. The downgrade below clears the outcome, so the dive now fires
+    # for this window only when its eventType stays goal-type — it is NOT spent
+    # on a live-rail (SPORTING_EVENT / AUDIO_BURST) accept the deterministic guard
+    # already refused. That is deliberate: the guard is the attestation of
+    # record here and spending a second decide call per refused window is the
+    # cost the ticket forbids. The ADAAAA-7357 bare-non-accept population
+    # (`isHighlight=false` + `outcome=scoring_play`, which returns
+    # `not_an_accept` above and is never downgraded) keeps its dive unchanged.
     if _confirm_pass_enabled():
         record["stage2ConfirmEligible"] = True
 
@@ -1154,11 +1215,17 @@ def apply_contract_guard(
             f"(goalLineDelta={att['goalLineDelta']:.2f}) and no other measured channel attests a goal"
         )
     if code is None:
-        # Evidence genuinely absent-but-plausible and no text claim: leave the
-        # decision exactly as the model read it (never turn null/absent into false).
-        record["outcome"] = "unverifiable_evidence"
-        decision["contractGuard"] = record
-        return decision, record
+        # ADAAAA-8370: absent-but-plausible evidence is no longer a silent pass.
+        # An ACCEPT that no measured channel attests is exactly what the eval
+        # measured as the false-accept class (perceive evidence `none` / `saved`,
+        # model-invented goal-line + ball-in-net pair). The tri-state criteria on
+        # the wire are still left as UNVERIFIABLE (never coerced to false) — the
+        # refusal is about the accept, not about the read.
+        code = "unattested_goal_accept"
+        refuting.append(
+            "no measured channel attests the goal (absent: "
+            f"{missing}); an un-attested goal accept is never emitted as scoring_play"
+        )
 
     detail = "; ".join(refuting)
     record.update(
@@ -1167,9 +1234,20 @@ def apply_contract_guard(
             "contradictedBy": code,
             "refutingEvidence": refuting,
             "detail": f"{code}: {detail}",
+            # ADAAAA-8370: what the refused accept was downgraded TO, so a
+            # re-grade reads the emitted outcome off the stored audit row. The
+            # model's own read is kept beside it (`modelOutcome`) so the audit
+            # still carries the pre-guard taxonomy member.
+            "downgradeTo": GOAL_REJECT_OUTCOME,
+            "modelOutcome": str(decision.get("outcome") or "") or None,
         }
     )
     decision["isHighlight"] = False
+    # ADAAAA-8370: the emitted contract stops claiming a goal. isHighlight=false
+    # alone was not enough — the eval scores the OUTCOME taxonomy, and a refused
+    # accept that still says `scoring_play` is the bug this ticket closes.
+    decision["outcome"] = GOAL_REJECT_OUTCOME
+    decision["nearMiss"] = False
     try:
         score = float(decision.get("score") or 0.0)
     except (TypeError, ValueError):
