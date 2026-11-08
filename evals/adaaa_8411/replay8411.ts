@@ -2,8 +2,7 @@
 //
 // Run inside a highlights-server container (tsx + the deployed @highlights/events):
 //
-//   docker cp evals/adaaa_8411/replay8411.ts highlights-server:/app/replay8411.ts
-//   docker exec -w /app highlights-server ./node_modules/.bin/tsx replay8411.ts 755fd1f5-babc-44b3-803e-452ae64bcc9c
+//   docker exec -w /app highlights-server ./node_modules/.bin/tsx evals/adaaa_8411/replay8411.ts 755fd1f5-babc-44b3-803e-452ae64bcc9c
 //
 // Section A replays the WRITE seam (`storedSurfaceFor`, the same derivation
 // `acceptVideoDecision` runs) over every stored `decide_audit` row of the job and
@@ -18,8 +17,11 @@ import {
   projectAnnouncerCaption,
   projectPostTitle,
   postTitleTeamSubject,
-  storedSurfaceFor,
 } from "@highlights/events";
+// The write seam's ONE derivation, taken from the SERVER source (it is not part of
+// the shared events package). Run this script from the repo root (`-w /app`), so
+// the relative specifier resolves against the same tree the server boots.
+import { storedSurfaceFor } from "../../services/server/src/analyzer";
 
 const JOB_PREFIX = (process.argv[2] ?? "755fd1f5").slice(0, 8);
 
