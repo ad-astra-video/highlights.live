@@ -805,6 +805,9 @@ services:
       - LIVE_DECIDE_ASR_PREFETCH=${LIVE_DECIDE_ASR_PREFETCH:-1}
       - LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS=${LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS:-6000}
       - LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY=${LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY:-2}
+      # ADAAAA-8351: decide-side WAIT budget, split from the transcription
+      # timeout above. Default 0 = inert (await the whole prefetch).
+      - LIVE_DECIDE_ASR_WAIT_MS=${LIVE_DECIDE_ASR_WAIT_MS:-0}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
       # ADAAAA-7781: COMPACT verdict contract on the live decide rail. The live
       # pass is decode-bound (measured: p50 9.4 s for a ~1340-char verdict; the

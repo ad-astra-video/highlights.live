@@ -2852,6 +2852,15 @@ export interface AnalyzerConfig {
   /** ADAAAA-8300: the side lane's in-flight budget.
    * `LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY`, default 2 (the pre-8300 constant). */
   decideAsrPrefetchConcurrency?: number;
+  /** ADAAAA-8351: decide-side WAIT budget (ms) for the side lane's prefetch.
+   * `LIVE_DECIDE_ASR_WAIT_MS`, default 0 = inert (the decide awaits the whole
+   * prefetch, today's behaviour). On a miss the decide proceeds with its own
+   * inline ASR and the prefetch keeps running so its result still caches. */
+  decideAsrWaitMs?: number;
+  /** ADAAAA-8351: per-run wait-miss counter (one object per live run, created by
+   *  `buildLiveAnalyzerConfig`) so the persisted observe snapshot can carry
+   *  `asrWaitMisses` without a module-level global. */
+  decideAsrWaitStats?: { misses: number };
   /** ADAAAA-8081: ASR base URL (`ASR_URL`) for the side lane. Unset => the lane
    *  cannot run and the decide service transcribes inline as before. */
   asrUrl?: string;
@@ -3505,6 +3514,14 @@ export interface LiveObserveMetricsSnapshot {
    *  Deliberately EXCLUDES `throttleSkippedWindows`, which is a funded rate
    *  decision and must never be folded into the supply number. */
   supplySkippedWindows?: number;
+  /** ADAAAA-8351: decide-side ASR wait-budget meter. `asrWaitMisses` counts
+   *  decides that stopped waiting for the side lane and transcribed inline;
+   *  `asrWaitBudgetMs` / `asrLaneWidth` are the EFFECTIVE values the run used,
+   *  so a leg record answers "what posture produced this tail" without the
+   *  container log. Written only when the budget is configured. */
+  asrWaitMisses?: number;
+  asrWaitBudgetMs?: number;
+  asrLaneWidth?: number;
   /** ADAAAA-7774: the LIVE perceive stride — the ingest-to-analysis frame rate
    *  the pass consumed at, plus the counts that prove the stride ran:
    *  `perceiveCalls < framesAnalyzed` in a cool region (the cadence skipped
@@ -3679,7 +3696,11 @@ export function liveLagReserveS(maxE2eMs: number, meanE2eMs: number, budgetS: nu
 export function buildLiveObserveMetrics(
   obs: LiveObserver,
   stride?: LivePerceiveStrideSnapshot,
-  confirm?: { calls: number; dives: number; dropped: number }
+  confirm?: { calls: number; dives: number; dropped: number },
+  /** ADAAAA-8351: the effective ASR wait posture of this run. Absent (or a zero
+   *  budget) leaves the row byte-identical to today — the three fields below are
+   *  written only when `LIVE_DECIDE_ASR_WAIT_MS` was actually configured. */
+  asr?: { waitMs: number; misses: number; laneWidth: number }
 ): LiveObserveMetricsSnapshot {
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
@@ -3754,6 +3775,10 @@ export function buildLiveObserveMetrics(
     // timeout / transport / parse). Absent when the lane never ran.
     ...(confirm
       ? { confirmCalls: confirm.calls, confirmDiveCount: confirm.dives, confirmDropped: confirm.dropped }
+      : {}),
+    // ADAAAA-8351: the effective ASR wait posture (see the parameter doc above).
+    ...(asr && asr.waitMs > 0
+      ? { asrWaitMisses: Math.max(0, Math.floor(asr.misses)), asrWaitBudgetMs: asr.waitMs, asrLaneWidth: asr.laneWidth }
       : {}),
   };
 }
@@ -7360,6 +7385,10 @@ export function withWindowFrameRefs(
   return { ...analysis, frames: refs };
 }
 
+/** ADAAAA-8351: sentinel resolved by the wait-budget timer. A unique object (not
+ *  `null`) so it can never be confused with a real prefetch result. */
+const WAIT_BUDGET_MISSED = Symbol("asrWaitBudgetMissed");
+
 /**
  * ADAAAA-7011 / ADAAAA-7771: the DECIDE half of the shared decide+accept
  * callback. Builds the decide request from an observe window payload, runs the
@@ -7387,13 +7416,51 @@ export async function observeDecideOnly(
   // the decide slot is held by gemma alone (the transcription overlapped the
   // decide that was already in flight). A rejected/absent prefetch leaves
   // `prefetched` null => the decide service transcribes inline, as before.
+  //
+  // ADAAAA-8351: the wait is now BOUNDED (`LIVE_DECIDE_ASR_WAIT_MS`), separately
+  // from the transcription timeout. The phase-2 leg measured what an unbounded
+  // wait costs: two rows waited 20 767 / 21 494 ms for a transcription that never
+  // landed inside the deadline, so `max` rose to 23 628 / 23 852 ms. On a miss
+  // the decide proceeds with its own INLINE ASR (which keeps `asrRan` at 100 %)
+  // and the prefetch keeps running — it is never aborted — so a slow call still
+  // completes and caches, and the next window / a re-decide reuses it instead of
+  // paying for a second transcription.
   const prefetch = payload[ASR_PREFETCH];
-  const prefetched: AsrPrefetchResult | null = prefetch ? await prefetch.catch(() => null) : null;
+  const waitBudgetMs = Math.max(0, Math.floor(cfg.decideAsrWaitMs ?? 0));
+  let prefetched: AsrPrefetchResult | null = null;
+  let waitMissed = false;
+  if (prefetch) {
+    if (waitBudgetMs > 0) {
+      const settled = prefetch.catch(() => null);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const budget = new Promise<typeof WAIT_BUDGET_MISSED>((resolve) => {
+        timer = setTimeout(() => resolve(WAIT_BUDGET_MISSED), waitBudgetMs);
+      });
+      try {
+        const raced = await Promise.race([settled, budget]);
+        if (raced === WAIT_BUDGET_MISSED) {
+          waitMissed = true;
+          if (cfg.decideAsrWaitStats) cfg.decideAsrWaitStats.misses++;
+          // The prefetch stays in flight: attach a no-op handler so its eventual
+          // rejection can never surface as an unhandled rejection.
+          settled.then(() => {}, () => {});
+        } else {
+          prefetched = raced;
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    } else {
+      prefetched = await prefetch.catch(() => null);
+    }
+  }
   if (cfg.liveObserveLoop && cfg.jobId) {
     const lane = cfg.decideAsrPrefetch !== false && prefetched
       ? `lane=${prefetched.ran ? "prefetched" : "miss"} prefetchMs=${Math.round(prefetched.latencyS * 1000)}` +
         ` chars=${prefetched.transcript.length}`
-      : "lane=inline";
+      : waitMissed
+        ? `lane=waitmiss waitMs=${waitBudgetMs}`
+        : "lane=inline";
     console.error(`[live-asr:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s ${lane}`);
   }
   let { evidence, opts } = buildObserveDecideRequest(cfg, run, payload, prefetched);
@@ -9228,7 +9295,14 @@ export async function analyzeJob(
             // ADAAAA-8205: the async confirm lane's meter, read at the same
             // instant as the decide counters so the cost term and the meter
             // describe one point in the run.
-            { calls: run.confirmDiveCalls(), dives: run.confirmDiveCount(), dropped: run.confirmDiveDropped() }
+            { calls: run.confirmDiveCalls(), dives: run.confirmDiveCount(), dropped: run.confirmDiveDropped() },
+            // ADAAAA-8351: the effective ASR wait posture + the run's wait-miss
+            // counter, read at the same instant as the decide counters.
+            {
+              waitMs: Math.max(0, Math.floor(cfg.decideAsrWaitMs ?? 0)),
+              misses: cfg.decideAsrWaitStats?.misses ?? 0,
+              laneWidth: Math.max(1, Math.floor(cfg.decideAsrPrefetchConcurrency ?? 2)),
+            }
           ),
           // ADAAAA-8254: the decide admission counters + capacity snapshot, read
           // off the gate at the same instant.
