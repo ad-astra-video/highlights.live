@@ -262,6 +262,13 @@ def _roi_enabled() -> bool:
     return os.environ.get(_ROI_ENV_ENABLED, "0").strip().lower() not in ("0", "false", "no")
 
 
+def roi_enabled() -> bool:
+    """ADAAAA-8395 (LFR-1 AC-5): the public read of the ROI-pass gate, so the
+    per-frame observation can state WHETHER the pass was armed. Without it a
+    `roiPasses: 0` cannot be told apart from "the pass never ran"."""
+    return _roi_enabled()
+
+
 def _roi_config() -> tuple[int, int, float, float]:
     """Return (rows, cols, yfrac, overlap). Bounded to _ROI_MAX_TILES."""
     rows, cols = 3, 4
@@ -565,6 +572,13 @@ class FlorenceDetector:
         # Per-frame gating metrics (ADAAAA-3726): how many boxes Florence emitted,
         # how many were gated as weak/unlabeled, and the resulting Unknown rate.
         self.stats: Optional[dict] = None
+        # ADAAAA-8395 (LFR-1 AC-5): monotonic counters for the bounded ROI second
+        # pass. `roi_passes` counts frames whose ROI pass actually inferred >= 1
+        # cropped tile (the GPU cost real events); `roi_tiles` counts those tile
+        # inferences. Monotonic because the detector is shared per stream: the
+        # caller measures a DELTA around one analyze request.
+        self.roi_passes = 0
+        self.roi_tiles = 0
 
     # --- device resolution --------------------------------------------------
     def _pick_device(self):
@@ -759,6 +773,13 @@ class FlorenceDetector:
         # Already have a ball on this frame -> nothing to recover.
         if any((o.get("label") or "").lower() == "soccer ball" for o in objs):
             return objs
+        # ADAAAA-8395 (LFR-1 AC-5): the fires this invocation actually paid for.
+        # A pass counts as one fire only when it inferred at least one cropped
+        # tile — the no-op guards above (no soccer vocab, ball already found, a
+        # too-small frame) cost nothing and must not inflate the rate. Counted in
+        # `finally` so a tile that raises mid-loop still counts the inferences
+        # that were issued.
+        tiles = 0
         try:
             from PIL import Image
 
@@ -779,6 +800,7 @@ class FlorenceDetector:
                     continue
                 cw = x1 - x0
                 ch = t1 - t0
+                tiles += 1
                 text = self._infer(
                     Image.fromarray(crop.astype(np.uint8)).convert("RGB"), "<OD>"
                 )
@@ -802,6 +824,13 @@ class FlorenceDetector:
                     existing.append(tuple(round(float(x), 4) for x in nb))
         except Exception as e:  # pragma: no cover - defensive; keep 0-crash invariant
             log.warning("roi pass skipped for frame: %s", e)
+        finally:
+            # ADAAAA-8395: one fire = >=1 ROI tile actually inferred on this
+            # frame; `roi_tiles` sums the inferences. Both are monotonic on the
+            # shared detector, so a caller reads a DELTA per analyze request.
+            if tiles:
+                self.roi_passes += 1
+                self.roi_tiles += tiles
         return objs
 
     def ocr(self, image: "np.ndarray", roi=None) -> list[str]:

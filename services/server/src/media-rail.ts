@@ -84,6 +84,13 @@ export interface MediaRailObservation {
   goalCrossed?: boolean;
   ballOutcome?: string;
   scoreBoardChanged?: boolean;
+  /** ADAAAA-8395 (LFR-1 AC-5): the perceive runner's bounded ROI second pass for
+   *  this frame — fires (>=1 inferred cropped tile), the tile inferences behind
+   *  them, and the gate the runner resolved. Additive: absent on a runner that
+   *  does not report the pass, so an old relay is byte-identical. */
+  roiPasses?: number;
+  roiTiles?: number;
+  roiEnabled?: boolean;
   candidate?: {
     eventType?: string;
     timestamp?: number;
@@ -332,6 +339,16 @@ export class MediaRailObserver {
    *  content clock skipped. Published as `observeMetrics.perceive`. */
   private framesSeen = 0;
   private framesStrided = 0;
+  /** ADAAAA-8395 (LFR-1 AC-5): the perceive runner's bounded ROI-pass fires,
+   *  summed over the frames this rail CONSUMED (a strided/evidence-only relay is
+   *  not in the analysed set, so `roiPasses <= framesAnalyzed` holds by
+   *  construction). `roiSeen` flips once an observation reports the field, so a
+   *  media node/perceive pair that predates the instrument leaves the perceive
+   *  block byte-identical instead of publishing an invented zero. */
+  private roiPasses = 0;
+  private roiTiles = 0;
+  private roiSeen = false;
+  private roiEnabled = false;
   /** ADAAAA-8121: the CONSUME CLOCK in content seconds. `lastConsumedTs` is the
    *  newest frame this rail ANALYSED (the position the live indicator names on a
    *  stored record) and `lastSeenTs` the newest frame the relay DELIVERED,
@@ -580,6 +597,16 @@ export class MediaRailObserver {
     const seq = this.frames;
     this.observations++;
     this.frames++;
+    // ADAAAA-8395 (LFR-1 AC-5): fold this CONSUMED frame's ROI-pass fires into
+    // the rail counters. Only consumed frames count, so `roiPasses <=
+    // framesAnalyzed` holds on the stored record; a relay that does not report
+    // the field leaves `roiSeen` alone (old media node -> absent, never zero).
+    if (typeof obs.roiPasses === "number" && Number.isFinite(obs.roiPasses)) {
+      this.roiSeen = true;
+      this.roiPasses += Math.max(0, Math.floor(obs.roiPasses));
+      this.roiTiles += Math.max(0, Math.floor(Number(obs.roiTiles) || 0));
+      if (obs.roiEnabled === true) this.roiEnabled = true;
+    }
     // ADAAAA-8121: this frame was CONSUMED (analysed) — the content position the
     // live indicator names. Strided frames never reach here.
     if (ts > this.lastConsumedTs) this.lastConsumedTs = ts;
@@ -820,7 +847,11 @@ export class MediaRailObserver {
     // to the shipped record. `perceiveCalls` = `framesSeen` because perceive for
     // this rail runs in the MEDIA NODE (one call per relayed frame) — stated
     // explicitly by `perceiveSource`.
-    if (this.contentFps <= 0) return metrics;
+    // ADAAAA-8395 (LFR-1 AC-5): a stride-less rail still publishes no perceive
+    // block (the shipped record is unchanged) UNLESS the perceive runner reported
+    // the ROI pass — that counter must stay gradeable on a rail with no content
+    // stride, and `analysisFps: 0` states plainly that no stride ran.
+    if (this.contentFps <= 0 && !this.roiSeen) return metrics;
     return {
       ...metrics,
       perceive: {
@@ -837,6 +868,19 @@ export class MediaRailObserver {
         // it — the two numbers the live indicator reads, both content ts.
         analysedThroughTs: Number(this.lastConsumedTs.toFixed(3)),
         tapThroughTs: Number(this.lastSeenTs.toFixed(3)),
+        // ADAAAA-8395 (LFR-1 AC-5): the bounded ROI second pass, summed over the
+        // frames this rail CONSUMED (roiPasses <= framesAnalyzed). Additive: the
+        // four keys appear only once the relay reports the pass, so a rail fed by
+        // a pre-instrument media node publishes the exact block it does today.
+        ...(this.roiSeen
+          ? {
+              roiPasses: this.roiPasses,
+              roiTiles: this.roiTiles,
+              roiEnabled: this.roiEnabled,
+              roiPassesPerAnalysedFrame:
+                this.frames > 0 ? Number((this.roiPasses / this.frames).toFixed(4)) : 0,
+            }
+          : {}),
       },
     };
   }

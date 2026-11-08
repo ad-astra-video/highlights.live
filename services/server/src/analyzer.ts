@@ -123,6 +123,13 @@ export interface ObservationResult {
     // Consumed by the Tier-2 signal gate; absent when no goal-line/ball channel
     // judged the frame (recall-safe: the gate escalates).
     evidence?: PerFrameSignal;
+    // ADAAAA-8395 (LFR-1 AC-5): the bounded ROI second pass for THIS analyze
+    // request (`roiPasses` fires, `roiTiles` tile inferences) and the gate the
+    // perceive runner resolved (`roiEnabled`). Additive: absent on a runner that
+    // does not report the pass, so an old observation is byte-identical.
+    roiPasses?: number;
+    roiTiles?: number;
+    roiEnabled?: boolean;
   };
   candidate?: {
     eventType: string;
@@ -2393,6 +2400,15 @@ export interface ConfirmDecision {
   /** The reconciled HighlightDecision-shaped dict to adopt in place of the
    * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
   decision: DecisionResult;
+  /** ADAAAA-8395 (LFR-1 AC-4): the confirmation pass's OWN gemma token meter
+   * (`{prompt_tokens, completion_tokens, total_tokens}`) and its provenance
+   * (`"vllm"` when the upstream reply carried a usage block, `"absent"` when it
+   * did not — never a zero-filled block). Persisted onto the confirm row's
+   * `decide_audit.timings` so the dive's token cost is gradeable. Absent when
+   * the decide service did not return one (an old service, or a pass that never
+   * issued a call). */
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  usageSource?: "vllm" | "absent";
   // ADAAAA-7155 Increment A / ADAAAA-7156 Increment B: the confirmation-pass
   // analysis record (exact confirm prompt + request context summary +
   // ConfirmDecision) returned by the decide /confirm endpoint. Carried across
@@ -3648,6 +3664,20 @@ export interface LivePerceiveStrideSnapshot {
   /** ADAAAA-8121: content ts (seconds) of the newest frame the ingest DELIVERED,
    *  strided frames included — the live edge the delay is measured against. */
   tapThroughTs?: number;
+  /** ADAAAA-8395 (LFR-1 AC-5): the bounded ROI second pass, summed over the
+   *  frames this pass actually PERCEIVED (roiPasses <= framesAnalyzed by
+   *  construction, since only consumed frames are perceived here). `roiEnabled`
+   *  is the perceive runner's own gate as the runner reported it on the frames,
+   *  so a `roiPasses: 0` reads as "armed but never fired" rather than
+   *  "unmeasured". Absent (all four) on a runner that does not report the pass,
+   *  so an old runner's record is byte-identical. */
+  roiPasses?: number;
+  /** Summed ROI tile inferences behind `roiPasses` (<= roiPasses * ROI_MAX_TILES). */
+  roiTiles?: number;
+  /** Derived: `roiPasses / framesAnalyzed` (fires per analysed frame, 4 dp). */
+  roiPassesPerAnalysedFrame?: number;
+  /** The ROI gate the perceive runner resolved for these frames. */
+  roiEnabled?: boolean;
 }
 
 /** ADAAAA-7007: VOD decide-observer per-call input-size + cap snapshot, recorded
@@ -8851,6 +8881,17 @@ export function confirmAuditDescriptor(
     rawReply: confirm?.reason ?? "",
     timings: {
       elapsedMs: typeof elapsedMs === "number" && Number.isFinite(elapsedMs) ? Math.round(elapsedMs) : null,
+      // ADAAAA-8395 (LFR-1 AC-4): the confirm pass's own gemma token meter, when
+      // the decide service returned one. Additive: an old service (or a
+      // passthrough that never issued a call) adds nothing, so the row stays
+      // byte-identical; a measured `absent` is stored as absent, never as a
+      // zero-filled block.
+      ...((confirm as any)?.usageSource
+        ? {
+            ...((confirm as any)?.usage ? { usage: (confirm as any).usage } : {}),
+            usageSource: (confirm as any).usageSource,
+          }
+        : {}),
     },
     createdAt: new Date().toISOString(),
   };
@@ -9433,6 +9474,14 @@ export async function analyzeJob(
   let perceiveBudgetSkipped = 0;
   let perceiveHotCalls = 0;
   let perceiveCalls = 0;
+  // ADAAAA-8395 (LFR-1 AC-5): the perceive runner's bounded ROI-pass fires,
+  // summed over the frames this pass actually perceived, plus the gate it
+  // resolved. `roiSeen` flips once any observation reports the field, so a
+  // runner that predates the instrument leaves the stride block byte-identical.
+  let roiPasses = 0;
+  let roiTiles = 0;
+  let roiSeen = false;
+  let roiEnabled = false;
   /**
    * ADAAAA-8310: the live observe snapshot as a CALLABLE, defined here (before
    * the frame loop) so it reads the counters LIVE and can be sampled at any
@@ -9456,6 +9505,16 @@ export async function analyzeJob(
               perceiveHotCalls,
               analysisFps: liveStrideS > 0 ? 1 / liveStrideS : 0,
               perceiveMeanCostMs: perceiveCostCount ? Math.round((perceiveCostSumS / perceiveCostCount) * 1000) : 0,
+              // ADAAAA-8395 (LFR-1 AC-5): the ROI-pass posture this pass measured
+              // (absent until the runner reports the pass at least once).
+              ...(roiSeen
+                ? {
+                    roiPasses,
+                    roiTiles,
+                    roiEnabled,
+                    roiPassesPerAnalysedFrame: framesAnalyzed > 0 ? Number((roiPasses / framesAnalyzed).toFixed(4)) : 0,
+                  }
+                : {}),
               // ADAAAA-8121: the consume clock both live indicators read, in
               // content seconds. Persisted so a stored record answers "where did
               // the analysis get to and how far ahead was the tap" without the
@@ -9627,6 +9686,18 @@ export async function analyzeJob(
             // the analyze calls that START while a decide is in flight.
             ingestGaps.noteAnalyze(tPerceive);
             res = await client.analyze(sessionId, frame, vocab);
+            // ADAAAA-8395 (LFR-1 AC-5): fold this analyze request's ROI-pass
+            // fires into the pass counters. Only perceived frames are counted, so
+            // `roiPasses <= framesAnalyzed` holds on the stored record. A frame
+            // whose observation does not report the field leaves `roiSeen` alone
+            // (an old runner makes the whole block absent, not zero).
+            const obsRoi = res.observation?.roiPasses;
+            if (typeof obsRoi === "number" && Number.isFinite(obsRoi)) {
+              roiSeen = true;
+              roiPasses += Math.max(0, Math.floor(obsRoi));
+              roiTiles += Math.max(0, Math.floor(Number(res.observation?.roiTiles) || 0));
+              if (res.observation?.roiEnabled === true) roiEnabled = true;
+            }
             // ADAAAA-7774: the stride that keeps the loop at the live edge is
             // driven by this measurement (shared-GPU perceive is the real rate
             // limit, not the ingest rate).

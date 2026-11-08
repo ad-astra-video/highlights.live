@@ -200,6 +200,16 @@ export interface ServerConfig {
    * shipped 320:180 in this increment: no default flip before the ON leg's
    * AC-1..AC-6 pass on stored rows. `LIVE_FRAME_SCALE`. */
   liveFrameScale: string;
+  /** ADAAAA-8395 (LFR-1 AC-5): the perceive runner's bounded ROI second pass
+   * gate (`PERCEIVE_ROI_ENABLED`). The GAIN lives in the perceive container —
+   * this copy exists only so the boot readout can name the posture the shared
+   * `docker/.env` hands both containers; the MEASURED tell is `roiEnabled` /
+   * `roiPasses` on each observation and the job's `observeMetrics.perceive`.
+   * Default false (the pass is opt-in, ADAAAA-6395). */
+  perceiveRoiEnabled: boolean;
+  /** ADAAAA-8395: the ROI tile grid (`PERCEIVE_ROI_GRID`, `<rows>x<cols>`), for
+   * the same boot line. Reported, never applied here. */
+  perceiveRoiGrid: string;
   /** ADAAAA-7847: frame scale for the ONE-SHOT jersey-identify anchor frame a
    * `track-player` / `track-player-by-number` request samples at REQUEST time.
    * Jersey OCR needs the number large and sharp, and neither rail scale is
@@ -960,6 +970,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // shipped 320:180 in this increment; `LIVE_FRAME_SCALE=640:360` is the ON
     // arm of the LFR-1 A/B and reverting the knob restores today exactly.
     liveFrameScale: resolveFrameScale(env.LIVE_FRAME_SCALE, LIVE_FRAME_SCALE_DEFAULT),
+    // ADAAAA-8395 (LFR-1 AC-5/IN-3): the perceive ROI-pass posture, printed by
+    // the boot readout. The server never gates the pass (perceive does); it reads
+    // the SAME docker/.env value compose hands the perceive container so the
+    // readout is evidence rather than a guess. Compose substitutes `0` for
+    // unset/empty, so this mirrors the value perceive actually receives.
+    perceiveRoiEnabled: !["0", "false", "no", ""].includes(
+      (env.PERCEIVE_ROI_ENABLED ?? "").trim().toLowerCase()
+    ),
+    perceiveRoiGrid: (env.PERCEIVE_ROI_GRID ?? "").trim() || "3x4",
     // ADAAAA-7847: the jersey-identify anchor frame is sampled at REQUEST time
     // and is deliberately NOT the rail scale. Jersey OCR needs the number large
     // and sharp: measured on clip `397294f3` (native 1280x720) the number is
