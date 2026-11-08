@@ -322,8 +322,12 @@ def test_compact_prompt_delta_is_bounded():
     # ADAAAA-8318 adds the `postTitle` field (+145 chars on the contract; ~+36
     # input tokens, inside the ticket's +40 budget) and one output field. Prefill
     # only — the announcer budgets are untouched.
+    # ADAAAA-8356 rebuilds that spec as its own POST TITLE RULES paragraph
+    # (+893 chars over 8318): the terse parenthetical left 341/898 model titles on
+    # a place chain and got 46/54 rows refused, so the rule set has to be stated
+    # in full. Prefill only — no output budget moved.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 14800
+    assert len(_compact_prompt()) <= 15550
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the

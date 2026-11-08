@@ -88,11 +88,47 @@ def test_phase_addendum_is_within_its_contract_budget():
 
 
 def test_title_addendum_is_within_its_input_token_budget():
-    """<= +40 input tokens: measured as the character delta from the pre-change
-    contract, at the contract's own ~4 chars/token ratio (<= 160 chars)."""
+    """Prefill budget for the title spec, measured as the character delta from the
+    pre-ADAAAA-8318 contract at the contract's own ~4 chars/token ratio.
+
+    8318's one-line parenthetical cost +145 chars and it measurably did not
+    survive contact with the model (leg 23bb0a61: 341/898 place chains, 39
+    ungrounded goal claims, 46/54 rows refused). ADAAAA-8356 replaces it with a
+    POST TITLE RULES paragraph: +1038 chars (~+260 input tokens, ~6 % of the
+    live prompt's 4 407 text tokens). The bound is raised ONCE, deliberately,
+    and the paragraph may not grow beyond it.
+    """
     delta = len(_OUTPUT_CONTRACT_COMPACT) - PRE_CHANGE_COMPACT_LEN
     assert delta > 0
-    assert delta <= 160, f"postTitle addendum grew the contract by {delta} chars"
+    assert delta <= 1100, f"postTitle addendum grew the contract by {delta} chars"
+
+
+def test_title_spec_owns_its_own_paragraph_and_bars():
+    """The 8318 defect was STRUCTURAL: the `postTitle` key was spliced mid-way
+    through the runningSummary description, so the caption's colour/clock rules
+    dangled after the title key and the title spec sat under a lead rule that
+    requires a place. Pin the layout, then pin the four bars the model got wrong.
+    """
+    contract = _OUTPUT_CONTRACT_COMPACT
+    # the caption description is contiguous: ... never re-said afterwards. COLOR BEAT
+    assert "is not re-said afterwards. COLOR BEAT" in contract
+    # the title key comes AFTER the whole caption description, and its rules follow it
+    assert contract.index('"postTitle"') > contract.index("no invented names, scores, kit colours or flags")
+    assert "POST TITLE RULES" in contract
+    assert contract.index("POST TITLE RULES") > contract.index('"postTitle"')
+    # the caption/title collision is named outright (AC2)
+    assert "The lead above MUST name a place; the title must NOT" in contract
+    # grounding: names only from THIS window's own reads (AC3)
+    assert "ONLY when THIS window's transcript, OCR or frames read that exact name" in contract
+    assert "never a name, team, score or colour taken from the story or the match context" in contract
+    # the claim bar is keyed to the model's OWN verdict, not a generic "a goal" (AC3)
+    assert "No score, goal, level or equalise claim unless YOUR OWN outcome here is scoring_play" in contract
+    # one event / one clause, no second beat, and the distinctness rule (AC2/AC6)
+    assert "ONE event, ONE clause = subject + present-tense verb + object" in contract
+    assert "no consequence ('leads to', 'after', 'then')" in contract
+    assert "Never reuse a subject+verb you already titled this job" in contract
+    # the model is told a violation is discarded, so it does not gamble on a phrase
+    assert "A title that breaks any of these rules is discarded" in contract
 
 
 def test_normalize_decision_carries_the_title():

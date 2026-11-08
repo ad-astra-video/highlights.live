@@ -47,8 +47,11 @@ GOLDEN = {
     # ADAAAA-8318 re-pinned the two COMPACT rows (+145 chars: the `postTitle`
     # field); ADAAAA-8325 (Inc 2) re-pins the FULL rows (+411 chars: the `phase`
     # field + its rule). Each contract layer is pinned on its own.
-    ("compact", ""): (14396, "a9abe8a55aa8cbf48447073c49b7d131e4a7fb190c8471cc91e56c92ac1c49ea"),
-    ("compact", STORY): (14648, "feb868075998c61158d831fb1e3a5c88d098006a5ef6a24c551a0037d2f4fc33"),
+    # ADAAAA-8356 re-pins the two COMPACT rows again (+893 chars): the title spec
+    # is now its own POST TITLE RULES paragraph instead of a parenthetical spliced
+    # through the caption description. The FULL rows above stay byte-identical.
+    ("compact", ""): (15289, "062e14fab3c7381938be59da5fabd5845c428d81d8f7491f158653b3dd106dfa"),
+    ("compact", STORY): (15541, "9ca6077e095bc5ab3b6d31646400f7342f8ea4ad761df6645215f062d7bd7335"),
 }
 
 
