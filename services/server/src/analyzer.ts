@@ -3212,12 +3212,25 @@ export interface AnalyzerConfig {
   liveObserveInFlight?: number;
   /**
    * ADAAAA-7771: how many decide app-calls the box ADMITS at once — the
-   * orchestrated decide client's `DECIDE_CONCURRENCY` (default 2). The live
-   * in-flight depth is shared out of this budget (`depth = admission /
-   * activeLiveStreams`), so a crowded box degrades to the serial pass instead of
-   * queueing every stream behind a 2-wide gate. Wired from `DECIDE_CONCURRENCY`.
+   * orchestrated decide client's admission width (`DECIDE_CONCURRENCY`, default
+   * 2). The live in-flight depth is shared out of this budget (`depth =
+   * admission / activeLiveStreams`), so a crowded box degrades to the serial
+   * pass instead of queueing every stream behind a narrow gate. Wired from
+   * `DECIDE_CONCURRENCY`.
+   *
+   * ADAAAA-8437: this is the FALLBACK width. When the caller wires
+   * {@link liveDecideEffectiveAdmission} the depth follows the DISCOVERED
+   * `effective` capacity instead, so the per-stream depth grows with the fleet.
    */
   liveDecideAdmission?: number;
+  /**
+   * ADAAAA-8437: the LIVE decide admission width to size the per-stream depth
+   * from, read on every depth check so a capacity probe that lands mid-run sizes
+   * the pass immediately. Wired from the admission gate's snapshot
+   * (`decideAdmissionMetrics().capacity.effective`); unset falls back to
+   * {@link liveDecideAdmission}.
+   */
+  liveDecideEffectiveAdmission?: () => number;
   /** ADAAAA-7799 (lever C): decide-rate cap. Keep only a fraction (0 < r < 1)
    *  of the decide opportunities so the decided-window rate and the derived spend
    *  are bounded; 0.625 = 5 of every 8 windows (~67 of ~108 per 300 s at 2
@@ -3610,7 +3623,9 @@ export interface LiveObserveMetricsSnapshot {
   decidePauses?: number;
   capacityProbeErrors?: number;
   /** ADAAAA-8254: `{advertised, funded, effective}` decide ceiling.
-   *  ADAAAA-8262 adds `probeOk` / `runners` / `source` provenance. */
+   *  ADAAAA-8262 adds `probeOk` / `runners` / `source` provenance.
+   *  ADAAAA-8437 adds `cap`: admission follows `advertised` (up or down) clamped
+   *  to the safety cap; `funded` is reporting only. */
   decideCapacity?: {
     advertised: number;
     funded: number;
@@ -3621,6 +3636,9 @@ export interface LiveObserveMetricsSnapshot {
     runners?: number;
     /** Provenance of `advertised`. */
     source?: "probe" | "last-known" | "funded";
+    /** ADAAAA-8437: the `DECIDE_MAX_ADMISSION` bound `effective` was clamped to
+     *  (absent on records written before the field existed). */
+    cap?: number;
   };
 }
 
@@ -9290,17 +9308,17 @@ export async function analyzeJob(
   const liveInvoke = cfg.liveObserveInFlight;
   const liveInFlight = Math.max(1, Math.floor(liveInvoke ?? 1));
   // ADAAAA-7771: the in-flight depth is a SHARED budget. The orchestrated decide
-  // client admits only `DECIDE_CONCURRENCY` decide app-calls at once, so depth
-  // above that admission does not add throughput — it only queues, and a queued
-  // window lands later (measured at depth 4 with a 2-wide gate: 1 stream
+  // client admits only the DISCOVERED effective capacity at once (ADAAAA-8437),
+  // so depth above that admission does not add throughput — it only queues, and
+  // a queued window lands later (measured at depth 4 with a 2-wide gate: 1 stream
   // 11.6 s/decide and 31.3 s lag; 2 streams 24.8-26.6 s and 50.8-52.0 s lag,
-  // worse than the serial 32.6-34.5 s). ADAAAA-7773: docker-compose now ships
-  // `DECIDE_CONCURRENCY=8` (the box's real 4+4 decide slots), so two streams get
-  // 4 each instead of falling back to the serial pass; the fallback below stays
-  // at the client's own default (2) so an unset env behaves like the client.
-  // Each live stream therefore gets `admission / activeStreams`, never more than
-  // `liveObserveInFlight`.
-  const liveDecideAdmissionBudget = Math.max(1, Math.floor(cfg.liveDecideAdmission ?? 2));
+  // worse than the serial 32.6-34.5 s). ADAAAA-8437: the width is read LIVE from
+  // the capacity snapshot (the fleet advertises 6 on the routed 5090 set), so a
+  // lone stream keeps its configured depth and two streams split the advertised
+  // capacity; the fallback stays the client's own default (2) when nothing is
+  // wired, so an unset env behaves like the client.
+  const liveDecideAdmissionBudget = () =>
+    Math.max(1, Math.floor(cfg.liveDecideEffectiveAdmission?.() ?? cfg.liveDecideAdmission ?? 2));
   if (liveInFlight > 1) liveDecideAdmission.registerLiveJob(cfg.jobId);
   // ADAAAA-8081: the ASR side lane for this run. Content-addressed + single
   // flight, so a re-decide of the same window (recall / confirm) reuses one
@@ -9378,7 +9396,7 @@ export async function analyzeJob(
             ? {
                 maxInFlight: liveInFlight,
                 ...(liveInFlight > 1
-                  ? { depthBudget: () => liveDecideAdmission.depthFor(cfg.jobId, liveInFlight, liveDecideAdmissionBudget) }
+                  ? { depthBudget: () => liveDecideAdmission.depthFor(cfg.jobId, liveInFlight, liveDecideAdmissionBudget()) }
                   : {}),
                 onDecideStaged: (payload: ObserveDecidePayload) => {
                   let verdict: Awaited<ReturnType<typeof observeDecideOnly>> = null;

@@ -162,23 +162,34 @@ below. The **~30 s flag budget** (cadence + gemma end-to-end latency) and how it
 is measured/reported on the Livepeer runner are documented in
 [`docs/plan/09-live-observer-latency-report.md`](plan/09-live-observer-latency-report.md).
 
-## Decide admission: capacity-aware ceiling + ordered 503 queue (ADAAAA-8254)
+## Decide admission: capacity-wide ceiling + ordered 503 queue (ADAAAA-8254 -> ADAAAA-8437)
 
 Every decide app-call (live observer, VOD pass, planner) is admitted through ONE
 gate in `packages/livepeer-session/src/index.ts`. Two properties matter:
 
-1. **The ceiling is capacity-aware, downward only.**
-   `effective = min(funded, advertised)` clamped to `[1, funded]`, where
-   `funded` is `DECIDE_CONCURRENCY` (the box runs 8) and `advertised` is the sum
-   of `capacity` over the `highlights-live/decide` runners the signer's
-   `GET /discover-orchestrators` returns (the 8/2/2 pool advertises 12).
-   **`DECIDE_CONCURRENCY` is the funded ceiling that WINS**: capacity stays 8 by
-   CEO ruling (ADAAAA-7803, ratified 2026-11-02), so a discovered advertisement
-   can only LOWER admission, never raise it. `capacity_available` is recorded but
-   never sizes the gate (it is transient); two consecutive all-zero samples hold
-   the queue (one probe per backoff window). Discovery errors / timeouts (2 s) /
-   malformed answers keep the LAST KNOWN capacity, then the funded value — a
-   probe failure never throws into decide and never yields 0.
+1. **The ceiling follows the capacity the fleet advertises.**
+   `effective = clamp(advertised, 1, cap)`, where `advertised` is the sum of
+   `capacity` over the `highlights-live/decide` runners the signer's
+   `GET /discover-orchestrators` returns, and `cap` is the safety bound
+   `DECIDE_MAX_ADMISSION` (default 32). Admission sizes UP as well as down: the
+   board ruling on ADAAAA-8418 rejected the funded-8 ceiling ("The
+   DECIDE_CONCURRENCY artificially limiting to 8 is wrong. It should just be
+   limited by the capacity available"), superseding the ADAAAA-7803 framing and
+   the ADAAAA-8254 "funded wins, discovery can only lower it" rule. Today the
+   routed set is the three 5090 workers at 2 seqs (`docker/decide-router.conf`
+   primaries; the x99 pair is `backup` only), so `advertised`/`effective` read 6 —
+   and 12 the moment `DECIDE_WORKER_SEQS` is raised to 4 (that re-create is
+   cost-gated on ADAAAA-8418). `DECIDE_CONCURRENCY` survives on the snapshot as
+   `funded` for reporting only, and is the fallback when discovery is dark
+   (`effective == funded`, a box that never probes is unchanged).
+   **The cap is not a funding posture**: it guards a malformed advertisement (a
+   truncated pool read, a mis-set `--max-num-seqs`, a sum that includes the
+   failover pair), so a bad discovery cannot open admission unboundedly.
+   `capacity_available` is recorded but never sizes the gate (it is transient);
+   two consecutive all-zero samples hold the queue (one probe per backoff
+   window). Discovery errors / timeouts (2 s) / malformed answers keep the LAST
+   KNOWN capacity, then the funded value — a probe failure never throws into
+   decide and never yields 0.
 2. **A 503 is recovered by an ordered queue, not a probe fan-out.**
    Waiters are FIFO by request order (a retry keeps its position). A 503 opens a
    SHARED pause window (exponential 500 ms → 8 s, with jitter); every queued
@@ -193,7 +204,8 @@ pause queue):
 
 | Env | Default | Meaning |
 |---|---|---|
-| `DECIDE_CONCURRENCY` | client default 2; box ships 8 | **Funded** decide ceiling — the value that wins. Discovered capacity can only lower admission below it. |
+| `DECIDE_CONCURRENCY` | client default 2; box ships 8 | **Funded** decide value — reporting only, and the fallback when discovery is dark (`effective == funded`). No longer a ceiling on a discovered advertisement. |
+| `DECIDE_MAX_ADMISSION` | 32 | Safety CAP on a discovered advertisement (`effective = clamp(advertised, 1, cap)`). Not a funding posture: it bounds a malformed advertisement. |
 | `DECIDE_CAPACITY_REFRESH_S` | 60 | Minimum seconds between signer capacity probes. A probe also runs (fire-and-forget) at every decide-job start. |
 | `DECIDE_QUEUE_MAX_WAIT_MS` | 60000 | Hard per-decide queue-wait budget; exceeding it drops the decide with `DecideCapacityError`. |
 | `DECIDE_CAPACITY_DISCOVERY` | on | `0`/`false`/`off`/`no` disables the capacity probe entirely (the byte-identical pre-8254 static gate). No signer configured => no probe regardless. |
@@ -201,7 +213,7 @@ pause queue):
 Observability: the gate's counters land on the job's `observeMetrics` record
 (`decideQueued`, `decideDropped`, `decide503`, `decidePauses`,
 `capacityProbeErrors`, and
-`decideCapacity: {advertised, funded, effective, probeOk, runners, source}`), so
+`decideCapacity: {advertised, funded, effective, probeOk, runners, source, cap}`), so
 QA can grade a run from `GET /jobs/:id` without reading container logs.
 `probeOk`/`runners`/`source` are provenance only (ADAAAA-8262): `probeOk: false`
 means the last discovery probe FAILED, while `probeOk: true, runners: 0` means
@@ -283,11 +295,12 @@ docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py --
 
 `services/server/test/decide-router-upstreams.test.ts` pins
 `registrar capacity === primary_count * 2` (and that `backup` lines are never
-counted), so the two cannot drift silently. `DECIDE_CONCURRENCY` stays the
-FUNDED bar (8); with L1 in force the box prints
-`[decide-capacity] advertised=6 funded=8 effective=6 probeOk=true runners=1 source=probe`.
-If the 6 ceiling ever binds (`maxDecideInFlight` pinned at 6 with
-`decideQueued` rising), the answer is a fourth worker, not a higher funded bar.
+counted), so the two cannot drift silently. With L1 in force the box prints
+`[decide-capacity] advertised=6 funded=8 effective=6 probeOk=true runners=1 source=probe cap=32`.
+Since ADAAAA-8437 admission follows that advertisement, so the deciding set —
+not the funded bar — is the lever: raising `DECIDE_WORKER_SEQS` 2 -> 4 makes the
+pool advertise 12 and the gate admits 12 with no code change (cost-gated on
+ADAAAA-8418).
 
 Restore, one command per knob, each returning the pre-8281 state:
 

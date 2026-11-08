@@ -1,15 +1,19 @@
-// ADAAAA-8254: decide admission — capacity-aware ceiling (downward only) and
-// the ordered 503 queue with a single-flight probe.
+// ADAAAA-8254, revised by ADAAAA-8437: decide admission — the effective ceiling
+// FOLLOWS the advertised capacity (up or down) bounded by a safety cap, plus the
+// ordered 503 queue with a single-flight probe.
 //
-// AC coverage in this file:
-//   AC1 effective ceiling = min(funded, advertised) clamped [1, funded];
-//       8/2/2 -> 8, single cap-4 -> 4, unset env + no signer -> today's value.
-//   AC2 a discovery 500 / timeout / malformed advertisement never throws into
-//       decide; probe errors are counted and last-known capacity is kept.
-//   AC3 FIFO order preserved and a zero-capacity episode costs ~one decide
-//       probe per backoff window (not one per queued request).
-//   AC4 an exhausted decide raises the typed DecideCapacityError, increments
-//       decideDropped, and the client keeps working (the job is not aborted).
+// AC coverage in this file (ADAAAA-8437):
+//   AC1 effective = advertised whenever the probe is well-formed; DECIDE_CONCURRENCY
+//       is no longer a ceiling (advertised 12 + funded 2 -> 12).
+//   AC2 the safety cap DECIDE_MAX_ADMISSION (default 32) clamps [1, cap].
+//   AC3 a discovery 500 / timeout / malformed advertisement never throws into
+//       decide; probe errors are counted and last-known capacity is kept, then
+//       the funded value.
+//   AC6 advertised 6 -> 6, advertised 12 -> 12, probe dark -> last-known ->
+//       funded, advertised 0 -> 1, advertised 1e6 -> cap.
+//   ADAAAA-8254 AC3/AC4 keep their coverage: FIFO order, one probe per backoff
+//       window during a zero-capacity episode, typed DecideCapacityError + a
+//       counted `decideDropped` that never aborts the job.
 import { describe, it, expect, vi } from "vitest";
 import {
   DecideCapacityError,
@@ -71,8 +75,8 @@ const runner = (app: string, capacity?: number, capacity_available?: number): Di
   ...(capacity_available !== undefined ? { capacity_available } : {}),
 });
 
-describe("ADAAAA-8254 AC1: capacity-aware effective ceiling (downward only)", () => {
-  it("sums the advertised decide capacity (8/2/2 = 12) and admits min(funded 8, 12) = 8", async () => {
+describe("ADAAAA-8437 AC1: admission follows the advertised capacity", () => {
+  it("sums the advertised decide capacity (8/2/2 = 12) and admits 12 even with DECIDE_CONCURRENCY=8", async () => {
     const discovery = [
       { address: "a", runners: [runner("highlights-live/decide", 8)] },
       { address: "b", runners: [runner("highlights-decide", 2)] },
@@ -89,26 +93,61 @@ describe("ADAAAA-8254 AC1: capacity-aware effective ceiling (downward only)", ()
       onDecideCapacity: (s) => seen.push(s),
     });
     const snap = await c.refreshDecideCapacity(true);
-    expect(snap).toEqual({ advertised: 12, funded: 8, effective: 8, probeOk: true, runners: 3, source: "probe" });
-    // AC1 startup log line carries the three numbers.
-    expect(seen.at(-1)).toEqual({ advertised: 12, funded: 8, effective: 8, probeOk: true, runners: 3, source: "probe" });
+    expect(snap).toEqual({
+      advertised: 12,
+      funded: 8,
+      effective: 12,
+      probeOk: true,
+      runners: 3,
+      source: "probe",
+      cap: 32,
+    });
+    // AC4 startup log line carries the numbers plus the cap.
+    expect(seen.at(-1)).toEqual({
+      advertised: 12,
+      funded: 8,
+      effective: 12,
+      probeOk: true,
+      runners: 3,
+      source: "probe",
+      cap: 32,
+    });
   });
 
-  it("shrinks to a single cap-4 fleet when the pool is smaller than the funded ceiling", async () => {
+  it("follows the routed 5090 set: advertised 6 -> effective 6 (funded stays 8)", async () => {
+    const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
+      decideConcurrency: 8,
+      decideCapacityProbe: async () => ({ capacity: 6, runners: 1 }),
+    });
+    expect(await c.refreshDecideCapacity(true)).toEqual({
+      advertised: 6,
+      funded: 8,
+      effective: 6,
+      probeOk: true,
+      runners: 1,
+      source: "probe",
+      cap: 32,
+    });
+  });
+
+  it("shrinks to a single cap-4 fleet when the pool is smaller than the funded value", async () => {
     const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
       decideConcurrency: 8,
       decideCapacityProbe: async () => ({ capacity: 4 }),
     });
     const snap = await c.refreshDecideCapacity(true);
-    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 0, source: "probe" });
+    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 0, source: "probe", cap: 32 });
   });
 
-  it("never sizes UP past the funded ceiling (advertised 12 with DECIDE_CONCURRENCY=2 -> 2)", async () => {
+  it("sizes UP past the funded value: advertised 12 with DECIDE_CONCURRENCY=2 -> 12", async () => {
     const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
       decideConcurrency: 2,
-      decideCapacityProbe: async () => ({ capacity: 12 }),
+      decideCapacityProbe: async () => ({ capacity: 12, runners: 3 }),
     });
-    expect((await c.refreshDecideCapacity(true)).effective).toBe(2);
+    const snap = await c.refreshDecideCapacity(true);
+    expect(snap.effective).toBe(12);
+    // `funded` survives for reporting, it is simply not a ceiling any more.
+    expect(snap.funded).toBe(2);
   });
 
   it("falls back to capacity_available when an older advertisement has no `capacity`", async () => {
@@ -139,14 +178,14 @@ describe("ADAAAA-8254 AC1: capacity-aware effective ceiling (downward only)", ()
       decideConcurrency: 8,
       decideCapacityProbe: async () => summary,
     });
-    expect(await c.refreshDecideCapacity(true)).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: true, runners: 1, source: "funded" });
+    expect(await c.refreshDecideCapacity(true)).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: true, runners: 1, source: "funded", cap: 32 });
   });
 
   it("unset env + no signer (no probe) is byte-identical to today's static gate", async () => {
     const t = new ScriptedTransport(() => 200);
     const c = new LivepeerClient("http://orch:8935", t);
     // No probe: the funded default (capacity-2 admission, ADAAAA-6911) wins.
-    expect(c.decideAdmissionMetrics().capacity).toEqual({ advertised: 0, funded: 2, effective: 2, probeOk: false, runners: 0, source: "funded" });
+    expect(c.decideAdmissionMetrics().capacity).toEqual({ advertised: 0, funded: 2, effective: 2, probeOk: false, runners: 0, source: "funded", cap: 32 });
     const r = await c.decide("decide", { id: 1 });
     expect(r.status).toBe(200);
     expect(t.calls.length).toBe(1);
@@ -163,7 +202,7 @@ describe("ADAAAA-8254 AC2: discovery failures never reach the decide path", () =
     });
     const snap = await c.refreshDecideCapacity(true);
     // ADAAAA-8262: a FAILED probe (probeOk false) is not an empty fleet.
-    expect(snap).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: false, runners: 0, source: "funded" });
+    expect(snap).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: false, runners: 0, source: "funded", cap: 32 });
     expect(c.decideAdmissionMetrics().capacityProbeErrors).toBe(1);
     // Decide still returns 200 while the probe is broken.
     const r = await c.decide("decide", { id: 7 });
@@ -188,7 +227,7 @@ describe("ADAAAA-8254 AC2: discovery failures never reach the decide path", () =
     // Last known advertised capacity survives the failed probe — and the
     // snapshot says so (`probeOk: false`, `source: "last-known"`), which is
     // exactly the distinction ADAAAA-8254 could not express.
-    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4, probeOk: false, runners: 0, source: "last-known" });
+    expect(snap).toEqual({ advertised: 4, funded: 8, effective: 4, probeOk: false, runners: 0, source: "last-known", cap: 32 });
     expect(c.decideAdmissionMetrics().capacityProbeErrors).toBe(1);
     // Decide is unaffected.
     expect((await c.decide("decide", { id: 1 })).status).toBe(200);
@@ -367,6 +406,7 @@ describe("ADAAAA-8254 AC4: bounded, counted loss", () => {
       probeOk: true,
       runners: 0,
       source: "funded",
+      cap: 32,
     });
 
     // Probe OK, decide runner present but at zero capacity: a REAL advertisement.
@@ -378,6 +418,7 @@ describe("ADAAAA-8254 AC4: bounded, counted loss", () => {
       probeOk: true,
       runners: 1,
       source: "probe",
+      cap: 32,
     });
 
     // Signer dark (503 cache empty): the probe FAILED — the snapshot says so
@@ -392,6 +433,7 @@ describe("ADAAAA-8254 AC4: bounded, counted loss", () => {
       probeOk: false,
       runners: 0,
       source: "last-known",
+      cap: 32,
     });
     expect(c.decideAdmissionMetrics().capacityProbeErrors).toBe(1);
   });
@@ -410,7 +452,7 @@ describe("ADAAAA-8254 AC4: bounded, counted loss", () => {
       decide503: 0,
       decidePauses: 0,
       capacityProbeErrors: 0,
-      capacity: { advertised: 4, funded: 8, effective: 4 },
+      capacity: { advertised: 4, funded: 8, effective: 4, cap: 32 },
     });
   });
 
@@ -447,5 +489,62 @@ describe("ADAAAA-8254 summarizeDecideDiscovery", () => {
     available = 4;
     await c.refreshDecideCapacity(true);
     expect((await c.decide("decide", { id: 1 })).status).toBe(200);
+  });
+});
+
+describe("ADAAAA-8437 AC2/AC6: the safety cap bounds a malformed advertisement", () => {
+  it("advertised 1e6 clamps to the default cap (32)", async () => {
+    const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
+      decideConcurrency: 8,
+      decideCapacityProbe: async () => ({ capacity: 1_000_000, runners: 3 }),
+    });
+    const snap = await c.refreshDecideCapacity(true);
+    expect(snap.advertised).toBe(1_000_000);
+    expect(snap.effective).toBe(32);
+    expect(snap.cap).toBe(32);
+  });
+
+  it("DECIDE_MAX_ADMISSION (client option) lowers the cap: advertised 12 with cap 8 -> 8", async () => {
+    const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
+      decideConcurrency: 8,
+      decideMaxAdmission: 8,
+      decideCapacityProbe: async () => ({ capacity: 12, runners: 3 }),
+    });
+    const snap = await c.refreshDecideCapacity(true);
+    expect(snap).toMatchObject({ advertised: 12, effective: 8, cap: 8 });
+    // A cap of 0/negative is clamped to 1, never to 0.
+    const zero = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
+      decideConcurrency: 8,
+      decideMaxAdmission: 0,
+      decideCapacityProbe: async () => ({ capacity: 12, runners: 3 }),
+    });
+    expect((await zero.refreshDecideCapacity(true)).effective).toBe(1);
+  });
+
+  it("discovery dark: capacity absent keeps last-known, then funded when nothing was ever advertised", async () => {
+    let mode: "ok" | "absent" = "ok";
+    const c = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
+      decideConcurrency: 8,
+      decideCapacityProbe: async () => (mode === "ok" ? { capacity: 6, runners: 1 } : { capacity: null }),
+    });
+    expect((await c.refreshDecideCapacity(true)).effective).toBe(6);
+    // `capacity: null` is NOT zero: the last known advertisement survives.
+    mode = "absent";
+    expect(await c.refreshDecideCapacity(true)).toMatchObject({
+      advertised: 6,
+      effective: 6,
+      source: "last-known",
+    });
+    // Nothing was ever advertised => funded (AC7).
+    const dark = new LivepeerClient("http://orch:8935", new ScriptedTransport(() => 200), {
+      decideConcurrency: 8,
+      decideCapacityProbe: async () => ({ capacity: null }),
+    });
+    expect(await dark.refreshDecideCapacity(true)).toMatchObject({
+      advertised: 0,
+      funded: 8,
+      effective: 8,
+      source: "funded",
+    });
   });
 });

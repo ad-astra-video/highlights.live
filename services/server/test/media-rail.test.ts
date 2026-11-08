@@ -342,6 +342,30 @@ describe("MediaRailObserver pipelined decide depth (ADAAAA-7987)", () => {
     narrowB.release();
   });
 
+  it("ADAAAA-8437 AC5: a discovered-capacity getter widens the per-stream depth mid-run", () => {
+    // The fleet advertises 6 on the routed 5090 set; raising DECIDE_WORKER_SEQS
+    // makes it advertise 12. The depth must follow the advertisement, not the
+    // static funded number.
+    let effective = 6;
+    const opts = (jobId: string) => ({
+      jobId,
+      cadenceS: 3,
+      maxInFlight: 4,
+      decideAdmission: () => effective,
+      onDecideStaged: () => ({ decide: async () => {}, accept: async () => false }),
+    });
+    const a = new MediaRailObserver(opts("j-8437-admit-a"));
+    expect(a.currentDepthBudget()).toBe(4); // lone stream: min(4, 6) = 4 (byte-identical)
+    const b = new MediaRailObserver(opts("j-8437-admit-b"));
+    expect(a.currentDepthBudget()).toBe(3); // 2 streams: floor(6 / 2) = 3 each
+    expect(b.currentDepthBudget()).toBe(3);
+    effective = 12; // the pool advertised more (worker-seqs re-create, cost-gated)
+    expect(a.currentDepthBudget()).toBe(4); // floor(12 / 2) = 6, capped at 4
+    expect(b.currentDepthBudget()).toBe(4);
+    a.release();
+    b.release();
+  });
+
   it("keeps the serial path byte-identical when the off-loop flag is off", () => {
     const rail = new MediaRailObserver({
       jobId: "j-7987-serial",
