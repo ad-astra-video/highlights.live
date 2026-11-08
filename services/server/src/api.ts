@@ -1800,6 +1800,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       cfg,
       job,
       clipWindow: cw,
+      // ADAAAA-8437: size the per-stream in-flight depth from the DISCOVERED
+      // decide admission (the routed 5090 set advertises 6), not the static
+      // funded number.
+      decideEffectiveAdmission: () => {
+        const m = adapter.decideAdmissionMetrics?.();
+        return Math.max(1, Math.floor(m?.capacity.effective ?? cfg.decideConcurrency ?? 2));
+      },
       // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
       onDecision: persistDecision,
       // ADAAAA-7028 Inc 2: durable decide_audit rows (AC-2 parity with the
@@ -1978,7 +1985,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           };
         },
         maxInFlight: cfg.liveObserveInFlight,
-        decideAdmission: anaCfg.liveDecideAdmission,
+        // ADAAAA-8437: prefer the live DISCOVERED admission getter so this rail's
+        // depth follows the fleet (a probe landing mid-run widens it); the static
+        // funded number is the fallback.
+        decideAdmission: anaCfg.liveDecideEffectiveAdmission ?? anaCfg.liveDecideAdmission,
         observeDecideOffLoop: cfg.observeDecideOffLoop,
       },
       shared
@@ -2250,6 +2260,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         cfg,
         job,
         clipWindow: cw,
+        // ADAAAA-8437: size the per-stream in-flight depth from the DISCOVERED
+        // decide admission (the routed 5090 set advertises 6), not the static
+        // funded number.
+        decideEffectiveAdmission: () => {
+          const m = adapter.decideAdmissionMetrics?.();
+          return Math.max(1, Math.floor(m?.capacity.effective ?? cfg.decideConcurrency ?? 2));
+        },
         // ADAAAA-6851 Inc 2: persist every decide evaluation durably.
         onDecision: persistDecision,
         // ADAAAA-7028 Inc 2: ingest the decide audit descriptor durably.
@@ -7355,6 +7372,10 @@ export interface LiveAnalyzerConfigDeps {
   onConfirmDivePending?: AnalyzerConfig["onConfirmDivePending"];
   /** ADAAAA-8408 (W2): the live match-context writer's per-window hook. */
   onObserveWindowEvidence?: AnalyzerConfig["onObserveWindowEvidence"];
+  /** ADAAAA-8437: live read of the DISCOVERED decide admission width, so the
+   * per-stream in-flight depth follows the capacity the fleet advertises. Unset
+   * (tests / older wiring) falls back to `cfg.liveDecideAdmission`. */
+  decideEffectiveAdmission?: AnalyzerConfig["liveDecideEffectiveAdmission"];
 }
 
 /**
@@ -7410,6 +7431,7 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     liveFrameReread,
     onConfirmDivePending,
     onObserveWindowEvidence,
+    decideEffectiveAdmission,
   } = deps;
   return {
     jobId: job.id,
@@ -7488,6 +7510,10 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7771: the box's decide admission width, so the per-stream in-flight
     // depth is shared instead of oversubscribing the client's decide gate.
     liveDecideAdmission: cfg.decideConcurrency ?? 2,
+    // ADAAAA-8437: ...and when the caller wires the live snapshot, size the depth
+    // from the DISCOVERED effective capacity instead (the fleet advertises 6 on
+    // the routed 5090 set, so two streams get 3 each instead of 1 each).
+    ...(decideEffectiveAdmission ? { liveDecideEffectiveAdmission: decideEffectiveAdmission } : {}),
     // ADAAAA-7799 (lever C): the decide-rate cap (fraction of decide
     // opportunities kept). Forwarded verbatim; undefined leaves it unbounded.
     liveDecideKeepRatio: cfg.liveDecideKeepRatio,

@@ -331,16 +331,27 @@ export class HttpSignerClient implements SignerClient {
   }
 }
 
-// --- Decide admission (ADAAAA-8254) ------------------------------------------
+// --- Decide admission (ADAAAA-8254 -> ADAAAA-8437) ---------------------------
 // ONE gate owns every decide app-call (live observer, VOD pass, planner). The
 // gate is:
 //
-//   1. CAPACITY-AWARE, DOWNWARD ONLY. The effective ceiling is
-//      `min(funded DECIDE_CONCURRENCY, sum(runner.capacity) over the decide
-//      runners the signer discovers)`, clamped to [1, funded]. A discovered
-//      number can only ever LOWER admission: the CEO ruled capacity stays 8
-//      (ADAAAA-7803), so the 8/2/2 advertisement must never size the gate up.
-//      No configured probe => byte-identical to the pre-8254 static gate.
+//   1. CAPACITY-WIDE: admission follows what the fleet ADVERTISES. The effective
+//      ceiling is the discovered `advertised` number clamped to
+//      [1, DECIDE_MAX_ADMISSION] (default 32). It sizes UP as well as DOWN: the
+//      board ruling on ADAAAA-8418 rejected the funded-8 ceiling ("The
+//      DECIDE_CONCURRENCY artificially limiting to 8 is wrong. It should just be
+//      limited by the capacity available"), which supersedes the ADAAAA-7803
+//      framing and the ADAAAA-8254 "funded WINS, discovery can only lower it"
+//      rule. DECIDE_CONCURRENCY still rides the snapshot as `funded` for
+//      reporting, but it is no longer a ceiling.
+//
+//      The safety cap `DECIDE_MAX_ADMISSION` is NOT a funding posture: it guards
+//      against a bad advertisement (a truncated pool read, a mis-set
+//      `--max-num-seqs`, a signer that sums a backup set) turning into an
+//      unbounded admission width. Clamped [1, cap], never 0.
+//
+//      No configured probe => byte-identical to the pre-8254 static gate
+//      (`effective == funded`, AC7).
 //   2. AN ORDERED QUEUE. Waiters are admitted FIFO. A 503 opens one shared
 //      pause window; every waiter waits on the SAME deadline, and exactly ONE
 //      waiter runs the probe per window, so a zero-capacity episode costs one
@@ -353,11 +364,18 @@ export class HttpSignerClient implements SignerClient {
 //
 // The capacity probe is deliberately NEVER awaited on the decide path: a slow
 // or failing signer must not add latency or throw (AC2). A probe failure keeps
-// the last known capacity, then the funded ceiling — never 0.
+// the last known capacity, then the funded value — never 0.
 
-/** Funded decide ceiling when none is configured: the decide runner's
- * capacity-2 admission (ADAAAA-6911). */
+/** Funded decide value when none is configured: the decide runner's capacity-2
+ * admission (ADAAAA-6911). Reporting/fallback only since ADAAAA-8437 — it is no
+ * longer an admission ceiling. */
 export const DECIDE_FUNDED_CEILING_DEFAULT = 2;
+
+/** Safety cap on a discovered advertisement (`DECIDE_MAX_ADMISSION`, default 32).
+ * Not a funding posture: it bounds a MALFORMED advertisement (truncated pool
+ * read, mis-set `--max-num-seqs`, a sum that includes failover-only runners),
+ * so a bad discovery cannot open admission wider than the box can serve. */
+export const DECIDE_MAX_ADMISSION_DEFAULT = 32;
 
 /** First backoff window of a 503 episode (shared by every queued decide). */
 export const DECIDE_BACKOFF_BASE_MS = 500;
@@ -383,13 +401,16 @@ export type DecideCapacitySource =
   /** Nothing was ever advertised (dark discovery / no probe) => `effective = funded`. */
   | "funded";
 
-/** The three numbers the startup log line and the job snapshot carry. */
+/** The numbers the startup log line, the job snapshot and the admin live
+ * readout carry (ADAAAA-8254 -> ADAAAA-8437). */
 export interface DecideCapacitySnapshot {
   /** Sum of `capacity` over the discovered decide runners; 0 = unknown. */
   advertised: number;
-  /** The funded ceiling (`DECIDE_CONCURRENCY`) — the value that WINS. */
+  /** The FUNDED value (`DECIDE_CONCURRENCY`). Reporting only since
+   * ADAAAA-8437 — it no longer caps `effective`. */
   funded: number;
-  /** What the gate actually admits: min(funded, advertised), clamped [1, funded]. */
+  /** What the gate actually admits: `advertised` clamped to [1, `cap`], or
+   * `funded` (also clamped) when discovery is dark / never advertised. */
   effective: number;
   /** ADAAAA-8262: the last probe came back well-formed (no throw / timeout).
    * `false` means "probe failed" — distinct from a probe that answered with an
@@ -399,6 +420,10 @@ export interface DecideCapacitySnapshot {
   runners: number;
   /** ADAAAA-8262: provenance of `advertised` (see {@link DecideCapacitySource}). */
   source: DecideCapacitySource;
+  /** ADAAAA-8437: the safety cap (`DECIDE_MAX_ADMISSION`, default 32) the
+   * advertisement was clamped to. Guards a malformed advertisement; it is NOT a
+   * funding posture. */
+  cap: number;
 }
 
 /**
@@ -562,6 +587,11 @@ export class LivepeerClient {
        * being silently serialized to 1; oversubscription is absorbed by the
        * orchestrator's `503 no capacity` + this client's backoff/retry. */
       decideConcurrency?: number;
+      /** ADAAAA-8437: the safety cap on a discovered advertisement
+       * (`DECIDE_MAX_ADMISSION`, default {@link DECIDE_MAX_ADMISSION_DEFAULT}).
+       * `effective` is clamped [1, cap]. This is NOT a funding posture — it
+       * bounds a bad advertisement, it does not budget the fleet. */
+      decideMaxAdmission?: number;
       /** ADAAAA-6993: short backoff (ms) before retrying a `/payment` (or the
        * matching single-shot request) after the orchestrator rejects a ticket
        * minted against expired payment params with HTTP 400 `TicketParams
@@ -605,10 +635,11 @@ export class LivepeerClient {
     this.capacitySnapshot = {
       advertised: 0,
       funded: this.fundedDecideCeiling,
-      effective: this.fundedDecideCeiling,
+      effective: Math.min(this.fundedDecideCeiling, this.decideMaxAdmission),
       probeOk: false,
       runners: 0,
       source: "funded",
+      cap: this.decideMaxAdmission,
     };
   }
 
@@ -738,8 +769,8 @@ export class LivepeerClient {
    * probe per queued request per backoff window, and the gate could not see a
    * shrunken pool. Now:
    *
-   * - the ceiling is `min(funded DECIDE_CONCURRENCY, discovered capacity)`,
-   *   clamped [1, funded] (downward only — see the section comment);
+   * - the ceiling is the DISCOVERED capacity clamped to [1, DECIDE_MAX_ADMISSION]
+   *   (ADAAAA-8437: it sizes UP as well as down — see the section comment);
    * - waiters are one FIFO queue; a 503 opens a SHARED `pausedUntil` window that
    *   every waiter respects, and only one waiter probes per window;
    * - a waiter past its DECIDE_QUEUE_MAX_WAIT_MS budget is dropped with
@@ -786,14 +817,19 @@ export class LivepeerClient {
    * instead of zeroing a job that is still running. */
   private decideBaseline = { queued: 0, dropped: 0, s503: 0, pauses: 0, probeErrors: 0 };
 
-  /** The FUNDED ceiling (DECIDE_CONCURRENCY). Discovered capacity can only lower
-   * admission; it can never raise this. */
+  /** The FUNDED value (DECIDE_CONCURRENCY). Reporting only since ADAAAA-8437: it
+   * is the fallback when discovery is dark, never a ceiling on `advertised`. */
   private get fundedDecideCeiling(): number {
     return Math.max(1, Math.floor(this.opts.decideConcurrency ?? DECIDE_FUNDED_CEILING_DEFAULT));
   }
-  /** What the gate admits right now: min(funded, advertised), clamped [1, funded]. */
+  /** ADAAAA-8437: the safety cap on a discovered advertisement. */
+  private get decideMaxAdmission(): number {
+    return Math.max(1, Math.floor(this.opts.decideMaxAdmission ?? DECIDE_MAX_ADMISSION_DEFAULT));
+  }
+  /** What the gate admits right now: `effective` from the snapshot, re-clamped
+   * to [1, cap] so a stale snapshot can never exceed the cap. */
   private get effectiveDecideCeiling(): number {
-    return Math.max(1, Math.min(this.fundedDecideCeiling, this.capacitySnapshot.effective));
+    return Math.max(1, Math.min(this.decideMaxAdmission, this.capacitySnapshot.effective));
   }
   private get decideQueueMaxWaitMs(): number {
     return Math.max(0, this.opts.decideQueueMaxWaitMs ?? DECIDE_QUEUE_MAX_WAIT_MS_DEFAULT);
@@ -923,8 +959,12 @@ export class LivepeerClient {
 
   private recomputeDecideCapacity(): void {
     const funded = this.fundedDecideCeiling;
+    const cap = this.decideMaxAdmission;
     const advertised = this.lastAdvertisedCapacity;
-    const effective = advertised === null ? funded : Math.max(1, Math.min(funded, advertised));
+    // ADAAAA-8437: the advertisement IS the ceiling (up or down), bounded only
+    // by the safety cap. With discovery dark (never advertised) the funded value
+    // is the fallback, exactly as before (AC7).
+    const effective = Math.max(1, Math.min(cap, advertised ?? funded));
     // ADAAAA-8262: provenance only — the ceiling arithmetic above is untouched.
     const source: DecideCapacitySource =
       advertised === null ? "funded" : this.lastProbeYieldedCapacity ? "probe" : "last-known";
@@ -935,8 +975,9 @@ export class LivepeerClient {
       advertised !== this.capacitySnapshot.advertised ||
       probeOk !== this.capacitySnapshot.probeOk ||
       runners !== this.capacitySnapshot.runners ||
-      source !== this.capacitySnapshot.source;
-    this.capacitySnapshot = { advertised: advertised ?? 0, funded, effective, probeOk, runners, source };
+      source !== this.capacitySnapshot.source ||
+      cap !== this.capacitySnapshot.cap;
+    this.capacitySnapshot = { advertised: advertised ?? 0, funded, effective, probeOk, runners, source, cap };
     if (changed) {
       try {
         this.opts.onDecideCapacity?.({ ...this.capacitySnapshot });

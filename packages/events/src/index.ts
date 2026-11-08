@@ -465,11 +465,12 @@ export const ConfirmMetricsSnapshotSchema = z.object({
 });
 export type ConfirmMetricsSnapshot = z.infer<typeof ConfirmMetricsSnapshotSchema>;
 
-// ADAAAA-8254: the capacity-aware decide ceiling, as recorded on the job. The
-// three numbers are the startup log line's: `advertised` = sum of `capacity`
-// over the discovered decide runners (0 = unknown), `funded` = the
-// DECIDE_CONCURRENCY ceiling that WINS, `effective` = min(funded, advertised)
-// clamped to [1, funded] — the value the gate actually admitted.
+// ADAAAA-8254: the capacity-aware decide ceiling, as recorded on the job.
+// ADAAAA-8437: admission follows the ADVERTISED capacity (up or down), clamped
+// to `cap`; `funded` is retained for reporting only. `advertised` = sum of
+// `capacity` over the discovered decide runners (0 = unknown), `effective` = the
+// value the gate actually admitted, `cap` = the DECIDE_MAX_ADMISSION safety bound
+// (absent on rows written before the field existed).
 export const DecideCapacitySnapshotSchema = z.object({
   advertised: z.number().int().min(0),
   funded: z.number().int().min(1),
@@ -480,6 +481,9 @@ export const DecideCapacitySnapshotSchema = z.object({
   probeOk: z.boolean().optional(),
   runners: z.number().int().min(0).optional(),
   source: z.enum(["probe", "last-known", "funded"]).optional(),
+  // ADAAAA-8437: the safety cap the advertisement was clamped to. Optional for
+  // the same reason: pre-8437 rows carry no cap.
+  cap: z.number().int().min(1).optional(),
 });
 export type DecideCapacitySnapshot = z.infer<typeof DecideCapacitySnapshotSchema>;
 

@@ -39,19 +39,23 @@ export interface ServerConfig {
   matchContextAsrSeconds: number;
   /** Hard cap on the decoded prefix bytes (MATCH_CONTEXT_ASR_MAX_BYTES). */
   matchContextAsrMaxBytes: number;
-  /** ADAAAA-6911 + ADAAAA-8254: the FUNDED decide ceiling (`DECIDE_CONCURRENCY`)
-   * — the value that WINS. Left unset -> the client keeps its default (decide
-   * runner capacity 2). ADAAAA-7773: docker-compose ships
-   * `DECIDE_CONCURRENCY=${DECIDE_CONCURRENCY:-8}` because the box has 8 real
-   * decide slots (4 per gemma card behind decide-router).
+  /** ADAAAA-6911 + ADAAAA-8254: the FUNDED decide value (`DECIDE_CONCURRENCY`).
+   * ADAAAA-8437: reporting/fallback only — it is NO LONGER an admission
+   * ceiling. Admission follows the capacity the fleet advertises (the board
+   * ruling on ADAAAA-8418), clamped by `decideMaxAdmission`. Left unset -> the
+   * client keeps its default (decide runner capacity 2). ADAAAA-7773: docker-
+   * compose still ships `DECIDE_CONCURRENCY=${DECIDE_CONCURRENCY:-8}` as the
+   * funded number the snapshot reports and the fallback when discovery is dark
+   * (`effective == funded`, AC7), so a box that never probes is unchanged.
    *
-   * ADAAAA-8254: the livepeer-session gate admits
-   * `min(decideConcurrency, discovered decide capacity)` clamped to [1,
-   * decideConcurrency], refreshed at job start and at most every
-   * `DECIDE_CAPACITY_REFRESH_S`. Discovered capacity can only LOWER admission —
-   * the 8/2/2 advertisement must never raise it past the funded 8 (CEO ruling
-   * ADAAAA-7803). Set to 1 to reproduce the capacity-1 serial baseline. */
+   * Set to 1 to reproduce the capacity-1 serial fallback. */
   decideConcurrency?: number;
+  /** ADAAAA-8437: safety cap on a discovered advertisement
+   * (`DECIDE_MAX_ADMISSION`, default 32). `effective = clamp(advertised, 1,
+   * cap)`. This is NOT a funding posture: it exists so a MALFORMED
+   * advertisement (a truncated pool read, a mis-set `--max-num-seqs`, a sum
+   * that includes failover-only runners) cannot open admission unboundedly. */
+  decideMaxAdmission?: number;
   /** ADAAAA-8254: minimum seconds between signer capacity probes
    * (`DECIDE_CAPACITY_REFRESH_S`, default 60). A probe also runs at every decide
    * job start. */
@@ -932,6 +936,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     matchContextAsrSeconds: Number(env.MATCH_CONTEXT_ASR_SECONDS ?? 90),
     matchContextAsrMaxBytes: Number(env.MATCH_CONTEXT_ASR_MAX_BYTES ?? 8 * 1024 * 1024),
     decideConcurrency: env.DECIDE_CONCURRENCY ? Number(env.DECIDE_CONCURRENCY) : undefined,
+    // ADAAAA-8437: the safety cap on a discovered advertisement (default 32 in
+    // the client). Unset keeps that default, so an operator who never sets it
+    // gets the documented cap rather than a silent 1.
+    decideMaxAdmission: env.DECIDE_MAX_ADMISSION ? Number(env.DECIDE_MAX_ADMISSION) : undefined,
     // ADAAAA-8254: the capacity-aware decide ceiling + ordered 503 queue knobs.
     // Unset keeps the client defaults (60 s refresh, 60 s queue budget, probe
     // on when a signer exists), so an unset environment behaves exactly like

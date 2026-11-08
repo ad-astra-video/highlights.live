@@ -31,7 +31,7 @@ describe("ADAAAA-8254 AC4: admission counters persist on the job record", () => 
     decide503: 3,
     decidePauses: 2,
     capacityProbeErrors: 0,
-    decideCapacity: { advertised: 12, funded: 8, effective: 8, probeOk: true, runners: 3, source: "probe" as const },
+    decideCapacity: { advertised: 12, funded: 8, effective: 12, probeOk: true, runners: 3, source: "probe" as const, cap: 32 },
   };
 
   it("keeps decideQueued/Dropped/503/Pauses/probeErrors + the capacity snapshot in the stored row", async () => {
@@ -54,18 +54,20 @@ describe("ADAAAA-8254 AC4: admission counters persist on the job record", () => 
     expect(m.decideCapacity).toEqual({
       advertised: 12,
       funded: 8,
-      effective: 8,
+      effective: 12,
       probeOk: true,
       runners: 3,
       source: "probe",
+      cap: 32,
     });
 
     // The raw record is what QA's `record->'observeMetrics'` read returns.
     const raw = JSON.stringify(stored);
     expect(raw).toContain('"decideDropped":1');
     expect(raw).toContain('"decide503":3');
+    // ADAAAA-8437: the advertisement IS the ceiling (12), bounded by the cap.
     expect(raw).toContain(
-      '"decideCapacity":{"advertised":12,"funded":8,"effective":8,"probeOk":true,"runners":3,"source":"probe"}',
+      '"decideCapacity":{"advertised":12,"funded":8,"effective":12,"probeOk":true,"runners":3,"source":"probe","cap":32}',
     );
 
     // A restart hydrates the counters back onto the row.
@@ -91,7 +93,7 @@ describe("ADAAAA-8254 AC4: admission counters persist on the job record", () => 
       decide503: 4,
       decidePauses: 3,
       capacityProbeErrors: 1,
-      capacity: { advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 1, source: "probe" },
+      capacity: { advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 1, source: "probe", cap: 32 },
     });
     expect(merged).toMatchObject({
       decideCalls: 73, // base untouched
@@ -100,7 +102,7 @@ describe("ADAAAA-8254 AC4: admission counters persist on the job record", () => 
       decide503: 4,
       decidePauses: 3,
       capacityProbeErrors: 1,
-      decideCapacity: { advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 1, source: "probe" },
+      decideCapacity: { advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 1, source: "probe", cap: 32 },
     });
     // No gate (direct-dev / older client) => byte-identical snapshot.
     expect(withDecideAdmissionMetrics(baseObserveMetrics, undefined)).toEqual(baseObserveMetrics);
@@ -117,11 +119,13 @@ describe("ADAAAA-8254 AC6: config knobs", () => {
   it("parses DECIDE_CAPACITY_REFRESH_S / DECIDE_QUEUE_MAX_WAIT_MS / DECIDE_CAPACITY_DISCOVERY", () => {
     const cfg = loadConfig({
       DECIDE_CONCURRENCY: "8",
+      DECIDE_MAX_ADMISSION: "24",
       DECIDE_CAPACITY_REFRESH_S: "30",
       DECIDE_QUEUE_MAX_WAIT_MS: "45000",
       DECIDE_CAPACITY_DISCOVERY: "0",
     } as NodeJS.ProcessEnv);
     expect(cfg.decideConcurrency).toBe(8);
+    expect(cfg.decideMaxAdmission).toBe(24);
     expect(cfg.decideCapacityRefreshS).toBe(30);
     expect(cfg.decideQueueMaxWaitMs).toBe(45_000);
     expect(cfg.decideCapacityDiscovery).toBe(false);
@@ -130,6 +134,8 @@ describe("ADAAAA-8254 AC6: config knobs", () => {
   it("all knobs unset = client defaults (AC1 last row: today's behaviour)", () => {
     const cfg = loadConfig({} as NodeJS.ProcessEnv);
     expect(cfg.decideConcurrency).toBeUndefined();
+    // ADAAAA-8437: unset keeps the client's own safety cap (32).
+    expect(cfg.decideMaxAdmission).toBeUndefined();
     expect(cfg.decideCapacityRefreshS).toBeUndefined();
     expect(cfg.decideQueueMaxWaitMs).toBeUndefined();
     expect(cfg.decideCapacityDiscovery).toBe(true);
@@ -176,7 +182,7 @@ describe("ADAAAA-8254 adapter wiring: the signer is the capacity source", () => 
     return read();
   };
 
-  it("discovering 8/2/2 with DECIDE_CONCURRENCY=8 yields advertised 12 / funded 8 / effective 8", async () => {
+  it("discovering 8/2/2 yields advertised 12 / effective 12 (funded 8 is reporting only)", async () => {
     const capsSeen: string[][] = [];
     const lines: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
@@ -190,11 +196,11 @@ describe("ADAAAA-8254 adapter wiring: the signer is the capacity source", () => 
       adapter.beginDecideJob();
       const m = await settle(() => adapter.decideAdmissionMetrics().capacity, { advertised: 12, effective: 8 });
       expect(capsSeen[0]).toEqual(["highlights-live/decide"]);
-      expect(m).toEqual({ advertised: 12, funded: 8, effective: 8, probeOk: true, runners: 3, source: "probe" });
+      expect(m).toEqual({ advertised: 12, funded: 8, effective: 12, probeOk: true, runners: 3, source: "probe", cap: 32 });
       // AC1: the startup/refresh log line carries the three numbers; ADAAAA-8262
       // appends the provenance so a dark discovery is not read as an empty fleet.
       expect(lines).toContain(
-        "[decide-capacity] advertised=12 funded=8 effective=8 probeOk=true runners=3 source=probe",
+        "[decide-capacity] advertised=12 funded=8 effective=12 probeOk=true runners=3 source=probe cap=32",
       );
     } finally {
       spy.mockRestore();
@@ -211,6 +217,7 @@ describe("ADAAAA-8254 adapter wiring: the signer is the capacity source", () => 
       probeOk: true,
       runners: 1,
       source: "probe",
+      cap: 32,
     });
   });
 
@@ -225,6 +232,7 @@ describe("ADAAAA-8254 adapter wiring: the signer is the capacity source", () => 
       probeOk: false,
       runners: 0,
       source: "funded",
+      cap: 32,
     });
     expect(adapter.decideAdmissionMetrics().capacityProbeErrors).toBe(0);
   });
@@ -245,6 +253,7 @@ describe("ADAAAA-8254 adapter wiring: the signer is the capacity source", () => 
       probeOk: false,
       runners: 0,
       source: "funded",
+      cap: 32,
     });
   });
 
@@ -270,6 +279,6 @@ describe("ADAAAA-8254 adapter wiring: the signer is the capacity source", () => 
     expect(m.capacityProbeErrors).toBe(1);
     // ADAAAA-8262: the stored row now says the probe FAILED (`probeOk: false`)
     // instead of looking like a fleet with no runners.
-    expect(m.capacity).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: false, runners: 0, source: "funded" });
+    expect(m.capacity).toEqual({ advertised: 0, funded: 8, effective: 8, probeOk: false, runners: 0, source: "funded", cap: 32 });
   });
 });
