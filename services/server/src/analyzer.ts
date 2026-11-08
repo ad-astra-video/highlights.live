@@ -2197,6 +2197,13 @@ export interface DecisionResult {
   // near miss is notable but NOT a scoring play — surfaced at a lower score and
   // flagged so the highlight-clip is labeled distinctly downstream.
   outcome?: "scoring_play" | "near_miss" | "big_play" | "not_highlight";
+  // ADAAAA-8325 (Inc 2): the footage phase the VOD decide verdict reported —
+  // `live` action or a `replay` of earlier action (broadcast replay, slow-mo
+  // repeat, replay bug/logo overlay). Additive optional metadata beside
+  // `outcome`; absent = UNKNOWN (never inferred as "live"). The server persists
+  // it on the decided record and uses it ONLY as corroboration for a replay
+  // attach — it never creates an attach on its own.
+  phase?: "live" | "replay";
   nearMiss?: boolean;
   // ADAAAA-7008 / ADAAAA-7012: when the verdict is uncertain and asks for MORE
   // evidence for this moment before finalizing, the server calls perceive
@@ -5682,6 +5689,9 @@ export function buildCandidateNote(
       score: decision.score,
       isHighlight: decision.isHighlight,
       outcome: decision.outcome,
+      // ADAAAA-8325 (Inc 2): persist the footage phase on the decided window so
+      // AC8's adherence is queryable per window (absent key = unknown).
+      ...(decision.phase ? { phase: decision.phase } : {}),
       nearMiss: decision.nearMiss,
       reason: decision.reason,
       status,
@@ -6431,6 +6441,10 @@ export async function acceptVideoDecision(
     // distinctly via the outcome/nearMiss flag.
     outcome: decision.outcome,
     nearMiss: decision.nearMiss,
+    // ADAAAA-8325 (Inc 2): the decide verdict's footage phase for this window,
+    // persisted on the decided record and echoed by GET /jobs/:id/detail. Spread
+    // so an unknown phase adds NO key (absent = unknown, never "live").
+    ...(decision.phase ? { phase: decision.phase } : {}),
     // Stage-2 confirmation verdict (ADAAAA-6797), set when the trigger fired.
     goalConfirmed: confirm?.goalConfirmed ?? undefined,
     stage1Disagreed: confirm?.stage1Disagreed ?? undefined,
