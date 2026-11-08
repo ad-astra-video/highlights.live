@@ -5924,6 +5924,19 @@ export function storedSurfaceFor(
   // card is earned only by corroboration (§3.4), never by copy (clause 2).
   const quietCopy = grounding && !card.caption && !reasonClean ? quietStoredCopy(rawSurface, grounding) : "";
   const storedReason = grounding ? card.caption || (reasonClean ? shapedReason : quietCopy) : gatedReason;
+  // ADAAAA-8405 (Phase C AC4, measured 0/6 served cards): a refused CARD is not
+  // a refused ANNOUNCER line. `card.caption`/`cardTitles` are the postable copy
+  // options, earned only by corroboration (§3.4), so they stay refused; but the
+  // row's own gated announcer sentence (`storedReason`, the same string served
+  // as `reason`) crossed the claim/absence/name gates and is honest detail copy.
+  // Storing it as the collapsed `caption` is what stops the detail route from
+  // degrading to the post TITLE (measured: served `caption` was byte-identical
+  // to `postTitle` on 6 of 6 cards because `caption` was null on every row).
+  // No gate is loosened here — nothing is stored that `reason` does not already
+  // serve, and a row with no honest sentence still stores no caption.
+  // FAST rail only (`grounding` is set only when caption grounding is on): the
+  // VOD seam keeps `reason`-only rows byte-identical (AC8 parity).
+  const storedCaption = card.caption || (grounding ? storedReason : "");
   // ADAAAA-8318 (ADAAAA-8302 Option 2): the CARD'S COPY TARGET. The model writes
   // the title in the same reply as the announcer line; it crosses the same v9
   // grounding gate here (goal claim on this row's verdict, names from this
@@ -5942,7 +5955,8 @@ export function storedSurfaceFor(
   return {
     ...(storedReason ? { reason: storedReason } : {}),
     ...(grounding?.colourSignal && captionColour(storedReason) ? { colour: grounding.colourSignal } : {}),
-    ...(card.caption ? { caption: card.caption, cardTitles: card.cardTitles } : {}),
+    ...(storedCaption ? { caption: storedCaption } : {}),
+    ...(card.caption ? { cardTitles: card.cardTitles } : {}),
     ...(postTitle ? { postTitle } : {}),
     ...(grounding ? { postTitleGate: postTitleGate.gate } : {}),
     ...(grounding && storedReason !== decision.reason && (decision.reason ?? "").trim() ? { reason_raw: decision.reason } : {}),

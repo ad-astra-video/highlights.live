@@ -157,8 +157,11 @@ describe("ADAAAA-8216 — the write seam carries the window's prompt into the co
     const decision = { ...DEMOTED_ROW, analysis: { prompt: WINDOW_PROMPT } as any } as DecisionResult;
     const surface = storedSurfaceFor(decision, windowGrounding(decision));
     expectOwedCopy(surface);
-    // Clause 2 unchanged: a claim card is earned only by corroboration.
-    expect(surface.caption).toBeUndefined();
+    // Clause 2 unchanged: a claim CARD is earned only by corroboration.
+    // ADAAAA-8405: the collapsed `caption` now carries the row's own gated
+    // announcer line (it is the same string served as `reason`), so the detail
+    // route stops degrading to the post title; the card options stay refused.
+    expect(surface.caption).toBe(surface.reason);
     expect(surface.cardTitles).toBeUndefined();
     // The audit tail is never copy; the raw sentence stays as the audit record.
     expect(surface.reason_raw).toBe(ROW_REASON_RAW);
@@ -198,7 +201,8 @@ describe("ADAAAA-8216 — the write seam carries the window's prompt into the co
     expect(rec.eventType).toBe("BIG_PLAY");
     expect(rec.outcome).toBe("big_play");
     expect(rec.reason).toBe("Scoreboard changes to 1-1.");
-    expect(rec.caption).toBeUndefined();
+    // ADAAAA-8405: the gated announcer line is the collapsed caption too.
+    expect(rec.caption).toBe("Scoreboard changes to 1-1.");
     expect(rec.cardTitles).toBeUndefined();
     expect(rec.reason_raw).toBe(ROW_REASON_RAW);
     // The demotion disclosure still names what the gate read.
@@ -209,7 +213,8 @@ describe("ADAAAA-8216 — the write seam carries the window's prompt into the co
   it("persists the copy on the ACCEPT lane when only the window capture is present", async () => {
     const rec = await acceptOnce({ ...SCORING_READ, analysis: { prompt: WINDOW_PROMPT } as any } as DecisionResult);
     expect(rec.reason).toBe("Scoreboard changes to 1-1.");
-    expect(rec.caption).toBeUndefined();
+    // ADAAAA-8405: the gated announcer line is the collapsed caption too.
+    expect(rec.caption).toBe("Scoreboard changes to 1-1.");
   });
 
   it("keeps the static-form refusal: a post-only read stores nothing (762d8a89)", () => {
