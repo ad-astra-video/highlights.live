@@ -997,14 +997,19 @@ export interface StoredSurfaceFields {
 
 /** ADAAAA-8006: the re-emit handed to the caller's persist hook. */
 export interface DeferredGoalAttestationUpgrade extends DeferredGoalAttestation {
-  /** The transition instant the later read measured (first read of the new score). */
-  deltaTs: number;
-  /** The content timestamp of the window whose read resolved it. */
+  /** The transition instant the later read measured (first read of the new score).
+   * ADAAAA-8442: absent when the promotion was carried by a NON-delta measured
+   * attestation (goal-line / net channel); the row then records `readAt`. */
+  deltaTs?: number;
+  /** The content timestamp of the window whose read resolved it (on the
+   * ADAAAA-8442 attestation-only path: the accepting window's decide instant). */
   readAt: number;
-  /** The measured delta itself (pre/post + sample counts). */
-  delta: ScoreboardDeltaEvidence;
-  /** The lookahead bound that was applied (audit). */
-  lookaheadS: number;
+  /** The measured delta itself (pre/post + sample counts). Absent on the
+   * ADAAAA-8442 attestation-only promotion — never fabricate a score read. */
+  delta?: ScoreboardDeltaEvidence;
+  /** The lookahead bound that was applied (audit). Absent when no delta bound
+   * applied (the ADAAAA-8442 attestation-only path). */
+  lookaheadS?: number;
   /** ADAAAA-8212: the copy the RESOLVING verdict produced — the accepting
    * window's own write-seam surface, or the entry's scoring-lane claim re-gated
    * under the measured corroboration. Present only when a seam could derive it;
@@ -1019,6 +1024,19 @@ export interface DeferredGoalAttestationUpgrade extends DeferredGoalAttestation 
    * NOT measure the score change (`postSamples: 0`, `scoreBoardChanged: false`)
    * and therefore attests nothing about the goal the row now claims. */
   attestationUsed?: LiveGoalAttestationUsed;
+}
+
+/**
+ * ADAAAA-8442: the DELTA-resolved upgrade — the shape the ADAAAA-8006/8199
+ * deferral lanes produce, where the measured scoreboard read is guaranteed. The
+ * base {@link DeferredGoalAttestationUpgrade} relaxes `delta` / `deltaTs` /
+ * `lookaheadS` only for the attestation-only burst-owner promotion, so the
+ * delta lanes keep a narrowed type that cannot read a delta that is not there.
+ */
+export interface ScoreDeltaGoalAttestationUpgrade extends DeferredGoalAttestationUpgrade {
+  deltaTs: number;
+  delta: ScoreboardDeltaEvidence;
+  lookaheadS: number;
 }
 
 /** ADAAAA-8006: is this delta a SINGLE goal step (exactly one side +1)?
@@ -3973,6 +3991,92 @@ export function formatGoalBurstSuppressionReason(s: GoalBurstSuppression): strin
   );
 }
 
+/**
+ * ADAAAA-8442 (ATTEST-2): a burst whose own row ATTESTS a measured goal must be
+ * deduped under the GOAL lane, not deleted as a duplicate of a celebration.
+ *
+ * Measured defect (live job `b55c5781`, ATTEST-2 census): 10 `eventType=GOAL`
+ * candidates were `status=suppressed` with `kind=goal_burst_same_transition` and
+ * `transitionKey=null`; three of them held every measured channel true
+ * (`ballInNet` + `ballCrossedLineBetweenPosts` + `scoreboardChanged` +
+ * `crowdErupted`) and still produced no highlight, because the burst lane's
+ * nearest reference was an earlier goal-shaped row the attestation gate had
+ * DEMOTED to a celebration (`75b22f0f`→`ab1071b5` 3.408 s, `c1338e86`→`ab1071b5`
+ * 5.714 s, `65e0ad50`→`e4214be4` 6.785 s). Suppression runs BEFORE accept, so a
+ * fully-attested goal left the lane as a duplicate of a row that is explicitly
+ * NOT a goal: the dedupe owner's lane decided the burst's lane.
+ *
+ * The fix here is OWNER RESOLUTION BY ATTESTATION STRENGTH: when this candidate
+ * itself carries a measured goal attestation, the burst owner becomes the
+ * goal-shaped celebration row (an already-delivered clip, still awaiting its own
+ * measured re-attestation) and THAT row is promoted in place to the scoring
+ * lane. The accepting candidate is recorded as `suppressed` with
+ * `goal_burst_owner_promoted:...` — so the suppression counts keep today's shape
+ * (one row is still suppressed, no second card is created) and `total clip
+ * windows delivered` does not move: the promoted row IS the burst's clip.
+ *
+ * Fail-closed (AT2-AC3): a burst whose candidate carries NO measured attestation
+ * returns `undefined`, so the caller keeps today's celebration dedupe byte-for-
+ * byte. Only a goal-shaped candidate, on the live lane, whose suppression target
+ * is a `goal_shaped_celebration` that is still parked in the deferred-attestation
+ * ledger (i.e. a row the gate demoted and whose scoring-lane copy already exists)
+ * can be promoted — a plain celebration, a `near_miss` or a VOD row never is.
+ * The owner's judged window must also OVERLAP the accepting window: a merely
+ * nearby row is not the same moment, so the accept ships its own row instead.
+ */
+export function attestedGoalBurstOwnerPromotion(input: {
+  /** The burst lane's verdict for this candidate (`undefined` = nothing to dedupe). */
+  suppression: GoalBurstSuppression | undefined;
+  /** The PRE-gate label (`highlightEventType(decision, candidate.eventType)`). */
+  goalShaped: boolean;
+  /** Does this candidate itself carry a measured goal attestation? */
+  measuredGoalAttested: boolean;
+  /** Live accept lane only (the demotion + deferred-attestation machinery). */
+  liveLane: boolean;
+  /** The rows still parked in the run's deferred-attestation ledger. */
+  deferred: readonly DeferredGoalAttestation[];
+  /** The accepting window this candidate was judged over (`liveWindow`). */
+  acceptWindow?: { lo: number; hi: number };
+}): DeferredGoalAttestation | undefined {
+  const sup = input.suppression;
+  if (!sup) return undefined;
+  if (!input.goalShaped || !input.measuredGoalAttested || !input.liveLane) return undefined;
+  if (sup.kind !== "goal_burst_same_transition") return undefined;
+  if (sup.dedupeAgainstKind !== "goal_shaped_celebration") return undefined;
+  const owner = input.deferred.find((e) => e.highlightId === sup.dedupeAgainstHighlightId);
+  if (!owner) return undefined;
+  const w = input.acceptWindow;
+  if (!w || !Number.isFinite(owner.lo) || !Number.isFinite(owner.hi)) return undefined;
+  const overlaps = Math.max(owner.lo, w.lo) < Math.min(owner.hi, w.hi);
+  return overlaps ? owner : undefined;
+}
+
+/** ADAAAA-8442: the machine-readable reason written on the candidate row whose
+ * burst was resolved by promoting its celebration owner in place. Stable keys,
+ * same one-line shape as {@link formatGoalBurstSuppressionReason}:
+ *
+ *   goal_burst_owner_promoted:owner=<highlightId>@<ts>s;
+ *   attestation=<channels>;gap=<gap>s;burst=<n>
+ */
+export function formatGoalBurstOwnerPromotedReason(input: {
+  owner: DeferredGoalAttestation;
+  suppression: GoalBurstSuppression;
+  attestationUsed: LiveGoalAttestationUsed;
+}): string {
+  const channels = [
+    input.attestationUsed.scoreBoardChanged ? "scoreBoardChanged" : null,
+    input.attestationUsed.goalCrossed ? "goalCrossed" : null,
+    /^goal$/i.test((input.attestationUsed.ballOutcome ?? "").trim()) ? "ballOutcome=goal" : null,
+    input.attestationUsed.corroborated ? "corroborated" : null,
+    (input.attestationUsed.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal" ? "goalConfirmed" : null,
+  ].filter(Boolean);
+  return (
+    `goal_burst_owner_promoted:owner=${input.owner.highlightId}@${input.owner.anchorTs.toFixed(3)}s;` +
+    `attestation=${channels.join("+") || "none"};` +
+    `gap=${input.suppression.gapS.toFixed(3)}s;burst=${input.suppression.burstSize}`
+  );
+}
+
 /** ADAAAA-7402 (shootout-aware follow-up to the AC2 recall fix): the TIGHT
  * same-kick dedup window (seconds) applied to a GOAL whose acceptance is
  * independently corroborated by a scoreboard change (`corroborationSource ===
@@ -4805,7 +4909,7 @@ export class LiveRunShared {
     readAt: number;
     delta: ScoreboardDeltaEvidence | undefined | null;
     maxLookaheadS?: number;
-  }): DeferredGoalAttestationUpgrade[] {
+  }): ScoreDeltaGoalAttestationUpgrade[] {
     const delta = input.delta;
     if (!scoreboardDeltaLegible(delta)) return [];
     const d = delta as ScoreboardDeltaEvidence;
@@ -4872,7 +4976,7 @@ export class LiveRunShared {
   promoteDeferredGoalForAccept(input: {
     delta: ScoreboardDeltaEvidence | undefined | null;
     readAt: number;
-  }): DeferredGoalAttestationUpgrade | undefined {
+  }): ScoreDeltaGoalAttestationUpgrade | undefined {
     const delta = input.delta;
     if (!scoreboardDeltaLegible(delta)) return undefined;
     const d = delta as ScoreboardDeltaEvidence;
@@ -4904,6 +5008,31 @@ export class LiveRunShared {
       delta: d,
       lookaheadS: LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S,
     };
+  }
+  /**
+   * ADAAAA-8442 (ATTEST-2): consume the deferred-attestation entry parked for a
+   * goal-shaped celebration row, so the attested accept that deduped against it
+   * can promote THAT row IN PLACE instead of shipping a second card for the same
+   * moment.
+   *
+   * This is the ADAAAA-8199 seam's sibling for the NON-delta attestation
+   * channels (goal-line / net / corroborated confirm): `promoteDeferredGoalForAccept`
+   * needs a legible single-goal `scoreBoardDelta`, and a live window with
+   * `postSamples=0` has none — which is exactly the measured ATTEST-2 shape
+   * (three fully-attested goal rows deduped against celebrations with
+   * `transitionKey=null` on the whole burst). Attribution here is the burst
+   * lane's own owner (the row the candidate deduped against), not a delta, so
+   * the caller must have already established that the candidate attests the goal
+   * and that the two judged windows overlap (see
+   * {@link attestedGoalBurstOwnerPromotion}).
+   *
+   * Consumed exactly once: a re-decided window cannot promote the same row twice.
+   */
+  claimBurstCelebrationOwner(highlightId: string): DeferredGoalAttestation | undefined {
+    const entry = this.deferredGoalAttestations.find((e) => e.highlightId === highlightId);
+    if (!entry) return undefined;
+    this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
+    return entry;
   }
   /** ADAAAA-7938 (Spec A): fold one RESOLVED decide window into the prior-game
    * state the next window inherits. Content-ordered (a re-produced older window
@@ -6161,13 +6290,62 @@ export async function acceptVideoDecision(
   // `decision.eventType` to BIG_PLAY, so the delivered-shaped ledger must key on
   // the label the window was judged as.
   const goalShapedEventType = highlightEventType(decision, candidate.eventType);
+  const isGoalShapedEvent = /^(GOAL|GOL)$/i.test(goalShapedEventType || "");
+  // ADAAAA-8442 (ATTEST-2): the MEASURED attestation has to be known BEFORE the
+  // burst lane runs, because the lane's dedupe OWNER must be resolved by
+  // attestation strength: a row that measured the goal is never deleted as a
+  // duplicate of a celebration. Pure function — the same object the demotion
+  // gate and the stored row read, moved up (no behaviour change on its own).
+  const attestationUsed = liveGoalAttestationUsed({
+    attribution: {
+      scoreBoardChanged: candidate.scoreBoardChanged,
+      goalCrossed: candidate.goalCrossed,
+      ballOutcome: candidate.ballOutcome,
+      scoreBoardDelta: candidate.scoreBoardDelta,
+    },
+    corroborated: confirm?.corroborated === true,
+    goalConfirmed: confirm?.goalConfirmed ?? null,
+    // ADAAAA-8134: the read counts the pooled re-read measured (AC-R4).
+    // ADAAAA-8140: disclosed on ACCEPTED goal rows too, so a reviewer can name
+    // what certified the row instead of guessing from a bare `GOAL`.
+    scoreReads: candidate.scoreReads,
+    transitionKey: candidateTransitionKey,
+  });
+  // ADAAAA-8442: the SAME predicate the live scoring-lane gate applies
+  // (`liveGoalHasMeasuredEvidence`), so "attested enough to win the burst owner"
+  // can never be looser than "attested enough to keep the GOAL lane".
+  const measuredGoalAttested = liveGoalHasMeasuredEvidence({
+    scoreBoardChanged: attestationUsed.scoreBoardChanged,
+    goalCrossed: attestationUsed.goalCrossed,
+    ballOutcome: attestationUsed.ballOutcome,
+    corroborated: attestationUsed.corroborated,
+    goalConfirmed: attestationUsed.goalConfirmed,
+    // ADAAAA-8140: the score channel must agree with the measured span — a
+    // `1-1 -> 1-1` no-op or a `2-2 -> 1-1` backward read attests nothing.
+    scoreBoardDelta: candidate.scoreBoardDelta,
+    scoreReads: candidate.scoreReads,
+  });
   const goalBurst = run.goalBurstSuppression({
     ts: candidate.timestamp,
     eventType: goalShapedEventType,
     corroborated,
     transitionKey: candidateTransitionKey,
   });
-  if (goalBurst) {
+  // ADAAAA-8442 (ATTEST-2): when this candidate ATTESTED a measured goal and the
+  // burst lane's nearest reference is a goal-shaped CELEBRATION the gate demoted,
+  // the burst belongs to the goal lane. Do not drop the attested row here: let it
+  // run the accept lane (its measured attestation keeps it a GOAL) and promote the
+  // celebration OWNER in place at the write seam below — one row, one clip, one
+  // postable GOAL per transition. Fails closed: no attestation, no promotion.
+  const burstOwnerPromotion = attestedGoalBurstOwnerPromotion({
+    suppression: goalBurst,
+    goalShaped: isGoalShapedEvent,
+    measuredGoalAttested,
+    liveLane: cfg.liveObserveLoop === true && cfg.decideWindowN === undefined && liveWindow !== undefined,
+    deferred: run.pendingDeferredGoalAttestations(),
+    acceptWindow: liveWindow,
+  });
+  if (goalBurst && !burstOwnerPromotion) {
     const suppressionReason = formatGoalBurstSuppressionReason(goalBurst);
     console.error(
       `[goal-burst-suppress:${cfg.jobId}] @${candidate.timestamp}s ${goalShapedEventType} ` +
@@ -6219,7 +6397,7 @@ export async function acceptVideoDecision(
   // independent transition evidence is delivered as a CELEBRATION: the clip is
   // still cut (celebration windows stay accepted), but its outcome leaves the
   // scoring lane so the board never shows a second GOAL for the same transition.
-  let isGoalAccept = /^(GOAL|GOL)$/i.test(highlightEventType(decision, candidate.eventType) || "");
+  let isGoalAccept = isGoalShapedEvent;
   /** ADAAAA-8006: the pre-downgrade (scoring lane) verdict, set only when the
    * ADAAAA-7996 gate below demotes this accept. */
   let scoringLaneDecision: DecisionResult | undefined;
@@ -6238,21 +6416,10 @@ export async function acceptVideoDecision(
   // graphic appears"; no score change, no goal-line signal). Downgrade here (the
   // same seam and shape as the 7865 repeat-goal downgrade): the clip is still cut
   // and delivered as a celebration, but it can never be postable as a GOAL.
-  const attestationUsed = liveGoalAttestationUsed({
-    attribution: {
-      scoreBoardChanged: candidate.scoreBoardChanged,
-      goalCrossed: candidate.goalCrossed,
-      ballOutcome: candidate.ballOutcome,
-      scoreBoardDelta: candidate.scoreBoardDelta,
-    },
-    corroborated: confirm?.corroborated === true,
-    goalConfirmed: confirm?.goalConfirmed ?? null,
-    // ADAAAA-8134: the read counts the pooled re-read measured (AC-R4).
-    // ADAAAA-8140: disclosed on ACCEPTED goal rows too, so a reviewer can name
-    // what certified the row instead of guessing from a bare `GOAL`.
-    scoreReads: candidate.scoreReads,
-    transitionKey: candidateTransitionKey,
-  });
+  //
+  // ADAAAA-8442: `attestationUsed` / `measuredGoalAttested` are computed above the
+  // burst lane now (the dedupe OWNER is resolved by attestation strength), so this
+  // seam reads the same two values instead of recomputing them.
   // ADAAAA-8356: LANE-1 attestation is this window's corroboration. The measured
   // gate below is what decides whether a GOAL accept may stay in the scoring
   // lane, and `shouldRunConfirm` short-circuits on exactly that independent
@@ -6262,22 +6429,7 @@ export async function acceptVideoDecision(
   // scoreboard-attested GOAL stored `Ball shoots on the left.` and 0/3 cards
   // carried model copy. A GOAL the gate itself certified is corroborated.
   const laneOneAttested =
-    isGoalAccept &&
-    !!cfg.liveObserveLoop &&
-    cfg.decideWindowN === undefined &&
-    liveGoalHasMeasuredEvidence({
-      // ADAAAA-8140: the flat counts on the record are NOT the diagnostics the
-      // gate reads, so the gate input is built explicitly.
-      scoreBoardChanged: attestationUsed.scoreBoardChanged,
-      goalCrossed: attestationUsed.goalCrossed,
-      ballOutcome: attestationUsed.ballOutcome,
-      corroborated: attestationUsed.corroborated,
-      goalConfirmed: attestationUsed.goalConfirmed,
-      // ADAAAA-8140: the score channel must agree with the measured span — a
-      // `1-1 -> 1-1` no-op or a `2-2 -> 1-1` backward read attests nothing.
-      scoreBoardDelta: candidate.scoreBoardDelta,
-      scoreReads: candidate.scoreReads,
-    });
+    isGoalAccept && !!cfg.liveObserveLoop && cfg.decideWindowN === undefined && measuredGoalAttested;
   if (isGoalAccept && cfg.liveObserveLoop && cfg.decideWindowN === undefined && !laneOneAttested) {
     console.error(
       `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
@@ -6443,6 +6595,88 @@ export async function acceptVideoDecision(
   // pre-downgrade verdict instead of re-deriving copy at read time.
   const surface = storedSurfaceFor(decision, writeGrounding);
   const gatedReason = surface.reason;
+  // ADAAAA-8442 (ATTEST-2): this attested goal accept is the FIRST row of its
+  // burst to measure the goal, and the burst lane's owner is a goal-shaped
+  // CELEBRATION the gate demoted (still parked awaiting its own re-attestation).
+  // Resolve the owner by ATTESTATION STRENGTH: promote THAT row in place — its
+  // id, clip and instant are preserved, and the clip was already delivered, so
+  // `total clip windows delivered` does not move — then drop this accept with a
+  // reason that names the promoted row. One transition, one postable GOAL (AV10),
+  // never a second card for the same moment.
+  //
+  // Fail-safe ladder: no gated scoring-lane copy on this accept => do not promote;
+  // fall through and persist this attested accept as its own GOAL row (the read
+  // projection's ADAAAA-8199 absorb then collapses the celebration sibling into
+  // it). The goal is never lost, which is the invariant this ticket restores.
+  if (burstOwnerPromotion && surface.reason?.trim()) {
+    const owner = run.claimBurstCelebrationOwner(burstOwnerPromotion.highlightId);
+    if (owner) {
+      const promotionDelta =
+        scoreboardDeltaLegible(candidate.scoreBoardDelta) && scoreboardDeltaSingleGoalStep(candidate.scoreBoardDelta)
+          ? (candidate.scoreBoardDelta as ScoreboardDeltaEvidence)
+          : undefined;
+      const promotedFull: DeferredGoalAttestationUpgrade = {
+        ...owner,
+        // The accepting window is the read that resolved the owner: with a
+        // measured delta it names the transition instant, otherwise the audit
+        // records the attesting window (never a fabricated score read).
+        readAt: candidate.timestamp,
+        ...(promotionDelta
+          ? { delta: promotionDelta, deltaTs: promotionDelta.deltaTs }
+          : {}),
+        // The resolving verdict's copy is gated for the GOAL lane (laneOneAttested
+        // certified it), so the promoted row never keeps celebration copy.
+        resolvedSurface: surface,
+        attestationUsed,
+      };
+      console.error(
+        `[live-goal-burst-owner:${cfg.jobId}] promoting ${owner.highlightId} IN PLACE for the GOAL ` +
+          `attested by the burst sibling @${candidate.timestamp}s (owner judged window [${owner.lo}, ${owner.hi}], ` +
+          `gap ${goalBurst!.gapS.toFixed(3)}s, attestation=${JSON.stringify(attestationUsed)}): ` +
+          `no second row and no second clip for the same transition`
+      );
+      try {
+        cfg.onDeferredGoalAttested?.(promotedFull);
+      } catch (e: any) {
+        console.error(`[live-goal-burst-owner:${cfg.jobId}] persist hook failed:`, String(e?.message || e));
+      }
+      // The promoted row now owns the moment for every later window (burst,
+      // repeat-goal and deferred resolution all read the delivered-GOAL ledger).
+      run.noteAcceptedGoalEvent({
+        highlightId: owner.highlightId,
+        anchorTs: owner.anchorTs,
+        start: owner.lo,
+        end: owner.hi,
+        candidateTs: candidate.timestamp,
+        transitionKey: candidateTransitionKey,
+      });
+      const promotionReason = formatGoalBurstOwnerPromotedReason({
+        owner,
+        suppression: goalBurst!,
+        attestationUsed,
+      });
+      buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
+        reason: promotionReason,
+        evidence: {
+          kind: "goal_burst_owner_promoted",
+          dedupeAgainstHighlightId: owner.highlightId,
+          dedupeAgainstTs: owner.anchorTs,
+          candidateTs: candidate.timestamp,
+          transitionKey: candidateTransitionKey,
+          attestationUsed,
+        },
+      });
+      onEvent?.({
+        seq: emit.seq,
+        timestamp: emit.timestamp,
+        type: "candidateBlocked",
+        candidate: { eventType: goalShapedEventType, timestamp: candidate.timestamp },
+        reason: promotionReason,
+      });
+      if (sink) sink.final = decision;
+      return;
+    }
+  }
   // ADAAAA-8199: BEFORE this accept persists a new row, check whether it is the
   // first window to MEASURE a transition a delivered celebration is still
   // waiting on. If exactly one demoted row is attributable to this delta, credit
@@ -8146,7 +8380,7 @@ export function applyDeferredGoalAttestations(
  * attestation, and `deferredAttestation` names its exact instant and read.
  */
 export function attestationUsedForDeferredResolution(
-  upgrade: Pick<DeferredGoalAttestationUpgrade, "delta" | "scoreReads">
+  upgrade: Pick<ScoreDeltaGoalAttestationUpgrade, "delta" | "scoreReads">
 ): LiveGoalAttestationUsed {
   const d = upgrade.delta;
   const need = Math.max(1, Math.floor(upgrade.scoreReads?.need ?? SCOREBOARD_MIN_CONSISTENT_READS));
