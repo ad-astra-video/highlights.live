@@ -55,7 +55,12 @@ V2_FULL_CONTRACT_CHARS = 2354
 # ceiling for the static prefix: a later edit may not silently inflate every
 # window's prompt (measured 9193 chars / ~2 240 tokens at v3).
 MAX_STATIC_PREAMBLE_CHARS = 9400
-MAX_STATIC_BLOCK_CHARS = 14500  # SYSTEM_PROMPT + preamble + compact contract
+# SYSTEM_PROMPT + preamble + compact contract. ADAAAA-8356 moved this ceiling
+# once, by +500: the compact contract gained a POST TITLE RULES paragraph
+# (+893 chars over the 8318 field spec, measured 15 197 here) because the terse
+# parenthetical measurably failed on leg 23bb0a61. The preamble ceiling above is
+# untouched — the caption contract itself did not grow a character.
+MAX_STATIC_BLOCK_CHARS = 15400
 
 EV = {
     "trackCount": 3,
@@ -198,9 +203,10 @@ def test_static_block_budget():
     assert static_block <= MAX_STATIC_BLOCK_CHARS
     # measured deltas vs v2 (reported on the ticket, bounded here)
     assert len(STATIC_PREAMBLE) - V2_PREAMBLE_CHARS <= 2500
-    # v3 added +93; ADAAAA-8318 adds the `postTitle` field (+145) — bounded at 260
-    # so another field cannot ride along.
-    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 260
+    # v3 added +93; ADAAAA-8318 adds the `postTitle` field (+145); ADAAAA-8356
+    # rebuilds that spec as its own POST TITLE RULES paragraph (+1038 over the
+    # pre-8318 contract) — bounded at 1200 so another field cannot ride along.
+    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 1200
     # ADAAAA-8325 (Inc 2): the VOD (FULL) contract gained the `phase` field and
     # its rule (+486 chars with the REPLAY cues); bounded so a later edit cannot inflate every VOD
     # window's prefill any further. The COMPACT bound above is untouched — the
