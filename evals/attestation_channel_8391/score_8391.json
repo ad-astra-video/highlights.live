@@ -1,0 +1,262 @@
+{
+ "issue": "ADAAAA-8391",
+ "manifest_sha256": "f6bea8ec97352b3385feac634a7c1c6e8461e01719f79db3c68a061140047ccf",
+ "rows": 296,
+ "windows": 37,
+ "goal_windows": 15,
+ "no_goal_windows": 22,
+ "fidelity": {
+  "rows": 296,
+  "matched_v1": 296,
+  "missing_evidence": [],
+  "unparsed": 0,
+  "outcome_mismatch": []
+ },
+ "channel_coverage": {
+  "windows": 74,
+  "ballOutcome_present": 0,
+  "ballOutcome_goal": 0,
+  "goalCrossed_present": 0,
+  "goalCrossed_true": 0,
+  "scoreBoardChanged_present": 74,
+  "scoreBoardChanged_true": 3,
+  "scoreBoardDelta_present": 0,
+  "goalLineDelta_present": 0,
+  "perceiveTimeline_present": 0,
+  "audioLevels_present": 74
+ },
+ "channels": {
+  "ballOutcome=goal": {
+   "channel": "ballOutcome=goal",
+   "goal_rows_attested": 0,
+   "goal_rows": 120,
+   "goal_row_rate": 0.0,
+   "no_goal_rows_attested": 0,
+   "no_goal_rows": 176,
+   "no_goal_row_rate": 0.0,
+   "row_rate_ratio": null,
+   "row_rate_ratio_infinite": false,
+   "goal_windows_attested": 0,
+   "goal_windows": 15,
+   "goal_windows_list": [],
+   "no_goal_windows_attested": 0,
+   "no_goal_windows": 22,
+   "no_goal_windows_list": [],
+   "window_rate_ratio": null,
+   "window_rate_ratio_infinite": false
+  },
+  "goalCrossed=true": {
+   "channel": "goalCrossed=true",
+   "goal_rows_attested": 0,
+   "goal_rows": 120,
+   "goal_row_rate": 0.0,
+   "no_goal_rows_attested": 0,
+   "no_goal_rows": 176,
+   "no_goal_row_rate": 0.0,
+   "row_rate_ratio": null,
+   "row_rate_ratio_infinite": false,
+   "goal_windows_attested": 0,
+   "goal_windows": 15,
+   "goal_windows_list": [],
+   "no_goal_windows_attested": 0,
+   "no_goal_windows": 22,
+   "no_goal_windows_list": [],
+   "window_rate_ratio": null,
+   "window_rate_ratio_infinite": false
+  },
+  "scoreBoardChanged=true": {
+   "channel": "scoreBoardChanged=true",
+   "goal_rows_attested": 4,
+   "goal_rows": 120,
+   "goal_row_rate": 0.0333,
+   "no_goal_rows_attested": 8,
+   "no_goal_rows": 176,
+   "no_goal_row_rate": 0.0455,
+   "row_rate_ratio": 0.7319,
+   "row_rate_ratio_infinite": false,
+   "goal_windows_attested": 1,
+   "goal_windows": 15,
+   "goal_windows_list": [
+    "ks-g-0117"
+   ],
+   "no_goal_windows_attested": 2,
+   "no_goal_windows": 22,
+   "no_goal_windows_list": [
+    "ks-n-0312",
+    "ks-n-0402"
+   ],
+   "window_rate_ratio": 0.7333,
+   "window_rate_ratio_infinite": false
+  },
+  "timeline:ballOutcome=goal": {
+   "channel": "timeline:ballOutcome=goal",
+   "goal_rows_attested": 0,
+   "goal_rows": 120,
+   "goal_row_rate": 0.0,
+   "no_goal_rows_attested": 0,
+   "no_goal_rows": 176,
+   "no_goal_row_rate": 0.0,
+   "row_rate_ratio": null,
+   "row_rate_ratio_infinite": false,
+   "goal_windows_attested": 0,
+   "goal_windows": 15,
+   "goal_windows_list": [],
+   "no_goal_windows_attested": 0,
+   "no_goal_windows": 22,
+   "no_goal_windows_list": [],
+   "window_rate_ratio": null,
+   "window_rate_ratio_infinite": false
+  },
+  "any_measured": {
+   "channel": "any_measured",
+   "goal_rows_attested": 4,
+   "goal_rows": 120,
+   "goal_row_rate": 0.0333,
+   "no_goal_rows_attested": 8,
+   "no_goal_rows": 176,
+   "no_goal_row_rate": 0.0455,
+   "row_rate_ratio": 0.7333,
+   "row_rate_ratio_infinite": false,
+   "goal_windows_attested": 1,
+   "goal_windows": 15,
+   "goal_windows_list": [
+    "ks-g-0117"
+   ],
+   "no_goal_windows_attested": 2,
+   "no_goal_windows": 22,
+   "no_goal_windows_list": [
+    "ks-n-0312",
+    "ks-n-0402"
+   ],
+   "window_rate_ratio": 0.7333,
+   "window_rate_ratio_infinite": false
+  }
+ },
+ "false_accept_framing": {
+  "true_accepts": 35,
+  "true_accepts_attested": 4,
+  "false_accepts": 30,
+  "false_accepts_attested": 8,
+  "true_accept_rate": 0.1143,
+  "false_accept_rate": 0.2667
+ },
+ "ac1_discrimination": {
+  "goal_windows_attested": 1,
+  "goal_windows_required": 8,
+  "window_requirement_met": false,
+  "window_rate_ratio": 0.7333,
+  "row_rate_ratio": 0.7333,
+  "ratio_requirement_met": false,
+  "ratio_required": 4.0,
+  "met": false
+ },
+ "ac2_recall_safe": {
+  "rule": "keep an accept only when a measured channel attests the goal",
+  "cells": {
+   "live_ctrl_280_320x180": {
+    "goal_rows": 15,
+    "tp_v1": 4,
+    "tp_attested": 0,
+    "recall_v1": 0.2667,
+    "recall_attested_rule": 0.0,
+    "recall_delta": -0.2667,
+    "loses_goal": true
+   },
+   "live_280_768x432": {
+    "goal_rows": 15,
+    "tp_v1": 6,
+    "tp_attested": 0,
+    "recall_v1": 0.4,
+    "recall_attested_rule": 0.0,
+    "recall_delta": -0.4,
+    "loses_goal": true
+   },
+   "live_140_768x432": {
+    "goal_rows": 15,
+    "tp_v1": 3,
+    "tp_attested": 0,
+    "recall_v1": 0.2,
+    "recall_attested_rule": 0.0,
+    "recall_delta": -0.2,
+    "loses_goal": true
+   },
+   "live_70_768x432": {
+    "goal_rows": 15,
+    "tp_v1": 3,
+    "tp_attested": 0,
+    "recall_v1": 0.2,
+    "recall_attested_rule": 0.0,
+    "recall_delta": -0.2,
+    "loses_goal": true
+   },
+   "vod_ctrl_280_640x360": {
+    "goal_rows": 15,
+    "tp_v1": 6,
+    "tp_attested": 1,
+    "recall_v1": 0.4,
+    "recall_attested_rule": 0.0667,
+    "recall_delta": -0.3333,
+    "loses_goal": true
+   },
+   "vod_280_1080x608": {
+    "goal_rows": 15,
+    "tp_v1": 7,
+    "tp_attested": 1,
+    "recall_v1": 0.4667,
+    "recall_attested_rule": 0.0667,
+    "recall_delta": -0.4,
+    "loses_goal": true
+   },
+   "vod_140_1080x608": {
+    "goal_rows": 15,
+    "tp_v1": 5,
+    "tp_attested": 1,
+    "recall_v1": 0.3333,
+    "recall_attested_rule": 0.0667,
+    "recall_delta": -0.2666,
+    "loses_goal": true
+   },
+   "vod_70_1080x608": {
+    "goal_rows": 15,
+    "tp_v1": 1,
+    "tp_attested": 1,
+    "recall_v1": 0.0667,
+    "recall_attested_rule": 0.0667,
+    "recall_delta": 0.0,
+    "loses_goal": false
+   }
+  },
+  "any_cell_loses_recall": true,
+  "met": false
+ },
+ "ac3_false_positive_floor": {
+  "no_goal_windows_attested": 2,
+  "no_goal_windows_list": [
+   "ks-n-0312",
+   "ks-n-0402"
+  ],
+  "max_allowed": 1,
+  "met": false
+ },
+ "non_attestation_feature_auc": {
+  "live": {
+   "ocrHits": 0.4576,
+   "maxVelocity": 0.6348,
+   "trackCount": 0.5,
+   "detections": 0.5136,
+   "ballX": 0.3636,
+   "ballY": 0.4818,
+   "crowdEnergy": 0.4394
+  },
+  "vod": {
+   "ocrHits": 0.3894,
+   "maxVelocity": 0.5061,
+   "trackCount": 0.5,
+   "detections": 0.5015,
+   "ballX": 0.4636,
+   "ballY": 0.3985,
+   "crowdEnergy": 0.4394
+  }
+ },
+ "verdict": "does_not_discriminate"
+}
