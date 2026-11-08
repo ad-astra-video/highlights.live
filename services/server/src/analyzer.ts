@@ -855,11 +855,67 @@ export function liveGoalHasMeasuredEvidence(input: {
 export const LIVE_UNATTESTED_GOAL_NOTE =
   "live scoring lane: no measured attestation in this window (no scoreboard change, no goal-line / net signal, no corroborated confirm) — delivered as a celebration, not a GOAL";
 
+/** ADAAAA-8441 (D2): WHY the live scoring lane refused a goal-shaped window, named
+ * from the measurement the gate actually read.
+ *
+ * Before this, every demotion said "no measured attestation in this window" —
+ * including rows whose own parenthetical reports a measured change
+ * (`scoreBoardChanged=true scoreReads=9`). On live job `b55c5781` that sentence
+ * sat on `ab1071b5`, `dbaeea34`, `a88d198c` and `e4214be4`, whose real refusal
+ * was the SPAN (one steady score, or a boundary that was not a single forward
+ * step), not the absence of a measurement. Each branch below names a distinct,
+ * checkable refusal, so the row explains itself without a replay:
+ *
+ *  - a change hint on an unread scorebug -> the scorebug was never read;
+ *  - a span of >= 1 reads that ended on the OLD score -> the transition landed
+ *    after the window closed (the row's own `postSamples=0` is the proof);
+ *  - `postSamples < need` -> the transition became legible only at the tail;
+ *  - `postSamples >= need` -> the span's newest boundary was not a single
+ *    forward goal step (backward read, multi-goal jump, or past the confirm gap);
+ *  - a span whose transition another overlapping window already credited -> the
+ *    one-transition-per-run rule, not a missing measurement.
+ *
+ * Copy only: this is unreachable on any row the gate attested, and the field
+ * parenthetical it is prepended to is unchanged byte for byte.
+ */
+export function liveUnattestedGoalRefusal(used: LiveGoalAttestationUsed): string {
+  const reads = used.scoreReads;
+  const post = used.postSamples ?? 0;
+  const pre = used.preSamples ?? 0;
+  const need = used.need ?? SCOREBOARD_MIN_CONSISTENT_READS;
+  if (used.scoreBoardChanged) {
+    if (reads === 0) {
+      return "the scorebug was never read in this span, so the scoreboard-change hint could not be measured";
+    }
+    if (post === 0) {
+      return "the scorebug read one steady score through the whole span — the transition landed after the window closed";
+    }
+    if (post < need) {
+      return (
+        `the transition became legible only at the span's tail — ${post} post-transition read(s) ` +
+        `of the ${need} needed inside the window`
+      );
+    }
+    return (
+      "the span's newest score boundary was not a legible single forward goal step " +
+      "(a backward read, a multi-goal jump, or a gap past the confirm bound)"
+    );
+  }
+  if (reads === undefined) return "no measured attestation in this window";
+  if (reads === 0) return "the scorebug was never read in this span";
+  if (post >= need && pre >= need) {
+    return "the span's score transition was already credited to an earlier overlapping window (one transition, one scoring row)";
+  }
+  return "no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed";
+}
+
 /** ADAAAA-8071: the demotion note NAMES the attestations the gate actually read
  * (and why the audio/motion evidence could not carry the goal), so a demoted
  * goal is auditable from the row alone instead of reading as a silent
  * "celebration" demotion. Falls back to {@link LIVE_UNATTESTED_GOAL_NOTE} when
- * the caller has no field values (legacy shape). */
+ * the caller has no field values (legacy shape). ADAAAA-8441: the leading clause
+ * now names the real refusal (see {@link liveUnattestedGoalRefusal}) instead of
+ * asserting "no measured attestation" on a span that did measure a change. */
 export function liveUnattestedGoalNote(used?: LiveGoalAttestationUsed): string {
   if (!used) return LIVE_UNATTESTED_GOAL_NOTE;
   const yes = (v: boolean) => (v ? "true" : "false");
@@ -877,7 +933,7 @@ export function liveUnattestedGoalNote(used?: LiveGoalAttestationUsed): string {
       : [`scoreReads=${used.scoreReads} preSamples=${used.preSamples ?? 0} postSamples=${used.postSamples ?? 0} need=${used.need ?? 0}`]),
   ].join(" ");
   return (
-    `live scoring lane: no measured attestation in this window (${fields}); ` +
+    `live scoring lane: ${liveUnattestedGoalRefusal(used)} (${fields}); ` +
     "audio/motion reaction is corroborating evidence only and cannot attest a score — " +
     "delivered as a celebration, not a GOAL"
   );
@@ -6433,7 +6489,7 @@ export async function acceptVideoDecision(
   if (isGoalAccept && cfg.liveObserveLoop && cfg.decideWindowN === undefined && !laneOneAttested) {
     console.error(
       `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
-        `(trigger ${trigger.kind}) to a celebration: no measured attestation in the window ` +
+        `(trigger ${trigger.kind}) to a celebration: ${liveUnattestedGoalRefusal(attestationUsed)} ` +
         `(${JSON.stringify(attestationUsed)})`
     );
     // ADAAAA-8006: keep the SCORING-LANE verdict before the downgrade. The row is
