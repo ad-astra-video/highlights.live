@@ -68,9 +68,16 @@ describe("ADAAAA-8125 AC1 — the 22-row class is unproducible at the seam", () 
     expect(demoted.reason_raw).toBe(DEMOTED_PLAYER_IN_WHITE);
   });
 
-  it("stores no caption and no card title: copy does not earn a claim card", () => {
-    expect(demoted.caption).toBeUndefined();
+  it("stores no card title: copy does not earn a claim card", () => {
+    // ADAAAA-8405 (Phase C AC4): the CARD (the postable copy options) still
+    // stays refused — a claim card is earned only by corroboration (§3.4). What
+    // changed is the COLLAPSED DETAIL: the row's own gated announcer sentence is
+    // stored as `caption` instead of leaving the field empty, because an empty
+    // caption made the detail route serve the post TITLE byte-for-byte on every
+    // card (measured 6 of 6). Nothing is stored here that `reason` does not
+    // already serve, and it carries no claim (asserted below).
     expect(demoted.cardTitles).toBeUndefined();
+    expect(demoted.caption).toBe(demoted.reason);
   });
 
   it("the stored copy passes the same post-condition `reasonClean` applies", () => {
@@ -94,7 +101,7 @@ describe("ADAAAA-8125 AC1 — the 22-row class is unproducible at the seam", () 
     // The seam is a pure writer: it returns the surface for a row it accepts, and
     // the only difference from the pre-fix seam is the copy. Counts (§3 whole-goal
     // counts, banner counts, chapter sums) are computed elsewhere and untouched.
-    expect(Object.keys(demoted).sort()).toEqual(["postTitleGate", "reason", "reason_raw"]);
+    expect(Object.keys(demoted).sort()).toEqual(["caption", "postTitleGate", "reason", "reason_raw"]);
   });
 });
 
