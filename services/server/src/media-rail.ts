@@ -187,7 +187,7 @@ export interface MediaRailObserverOptions {
    *  rows therefore carried no `asrQueueMisses`, which contradicts the schema's
    *  "a live run always passes it" (ADAAAA-8219 class). Undefined keeps a rail
    *  that truly has no inline lane byte-identical. */
-  asrQueue?: () => { maxConcurrent: number; queueMs: number; misses: number };
+  asrQueue?: () => { maxConcurrent: number; queueMs: number; misses: number; queueDefaulted?: boolean };
 }
 
 /** Build the per-frame seed context handed to the decide window from one

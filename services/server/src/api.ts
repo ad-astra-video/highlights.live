@@ -23,6 +23,7 @@ import {
   observeOnDecide,
   observeDecideOnly,
   observeAcceptOnly,
+  asrQueuePosture,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -1919,11 +1920,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // the analyzer pass, so the counter really moves; without this reader the
         // snapshot dropped it and every browser/WebRTC row lost `asrQueueMisses`
         // (ADAAAA-8219 class). Read live at snapshot time, never captured.
-        asrQueue: () => ({
-          maxConcurrent: Math.max(0, Math.floor(anaCfg.decideAsrMaxConcurrent ?? 0)),
-          queueMs: Math.max(0, Math.floor(anaCfg.decideAsrQueueMs ?? 0)),
-          misses: anaCfg.decideAsrQueueStats?.misses ?? 0,
-        }),
+        asrQueue: () => asrQueuePosture(anaCfg),
       },
       shared
     );
@@ -7281,6 +7278,10 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // counter the decide responses increment. 0 = inert, shipped behaviour.
     decideAsrMaxConcurrent: cfg.liveAsrMaxConcurrent,
     decideAsrQueueMs: cfg.liveAsrQueueMs,
+    // ADAAAA-8393: `cfg.liveAsrQueueMs` is the EFFECTIVE deadline the decide gate
+    // applies (6 000 when a cap is set with no `ASR_QUEUE_MS`); this marks the
+    // defaulted case so the stored row can tell it from a configured budget.
+    decideAsrQueueDefaulted: cfg.liveAsrQueueDefaulted,
     decideAsrQueueStats: { misses: 0 },
     // ADAAAA-7781: the COMPACT verdict contract on the live rail only. The live
     // pass is decode-bound, so the per-call output-token count IS its throughput

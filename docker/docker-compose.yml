@@ -826,7 +826,9 @@ services:
       # browser/WebRTC media-rail share (ADAAAA-8384 C1). Defaults 0 = shipped
       # behaviour: no cap, wait as today. Set both knobs together (C3); the cap
       # bounds the decide process's inline call sites only, not the ASR endpoint
-      # (C2).
+      # (C2). ADAAAA-8393: a cap with `ASR_QUEUE_MS` unset is recorded as the
+      # gate's EFFECTIVE 6 000 ms deadline plus `asrQueueDefaulted: true`, so a
+      # row never says `asrQueueMs: 0` for a lane that HAS a deadline.
       - ASR_MAX_CONCURRENT=${ASR_MAX_CONCURRENT:-0}
       - ASR_QUEUE_MS=${ASR_QUEUE_MS:-0}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}

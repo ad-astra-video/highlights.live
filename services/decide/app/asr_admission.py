@@ -198,8 +198,11 @@ def gate_for(max_concurrent: int, queue_ms: int) -> AsrAdmission:
             # ADAAAA-8384 (C4): the posture line an operator reads off the decide
             # container log to confirm the bound is LIVE — the per-miss INFO at
             # `gemma.py:transcribe_inline` only fires once a call has already
-            # missed. One line per construction (at boot: exactly one), built
-            # from `describe()` so the log cannot drift from the gate's state.
+            # missed. One line per construction, built from `describe()` so the
+            # log cannot drift from the gate's state. ADAAAA-8393 (nit): this is
+            # NOT a boot line — `inline_asr_gate()` has no startup caller, so the
+            # first inline call under `LIVE_DECIDE_ASR_PREFETCH=1` (itself the
+            # default) is what constructs the gate and prints it.
             log.info("asr inline admission gate built: %s", _gate.describe())
         return _gate
 

@@ -593,6 +593,13 @@ export const ObserveMetricsSnapshotSchema = z.object({
   asrQueueMisses: z.number().int().min(0).optional(),
   asrMaxConcurrent: z.number().int().min(0).optional(),
   asrQueueMs: z.number().int().min(0).optional(),
+  // ADAAAA-8393: `true` when `asrQueueMs` is the gate's DEFAULT bounded-queue
+  // budget (a cap set with `ASR_QUEUE_MS` unset) rather than a configured
+  // deadline. Written only when defaulted: without it a cap-with-no-queue row
+  // says `asrQueueMs` = 0, which reads as "no deadline" and contradicts a row
+  // that also carries `asrQueueMisses > 0` (a miss needs a deadline). Declared
+  // here because a zod object STRIPS undeclared keys (the ADAAAA-8219 lesson).
+  asrQueueDefaulted: z.boolean().optional(),
   // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
   // ingest delivers ~5 fps while the decide window only carries ~2 fps of
   // content, so the pass now CONSUMES frames at the analysis fps and runs the
