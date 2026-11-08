@@ -1,0 +1,1263 @@
+{
+ "cells": [
+  {
+   "cell": "live_ctrl_280_320x180",
+   "rail": "live",
+   "budget": 280,
+   "scale": "320x180",
+   "windows": 90,
+   "n_img": 31,
+   "raw": {
+    "tp": 23,
+    "fp": 14,
+    "fn": 26,
+    "tn": 27,
+    "goals": 49,
+    "precision": 0.6216,
+    "recall": 0.4694,
+    "precision_ci95": [
+     0.461,
+     0.7594
+    ],
+    "recall_ci95": [
+     0.337,
+     0.6062
+    ],
+    "confusion": {
+     "goal|not_highlight": 26,
+     "goal|scoring_play": 23,
+     "no_shot|near_miss": 1,
+     "no_shot|not_highlight": 18,
+     "no_shot|scoring_play": 12,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "cg-n-02",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, followed by immediate player celebrations.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-03",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper diving and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-08",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, confirmed by keeper's position and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-12",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=15, confirmed by keeper's dive and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-19",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, followed by players celebrating and a high audio peak.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-20",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper diving and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-22",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, confirmed by keeper's dive and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-24",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=25, followed by a goal celebration.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0162",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=11.55, confirmed by the keeper's position and the ball's trajectory.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=16:51, confirmed by scoreboard change and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=22:11 and the scoreboard updates to 2-2.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball clearly enters the net at t=25, followed by a keeper diving and a celebration.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.78 and the keeper falls, confirmed by the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=25, confirmed by the keeper's position and crowd reaction.",
+      "guard_outcome": "unverifiable_evidence"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "cg-g-00",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is moving in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-03",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-04",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in the penalty area but does not enter the net; no goal recorded."
+     },
+     {
+      "window": "cg-g-10",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-11",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center area and does not enter the net."
+     },
+     {
+      "window": "cg-g-12",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-13",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-15",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is moving toward the goal but does not enter the net; no goal recorded."
+     },
+     {
+      "window": "cg-g-16",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-19",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center circle; no goal or significant action occurs."
+     },
+     {
+      "window": "cg-g-20",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "cg-g-22",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "cg-g-23",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is intercepted or blocked by a defender before reaching the goal."
+     },
+     {
+      "window": "cg-g-26",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "cg-g-28",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield area with no shot or goal occurring."
+     },
+     {
+      "window": "cg-g-30",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-31",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-33",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield area with no shot or goal occurring."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty shootout with no ball entering the net."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player standing still with the ball; no scoring action occurs."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and a celebration, but no goal is scored."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddling and celebrating, but no goal occurred."
+     }
+    ]
+   },
+   "guard": {
+    "tp": 23,
+    "fp": 14,
+    "fn": 26,
+    "tn": 27,
+    "goals": 49,
+    "precision": 0.6216,
+    "recall": 0.4694,
+    "precision_ci95": [
+     0.461,
+     0.7594
+    ],
+    "recall_ci95": [
+     0.337,
+     0.6062
+    ],
+    "confusion": {
+     "goal|not_highlight": 26,
+     "goal|scoring_play": 23,
+     "no_shot|near_miss": 1,
+     "no_shot|not_highlight": 18,
+     "no_shot|scoring_play": 12,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "cg-n-02",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, followed by immediate player celebrations.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-03",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper diving and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-08",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, confirmed by keeper's position and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-12",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=15, confirmed by keeper's dive and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-19",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, followed by players celebrating and a high audio peak.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-20",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper diving and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-22",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, confirmed by keeper's dive and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-24",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=25, followed by a goal celebration.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0162",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=11.55, confirmed by the keeper's position and the ball's trajectory.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=16:51, confirmed by scoreboard change and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=22:11 and the scoreboard updates to 2-2.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball clearly enters the net at t=25, followed by a keeper diving and a celebration.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.78 and the keeper falls, confirmed by the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=25, confirmed by the keeper's position and crowd reaction.",
+      "guard_outcome": "unverifiable_evidence"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "cg-g-00",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is moving in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-03",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-04",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in the penalty area but does not enter the net; no goal recorded."
+     },
+     {
+      "window": "cg-g-10",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-11",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center area and does not enter the net."
+     },
+     {
+      "window": "cg-g-12",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-13",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-15",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is moving toward the goal but does not enter the net; no goal recorded."
+     },
+     {
+      "window": "cg-g-16",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-19",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center circle; no goal or significant action occurs."
+     },
+     {
+      "window": "cg-g-20",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "cg-g-22",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "cg-g-23",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is intercepted or blocked by a defender before reaching the goal."
+     },
+     {
+      "window": "cg-g-26",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "cg-g-28",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield area with no shot or goal occurring."
+     },
+     {
+      "window": "cg-g-30",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-31",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-33",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield area with no shot or goal occurring."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area without crossing the goal line."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty shootout with no ball entering the net."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player standing still with the ball; no scoring action occurs."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and a celebration, but no goal is scored."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddling and celebrating, but no goal occurred."
+     }
+    ]
+   },
+   "latency": {
+    "prompt_tokens_median": 12737.0,
+    "prompt_tokens_min": 12389,
+    "prompt_tokens_max": 12760,
+    "ttft_s_median": 6.254,
+    "wall_s_median": 9.204,
+    "payload_mb_median": 0.427,
+    "errors": 0
+   }
+  },
+  {
+   "cell": "live_280_768x432",
+   "rail": "live",
+   "budget": 280,
+   "scale": "768x432",
+   "windows": 90,
+   "n_img": 31,
+   "raw": {
+    "tp": 24,
+    "fp": 10,
+    "fn": 25,
+    "tn": 31,
+    "goals": 49,
+    "precision": 0.7059,
+    "recall": 0.4898,
+    "precision_ci95": [
+     0.5383,
+     0.8317
+    ],
+    "recall_ci95": [
+     0.3558,
+     0.6253
+    ],
+    "confusion": {
+     "goal|not_highlight": 25,
+     "goal|scoring_play": 24,
+     "no_shot|near_miss": 1,
+     "no_shot|not_highlight": 22,
+     "no_shot|scoring_play": 8,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "cg-n-02",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=15, followed by player celebration and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-03",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper dive and net ripple.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "cg-n-20",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, confirmed by keeper diving and net rippling.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-22",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, followed by a goal celebration by the players.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "cg-n-24",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, followed by immediate celebration and high-motion reaction.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=00:51, confirmed by scoreboard change and crowd eruption.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "Scoreboard changes from 2-1 to 2-2 at t=22:12 and ball enters net.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's dive and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's position and the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper's dive and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "cg-g-03",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "cg-g-04",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in the air in the penalty area but does not enter the net."
+     },
+     {
+      "window": "cg-g-06",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is headed away by the keeper; no goal is scored."
+     },
+     {
+      "window": "cg-g-07",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is played into the box but does not enter the net; no goal occurs."
+     },
+     {
+      "window": "cg-g-10",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-12",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center circle; no goal or significant action occurs."
+     },
+     {
+      "window": "cg-g-13",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center area without entering the net."
+     },
+     {
+      "window": "cg-g-15",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is moving toward the goal but does not enter the net; it is a missed opportunity."
+     },
+     {
+      "window": "cg-g-16",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal or significant action occurs."
+     },
+     {
+      "window": "cg-g-19",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center circle and does not enter the net."
+     },
+     {
+      "window": "cg-g-22",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "cg-g-23",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is saved by the keeper at the end of the sequence."
+     },
+     {
+      "window": "cg-g-26",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in open play and does not enter the net."
+     },
+     {
+      "window": "cg-g-30",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-31",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-32",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The frames show a celebration and a ball in the box, but no goal is scored."
+     },
+     {
+      "window": "ks-g-0280",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in open play and does not enter the net."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a player taking a penalty kick that is saved by the keeper."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player preparing for a free kick, not a goal or notable play."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and the ball being saved by the keeper."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddled together, not a goal or scoring play."
+     }
+    ]
+   },
+   "guard": {
+    "tp": 24,
+    "fp": 10,
+    "fn": 25,
+    "tn": 31,
+    "goals": 49,
+    "precision": 0.7059,
+    "recall": 0.4898,
+    "precision_ci95": [
+     0.5383,
+     0.8317
+    ],
+    "recall_ci95": [
+     0.3558,
+     0.6253
+    ],
+    "confusion": {
+     "goal|not_highlight": 25,
+     "goal|scoring_play": 24,
+     "no_shot|near_miss": 1,
+     "no_shot|not_highlight": 22,
+     "no_shot|scoring_play": 8,
+     "shot|not_highlight": 8,
+     "shot|scoring_play": 2
+    },
+    "fp_ids": [
+     {
+      "window": "cg-n-02",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=15, followed by player celebration and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-03",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper dive and net ripple.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "cg-n-20",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, confirmed by keeper diving and net rippling.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "cg-n-22",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters the net at t=25, followed by a goal celebration by the players.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "cg-n-24",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, followed by immediate celebration and high-motion reaction.",
+      "guard_outcome": "unverifiable_evidence"
+     },
+     {
+      "window": "ks-n-0312",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=00:51, confirmed by scoreboard change and crowd eruption.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0402",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "Scoreboard changes from 2-1 to 2-2 at t=22:12 and ball enters net.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0622",
+      "truth": "shot",
+      "evidence": "saved",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's dive and net ripple.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0696",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "The ball enters the net at t=0.80, confirmed by the keeper's position and the 'GOL' graphic.",
+      "guard_outcome": "not_a_goal_accept"
+     },
+     {
+      "window": "ks-n-0760",
+      "truth": "no_shot",
+      "evidence": "none",
+      "reason": "Ball enters net at t=25, confirmed by keeper's dive and crowd reaction.",
+      "guard_outcome": "not_a_goal_accept"
+     }
+    ],
+    "fn_ids": [
+     {
+      "window": "cg-g-03",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "cg-g-04",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in the air in the penalty area but does not enter the net."
+     },
+     {
+      "window": "cg-g-06",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is headed away by the keeper; no goal is scored."
+     },
+     {
+      "window": "cg-g-07",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is played into the box but does not enter the net; no goal occurs."
+     },
+     {
+      "window": "cg-g-10",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-12",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center circle; no goal or significant action occurs."
+     },
+     {
+      "window": "cg-g-13",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center area without entering the net."
+     },
+     {
+      "window": "cg-g-15",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is moving toward the goal but does not enter the net; it is a missed opportunity."
+     },
+     {
+      "window": "cg-g-16",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal or significant action occurs."
+     },
+     {
+      "window": "cg-g-19",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the midfield/center circle and does not enter the net."
+     },
+     {
+      "window": "cg-g-22",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "cg-g-23",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is saved by the keeper at the end of the sequence."
+     },
+     {
+      "window": "cg-g-26",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in open play and does not enter the net."
+     },
+     {
+      "window": "cg-g-30",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "cg-g-31",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch with no goal scored."
+     },
+     {
+      "window": "cg-g-32",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The frames show a celebration and a ball in the box, but no goal is scored."
+     },
+     {
+      "window": "ks-g-0280",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the middle of the pitch with no goal scored."
+     },
+     {
+      "window": "ks-g-0435",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball is in open play and does not enter the net."
+     },
+     {
+      "window": "ks-g-0541",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the penalty area and does not enter the net."
+     },
+     {
+      "window": "ks-g-0584",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the pitch; no goal is scored."
+     },
+     {
+      "window": "ks-g-0602",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a player taking a penalty kick that is saved by the keeper."
+     },
+     {
+      "window": "ks-g-0616",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a player preparing for a free kick, not a goal or notable play."
+     },
+     {
+      "window": "ks-g-0643",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The sequence shows a penalty kick being taken and the ball being saved by the keeper."
+     },
+     {
+      "window": "ks-g-0719",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The ball remains in the center of the field; no goal or significant action occurs."
+     },
+     {
+      "window": "ks-g-0770",
+      "pred": "not_highlight",
+      "outcome": "not_highlight",
+      "reason": "The footage shows a group of players and staff huddled together, not a goal or scoring play."
+     }
+    ]
+   },
+   "latency": {
+    "prompt_tokens_median": 12737.0,
+    "prompt_tokens_min": 12389,
+    "prompt_tokens_max": 12760,
+    "ttft_s_median": 6.312,
+    "wall_s_median": 9.398,
+    "payload_mb_median": 1.495,
+    "errors": 0
+   }
+  }
+ ],
+ "comparison": {
+  "control_cell": "live_ctrl_280_320x180",
+  "match_cell": "live_280_768x432",
+  "lost_by_match": [
+   "cg-g-06",
+   "cg-g-07",
+   "cg-g-32",
+   "ks-g-0280"
+  ],
+  "gained_by_match": [
+   "cg-g-00",
+   "cg-g-11",
+   "cg-g-20",
+   "cg-g-28",
+   "cg-g-33"
+  ],
+  "discordant": {
+   "lost": 4,
+   "gained": 5
+  },
+  "mcnemar_exact_p": 1.0,
+  "per_mode": {
+   "raw": {
+    "lost_by_match": [
+     "cg-g-06",
+     "cg-g-07",
+     "cg-g-32",
+     "ks-g-0280"
+    ],
+    "gained_by_match": [
+     "cg-g-00",
+     "cg-g-11",
+     "cg-g-20",
+     "cg-g-28",
+     "cg-g-33"
+    ],
+    "discordant": {
+     "lost": 4,
+     "gained": 5
+    },
+    "mcnemar_exact_p": 1.0
+   },
+   "guard": {
+    "lost_by_match": [
+     "cg-g-06",
+     "cg-g-07",
+     "cg-g-32",
+     "ks-g-0280"
+    ],
+    "gained_by_match": [
+     "cg-g-00",
+     "cg-g-11",
+     "cg-g-20",
+     "cg-g-28",
+     "cg-g-33"
+    ],
+    "discordant": {
+     "lost": 4,
+     "gained": 5
+    },
+    "mcnemar_exact_p": 1.0
+   }
+  },
+  "delta": {
+   "raw": {
+    "precision_ctrl": 0.6216,
+    "precision_match": 0.7059,
+    "precision_delta": 0.0843,
+    "precision_delta_ci95": [
+     -0.1327,
+     0.2883
+    ],
+    "recall_ctrl": 0.4694,
+    "recall_match": 0.4898,
+    "recall_delta": 0.0204,
+    "recall_delta_ci95": [
+     -0.1711,
+     0.2098
+    ]
+   },
+   "guard": {
+    "precision_ctrl": 0.6216,
+    "precision_match": 0.7059,
+    "precision_delta": 0.0843,
+    "precision_delta_ci95": [
+     -0.1327,
+     0.2883
+    ],
+    "recall_ctrl": 0.4694,
+    "recall_match": 0.4898,
+    "recall_delta": 0.0204,
+    "recall_delta_ci95": [
+     -0.1711,
+     0.2098
+    ]
+   }
+  },
+  "power": {
+   "n_goal_windows": 49,
+   "discordance_8343": 0.2667,
+   "power_at_observed_n": 0.343,
+   "power_at_60": 0.4377,
+   "n_needed_for_80pct": 126
+  }
+ },
+ "verdict": {
+  "raw": {
+   "control_tp_lost": [
+    "cg-g-06",
+    "cg-g-07",
+    "cg-g-32",
+    "ks-g-0280"
+   ],
+   "no_control_tp_lost": false,
+   "precision_ge_control": true,
+   "recall_ge_control": true,
+   "mcnemar_exact_p": 1.0,
+   "pass_ac6": false
+  },
+  "guard": {
+   "control_tp_lost": [
+    "cg-g-06",
+    "cg-g-07",
+    "cg-g-32",
+    "ks-g-0280"
+   ],
+   "no_control_tp_lost": false,
+   "precision_ge_control": true,
+   "recall_ge_control": true,
+   "mcnemar_exact_p": 1.0,
+   "pass_ac6": false
+  },
+  "goal_window_count_ge_40": true,
+  "adopted_lever": "PASS only per AC6; anything else FAIL and the lever is closed"
+ },
+ "guard": {
+  "gemma_py_md5": "3797ff73a476d620d5762d395a199f04",
+  "decide_image": "sha256:1c416c3ce1d1eb20358629f6ad6a5ffd72af8cf5a90fd031b7d99a401bdcca6b",
+  "confirm_env": "DECIDE_CONFIRM_ENABLED=1"
+ },
+ "event_type_used": "SPORTING_EVENT",
+ "manifest": {
+  "path": "label-manifest-8371.json",
+  "sha256": "09468a9025dcebf01fbf6e29bbd203b8deb2ec23f7fc9b270922ff26ab4b1994",
+  "windows": 90
+ },
+ "rows": {
+  "file": "rows.jsonl",
+  "used": 180,
+  "total": 180
+ },
+ "register": {
+  "guard:not_a_goal_accept": 49,
+  "attest_ok:True": 180,
+  "guard:unverifiable_evidence": 22,
+  "guard:not_an_accept": 109
+ }
+}
