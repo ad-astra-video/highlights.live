@@ -7265,6 +7265,13 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     asrUrl: cfg.asrUrl,
     decideAsrPrefetch: cfg.liveDecideAsrPrefetch,
     decideAsrPrefetchTimeoutMs: cfg.liveDecideAsrPrefetchTimeoutMs,
+    // ADAAAA-8373: the inline-on-miss lane's admission posture. The gate itself
+    // runs in the decide process (one uvicorn worker == one lane); these two are
+    // the EFFECTIVE values this run's observe snapshot records, and the per-run
+    // counter the decide responses increment. 0 = inert, shipped behaviour.
+    decideAsrMaxConcurrent: cfg.liveAsrMaxConcurrent,
+    decideAsrQueueMs: cfg.liveAsrQueueMs,
+    decideAsrQueueStats: { misses: 0 },
     // ADAAAA-7781: the COMPACT verdict contract on the live rail only. The live
     // pass is decode-bound, so the per-call output-token count IS its throughput
     // ceiling; VOD keeps the full long-form contract.

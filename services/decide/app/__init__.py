@@ -369,14 +369,19 @@ class AudioContext(BaseModel):
     asrLatencyS: float = 0.0
     # ADAAAA-8081: `prefetch` when the server's fire-time side lane produced the
     # transcript (ASR ran OUTSIDE this decide call) or `inline` when this call
-    # ran ASR itself. Additive; a rule-path verdict leaves it at "none".
-    asrSource: str = "none"  # "prefetch" | "inline" | "none"
+    # ran ASR itself. ADAAAA-8373 adds `queue_miss`: the inline admission gate
+    # (`ASR_MAX_CONCURRENT` / `ASR_QUEUE_MS`) refused a slot inside the deadline,
+    # so no ASR ran and the window is NOT "ASR absent". Additive; a rule-path
+    # verdict leaves it at "none".
+    asrSource: str = "none"  # "prefetch" | "inline" | "queue_miss" | "none"
     # ADAAAA-8056 (AC-E2): whether this window carried ANY audio at all, and the
     # named reason when it did not. Without these a no-audio window is
     # indistinguishable from a transcribed one, which is exactly the inference
     # the ASR coverage AC forbids.
     windowAudioPresent: bool = False
-    noAudioReason: str = ""  # "" | "no_audio_clip" | "retention_gap" | "asr_unavailable" | "audio_context_off"
+    # ADAAAA-8373: `asr_queue_miss` is its own reason so a queue bound is never
+    # miscounted as ASR absence (`asr_unavailable`).
+    noAudioReason: str = ""  # "" | "no_audio_clip" | "retention_gap" | "asr_unavailable" | "audio_context_off" | "asr_queue_miss"
 
 
 class HighlightDecision(BaseModel):

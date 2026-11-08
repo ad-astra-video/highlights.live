@@ -579,6 +579,20 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // shortfall. Additive optional.
   droppedFrames: z.number().int().min(0).optional(),
   supplySkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-8373: the INLINE-on-miss ASR lane's admission meter. `ASR_MAX_CONCURRENT`
+  // caps how many inline ASR calls run at once (default 0 = unbounded, shipped)
+  // and `ASR_QUEUE_MS` caps how long one may wait for a slot (default 0 = wait as
+  // today). `asrQueueMisses` counts the windows that lost a slot and proceeded
+  // FAST on text-only evidence; it is ALWAYS written on a live record (0 when the
+  // bound is inert) so a queue bound can never be read back as ASR absence.
+  // `asrMaxConcurrent` / `asrQueueMs` are the EFFECTIVE posture and are written
+  // only when the bound is configured, so an unset knob gains only the zero-valued
+  // counter. Declared here (not merely on the server type) because a zod object
+  // STRIPS undeclared keys (the ADAAAA-8219 lesson) — without this block the
+  // counter would be computed and then dropped when the job row is persisted.
+  asrQueueMisses: z.number().int().min(0).optional(),
+  asrMaxConcurrent: z.number().int().min(0).optional(),
+  asrQueueMs: z.number().int().min(0).optional(),
   // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
   // ingest delivers ~5 fps while the decide window only carries ~2 fps of
   // content, so the pass now CONSUMES frames at the analysis fps and runs the
