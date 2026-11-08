@@ -960,3 +960,232 @@ export function createVodMatchContextResolver(deps: MatchContextResolverDeps): M
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8408 (W2 actor grounding): the LIVE rail's writer.
+//
+// Measured on the phase-C legs (ADAAAA-8359): `matchContext` was `{}` on 5/5
+// graded live legs, so the decide prompt carried no team to ground a caption or
+// a deterministic title subject on, and 173/255 titles opened on a bare role
+// word. The read path was never the problem — both live rails already forward
+// `store.getJob(id)?.matchContext` per window (api.ts) and the analyzer omits
+// the whole key when it holds nothing usable (`toDecideMatchContext`). Nothing
+// WROTE it on the live rail: `createVodMatchContextResolver` above owns a file
+// plus one bounded ffmpeg/ASR probe, neither of which exists for a stream.
+//
+// The live rail already holds the evidence the fold needs:
+//
+// - commentary: the per-window ASR prefetch transcript (`asr-prefetch.ts`, the
+//   lane 95-97 % of stored live rows already used) — accumulated here, bounded;
+// - scorebug OCR lines, kit samples and scoreboard swatches: perceive session
+//   state. `POST /app/match-context` fills them from the session when the body
+//   omits them, so the writer posts no OCR and samples nothing itself.
+//
+// So this writer adds NO ASR probe, NO OCR call, NO decide call and NO GPU
+// work: it forwards the transcript it was handed to the same CPU-only fold the
+// VOD rail uses, on a bounded schedule, single-flight, off the decide path.
+// Measured cost of a populated context on the live (compact) prompt: +123 tokens
+// per window for two teams (capped at ~176 by `MAX_BLOCK_CHARS` in
+// `match_context_prompt.py`) and ~+36 ms prefill on a ~2.2 s decide — zero added
+// inferences (design doc §2, artifact on ADAAAA-8408).
+//
+// Schedule: content seconds since the run's first observed window, not percent.
+// A live run has no known length (a stream ends when the operator stops it), so
+// a percentage checkpoint would either fire below its threshold on a long stream
+// or never fire on a short one. Four fixed folds cover a 300 s leg at
+// 0/20/40/80 % — the coverage the $0 replay measured at 75-76 % of emitted rows
+// (85-86 % with eight) — and stop growing on an hours-long stream, where the
+// first fold is the one that matters (context is needed EARLY).
+// ---------------------------------------------------------------------------
+
+/** Fold schedule for the live rail, in content seconds from the run's first
+ *  observed window. Four folds per run, hard-bounded: a stream of any length
+ *  never folds more than this. */
+export const LIVE_MATCH_CONTEXT_FOLDS_S: readonly number[] = [0, 60, 120, 240];
+
+/** Bound on the commentary carried into one live fold (the same 1 200 chars the
+ *  $0 replay used, so the measured token cost holds). */
+export const LIVE_MATCH_CONTEXT_MAX_TRANSCRIPT_CHARS = 1200;
+
+export interface LiveMatchContextWriterDeps {
+  jobId: string;
+  /** Perceive fold proxy (`postMatchContext`), same contract as the VOD
+   *  resolver: absent client => the writer is inert. */
+  client: MatchContextClient;
+  /** Read lazily: a live pass may re-reserve its perceive session mid-run
+   *  (SessionLostError recovery), and a fold must post at the CURRENT one. */
+  getSessionId: () => string;
+  hints: { title?: string; gameHint?: string; filename?: string };
+  getJob: (id: string) => Job | undefined;
+  patchJob: (id: string, patch: Partial<Omit<Job, "id">>) => Promise<Job>;
+  log?: (msg: string) => void;
+  /** Test/QA seam: override the fold schedule (content seconds). */
+  foldsAtS?: readonly number[];
+  /** Test/QA seam: override the accumulated-transcript bound. */
+  maxTranscriptChars?: number;
+}
+
+export interface LiveMatchContextWriter {
+  /**
+   * Call once per observe window, with the window's own transcript and its
+   * content clock (`payload.centerTs`). Cheap and synchronous: it accumulates
+   * commentary and, when the clock crosses a fold checkpoint, queues ONE fold.
+   * Never awaited on the decide path.
+   */
+  noteWindow(input: { centerTs: number; transcript?: string }): void;
+  /**
+   * Await every already-fired fold. Never starts one: a fold that has not fired
+   * by the last window would post at a session that may already be closed.
+   */
+  finish(): Promise<void>;
+}
+
+/**
+ * Build the live rail's once-per-run match-context writer.
+ *
+ * Wiring: constructed next to the live analyzer config (`ensureMediaRail` /
+ * `runLiveJob` in api.ts) only when `matchContextEnabled()`, its hook is handed
+ * to the analyzer as `onObserveWindowEvidence`, and `finish()` is awaited before
+ * the job's terminal patch. Every write is best-effort: a fold failure leaves
+ * the job without `matchContext` (pre-feature behaviour, byte-identical prompt)
+ * and never fails the job or the decide.
+ */
+export function createLiveMatchContextWriter(deps: LiveMatchContextWriterDeps): LiveMatchContextWriter {
+  const log = deps.log ?? ((msg: string) => console.log(msg));
+  const folds = deps.foldsAtS ?? LIVE_MATCH_CONTEXT_FOLDS_S;
+  const maxChars = deps.maxTranscriptChars ?? LIVE_MATCH_CONTEXT_MAX_TRANSCRIPT_CHARS;
+  const lastFoldS = folds.length ? folds[folds.length - 1] : 0;
+  let transcript = "";
+  const fired = new Set<number>();
+  const pending: Promise<void>[] = [];
+  let inflight = 0;
+  const queue: number[] = [];
+
+  /** Elapsed share of the fold schedule. Live has no known run length, so this
+   *  is an annotation for the persisted trail, never a claim about the run. */
+  const progressFor = (checkpoint: number): number => {
+    if (!lastFoldS) return 0;
+    return Math.max(0, Math.min(100, Math.round((checkpoint / lastFoldS) * 100)));
+  };
+
+  const resolveOnce = async (checkpoint: number): Promise<void> => {
+    if (!deps.client.postMatchContext) return;
+    const job = deps.getJob(deps.jobId);
+    const previous = job?.matchContext as MatchContext | undefined;
+    const progressPct = progressFor(checkpoint);
+    const body = {
+      gameHint: deps.hints.gameHint || job?.gameHint || undefined,
+      title: deps.hints.title || job?.title || undefined,
+      filename: deps.hints.filename,
+      // Perceive fills scorebug OCR / kit samples / swatches from the live
+      // session when these are omitted — no extra OCR, no kit sampling here.
+      transcript: transcript || undefined,
+      previous,
+      progressPct,
+    };
+    let result: { matchContext: Record<string, unknown>; evidenceStatus?: Record<string, unknown> } | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        result = await deps.client.postMatchContext(deps.getSessionId(), body);
+        if (result?.matchContext) break;
+      } catch (e: any) {
+        log(`[match-context:live:${deps.jobId}] fold at ${checkpoint}s failed: ${String(e?.message || e)}`);
+      }
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 250));
+    }
+    const ctx = result?.matchContext as MatchContext | undefined;
+    if (!ctx) {
+      log(
+        `[match-context:live:${deps.jobId}] no contract at ${checkpoint}s (session ${deps.getSessionId()}) — keeping the stored context`
+      );
+      return;
+    }
+    // Monotonic guard: a later fold cannot LOWER a name/confidence the record
+    // already earned nor publish a below-floor name as unambiguous, and one kit
+    // colour can never describe both sides (the VOD resolver's two gates).
+    const evidence = toMatchContextEvidence(result?.evidenceStatus);
+    const observedClusters = ((evidence.value as MatchContextEvidence | undefined)?.kitClusterColors ?? []) as string[];
+    const guarded = guardMatchContextRegression(previous, ctx, observedClusters);
+    const published = collapseDuplicateKitColors(guarded, progressPct);
+    // Folds accumulate over ONE session, so the evidence record is a running
+    // high-water union rather than a per-pass snapshot (identical to the VOD
+    // resume merge — the persisted record is the durable accumulator).
+    const previousEvidence = job?.matchContextEvidence as MatchContextEvidence | undefined;
+    const evidenceValue = evidence.value
+      ? mergeMatchContextEvidence(previousEvidence, evidence.value)
+      : previousEvidence;
+    if (evidence.error) {
+      log(
+        `[match-context:live:${deps.jobId}] evidence status rejected at ${checkpoint}s (${evidence.error}) — ` +
+          `persisting matchContext only`
+      );
+    }
+    try {
+      await deps.patchJob(
+        deps.jobId,
+        evidenceValue
+          ? { matchContext: published, matchContextEvidence: evidenceValue }
+          : { matchContext: published }
+      );
+      log(
+        `[match-context:live:${deps.jobId}] persisted at ${checkpoint}s: ` +
+          (published.teams.map((t) => `${t.side}=${t.name}@${Number(t.confidence).toFixed(2)}`).join(" ") || "none") +
+          ` ambiguous=${published.ambiguous} sources=${(evidenceValue?.sources ?? []).join(",") || "none"}`
+      );
+    } catch (e: any) {
+      if (!evidenceValue) {
+        log(`[match-context:live:${deps.jobId}] persist failed: ${String(e?.message || e)}`);
+        return;
+      }
+      log(
+        `[match-context:live:${deps.jobId}] combined persist rejected (${String(e?.message || e)}) — ` +
+          `retrying with matchContext only`
+      );
+      try {
+        await deps.patchJob(deps.jobId, { matchContext: published });
+      } catch (e2: any) {
+        log(`[match-context:live:${deps.jobId}] persist failed: ${String(e2?.message || e2)}`);
+      }
+    }
+  };
+
+  const pump = () => {
+    while (inflight < MAX_INFLIGHT_RESOLVES && queue.length) {
+      const checkpoint = queue.shift() as number;
+      inflight++;
+      const p = resolveOnce(checkpoint)
+        .catch(() => {})
+        .finally(() => {
+          inflight--;
+          pump();
+        });
+      pending.push(p);
+    }
+  };
+
+  const start = (checkpoint: number) => {
+    if (fired.has(checkpoint)) return;
+    fired.add(checkpoint);
+    queue.push(checkpoint);
+    pump();
+  };
+
+  return {
+    noteWindow({ centerTs, transcript: windowText }) {
+      const text = typeof windowText === "string" ? windowText.trim() : "";
+      if (text) {
+        transcript = (transcript ? `${transcript} ${text}` : text).slice(-maxChars);
+      }
+      const at = Number(centerTs);
+      if (!Number.isFinite(at) || at < 0) return;
+      for (const checkpoint of folds) {
+        if (at >= checkpoint) start(checkpoint);
+      }
+    },
+    async finish() {
+      while (queue.length > 0 || inflight > 0) {
+        await Promise.all(pending.slice());
+      }
+    },
+  };
+}
