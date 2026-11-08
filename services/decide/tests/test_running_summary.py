@@ -133,10 +133,13 @@ COMPACT_JSON_FIELDS = [
     "scoreboardChanged",
     "crowdErupted",
     "contradictedBy",
-    "runningSummary",
     # ADAAAA-8318: the clip card's copy target — ONE extra output field in the
-    # SAME reply (no second decide call). The announcer line above is unchanged.
+    # SAME reply (no second decide call). ADAAAA-8356 moved it BEFORE
+    # runningSummary on purpose: the model writes the headline from the event
+    # instead of shortening a caption it has not written yet (measured: 341/898
+    # titles carried the caption's place chain when the key sat after it).
     "postTitle",
+    "runningSummary",
 ]
 
 
@@ -327,7 +330,7 @@ def test_compact_prompt_delta_is_bounded():
     # a place chain and got 46/54 rows refused, so the rule set has to be stated
     # in full. Prefill only — no output budget moved.
     # Bound the growth so a later edit cannot silently inflate every window.
-    assert len(_compact_prompt()) <= 15550
+    assert len(_compact_prompt()) <= 15700
 
 
 # VOD golden hash. Captured from `build_prompt(..., compact=False)` on the

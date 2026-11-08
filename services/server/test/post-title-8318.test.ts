@@ -101,11 +101,24 @@ describe("write seam — storedSurfaceFor gates the post title", () => {
     expect(surface.postTitle).toBe("Ordoñez scores the opener");
   });
 
-  it("refuses a place chain, a colour beat and an over-long title", () => {
+  // ADAAAA-8356 SUPERSEDES the 8318 expectation: a trailing place phrase and a
+  // colour beat are DELETED (extractive) and the remainder must still pass every
+  // evidence gate, so the card keeps model copy instead of falling back. A title
+  // the deletion cannot repair is still refused.
+  it("repairs a place chain and a colour beat by deletion", () => {
     for (const bad of [
       "Ordoñez strikes in the penalty area",
       "Ordoñez strikes — the bench rises",
-      "Ordoñez strikes from close range after a long ball into the channel",
+      "Ordoñez strikes from close range",
+    ]) {
+      expect(storedSurfaceFor(decision({ postTitle: bad }), ctx("big_play")).postTitle).toBe("Ordoñez strikes");
+    }
+  });
+
+  it("refuses a title the deletion cannot repair", () => {
+    for (const bad of [
+      "Ordoñez strikes the ball with the outside of his right boot towards the far corner",
+      "Mbappé strikes in the penalty area",
     ]) {
       expect(storedSurfaceFor(decision({ postTitle: bad }), ctx("big_play")).postTitle).toBeUndefined();
     }

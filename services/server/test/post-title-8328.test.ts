@@ -104,10 +104,14 @@ describe("write seam — a title refusal never touches the copy fields", () => {
 
   it("keeps the copy byte-for-byte when the title is REFUSED by the shape bar", () => {
     const noTitle = storedSurfaceFor(goal(), grounded);
+    // ADAAAA-8356: fixtures that the extractive repair can clear (a trailing
+    // place phrase, a second clause, a clock prefix) are now ACCEPTED, so the
+    // refusal arm uses titles no deletion can save: over-long with no trailing
+    // place, too many words, and an unsourced name.
     for (const bad of [
-      "Ordoñez scores the opener in the penalty area after a long ball into the channel", // > 70 chars
-      "Ordoñez scores the opener — the bench rises", // second beat
-      "T+12 Ordoñez scores the opener", // clock prefix
+      "Ordoñez scores the opener with the outside of his right boot and the bench rises", // > 70 chars
+      "Ordoñez scores the opener after a long ball from the right side of the pitch", // > 10 words
+      "Mbappé scores the opener", // unsourced name
     ]) {
       const refused = storedSurfaceFor(goal({ postTitle: bad }), grounded);
       expect(refused.postTitle).toBeUndefined();
