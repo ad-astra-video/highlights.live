@@ -351,15 +351,22 @@ export interface ServerConfig {
   /** ADAAAA-8373: `ASR_MAX_CONCURRENT`, default 0 = UNBOUNDED (shipped). The
    *  cap on simultaneous INLINE-on-miss ASR calls in the decide process — the
    *  lane the ADAAAA-8363 grade measured at peak concurrency 4-5. The bound
-   *  itself lives in `services/decide/app/asr_admission.py` (one uvicorn worker
-   *  == one lane); the server reads the same env only to record the EFFECTIVE
-   *  posture on the run's observe snapshot, so the stored row answers "what
-   *  bound produced this tail" without the container. compose maps both sides
-   *  from the same `${ASR_MAX_CONCURRENT:-0}`, so they cannot disagree. */
+   *  itself lives in `services/decide/app/asr_admission.py`; the server reads the
+   *  same env only to record the EFFECTIVE posture on the run's observe snapshot,
+   *  so the stored row answers "what bound produced this tail" without the
+   *  container. compose maps both sides from the same `${ASR_MAX_CONCURRENT:-0}`,
+   *  so they cannot disagree.
+   *
+   *  ADAAAA-8384: the cap bounds the DECIDE process's inline call sites only —
+   *  the Stage-2 `/confirm` dive (`confirm.py`) and the server-side prefetch lane
+   *  (`asr-prefetch.ts`, another process) hit the same ASR endpoint ungated. It
+   *  is NOT "ASR endpoint concurrency <= 2". */
   liveAsrMaxConcurrent: number;
   /** ADAAAA-8373: `ASR_QUEUE_MS`, default 0 = wait as today. How long an inline
    *  call may wait for a slot before it misses FAST (no ASR text, labelled
-   *  `asr_source: queue_miss`); only binds when `ASR_MAX_CONCURRENT` is set. */
+   *  `asr_source: queue_miss`); only binds when `ASR_MAX_CONCURRENT` is set.
+   *  ADAAAA-8384: a cap with the queue knob unset gets the 6 000 ms wait budget
+   *  as its deadline (and a WARNING), so "cap + no deadline" cannot stall. */
   liveAsrQueueMs: number;
   /** ADAAAA-7777 (lever B, trim 3): run the Stage-2 `/confirm` dive on the LIVE
    * pass. `DECIDE_CONFIRM_ENABLED` stays the master gate; this is the live-rail

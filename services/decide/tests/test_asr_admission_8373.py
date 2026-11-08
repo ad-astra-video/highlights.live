@@ -22,12 +22,13 @@ the deploy decision rests on becomes unmeasurable.
 """
 
 import json
+import logging
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import app.gemma as G
-from app.asr_admission import inline_asr_gate, gate_for
+from app.asr_admission import DEFAULT_BOUNDED_QUEUE_MS, inline_asr_gate, gate_for
 from app.gemma import decide_with_gemma, transcribe_inline
 
 REPLY = json.dumps(
@@ -158,9 +159,14 @@ def test_queue_miss_is_fast_and_named(monkeypatch):
     """One slot held => the next inline call misses inside ASR_QUEUE_MS."""
     _asr_env(monkeypatch, 1, 80)
     release = threading.Event()
+    # ADAAAA-8384 (C6): the holder signals from INSIDE the stub, so the second
+    # call can only start once the slot is provably taken. Before this the test
+    # slept 50 ms and lost the race when the second decide won the slot instead.
+    entered = threading.Event()
 
     def _slow_transcribe(url, audio_b64, sample_rate=16000, timeout_s=20.0, task=None):
         # Hold the single slot until the test releases it.
+        entered.set()
         release.wait(2.0)
         return "held slot transcript", 0.9
 
@@ -175,8 +181,9 @@ def test_queue_miss_is_fast_and_named(monkeypatch):
 
     holder = threading.Thread(target=_hold, daemon=True)
     holder.start()
-    # Give the holder time to take the slot before the second call asks for one.
-    time.sleep(0.05)
+    # The stub only runs AFTER the gate granted the slot, so this is the proof
+    # that the holder owns it — no sleep, no race.
+    assert entered.wait(2.0), "holder never entered the stub (slot not acquired)"
     t0 = time.monotonic()
     results["b"] = _decide(llama_b)
     elapsed_ms = (time.monotonic() - t0) * 1000
@@ -261,3 +268,53 @@ def test_gate_for_is_the_lane_not_a_per_call_object(monkeypatch):
     _asr_env(monkeypatch, 2, 0)
     assert inline_asr_gate() is inline_asr_gate()
     assert gate_for(2, 0) is inline_asr_gate()
+
+
+# --- ADAAAA-8384 C3: a cap is NEVER left without a deadline ------------------
+
+
+def test_cap_without_queue_gets_the_wait_budget_deadline(monkeypatch, caplog):
+    """`ASR_MAX_CONCURRENT` set + `ASR_QUEUE_MS` unset => 6 000 ms deadline + WARNING.
+
+    A cap with no deadline acquires with no timeout, which serialises the inline
+    lane behind one stuck ASR call. That state does not exist in the shipped
+    posture (no cap => never queues), so it must not be constructible by a
+    half-configured deploy.
+    """
+    monkeypatch.setenv("ASR_MAX_CONCURRENT", "4")  # unseen pair => fresh gate
+    monkeypatch.delenv("ASR_QUEUE_MS", raising=False)
+    with caplog.at_level(logging.WARNING, logger="highlights.decide.asr_admission"):
+        gate = inline_asr_gate()
+    assert gate.bounded is True
+    assert gate.queue_defaulted is True
+    assert gate.queue_ms == DEFAULT_BOUNDED_QUEUE_MS == 6000  # the graded wait budget
+    assert gate.queue_wait_s == 6.0
+    assert any("Set both knobs together" in r.getMessage() for r in caplog.records)
+    # An EXPLICIT queue is never overridden.
+    explicit = gate_for(2, 150)
+    assert (explicit.queue_ms, explicit.queue_defaulted) == (150, False)
+
+
+def test_no_deadline_without_a_cap(monkeypatch):
+    """Unbounded stays `wait as today`: no default deadline, no warning."""
+    monkeypatch.delenv("ASR_MAX_CONCURRENT", raising=False)
+    monkeypatch.delenv("ASR_QUEUE_MS", raising=False)
+    gate = inline_asr_gate()
+    assert (gate.bounded, gate.queue_ms, gate.queue_defaulted) == (False, 0, False)
+    assert gate.queue_wait_s == 0.0
+
+
+# --- ADAAAA-8384 C4: the posture is visible in the decide container log ------
+
+
+def test_gate_construction_logs_the_effective_posture(monkeypatch, caplog):
+    """One INFO at gate construction, so an operator can confirm the bound is live."""
+    monkeypatch.setenv("ASR_MAX_CONCURRENT", "5")  # unseen pair => fresh gate
+    monkeypatch.setenv("ASR_QUEUE_MS", "250")
+    with caplog.at_level(logging.INFO, logger="highlights.decide.asr_admission"):
+        gate = inline_asr_gate()
+    assert gate.describe()["bounded"] is True
+    lines = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert any(
+        "maxConcurrent" in line and "queueMs" in line and "bounded" in line for line in lines
+    ), lines

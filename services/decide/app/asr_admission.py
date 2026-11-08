@@ -17,12 +17,33 @@ wait-miss — and the miss then spends the whole budget before deciding.
   says WHY (``asrSource: "queue_miss"`` / ``noAudioReason: "asr_queue_miss"``),
   so a queue bound can never be read back as ASR absence.
 
-The bound is per PROCESS, which is the lane: ``docker/Dockerfile.decide`` runs a
-single ``uvicorn app:app`` worker, so one semaphore == one lane. It also covers
-VOD's inline calls, because they run in the same process against the same ASR
-endpoint — the cap protects the endpoint, not one rail. The persisted metric is
-live-only (counted server-side from the decide response), so a deploy decision
-must read it on a window with no concurrent VOD pass.
+**A cap with NO deadline is a new stall mode** (ADAAAA-8384, C3): ``ASR_MAX_CONCURRENT=2``
+with ``ASR_QUEUE_MS`` unset used to acquire with no timeout, which serialises the
+inline lane behind one stuck ASR call (bounded only by ASR's own 20 s HTTP
+timeout). Shipped behaviour has no cap and therefore never queues, so that state
+is new. When a cap is set and the queue knob is unset/0 the gate applies
+``DEFAULT_BOUNDED_QUEUE_MS`` (the 6 000 ms wait budget the ADAAAA-8363 grade
+measured against) as the deadline and logs a WARNING at construction. Set the two
+knobs together.
+
+**Scope: the decide process's inline call sites only** (ADAAAA-8384, C2). The
+bound is per PROCESS, and covers the calls that go through ``transcribe_inline``
+(the live window's inline-on-miss path plus the VOD/group decide paths in
+``gemma.py``). Two other callers hit the same ASR endpoint UNGATED:
+
+* ``app/confirm.py`` — the Stage-2 ``/confirm`` dive, same process (and the live
+  rail runs confirm dives by default);
+* ``services/server/src/asr-prefetch.ts`` — the server-side prefetch lane, a
+  different process.
+
+So ``ASR_MAX_CONCURRENT=2`` means "at most 2 inline ASR calls inside the decide
+process", NOT "ASR endpoint concurrency <= 2". Routing ``confirm.py`` through
+``transcribe_inline`` is a separate, measured decision (it would also bound VOD's
+confirmation ASR and change VOD confirm timing), so this knob does not claim it.
+
+The persisted metric is live-only (counted server-side from the decide
+response), so a deploy decision must read it on a window with no concurrent VOD
+pass.
 
 Deliberately thread-safe and dependency-free: ``transcribe_audio`` is called from
 worker threads (``asyncio.to_thread`` on the decide path), so the gate cannot be
@@ -31,12 +52,19 @@ an asyncio primitive.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
+
+log = logging.getLogger("highlights.decide.asr_admission")
 
 # Shipped behaviour: no bound, wait as today.
 DEFAULT_MAX_CONCURRENT = 0
 DEFAULT_QUEUE_MS = 0
+# ADAAAA-8384 (C3): the deadline a BOUND gets when ASR_QUEUE_MS is unset. This is
+# the 6 000 ms wait budget the ADAAAA-8363 grade measured the inline p95 against,
+# so a capped lane can never queue past the budget the lane exists to protect.
+DEFAULT_BOUNDED_QUEUE_MS = 6000
 
 ENV_MAX_CONCURRENT = "ASR_MAX_CONCURRENT"
 ENV_QUEUE_MS = "ASR_QUEUE_MS"
@@ -66,15 +94,34 @@ class AsrAdmission:
     ``release()`` it in a ``finally``) and False when the queue deadline expired.
     ``max_concurrent <= 0`` means UNBOUNDED: no semaphore is constructed, every
     acquire succeeds immediately and release is a no-op.
+
+    A bounded gate always has a deadline: `max_concurrent > 0` with
+    `queue_ms <= 0` resolves to ``DEFAULT_BOUNDED_QUEUE_MS`` and warns
+    (ADAAAA-8384, C3 — a cap with no deadline serialises the lane behind one
+    stuck call, a stall mode the shipped posture does not have).
     """
 
     def __init__(self, max_concurrent: int = DEFAULT_MAX_CONCURRENT, queue_ms: int = DEFAULT_QUEUE_MS):
         self.max_concurrent = max(0, int(max_concurrent))
-        self.queue_ms = max(0, int(queue_ms))
+        configured_queue_ms = max(0, int(queue_ms))
+        # ADAAAA-8384 (C3): a CAP with no deadline is a stall mode that does not
+        # exist in the shipped posture (no cap => never queues). Apply the 6 000 ms
+        # wait budget instead of an unbounded acquire, so a stuck ASR call can
+        # never serialise the whole inline lane behind it.
+        self.queue_defaulted = self.max_concurrent > 0 and configured_queue_ms == 0
+        self.queue_ms = DEFAULT_BOUNDED_QUEUE_MS if self.queue_defaulted else configured_queue_ms
         self._sem = threading.BoundedSemaphore(self.max_concurrent) if self.max_concurrent > 0 else None
-        # Read by the tests and by the "was the bound actually built" log line.
+        # Reported by `describe()` in the boot posture line.
         self.admitted = 0
         self.queue_misses = 0
+        if self.queue_defaulted:
+            log.warning(
+                "ASR_MAX_CONCURRENT=%d is set but ASR_QUEUE_MS is not: applying the %d ms wait"
+                " budget as the queue deadline, because a cap with NO deadline serialises the"
+                " inline lane behind one stuck ASR call. Set both knobs together.",
+                self.max_concurrent,
+                self.queue_ms,
+            )
 
     @property
     def bounded(self) -> bool:
@@ -83,7 +130,12 @@ class AsrAdmission:
 
     @property
     def queue_wait_s(self) -> float:
-        """The configured queue deadline in seconds (0 = wait indefinitely)."""
+        """The EFFECTIVE queue deadline in seconds (0 = wait indefinitely).
+
+        A bounded gate always has one: `ASR_MAX_CONCURRENT` set with
+        `ASR_QUEUE_MS` unset resolves to ``DEFAULT_BOUNDED_QUEUE_MS``
+        (ADAAAA-8384, C3), so `0` here means unbounded only.
+        """
         return self.queue_ms / 1000.0
 
     def acquire(self) -> bool:
@@ -114,10 +166,11 @@ class AsrAdmission:
             self._sem.release()
 
     def describe(self) -> dict:
-        """The EFFECTIVE posture, for a log line / a leg record."""
+        """The EFFECTIVE posture, for the boot posture line (ADAAAA-8384, C4)."""
         return {
             "maxConcurrent": self.max_concurrent,
             "queueMs": self.queue_ms,
+            "queueDefaulted": self.queue_defaulted,
             "bounded": self.bounded,
             "admitted": self.admitted,
             "queueMisses": self.queue_misses,
@@ -142,6 +195,12 @@ def gate_for(max_concurrent: int, queue_ms: int) -> AsrAdmission:
         if _gate_key != key or _gate is None:
             _gate = AsrAdmission(*key)
             _gate_key = key
+            # ADAAAA-8384 (C4): the posture line an operator reads off the decide
+            # container log to confirm the bound is LIVE — the per-miss INFO at
+            # `gemma.py:transcribe_inline` only fires once a call has already
+            # missed. One line per construction (at boot: exactly one), built
+            # from `describe()` so the log cannot drift from the gate's state.
+            log.info("asr inline admission gate built: %s", _gate.describe())
         return _gate
 
 
