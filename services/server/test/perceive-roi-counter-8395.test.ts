@@ -145,6 +145,20 @@ describe("perceive ROI-pass counter lands on the job record (ADAAAA-8395 AC-5)",
     expect(perceive.roiPassesPerAnalysedFrame).toBe(0);
   });
 
+  it("ADAAAA-8397: the contract keeps the four ROI keys (JobSchema.parse strip)", async () => {
+    // The production strip is `JobSchema.parse` in store.patchJob: an undeclared
+    // key on the perceive object is DROPPED even though the analyzer measured it.
+    const { ObserveMetricsSnapshotSchema } = await import("@highlights/events");
+    const r = rail();
+    feed(r, 9, (i) => ({ roiPasses: i % 3 === 0 ? 1 : 0, roiTiles: i % 3 === 0 ? 4 : 0, roiEnabled: true }));
+    const parsed = ObserveMetricsSnapshotSchema.parse(r.observeMetrics());
+    const perceive = parsed.perceive!;
+    expect(perceive.roiPasses).toBe(3);
+    expect(perceive.roiTiles).toBe(12);
+    expect(perceive.roiEnabled).toBe(true);
+    expect(perceive.roiPassesPerAnalysedFrame).toBeCloseTo(3 / perceive.framesAnalyzed!, 4);
+  });
+
   it("persists on a stored job row (observeMetrics.perceive.roiPasses non-null)", async () => {
     // IN-3: the block must survive a round trip through the job record, which is
     // how the live routes persist `observeMetrics`.
