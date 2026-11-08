@@ -69,7 +69,7 @@ const confirm: ConfirmRecord = {
 describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
   it("renders the verbatim prompt, each data item, and the LLM response", () => {
     const html = renderToString(
-      React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc" })
+      React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc", promptDefaultOpen: true })
     );
     expect(html).toContain("data-window-analysis");
     // Verbatim prompt (monospace pre)
@@ -105,6 +105,47 @@ describe("WindowAnalysisPanel (ADAAAA-7157)", () => {
     expect(html).toContain("data-response-evidence");
     expect(html).toContain("frame_0");
     expect(html).toContain("data-response-audio-context");
+  });
+
+  it("collapses the verbatim prompt by default (ADAAAA-8338)", () => {
+    const html = renderToString(React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc" }));
+    // The wrapper + toggle row stay; the prompt body (and its text) does not.
+    expect(html).toContain("data-prompt");
+    expect(html).toContain("Prompt (verbatim)");
+    expect(html).not.toContain("data-prompt-body");
+    expect(html).toContain("data-prompt-toggle");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain("You are a highlight analyst");
+    // Real button, and aria-controls names the body it would reveal.
+    expect(html).toMatch(/<button type="button"[^>]*data-prompt-toggle[^>]*aria-controls="[^"]+"/);
+  });
+
+  it("expands the verbatim prompt when promptDefaultOpen is true (ADAAAA-8338)", () => {
+    const html = renderToString(
+      React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc", promptDefaultOpen: true })
+    );
+    expect(html).toContain("data-prompt-body");
+    expect(html).toContain("data-prompt-toggle");
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("You are a highlight analyst");
+    // Body id matches the toggle's aria-controls (same useId instance).
+    const controls = html.match(/aria-controls="([^"]+)"/)?.[1];
+    expect(controls).toBeTruthy();
+    expect(html).toContain(`id="${controls}"`);
+  });
+
+  it("gives two panels on one page distinct prompt body ids (ADAAAA-8338)", () => {
+    const html = renderToString(
+      React.createElement(
+        "div",
+        null,
+        React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc" }),
+        React.createElement(WindowAnalysisPanel, { analysis, jobId: "abc" })
+      )
+    );
+    const ids = [...html.matchAll(/aria-controls="([^"]+)"/g)].map((m) => m[1]);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 
   it("renders an explicit 'not captured' state when no analysis was captured (legacy)", () => {

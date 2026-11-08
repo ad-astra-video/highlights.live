@@ -22,7 +22,7 @@
 //
 // Legacy decide notes that predate the capture carry no `analysis` block; those
 // render an explicit "not captured" state rather than a blank panel.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ScanSearch, AudioLines, Captions, Boxes, Sparkles } from "lucide-react";
 import {
   authFetchFrame,
@@ -906,6 +906,43 @@ function AudioSeriesBlock({ series, triggerTs }: { series: AudioSeriesPoint[]; t
   );
 }
 
+/**
+ * ADAAAA-8338: the per-window verbatim prompt, collapsed by default.
+ *
+ * The context items and the response are what an operator actually reads, so
+ * the prompt starts as one compact toggle row and expands on demand. Mirrors
+ * `ConfirmSubPanel`'s toggle shape (same chevrons, same `aria-expanded`
+ * contract); the body id comes from `useId()` so two panels on one page never
+ * collide and SSR stays deterministic. Presentation-only — the prompt string is
+ * the same capture, just not in the DOM until opened.
+ */
+export function PromptBlock({ prompt, defaultOpen = false }: { prompt: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const bodyId = useId();
+  return (
+    <div data-prompt>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 text-left text-[10px] uppercase tracking-wide text-mut"
+        data-prompt-toggle
+        aria-expanded={open}
+        aria-controls={bodyId}
+      >
+        {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+        Prompt (verbatim)
+      </button>
+      {open && (
+        <div id={bodyId} data-prompt-body>
+          <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-mut/20 bg-black/40 p-2 font-mono text-[11px] leading-relaxed text-ink">
+            {prompt}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export interface WindowAnalysisPanelProps {
   /** The per-window analysis payload (absent on legacy decide notes). */
   analysis?: WindowAnalysis;
@@ -919,6 +956,9 @@ export interface WindowAnalysisPanelProps {
   /** ADAAAA-7255: the candidate trigger onset timestamp (seconds) to mark on
    * the audio energy-vs-baseline graph, when one fired. */
   triggerTs?: number;
+  /** ADAAAA-8338: start the verbatim prompt expanded. Default false — the
+   * prompt is one collapsed toggle row until the operator opens it. */
+  promptDefaultOpen?: boolean;
 }
 
 /**
@@ -926,7 +966,14 @@ export interface WindowAnalysisPanelProps {
  * Renders an explicit "not captured" state when `analysis` is absent (legacy)
  * rather than a blank.
  */
-export function WindowAnalysisPanel({ analysis, confirm, confirmation, jobId, triggerTs }: WindowAnalysisPanelProps) {
+export function WindowAnalysisPanel({
+  analysis,
+  confirm,
+  confirmation,
+  jobId,
+  triggerTs,
+  promptDefaultOpen = false,
+}: WindowAnalysisPanelProps) {
   if (!analysis) {
     return (
       <div
@@ -945,13 +992,8 @@ export function WindowAnalysisPanel({ analysis, confirm, confirmation, jobId, tr
     <div className="mt-1 rounded-md border border-neon/30 bg-black/30 p-3" data-window-analysis>
       {/* ADAAAA-8287: which lane confirmed the row, with the raw attestation. */}
       {confirmation && <ConfirmationBlock confirmation={confirmation} />}
-      {/* Prompt (verbatim, monospace) */}
-      <div data-prompt>
-        <span className="text-[10px] uppercase tracking-wide text-mut">Prompt (verbatim)</span>
-        <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded border border-mut/20 bg-black/40 p-2 font-mono text-[11px] leading-relaxed text-ink">
-          {analysis.prompt}
-        </pre>
-      </div>
+      {/* Prompt (verbatim, monospace) — collapsed by default (ADAAAA-8338) */}
+      <PromptBlock prompt={analysis.prompt} defaultOpen={promptDefaultOpen} />
 
       {/* Structured context items */}
       <div className="mt-2">
