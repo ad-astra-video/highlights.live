@@ -156,15 +156,18 @@ describe("one inspected window renders its full detail for that row only (ADAAAA
     })
   );
 
-  it("renders the banner, prompt/response, filmstrip and audio-energy graph", () => {
+  it("renders the banner, collapsed prompt toggle, response, filmstrip and audio-energy graph", () => {
     // exactly one window body — the inspected row
     expect(count(loaded, "data-inspect-window-body")).toBe(1);
     expect(loaded).toContain("data-decide-note");
     expect(loaded).toContain("Decide @ T+");
     expect(loaded).toContain("4.2");
     expect(loaded).toContain("data-window-analysis");
+    // ADAAAA-8338: the prompt is a collapsed toggle row until the operator opens it.
     expect(loaded).toContain("data-prompt");
-    expect(loaded).toContain("You are a highlight judge.");
+    expect(loaded).toContain("data-prompt-toggle");
+    expect(loaded).not.toContain("data-prompt-body");
+    expect(loaded).not.toContain("You are a highlight judge.");
     expect(loaded).toContain("data-response");
     expect(loaded).toContain("data-audio-series-graph");
     expect(loaded).toContain("data-detail-frame");
