@@ -73,9 +73,12 @@ STORY = "0-0, Portugal dominating the left channel."
 #: ADAAAA-8325 (Inc 2) re-pins ONLY `False` (VOD/full): the phase field + rule
 #: (+411 chars). The two rows move independently, which is the live-rail parity
 #: proof in both directions.
+#: ADAAAA-8356 re-pins ONLY `True`: the compact contract's `postTitle` spec was
+#: rebuilt as its own rule paragraph (+893 chars over 8318) because the 8318
+#: one-line parenthetical measurably failed on leg 23bb0a61.
 GOLDEN_PROMPT_SHA = {
     False: "0ba62dff7728e222f50dce4f2927d66698921eb14b52a7fb38cfa475154d6b7b",
-    True: "936532411d2453b2e97c1839c582b207531523cfcaee35480c62c11a0c6b685b",
+    True: "6f8d5c7d914a89405dc593ed9b9f7c9bf3180c81337c530a0ca7d2f89146bff5",
 }
 
 PORTUGAL_SPAIN = {
