@@ -1688,7 +1688,8 @@ _OUTPUT_CONTRACT_COMPACT = (
     "POST TITLE RULES — postTitle is the card's HEADLINE, written FIRST from the "
     "event itself. Fill exactly three slots and nothing else: WHO (a jersey "
     "number or a role — the keeper, the defender, the striker; a name ONLY when "
-    "THIS window's transcript or OCR spells it, copied EXACTLY as written, never "
+    "THIS window's transcript spells it (never a name you read off a scorebug, "
+    "graphic or caption in the frames), copied EXACTLY as written, never "
     "adding a first name to a surname and never correcting a spelling — never "
     "from the story or the match context, and an empty transcript and OCR mean "
     "NO NAME at all; a name lifted from STORY SO FAR or an earlier window is an "
@@ -1710,8 +1711,9 @@ _OUTPUT_CONTRACT_COMPACT = (
     "unless YOUR OWN outcome here is scoring_play with a transcript or "
     "scoreboard read that says so. Use an action verb: carries, drives, clears, "
     "tackles, blocks, saves, shoots, passes, contests, loses, signals. Never "
-    "reuse a subject+verb you already titled this job. Read the headline once "
-    "more and delete any word that names where the action happened."
+    "reuse a subject+verb you already titled this job. Start with a capital "
+    "letter. Read the headline once more and delete any word that names where "
+    "the action happened."
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "

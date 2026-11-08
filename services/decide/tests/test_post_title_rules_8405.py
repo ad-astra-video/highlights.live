@@ -64,7 +64,7 @@ def test_name_rule_pins_exact_transcription():
     assert "copied EXACTLY as written, never adding a first name to a surname" in c
     assert "never correcting a spelling" in c
     # the 6/255 class: a name the window never read
-    assert "a name ONLY when THIS window's transcript or OCR spells it" in c
+    assert "a name ONLY when THIS window's transcript spells it (never a name you read off a scorebug" in c
     assert "never from the story or the match context" in c
 
 

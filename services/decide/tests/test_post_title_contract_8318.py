@@ -102,7 +102,7 @@ def test_title_addendum_is_within_its_input_token_budget():
     assert delta > 0
     # ADAAAA-8405 rewrites the paragraph for the Phase C residuals (+571):
     # bounded at 1900 so no further field can ride along.
-    assert delta <= 2186, f"postTitle addendum grew the contract by {delta} chars"
+    assert delta <= 2281, f"postTitle addendum grew the contract by {delta} chars"
 
 
 def test_title_spec_owns_its_own_paragraph_and_bars():
@@ -124,7 +124,9 @@ def test_title_spec_owns_its_own_paragraph_and_bars():
     # the caption/title collision is named outright (AC2)
     assert "the caption MUST name a place, the headline NEVER does" in contract
     # grounding: names only from THIS window's own reads (AC3)
-    assert "a name ONLY when THIS window's transcript or OCR spells it" in contract
+    # ADAAAA-8405: the allowed source narrowed to the transcript TEXT (a name read
+    # off a scorebug graphic is not in the row's own copy and the gate refuses it).
+    assert "a name ONLY when THIS window's transcript spells it" in contract
     assert "never from the story or the match context" in contract
     # the claim bar is keyed to the model's OWN verdict, not a generic "a goal" (AC3)
     assert "unless YOUR OWN outcome here is scoring_play" in contract
