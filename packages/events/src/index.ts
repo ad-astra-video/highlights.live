@@ -1850,15 +1850,22 @@ export const HighlightRecordSchema = z.object({
     .optional(),
   deferredAttestation: z
     .object({
-      /** First legible read of the new score (the transition instant). */
+      /** First legible read of the new score (the transition instant). ADAAAA-8442:
+       * on a non-delta promotion this carries the ATTESTING window's instant. */
       deltaTs: z.number(),
       /** Content timestamp of the window whose read resolved it. */
       readAt: z.number(),
       /** The judged window the transition was attributed to. */
       windowLo: z.number(),
       windowHi: z.number(),
-      pre: z.tuple([z.number(), z.number()]),
-      post: z.tuple([z.number(), z.number()]),
+      /** ADAAAA-8442: which measured channel promoted the row. Absent on legacy
+       * rows (all of which were scoreboard-delta promotions). */
+      channel: z.enum(["scoreboard_delta", "measured_attestation"]).optional(),
+      /** ADAAAA-8442: absent when the promotion was carried by a NON-delta
+       * measured attestation (goal-line / net / corroborated confirm) — the row's
+       * `attestationUsed` names that channel, and no score read is fabricated. */
+      pre: z.tuple([z.number(), z.number()]).optional(),
+      post: z.tuple([z.number(), z.number()]).optional(),
     })
     .optional(),
   // When the clip entered `rejected` (soft-delete undo grace start). Set on

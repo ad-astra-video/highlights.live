@@ -564,12 +564,18 @@ export async function attestDeferredGoalHighlight(
     // confirmed GOAL. Absent (undefined) on rows the gate never marked.
     provisionalGoal: undefined,
     deferredAttestation: {
-      deltaTs: upgrade.deltaTs,
+      // ADAAAA-8442: an attestation-only promotion (no measured score delta — the
+      // goal-line / net channel carried it) records the ATTESTING window and never
+      // fabricates a pre/post score pair. `attestationUsed` on the row names the
+      // channel; `channel` says so explicitly.
+      deltaTs: upgrade.deltaTs ?? upgrade.readAt,
       readAt: upgrade.readAt,
       windowLo: upgrade.lo,
       windowHi: upgrade.hi,
-      pre: upgrade.delta.pre,
-      post: upgrade.delta.post,
+      // ADAAAA-8442: only the non-delta path stamps `channel`; a score-delta
+      // promotion keeps the legacy shape byte-identical (absence = scoreboard delta).
+      ...(upgrade.delta ? {} : { channel: "measured_attestation" as const }),
+      ...(upgrade.delta ? { pre: upgrade.delta.pre, post: upgrade.delta.post } : {}),
     },
   });
   // ADAAAA-8024: the re-attested row is now readable on the delivered (scoring)
