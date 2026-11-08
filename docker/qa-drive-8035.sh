@@ -104,14 +104,20 @@ alive() { ctr_exec "kill -0 $1" >/dev/null 2>&1; }
 # and docker deletes that file when the container is removed/recreated, so any
 # peer launcher that recreates `server` after a leg erases the leg's own boot
 # identity (ADAAAA-8145). Capture it while that boot is alive.
-BOOT_KEYS="LIVE_OBSERVE_WINDOW_S LIVE_OBSERVE_CADENCE_S LIVE_OBSERVE_MAX_FRAMES LIVE_OBSERVE_IN_FLIGHT LIVE_OBSERVE_CONTENT_FPS"
+BOOT_KEYS="LIVE_OBSERVE_WINDOW_S LIVE_OBSERVE_CADENCE_S LIVE_OBSERVE_MAX_FRAMES LIVE_OBSERVE_IN_FLIGHT LIVE_OBSERVE_CONTENT_FPS LIVE_FRAME_SCALE"
 BOOT_PATTERN='[boot] live decide window'
+# ADAAAA-8377 (LFR-1): the frame-scale axis. A leg's ON arm is graded from its
+# decide rows' measured imageW/imageH, but the boot line states what the serving
+# process RESOLVED, and `STATE.StartedAt` + this line are what prove the leg did
+# not straddle a recreate that changed the scale.
+BOOT_SCALE_PATTERN='[boot] live frame scale'
 EVID_ACTIVE=0
 EVID_FILE=""
 
 server_started() { docker inspect "$SERVER" --format '{{.State.StartedAt}}' 2>/dev/null | tr -d '\r\n'; }
 server_logpath() { docker inspect "$SERVER" --format '{{.LogPath}}' 2>/dev/null | tr -d '\r\n'; }
 server_boot_line() { docker logs "$SERVER" 2>&1 | grep -F "$BOOT_PATTERN" | tail -n 1 | tr -d '\r'; }
+server_scale_line() { docker logs "$SERVER" 2>&1 | grep -F "$BOOT_SCALE_PATTERN" | tail -n 1 | tr -d '\r'; }
 
 # The host dir the media container mounts at /state: the dir the driver's own
 # drive-<sid>.log (STREAM_DONE/DRIVE_EXIT) is written into. A recreate replaces
@@ -144,12 +150,13 @@ boot_env_lines() {
 
 # evidence_write_start [sid]: write <evidence-dir>/boot.txt (+ boot-<sid>.txt).
 evidence_write_start() {
-  local sid="${1:-}" dir f tmp line started logpath
+  local sid="${1:-}" dir f tmp line started logpath scale
   dir="$(evidence_dir)"
   mkdir -p "$dir" || { echo "qa-drive: cannot create evidence dir $dir" >&2; return 1; }
   f="$dir/boot.txt"
   tmp="$f.$$.tmp"
   line="$(server_boot_line)"
+  scale="$(server_scale_line)"
   started="$(server_started)"
   logpath="$(server_logpath)"
   {
@@ -163,6 +170,8 @@ evidence_write_start() {
     echo "SERVER_STARTED_AT=${started:-<missing>}"
     echo "SERVER_JSON_LOG=${logpath:-<missing>}"
     echo "BOOT_LINE=${line:-<missing>}"
+    # ADAAAA-8377: the frame-scale axis this boot resolved (LFR-1 AC-1/AC-7).
+    echo "FRAME_SCALE_LINE=${scale:-<missing>}"
     boot_env_lines
     echo "# ENV <key>=<unset> means the key is absent from the container, i.e. the"
     echo "# shipped default is in force; it is a captured value, not a gap."

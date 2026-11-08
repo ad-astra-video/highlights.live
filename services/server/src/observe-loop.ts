@@ -36,6 +36,9 @@ import type { ScoreboardDeltaEvidence } from "./analyzer";
 // observer only carries the promise + hands it to the decide fork; the decide
 // request builder is what consumes it.
 import type { AsrPrefetchResult } from "./asr-prefetch";
+// ADAAAA-8377 (LFR-1): the decide payload states the REAL dims of the images it
+// ships (beside `imagesPerDecide`), measured from the frame JPEG headers.
+import { jpegDimensionsFromBase64 } from "./image-dims";
 
 /** ADAAAA-8081: non-enumerable payload key carrying this window's prefetch. */
 export const ASR_PREFETCH = Symbol("asrPrefetch");
@@ -1827,6 +1830,14 @@ export interface ObserveDecidePayload {
   imagesPerDecide?: number;
   imageBudget?: number;
   imageBudgetApplied?: boolean;
+  /** ADAAAA-8377 (LFR-1 AC-1): the pixel width/height of the images this payload
+   *  hands to gemma, measured from the first carried frame's JPEG header. Beside
+   *  `imagesPerDecide` on purpose: the budget says how MANY images a call shipped,
+   *  these say how BIG they were, so the 640x360 ON leg is graded off the decide
+   *  row instead of `printenv`. Absent when the frame set is empty or the header
+   *  is unreadable (a dim that was not measured is never fabricated). */
+  imageW?: number;
+  imageH?: number;
   /** ADAAAA-8074: content moment the image selection was anchored on. */
   anchorTs?: number;
   /** ADAAAA-7658: the audio trigger this window is anchored to, when this
@@ -1904,6 +1915,22 @@ export function shouldFireObserve(
 }
 
 /**
+ * Isolate the JPEG dims of a window's carried frames (ADAAAA-8377). The first
+ * frame with a readable header wins: one window carries frames off one rail, so
+ * one measurement states the call's resolution. Exported for the unit test that
+ * pairs it with {@link buildObservePayload}.
+ */
+export function firstFrameDimensions(
+  frames: { imageB64: string }[]
+): { width: number; height: number } | undefined {
+  for (const f of frames) {
+    const d = jpegDimensionsFromBase64(f.imageB64);
+    if (d) return d;
+  }
+  return undefined;
+}
+
+/**
  * Build the full observe decide payload for a window: the window frames +
  * perceive-seeded per-frame context + the perceived bias hints within the
  * window. Pure + deterministic. `biasHints` are the folded candidate triggers
@@ -1924,6 +1951,10 @@ export function buildObservePayload(
   const observations = win.observedFrames?.length
     ? alignSeeds(win.observedFrames, findingsByTs)
     : undefined;
+  // ADAAAA-8377 (AC-1): measure the images this payload actually ships. Every
+  // frame on a window comes off ONE rail, so the first readable header states
+  // the call's dims; nothing is claimed when the set is empty or unreadable.
+  const dims = firstFrameDimensions(win.frames);
   return {
     centerTs: win.centerTs,
     frames: win.frames,
@@ -1939,6 +1970,7 @@ export function buildObservePayload(
           imagesPerDecide: win.frames.length,
           imageBudget: win.imageBudget,
           imageBudgetApplied: win.imageBudgetApplied,
+          ...(dims ? { imageW: dims.width, imageH: dims.height } : {}),
           ...(win.anchorTs !== undefined ? { anchorTs: win.anchorTs } : {}),
         }
       : {}),

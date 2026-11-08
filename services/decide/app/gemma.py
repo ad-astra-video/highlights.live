@@ -2086,6 +2086,13 @@ def render_perceive_timeline(
         # ADAAAA-8074 (AC-CAP-1): what the payload carried and which image budget
         # selected it, so a leg grades the decide_audit row instead of `printenv`.
         "imagesPerDecide": ("imagesPerDecide", int),
+        # ADAAAA-8377 (LFR-1 AC-1): the payload's MEASURED image dims (from the
+        # frame JPEG headers), beside the count. The ON leg of the live
+        # frame-scale A/B grades 640x360 off `decide_audit` rows, so the decide
+        # service must pass these through or the server's stamp never reaches
+        # `timings.perceiveTimeline`.
+        "imageW": ("imageW", int),
+        "imageH": ("imageH", int),
         "imageBudget": ("imageBudget", int),
         "imageGapMaxMs": ("imageGapMaxMs", int),
         "recordsPerSecond": ("recordsPerSecond", float),

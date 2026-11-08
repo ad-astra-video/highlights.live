@@ -795,6 +795,14 @@ services:
       #   trim 3 LIVE_DECIDE_CONFIRM: 0 skips the Stage-2 /confirm dive on the live
       #     rail only; DECIDE_CONFIRM_ENABLED stays the master gate for both rails.
       - LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-4}
+      # ADAAAA-8377 (LFR-1): the LIVE rail's sampled-frame SCALE — the size of the
+      # JPEGs the live extraction writes for BOTH perceive `/analyze` and the
+      # decide window. Unset/empty keeps today's 320:180 (no default flip in this
+      # increment); `640:360` is VOD parity and the ON arm of the frame-scale A/B.
+      # Reverting is this knob + a recreate (no code revert). The boot readout
+      # names the resolved value and every decide row carries the MEASURED
+      # `imageW`/`imageH`, so a leg grades the row, not `printenv`.
+      - LIVE_FRAME_SCALE=${LIVE_FRAME_SCALE:-}
       - LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}
       # ADAAAA-8081: transcribe the live window's clip in the server's fire-time
       # side lane instead of serially inside the decide call, so ASR runs while

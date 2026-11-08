@@ -191,6 +191,15 @@ export interface ServerConfig {
    * `frameScale`, default 640:360 — higher-res than live 320:180).
    * `VOD_FRAME_SCALE`. */
   vodFrameScale: string;
+  /** ADAAAA-8377: frame scale of the LIVE rail's sampled JPEGs — the images both
+   * live rails hand to perceive `/analyze` and to the decide window. Until this
+   * increment the live extraction hardcoded the literal (`live.ts`, the sampled
+   * `-vf fps=…,scale=320:180`) while VOD ran 640:360, so every live finding
+   * rested on a 4x coarser image. Threaded from here instead of a literal, so
+   * 640:360 is a KNOB an A/B leg can apply and revert. Default stays the
+   * shipped 320:180 in this increment: no default flip before the ON leg's
+   * AC-1..AC-6 pass on stored rows. `LIVE_FRAME_SCALE`. */
+  liveFrameScale: string;
   /** ADAAAA-7847: frame scale for the ONE-SHOT jersey-identify anchor frame a
    * `track-player` / `track-player-by-number` request samples at REQUEST time.
    * Jersey OCR needs the number large and sharp, and neither rail scale is
@@ -751,6 +760,35 @@ export function parseBooleanFlag(raw: string | undefined, fallback: boolean): bo
   return fallback;
 }
 
+/**
+ * ADAAAA-8377: the shipped LIVE rail frame scale — the value the live extraction
+ * hardcoded before it became a knob. Kept as the default here (one literal in
+ * the codebase) so a deploy that never sets `LIVE_FRAME_SCALE` reproduces
+ * today's 320:180 JPEGs byte-for-byte.
+ */
+export const LIVE_FRAME_SCALE_DEFAULT = "320:180";
+
+/**
+ * Resolve a `WxH` (ffmpeg `W:H`) frame-scale string.
+ *
+ * ffmpeg accepts `scale=640:360` and `scale=640x360`; both spellings are
+ * normalized to the colon form so the boot readout, the payload dims and the
+ * ffmpeg filter all agree on ONE string. Anything that is not two positive
+ * integers (`""` from compose's `${X:-}`, a typo, `0:0`) falls back to the
+ * default instead of handing ffmpeg a filter that would fail the whole live
+ * decode — the ADAAAA-7808 lesson (an empty env var must mean "unset", never a
+ * value that silently changes behaviour).
+ */
+export function resolveFrameScale(raw: string | undefined, fallback = LIVE_FRAME_SCALE_DEFAULT): string {
+  const trimmed = (raw ?? "").trim();
+  const m = /^(\d{1,5})\s*[:xX]\s*(\d{1,5})$/.exec(trimmed);
+  if (!m) return fallback;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return fallback;
+  return `${w}:${h}`;
+}
+
 function parseGoalLineCalibrations(raw: string | undefined): Record<string, GoalLineCalibration> | undefined {
   if (!raw) return undefined;
   try {
@@ -917,6 +955,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     vodSampleMaxFps: Number(env.VOD_SAMPLE_MAX_FPS ?? 8),
     vodDetailFps: Number(env.VOD_DETAIL_FPS ?? 3),
     vodFrameScale: env.VOD_FRAME_SCALE ?? "640:360",
+    // ADAAAA-8377: the LIVE rail's sampled-frame scale, threaded instead of the
+    // `320:180` literal the live extraction used to hardcode. Default stays the
+    // shipped 320:180 in this increment; `LIVE_FRAME_SCALE=640:360` is the ON
+    // arm of the LFR-1 A/B and reverting the knob restores today exactly.
+    liveFrameScale: resolveFrameScale(env.LIVE_FRAME_SCALE, LIVE_FRAME_SCALE_DEFAULT),
     // ADAAAA-7847: the jersey-identify anchor frame is sampled at REQUEST time
     // and is deliberately NOT the rail scale. Jersey OCR needs the number large
     // and sharp: measured on clip `397294f3` (native 1280x720) the number is
