@@ -1911,6 +1911,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-8108 (AC-E3): the enrichment ON/OFF arm for this rail, wired from
         // `LIVE_DECIDE_ENRICH` (unset = the shipped `on`, byte-identical).
         enrichment: cfg.liveDecideEnrich,
+        // ADAAAA-8431 (AC-N1): the SAME decide-rate lever the analyzer live pass
+        // takes at `analyzer.ts` (`decideKeepRatio: cfg.liveDecideKeepRatio`).
+        // Before this the media rail simply never received it — `grep -c
+        // decideKeepRatio api.ts` was 0 — so every natural browser share decided
+        // EVERY cadence window: job `b55c5781` charged 701 decides / 2 890.2 s =
+        // 72.76 per 300 s = $2.89-2.90/h/stream against a $2.75 cap. Undefined
+        // keeps the rail unbounded, so merging moves nothing until the box cell
+        // (keep 0.64) is rebuilt.
+        decideKeepRatio: cfg.liveDecideKeepRatio,
         stageA: shared.stageAOutcomes,
         signalGate: cfg.observeSignalGate,
         signalGateOpts: buildObserveSignalGateOpts(cfg),

@@ -483,7 +483,7 @@ describe("LiveObserver (ADAAAA-7008: rolling-past cadence observer)", () => {
 
 describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
   /** Drive a 30 s content timeline at 5 fps through one observer. */
-  async function drive(keepRatio: number | undefined, trigger?: AudioTriggerRecord) {
+  async function drive(keepRatio: number | undefined, trigger?: AudioTriggerRecord, seconds = 30) {
     const fired: ObserveDecidePayload[] = [];
     const obs = new LiveObserver({
       cadenceS: 3,
@@ -497,7 +497,7 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
       },
     });
     const fps = 5;
-    for (let i = 0; i < fps * 30; i++) {
+    for (let i = 0; i < fps * seconds; i++) {
       const ts = i / fps;
       obs.record(ts, `f${i}`, { ts });
       if (trigger && i === 0) obs.recordTrigger(trigger);
@@ -506,14 +506,22 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
     return { obs, fired };
   }
 
-  it("keeps a deterministic fraction of decide opportunities (2 of 3)", async () => {
-    const { obs, fired } = await drive(0.66);
-    // 30 s at a 3 s cadence = 10 opportunities (ts 0,3,...,27), one per window.
-    // The credit starts at 1 (first window decides) and accrues 0.66 per
-    // opportunity, so 7 of the 10 decide and 3 are counted as throttle skips.
-    expect(obs.decideCalls()).toBe(7);
-    expect(obs.throttleSkipCount()).toBe(3);
-    expect(fired.map((p) => p.centerTs)).toEqual([0, 3, 9, 12, 18, 21, 27]);
+  it("resolves keep 0.64 into an ABSOLUTE rate: 63..69 charged per 300 s at a 3 s cadence", async () => {
+    const { obs } = await drive(0.64, undefined, 300);
+    // ADAAAA-8431: the fraction is resolved ONCE into charged decides per 300 s
+    // of content clock (`min(66, floor(keep x 104))`), never spent per
+    // opportunity — so the same keep value charges the same rate on a rail that
+    // offers 73 opportunities as on one that offers 104.
+    expect(obs.decideRatePer300s()).toBe(66);
+    const charged = obs.decideCalls();
+    const dropped = obs.throttleSkipCount();
+    expect(charged).toBeGreaterThanOrEqual(63);
+    expect(charged).toBeLessThanOrEqual(69);
+    // 100 opportunities (one per 3 s cadence window over the 299.8 s of content
+    // the drive covers): the absolute rate, not the opportunity count, is the
+    // constraint.
+    expect(charged + dropped).toBe(100);
+    expect(dropped).toBeGreaterThan(30);
   });
 
   it("is byte-identical when the ratio is unset or 1 (cap off)", async () => {
@@ -570,13 +578,16 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
   });
 
   it("reports throttle skips separately from supply skips (ADAAAA-7808 PO ruling)", async () => {
-    const { obs } = await drive(0.66);
+    const { obs } = await drive(0.64, undefined, 300);
     const m = buildLiveObserveMetrics(obs);
-    // 7 decides + 3 throttle drops over the 10 opportunities, and NOTHING the
-    // rail failed to serve: the throttle is a funded rate decision, so it must
-    // never appear in the supply total the coverage clause reads.
-    expect(m.decideCalls).toBe(7);
-    expect(m.throttleSkippedWindows).toBe(3);
+    const charged = m.decideCalls;
+    // 100 opportunities over the share: charged + throttled accounts for all of
+    // them, and NOTHING the rail failed to serve — the throttle is a funded rate
+    // decision, so it must never appear in the supply total the coverage clause
+    // reads.
+    expect(charged).toBeGreaterThanOrEqual(63);
+    expect(charged).toBeLessThanOrEqual(69);
+    expect(m.throttleSkippedWindows).toBe(100 - charged);
     expect(m.supplySkippedWindows).toBe(0);
     expect(m.droppedFrames).toBe(0);
   });
