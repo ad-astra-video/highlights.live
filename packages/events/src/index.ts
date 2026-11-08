@@ -1861,6 +1861,15 @@ export const HighlightRecordSchema = z.object({
   // long-form prompt stays byte-identical (AC8); the read-time projection fills
   // those deterministically (never empty, never a model call).
   postTitle: z.string().optional(),
+  // ADAAAA-8356 (PO acceptance addendum, constraint 1): WHAT the write seam did
+  // with the model's title, as one audit token — `accepted` / `trimmed` (the
+  // extractive shape repair) / `refused:<violations>` / `absent` (the reply
+  // carried no title). Persisted so the next grade can attribute a residual to
+  // the PROMPT (absent, or a claim the prompt still emits) versus the GATE (a
+  // refused shape/evidence bar) without buying another live leg. Additive
+  // optional: absent on legacy rows, the VOD rail, and any row stored before
+  // this commit; no surface reads it.
+  postTitleGate: z.string().optional(),
   // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
   // `reason` was derived from, with the frame that confirms it.
   colour: ColourSignalSchema.optional(),
