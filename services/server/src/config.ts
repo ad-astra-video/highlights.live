@@ -366,8 +366,15 @@ export interface ServerConfig {
    *  call may wait for a slot before it misses FAST (no ASR text, labelled
    *  `asr_source: queue_miss`); only binds when `ASR_MAX_CONCURRENT` is set.
    *  ADAAAA-8384: a cap with the queue knob unset gets the 6 000 ms wait budget
-   *  as its deadline (and a WARNING), so "cap + no deadline" cannot stall. */
+   *  as its deadline (and a WARNING), so "cap + no deadline" cannot stall.
+   *  ADAAAA-8393: this is the EFFECTIVE deadline the decide gate applies, so the
+   *  cap-with-no-queue shape reads 6 000 here (never 0 = "no deadline"). */
   liveAsrQueueMs: number;
+  /** ADAAAA-8393: true when `liveAsrQueueMs` came from
+   *  `DEFAULT_BOUNDED_ASR_QUEUE_MS` (a cap set with no `ASR_QUEUE_MS`) rather
+   *  than the environment. Persisted as `asrQueueDefaulted` so a reader can tell
+   *  a configured 6 000 ms deadline from a defaulted one. */
+  liveAsrQueueDefaulted: boolean;
   /** ADAAAA-7777 (lever B, trim 3): run the Stage-2 `/confirm` dive on the LIVE
    * pass. `DECIDE_CONFIRM_ENABLED` stays the master gate; this is the live-rail
    * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
@@ -859,6 +866,15 @@ export function resolveAdminPassword(raw: string | undefined, nodeEnv: string): 
   return value || DEFAULT_ADMIN_PASSWORD;
 }
 
+/**
+ * ADAAAA-8393: the wait budget the DECIDE gate applies when a concurrency CAP is
+ * set with no `ASR_QUEUE_MS` (a cap with no deadline would serialise the inline
+ * lane behind one stuck call). Mirrors `DEFAULT_BOUNDED_QUEUE_MS` in
+ * `services/decide/app/asr_admission.py`; `services/server/test/asr-queue-8373.test.ts`
+ * fails if the two constants drift.
+ */
+export const DEFAULT_BOUNDED_ASR_QUEUE_MS = 6000;
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const nodeEnv = env.NODE_ENV ?? "development";
   // ADAAAA-7901: both secrets are resolved before the object literal so a
@@ -871,6 +887,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const exportTokenSecret = resolveExportTokenSecret(env.EXPORT_TOKEN_SECRET, jwtSecret, {
     requireStrong: nodeEnv === "production",
   });
+  // ADAAAA-8393: record the EFFECTIVE inline-ASR queue deadline, not the raw env.
+  // The decide gate (`services/decide/app/asr_admission.py`) applies
+  // `DEFAULT_BOUNDED_QUEUE_MS` when a CAP is set with no deadline; the server
+  // used to persist `asrQueueMs: 0` for that shape, which reads as "no deadline"
+  // and contradicts a row carrying `asrQueueMisses > 0`. Both snapshot call sites
+  // (analyzer live pass + media-rail share) read these values, so the default is
+  // resolved once here; `liveAsrQueueDefaulted` marks it so a reader can tell a
+  // configured 6 000 from a defaulted one.
+  const liveAsrMaxConcurrent = Math.max(0, Math.floor(finiteNumberOrUndefined(env.ASR_MAX_CONCURRENT) ?? 0));
+  const rawAsrQueueMs = Math.max(0, Math.floor(finiteNumberOrUndefined(env.ASR_QUEUE_MS) ?? 0));
+  const liveAsrQueueDefaulted = liveAsrMaxConcurrent > 0 && rawAsrQueueMs === 0;
+  const liveAsrQueueMs = liveAsrQueueDefaulted ? DEFAULT_BOUNDED_ASR_QUEUE_MS : rawAsrQueueMs;
   return {
     port: Number(env.PORT ?? 3000),
     nodeEnv,
@@ -1015,8 +1043,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // empty string can never construct one by accident. The gate is enforced in
     // the decide process; these values are recorded here as the effective
     // posture on the observe snapshot.
-    liveAsrMaxConcurrent: Math.max(0, Math.floor(finiteNumberOrUndefined(env.ASR_MAX_CONCURRENT) ?? 0)),
-    liveAsrQueueMs: Math.max(0, Math.floor(finiteNumberOrUndefined(env.ASR_QUEUE_MS) ?? 0)),
+    liveAsrMaxConcurrent,
+    liveAsrQueueMs,
+    liveAsrQueueDefaulted,
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",

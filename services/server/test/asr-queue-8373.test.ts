@@ -25,6 +25,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   LiveRunShared,
+  asrQueuePosture,
   buildLiveObserveMetrics,
   observeDecideOnly,
   type AnalyzerConfig,
@@ -33,7 +34,7 @@ import {
 import { LiveObserver, type ObserveDecidePayload } from "../src/observe-loop";
 import { MediaRailObserver } from "../src/media-rail";
 import { buildLiveAnalyzerConfig } from "../src/api";
-import { loadConfig } from "../src/config";
+import { DEFAULT_BOUNDED_ASR_QUEUE_MS, loadConfig } from "../src/config";
 import { JobSchema, ObserveMetricsSnapshotSchema } from "@highlights/events";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
@@ -288,5 +289,166 @@ describe("ADAAAA-8384 C1 — a media-rail share row carries the ASR posture", ()
     ).observeMetrics();
     expect(metrics.perceive).toBeTruthy();
     expect(metrics).toMatchObject({ asrQueueMisses: 1, asrMaxConcurrent: 2, asrQueueMs: 150 });
+  });
+});
+
+// ADAAAA-8393: the C3 guard resolves the queue deadline INSIDE the decide gate
+// (`services/decide/app/asr_admission.py`), but the server snapshot used to record
+// the RAW env — so `ASR_MAX_CONCURRENT=2` with `ASR_QUEUE_MS` unset persisted
+// `asrQueueMs: 0`, which reads as "no deadline" and contradicts a row that also
+// carries `asrQueueMisses > 0`. The stored row must describe the lane that RAN.
+describe("ADAAAA-8393 — the cap-defaulted deadline is recorded as the EFFECTIVE one", () => {
+  const base = { PERCEIVE_URL: "http://p", DECIDE_URL: "http://d", ASR_URL: "http://asr:8082" };
+
+  it("cap set + queue unset resolves to the 6 000 ms default and marks it", () => {
+    const cfg = loadConfig({ ...base, ASR_MAX_CONCURRENT: "2" });
+    expect(cfg.liveAsrMaxConcurrent).toBe(2);
+    expect(cfg.liveAsrQueueMs).toBe(DEFAULT_BOUNDED_ASR_QUEUE_MS);
+    expect(cfg.liveAsrQueueDefaulted).toBe(true);
+    // compose passes `${ASR_QUEUE_MS:-0}` and an explicit "0" means the same thing.
+    const zeroed = loadConfig({ ...base, ASR_MAX_CONCURRENT: "2", ASR_QUEUE_MS: "0" });
+    expect([zeroed.liveAsrQueueMs, zeroed.liveAsrQueueDefaulted]).toEqual([6000, true]);
+  });
+
+  it("both knobs set keeps the configured deadline, no defaulted marker", () => {
+    const cfg = loadConfig({ ...base, ASR_MAX_CONCURRENT: "2", ASR_QUEUE_MS: "150" });
+    expect([cfg.liveAsrQueueMs, cfg.liveAsrQueueDefaulted]).toEqual([150, false]);
+    // An explicitly configured 6 000 is NOT a defaulted 6 000.
+    const explicit = loadConfig({ ...base, ASR_MAX_CONCURRENT: "2", ASR_QUEUE_MS: "6000" });
+    expect([explicit.liveAsrQueueMs, explicit.liveAsrQueueDefaulted]).toEqual([6000, false]);
+  });
+
+  it("neither knob stays inert (no cap => no deadline to record)", () => {
+    const cfg = loadConfig(base);
+    expect([cfg.liveAsrMaxConcurrent, cfg.liveAsrQueueMs, cfg.liveAsrQueueDefaulted]).toEqual([0, 0, false]);
+    // A queue knob alone does not bind: the gate needs a cap for a deadline.
+    const queueOnly = loadConfig({ ...base, ASR_QUEUE_MS: "150" });
+    expect([queueOnly.liveAsrQueueMs, queueOnly.liveAsrQueueDefaulted]).toEqual([150, false]);
+  });
+
+  it("carries the effective deadline + marker into the live analyzer config", () => {
+    const cfg = loadConfig({ ...base, LIVE_OBSERVE_LOOP: "1", ASR_MAX_CONCURRENT: "2" });
+    const analyzer = buildLiveAnalyzerConfig({
+      cfg,
+      job: { id: "job-8393-cfg", gameHint: "soccer" },
+      clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
+    } as any);
+    expect(analyzer.decideAsrMaxConcurrent).toBe(2);
+    expect(analyzer.decideAsrQueueMs).toBe(6000);
+    expect(analyzer.decideAsrQueueDefaulted).toBe(true);
+  });
+
+  it("END TO END: cap-only env -> analyzer config -> stored live row says 2 / 6 000 / defaulted", () => {
+    const cfg = loadConfig({ ...base, LIVE_OBSERVE_LOOP: "1", ASR_MAX_CONCURRENT: "2" });
+    const analyzer = buildLiveAnalyzerConfig({
+      cfg,
+      job: { id: "job-8393-e2e", gameHint: "soccer" },
+      clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
+    } as any);
+    // The decide gate would have counted a bounded miss on this run.
+    analyzer.decideAsrQueueStats!.misses = 1;
+    // Exactly what the analyzer live pass writes: the shared posture reader.
+    const metrics = buildLiveObserveMetrics(observer(), undefined, undefined, undefined, asrQueuePosture(analyzer));
+    expect(metrics).toMatchObject({
+      asrQueueMisses: 1,
+      asrMaxConcurrent: 2,
+      asrQueueMs: DEFAULT_BOUNDED_ASR_QUEUE_MS,
+      asrQueueDefaulted: true,
+    });
+    const job = JobSchema.parse({
+      id: "job-8393-e2e",
+      status: "done",
+      createdAt: new Date().toISOString(),
+      source: "rtmp",
+      observeMetrics: metrics,
+    });
+    // The contradiction the ticket is about is gone: a miss now implies a deadline.
+    expect(job.observeMetrics).toMatchObject({ asrQueueMs: 6000, asrQueueDefaulted: true });
+  });
+
+  it("writes asrQueueMs 6000 + asrQueueDefaulted: true on the stored row and survives persistence", () => {
+    const metrics = buildLiveObserveMetrics(observer(), undefined, undefined, undefined, {
+      maxConcurrent: 2,
+      queueMs: 6000,
+      misses: 1,
+      queueDefaulted: true,
+    });
+    expect(metrics).toMatchObject({
+      asrQueueMisses: 1,
+      asrMaxConcurrent: 2,
+      asrQueueMs: 6000,
+      asrQueueDefaulted: true,
+    });
+    // Declared on the schema, so `store.patchJob` cannot strip it.
+    expect(ObserveMetricsSnapshotSchema.parse(metrics)).toMatchObject({
+      asrQueueMs: 6000,
+      asrQueueDefaulted: true,
+    });
+    const job = JobSchema.parse({
+      id: "job-8393-defaulted",
+      status: "done",
+      createdAt: new Date().toISOString(),
+      source: "rtmp",
+      observeMetrics: metrics,
+    });
+    expect(job.observeMetrics).toMatchObject({ asrQueueMs: 6000, asrQueueDefaulted: true });
+  });
+
+  it("both knobs set => the configured row carries NO defaulted marker", () => {
+    const metrics = buildLiveObserveMetrics(observer(), undefined, undefined, undefined, {
+      maxConcurrent: 2,
+      queueMs: 150,
+      misses: 0,
+      queueDefaulted: false,
+    });
+    expect(metrics).toMatchObject({ asrQueueMisses: 0, asrMaxConcurrent: 2, asrQueueMs: 150 });
+    expect(metrics).not.toHaveProperty("asrQueueDefaulted");
+  });
+
+  it("neither knob => the row stays byte-identical to shipped", () => {
+    const metrics = buildLiveObserveMetrics(observer(), undefined, undefined, undefined, {
+      maxConcurrent: 0,
+      queueMs: 0,
+      misses: 0,
+      queueDefaulted: false,
+    });
+    expect(metrics.asrQueueMisses).toBe(0);
+    expect(metrics).not.toHaveProperty("asrMaxConcurrent");
+    expect(metrics).not.toHaveProperty("asrQueueMs");
+    expect(metrics).not.toHaveProperty("asrQueueDefaulted");
+  });
+
+  it("the media-rail share records it too (a cap-with-no-queue share is not 'no deadline')", () => {
+    // Same reader the rail is wired with in `api.ts` (ADAAAA-8384 C1).
+    const cfg = loadConfig({ ...base, LIVE_OBSERVE_LOOP: "1", ASR_MAX_CONCURRENT: "2" });
+    const anaCfg = buildLiveAnalyzerConfig({
+      cfg,
+      job: { id: "job-8393-rail", gameHint: "soccer" },
+      clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
+    } as any);
+    anaCfg.decideAsrQueueStats!.misses = 1;
+    const metrics = new MediaRailObserver({
+      jobId: "job-8393-rail",
+      fps: 2,
+      windowS: 10,
+      cadenceS: 3,
+      maxFrames: 4,
+      onDecide: async () => false,
+      asrQueue: () => asrQueuePosture(anaCfg),
+    }).observeMetrics();
+    expect(metrics).toMatchObject({ asrQueueMisses: 1, asrMaxConcurrent: 2, asrQueueMs: 6000, asrQueueDefaulted: true });
+    expect(ObserveMetricsSnapshotSchema.parse(metrics)).toMatchObject({ asrQueueDefaulted: true });
+  });
+});
+
+// ADAAAA-8393: the default is duplicated across two languages/processes (the
+// decide gate applies it, the server records it). Pin them together — a drift
+// would make the stored row lie about the deadline the lane actually waited.
+describe("ADAAAA-8393 the server default is pinned to the decide module", () => {
+  it("DEFAULT_BOUNDED_ASR_QUEUE_MS equals app/asr_admission.DEFAULT_BOUNDED_QUEUE_MS", () => {
+    const py = readFileSync(repoFile("services/decide/app/asr_admission.py"), "utf8");
+    const m = /^DEFAULT_BOUNDED_QUEUE_MS\s*=\s*(\d+)\s*$/m.exec(py);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBe(DEFAULT_BOUNDED_ASR_QUEUE_MS);
   });
 });

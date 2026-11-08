@@ -2872,6 +2872,11 @@ export interface AnalyzerConfig {
    * responses report, so the stored row is readable without the container log. */
   decideAsrMaxConcurrent?: number;
   decideAsrQueueMs?: number;
+  /** ADAAAA-8393: true when `decideAsrQueueMs` is the gate's default 6 000 ms
+   *  wait budget (cap set, `ASR_QUEUE_MS` unset) rather than a configured value.
+   *  Recorded as `asrQueueDefaulted` on the snapshot so a reader can tell the two
+   *  apart. */
+  decideAsrQueueDefaulted?: boolean;
   /** ADAAAA-8373: per-run counter of inline calls that lost the admission slot
    *  (`asrSource: "queue_miss"` in the decide response). One object per live run,
    *  created by `buildLiveAnalyzerConfig` — never a module global. */
@@ -3546,6 +3551,11 @@ export interface LiveObserveMetricsSnapshot {
   asrQueueMisses?: number;
   asrMaxConcurrent?: number;
   asrQueueMs?: number;
+  /** ADAAAA-8393: true when `asrQueueMs` is the gate's DEFAULT 6 000 ms wait
+   *  budget (cap set, `ASR_QUEUE_MS` unset) rather than a configured value.
+   *  Written only when defaulted, so a reader can tell a configured budget from
+   *  the fallback and a fully-configured row keeps its shipped shape. */
+  asrQueueDefaulted?: boolean;
   /** ADAAAA-7774: the LIVE perceive stride — the ingest-to-analysis frame rate
    *  the pass consumed at, plus the counts that prove the stride ran:
    *  `perceiveCalls < framesAnalyzed` in a cool region (the cadence skipped
@@ -3713,6 +3723,23 @@ export function liveLagReserveS(maxE2eMs: number, meanE2eMs: number, budgetS: nu
   return Math.min(worstE2e + 1, budgetS / 2);
 }
 
+/** ADAAAA-8393: the inline-ASR admission posture a LIVE snapshot records, read
+ * off the analyzer config at snapshot time. Both write sites — the analyzer live
+ * pass and the browser/WebRTC media-rail share — go through this one function, so
+ * a stored row can never disagree with the lane that ran, and the "effective, not
+ * raw env" default is applied exactly once (`config.ts` resolves it; this reads
+ * that value). `queueDefaulted` is true only for the gate's 6 000 ms fallback. */
+export function asrQueuePosture(
+  cfg: Pick<AnalyzerConfig, "decideAsrMaxConcurrent" | "decideAsrQueueMs" | "decideAsrQueueDefaulted" | "decideAsrQueueStats">
+): { maxConcurrent: number; queueMs: number; misses: number; queueDefaulted: boolean } {
+  return {
+    maxConcurrent: Math.max(0, Math.floor(cfg.decideAsrMaxConcurrent ?? 0)),
+    queueMs: Math.max(0, Math.floor(cfg.decideAsrQueueMs ?? 0)),
+    misses: cfg.decideAsrQueueStats?.misses ?? 0,
+    queueDefaulted: cfg.decideAsrQueueDefaulted === true,
+  };
+}
+
 /** Build the live decide-observer latency/cadence snapshot from the observer's
  * measured samples (pure aggregation of {@link LiveObserver.latencySamples}).
  * `stride` carries the ADAAAA-7774 ingest -> analysis frame counters from the
@@ -3728,7 +3755,7 @@ export function buildLiveObserveMetrics(
    * counter. Absent leaves the record byte-identical (a caller that has no live
    * inline lane); a live run always passes it, so `asrQueueMisses` is written
    * even when the bound is inert (0). */
-  asrQueue?: { maxConcurrent: number; queueMs: number; misses: number }
+  asrQueue?: { maxConcurrent: number; queueMs: number; misses: number; queueDefaulted?: boolean }
 ): LiveObserveMetricsSnapshot {
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
@@ -3808,6 +3835,9 @@ export function buildLiveObserveMetrics(
     // ADAAAA-8373: the inline-ASR admission meter. The counter is written even
     // when the bound is inert (0), so a reader never has to infer absence from a
     // missing key; the EFFECTIVE posture is written only when a cap is set.
+    // ADAAAA-8393: `asrQueueDefaulted` marks a `queueMs` that is the gate's
+    // default 6 000 ms budget rather than a configured value — written only when
+    // defaulted, so a fully-configured row keeps its shipped shape.
     ...(asrQueue
       ? {
           asrQueueMisses: Math.max(0, Math.floor(asrQueue.misses)),
@@ -3815,6 +3845,7 @@ export function buildLiveObserveMetrics(
             ? {
                 asrMaxConcurrent: Math.max(0, Math.floor(asrQueue.maxConcurrent)),
                 asrQueueMs: Math.max(0, Math.floor(asrQueue.queueMs)),
+                ...(asrQueue.queueDefaulted ? { asrQueueDefaulted: true } : {}),
               }
             : {}),
         }
@@ -9333,11 +9364,9 @@ export async function analyzeJob(
             // ADAAAA-8373: this run's inline-ASR admission posture + the
             // queue-miss counter, read at the same instant. The gate lives in
             // the decide process; the snapshot records the EFFECTIVE env.
-            {
-              maxConcurrent: Math.max(0, Math.floor(cfg.decideAsrMaxConcurrent ?? 0)),
-              queueMs: Math.max(0, Math.floor(cfg.decideAsrQueueMs ?? 0)),
-              misses: cfg.decideAsrQueueStats?.misses ?? 0,
-            }
+            // ADAAAA-8393: one shared reader with the media-rail write site, so
+            // `asrQueueDefaulted` cannot land on one rail and not the other.
+            asrQueuePosture(cfg)
           ),
           // ADAAAA-8254: the decide admission counters + capacity snapshot, read
           // off the gate at the same instant.
