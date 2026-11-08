@@ -113,17 +113,26 @@ describe("clusterNotableWindows — one moment per overlap chain (N1-AC1)", () =
     expect(out.optionsSuppressed).toBe(1);
   });
 
-  it("the owner is the row whose footage the card shows (clip beats no clip)", () => {
+  it("the owner is the row whose footage the card shows (clip beats a failed clip beats nothing)", () => {
     const rows = [
       // No cut AND no named failure: this row cannot render a card at all, so it
       // must never own the moment's footage.
       row("nocut", 10, 25, { clipUri: "" }),
+      // A named cut failure renders a card, but it shows no footage — a sibling
+      // that DID cut must own the moment.
+      row("failed", 11, 26, { clipUri: "", clipError: "empty recording — the stream carried no frames" }),
       row("cut", 12, 27),
     ];
     const out = clusterNotableWindows(rows);
     expect(out.moments.length).toBe(1);
     expect(out.moments[0].owner.id).toBe("cut");
-    expect(out.moments[0].options.map((o) => o.id)).toEqual(["nocut"]);
+    expect(out.moments[0].options.map((o) => o.id)).toEqual(["nocut", "failed"]);
+    // With no cut anywhere, the named failure still owns the card (it can say WHY).
+    const onlyFailed = clusterNotableWindows([
+      row("nocut", 10, 25, { clipUri: "" }),
+      row("failed", 11, 26, { clipUri: "", clipError: "cut failed" }),
+    ]);
+    expect(onlyFailed.moments[0].owner.id).toBe("failed");
   });
 
   it("does not mutate the stored rows it clusters", () => {

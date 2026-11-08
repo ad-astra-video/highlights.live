@@ -366,11 +366,14 @@ export interface NotableMoments {
   optionsSuppressed: number;
 }
 
-/** Does the row carry footage to show? Prefers a clip when picking the card
- * owner, so a moment whose best-quality row never got a cut still renders a
- * playable card (and its footage is not hidden behind a text-only row). */
-function hasFootage(h: HighlightRecord): boolean {
-  return !!(h.clipUri || h.clipError);
+/** How much footage a row can show: 2 = an already-cut clip, 1 = a named clip
+ * failure (the card still renders its reason), 0 = no footage at all. Ordering
+ * the card owner on this first keeps a moment whose best-quality row never got a
+ * cut from hiding a sibling that DID get one. */
+function footageTier(h: HighlightRecord): number {
+  if (h.clipUri) return 2;
+  if (h.clipError) return 1;
+  return 0;
 }
 
 /**
@@ -393,9 +396,9 @@ export function clusterNotableWindows(
   let optionsSuppressed = 0;
   for (const cluster of clusters) {
     const owner = cluster.reduce((best, h) => {
-      const fa = hasFootage(best) ? 1 : 0;
-      const fb = hasFootage(h) ? 1 : 0;
-      if (fa !== fb) return fa > fb ? best : h;
+      const tb = footageTier(best);
+      const th = footageTier(h);
+      if (tb !== th) return th > tb ? h : best;
       return betterMoment(best as PostableHighlight, h as PostableHighlight) === h ? h : best;
     });
     const siblings = cluster.filter((h) => h.id !== owner.id).sort((a, b) => a.start - b.start);
