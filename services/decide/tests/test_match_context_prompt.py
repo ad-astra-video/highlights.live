@@ -78,7 +78,9 @@ STORY = "0-0, Portugal dominating the left channel."
 #: one-line parenthetical measurably failed on leg 23bb0a61.
 GOLDEN_PROMPT_SHA = {
     False: "0ba62dff7728e222f50dce4f2927d66698921eb14b52a7fb38cfa475154d6b7b",
-    True: "35a2e41ff01acc2df4a0e18428ef8b150ba8d5675d8c8d3f66e32c8f9dce462a",
+    #: ADAAAA-8405 re-pins ONLY `True` again: the headline rule paragraph moved
+    #: for the Phase C copy residuals. The absent-context invariant is unchanged.
+    True: "cf18ac8b5be96276412ac77424afeefc356ca31faec99f76a0e2c4b62afd1875",
 }
 
 PORTUGAL_SPAIN = {

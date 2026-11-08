@@ -60,7 +60,9 @@ MAX_STATIC_PREAMBLE_CHARS = 9400
 # (+893 chars over the 8318 field spec, measured 15 197 here) because the terse
 # parenthetical measurably failed on leg 23bb0a61. The preamble ceiling above is
 # untouched — the caption contract itself did not grow a character.
-MAX_STATIC_BLOCK_CHARS = 15500
+# ADAAAA-8405 moves it once more (+571 to the contract, 15 872 here): the Phase C
+# residuals needed the headline's place/claim/name rules stated as closed sets.
+MAX_STATIC_BLOCK_CHARS = 16000
 
 EV = {
     "trackCount": 3,
@@ -206,7 +208,9 @@ def test_static_block_budget():
     # v3 added +93; ADAAAA-8318 adds the `postTitle` field (+145); ADAAAA-8356
     # rebuilds that spec as its own POST TITLE RULES paragraph (+1038 over the
     # pre-8318 contract) — bounded at 1200 so another field cannot ride along.
-    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 1260
+    # ADAAAA-8405 raises it once more (+571, the headline rule rewrite): live
+    # prefill ~+140 tokens, output unchanged (the rail is decode-bound).
+    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 1900
     # ADAAAA-8325 (Inc 2): the VOD (FULL) contract gained the `phase` field and
     # its rule (+486 chars with the REPLAY cues); bounded so a later edit cannot inflate every VOD
     # window's prefill any further. The COMPACT bound above is untouched — the
