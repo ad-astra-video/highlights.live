@@ -609,6 +609,88 @@ interface PendingObserveDecide {
 }
 
 /**
+ * ADAAAA-8431: the ratified decide-rate TARGET and the opportunity convention
+ * the keep ratio was calibrated against.
+ *
+ * The funded §1 cell is 63..69 charged decides per 300 s of CONTENT clock (63 =
+ * the AC4 coverage floor, 69 = $2.7498/h, 70 = $2.7896/h = over the $2.75 cap at
+ * the measured $0.003321 per decide). The PO ruling on ADAAAA-8427 sets the
+ * target at 66 (3 decides of headroom under the cap, 3 above the floor).
+ *
+ * `LIVE_DECIDE_KEEP_RATIO` was authored against the analyzer/file-sim rail, which
+ * offers ~104 decide opportunities per 300 s. A fractional cap is a function of
+ * that density: wired onto the natural browser rail (whose first measured job
+ * offered 72.76 opportunities / 2 890.2 s = 72.76 per 300 s) keep 0.64 charges
+ * 46.6 / 300 s — under the cap but 44.8 % of the 104 convention, below the
+ * 63-decide floor. So the ratio is resolved ONCE here into an absolute rate, in
+ * the units both gates are written in.
+ */
+export const LIVE_DECIDE_RATE_TARGET_PER_300S = 66;
+/** The opportunity density `LIVE_DECIDE_KEEP_RATIO` was authored against (104
+ *  cadence windows / 300 s, ADAAAA-7799). Kept as the conversion basis so an
+ *  unchanged keep value (0.64 on the box) still states the same intended rate. */
+export const LIVE_DECIDE_OPPORTUNITY_CONVENTION_PER_300S = 104;
+
+/**
+ * ADAAAA-8431: decide-rate budget in ABSOLUTE units — charged decides per 300 s
+ * of content clock, not a fraction of whatever opportunities a rail happens to
+ * offer.
+ *
+ * Credit accrues with CONTENT time at `per300s / 300` per second and one decide
+ * charges 1. Accrual is clamped to one decide's worth of credit per interval, so
+ * a mid-share relay gap cannot burst a backlog of decides when it resumes. The
+ * balance starts at 1 so the first window of a stream still decides.
+ *
+ * Anchored (audio-trigger) and force (end-of-stream tail) fires BYPASS the gate
+ * and charge anyway: the balance goes negative and later cadence windows repay
+ * it. That keeps the latency-critical fire at its cadence (the live lens is 1-5 s)
+ * while still holding the charged rate at the cap over the stream.
+ */
+export class DecideRateCredit {
+  private credit = 1;
+  private lastTs: number | null = null;
+  constructor(readonly per300s: number) {}
+
+  /** Credit earned per content second. */
+  ratePerS(): number {
+    return Math.max(0, this.per300s) / 300;
+  }
+
+  private accrue(ts: number): void {
+    if (!Number.isFinite(ts)) return;
+    if (this.lastTs === null) {
+      this.lastTs = ts;
+      return;
+    }
+    if (ts <= this.lastTs) return;
+    const rate = this.ratePerS();
+    if (rate <= 0) return;
+    // Clamp the accrual to ONE decide's worth (1 / rate content seconds): a
+    // longer gap banks no extra burst, it just restores one token.
+    const dt = Math.min(ts - this.lastTs, 1 / rate);
+    this.credit += dt * rate;
+    this.lastTs = ts;
+  }
+
+  /** Whether a charged decide may fire at `ts` (peek, no charge). */
+  available(ts: number): boolean {
+    this.accrue(ts);
+    return this.credit >= 1 - 1e-9;
+  }
+
+  /** Charge one decide at `ts`. A bypassing (anchored/force) fire may go negative. */
+  charge(ts: number): void {
+    this.accrue(ts);
+    this.credit -= 1;
+  }
+
+  /** Current credit, for tests + the `[live-rate]` evidence line. */
+  balance(): number {
+    return this.credit;
+  }
+}
+
+/**
  * Streaming live decide-observer (ADAAAA-7008).
  *
  * Driven from the caller's OWN per-frame loop (which already calls perceive
@@ -725,17 +807,19 @@ export class LiveObserver {
    *  itself had no slot for it. */
   private capacityDroppedWindows = 0;
   private lastCapacityDropTs: number | null = null;
-  /** ADAAAA-7799 (lever C): decide-rate CAP. Spend is a pure function of decided
-   *  windows (`decideCalls * 12 * 0.0033` $/h/stream), so the funded ceiling is
-   *  held by KEEPING only a fraction of the decide opportunities instead of
-   *  deciding every cadence tick. `1` = off (byte-identical); `0 < r < 1` keeps
-   *  a fractional credit per opportunity and decides when the credit crosses 1,
-   *  so the realized rate is `r` of the opportunities (r = 0.625 keeps 5 of every
-   *  8 windows — a deterministic repeating pattern) and the drops are counted.
-   *  The window span and the audio noise-change trigger are NOT touched: a
-   *  trigger that comes due on a dropped window stays PENDING (never consumed)
-   *  and anchors the next kept window. */
+  /** ADAAAA-7799 (lever C): the decide-rate cap, expressed as the fraction of
+   *  the 104-window / 300 s opportunity convention the funded cell allows.
+   *  ADAAAA-8431: the fraction is NO LONGER spent per opportunity (that is what
+   *  made the cap rail-dependent: keep 0.64 charged 66.6 on a ~104-opportunity
+   *  analyzer leg and only 46.6 on the 72.76-opportunity natural browser leg).
+   *  It is resolved once, in the constructor, into an absolute rate on
+   *  {@link DecideRateCredit}; `1`/unset keeps the pass unbounded. */
   private readonly decideKeepRatio: number;
+  /** ADAAAA-8431: the absolute decide-rate budget (charged decides per 300 s of
+   *  content clock). Null = no rate cap (keep unset/1), byte-identical to the
+   *  shipped pass. Both live rails construct their observer here, so this one
+   *  helper binds the analyzer/file-sim rail and the browser media rail alike. */
+  private readonly decideRate: DecideRateCredit | null;
   /** ADAAAA-8108 (AC-E3): the enrichment arm mode for this rail (`on` = the
    *  shipped posture; `off`/`alternate` are the AC-E3 measurement arms). */
   private readonly enrichmentMode: "on" | "off" | "alternate";
@@ -744,8 +828,11 @@ export class LiveObserver {
    *  budget/gate/admission/backpressure refusal has returned), so a refused tick
    *  can never consume a parity slot and leave the ON arm with two neighbours. */
   private enrichWindows = 0;
-  /** ADAAAA-7799: decide opportunities dropped by the rate cap. */
-  private throttleSkips = 0;
+  /** ADAAAA-8431: opportunities DROPPED by the absolute rate budget. Counted
+   *  into {@link throttleSkipCount} (a funded rate decision, never supply — the
+   *  ADAAAA-7808 ruling) and kept apart so the evidence line can name which
+   *  mechanism dropped the window. */
+  private rateCappedSkips = 0;
   /** ADAAAA-7799: decide opportunities seen (kept + dropped). */
   private decideOpportunities = 0;
   /** ADAAAA-7799: content ts of the last counted opportunity. One opportunity
@@ -754,9 +841,6 @@ export class LiveObserver {
    *  intervening frame (measured on the first cut: 154 opportunities / 300 s
    *  against 97 decides, which re-inflated the rate the cap exists to bound). */
   private lastOpportunityTs: number | null = null;
-  /** ADAAAA-7799: fractional decide credit; starts at 1 so the first window of a
-   *  stream always decides. */
-  private decideCredit = 1;
   /** ADAAAA-7771: serialized accept chain + the first decide/accept failure.
    *  A failure is rethrown by `flush()`, matching the serial pass (which threw
    *  out of the frame loop). */
@@ -809,10 +893,13 @@ export class LiveObserver {
     depthBudget?: () => number;
     /** Minimum budget needed to fire early on a trigger (default 0.4). */
     triggerMinBudget?: number;
-    /** ADAAAA-7799 (lever C): decide-rate cap. Fraction of decide opportunities
-     *  that may decide (0 < r < 1), so the decided-window rate — and therefore
-     *  spend — is bounded deterministically. `undefined`/1 = off, byte-identical
-     *  to the unbounded pass. Wired from `LIVE_DECIDE_KEEP_RATIO`. */
+    /** ADAAAA-7799 (lever C): decide-rate cap. `0 < r < 1` = the fraction of the
+     *  104-window / 300 s opportunity CONVENTION the funded cell allows; it is
+     *  resolved to an absolute rate (`min(66, floor(r x 104))` charged decides /
+     *  300 s of content clock) so the cap holds the same rate on a rail offering
+     *  73 opportunities as on one offering 104 (ADAAAA-8431). `undefined`/1 = off,
+     *  byte-identical to the unbounded pass. Wired from
+     *  `LIVE_DECIDE_KEEP_RATIO` on BOTH live rails. */
     decideKeepRatio?: number;
     /** ADAAAA-8108 (AC-E3): the enrichment arm for this rail. `on` (default)
      *  sends the per-window `perceiveTimeline` exactly as shipped; `off` omits it
@@ -867,6 +954,20 @@ export class LiveObserver {
     // unbounded, so an unset env is byte-identical.
     const keepRatio = Number(opts.decideKeepRatio ?? 1);
     this.decideKeepRatio = Number.isFinite(keepRatio) && keepRatio > 0 && keepRatio < 1 ? keepRatio : 1;
+    // ADAAAA-8431: resolve that fraction ONCE into the units the spend cap and
+    // the coverage floor are both written in — charged decides per 300 s of
+    // content clock. `keep x 104` is the rate the ratio was authored to mean on
+    // the analyzer rail; it is clamped to the ratified 66 target (ADAAAA-8427)
+    // and never applied per opportunity, so the same keep value charges the same
+    // rate on a rail offering 73 opportunities as on one offering 104.
+    const ratePer300s =
+      this.decideKeepRatio < 1
+        ? Math.min(
+            LIVE_DECIDE_RATE_TARGET_PER_300S,
+            Math.floor(this.decideKeepRatio * LIVE_DECIDE_OPPORTUNITY_CONVENTION_PER_300S)
+          )
+        : 0;
+    this.decideRate = ratePer300s > 0 ? new DecideRateCredit(ratePer300s) : null;
     // ADAAAA-8108 (AC-E3): the enrichment arm. Any value outside the two
     // measurement arms normalises to the shipped `on` posture, so a typo can
     // never silently ship a leg with the timeline missing.
@@ -1246,8 +1347,15 @@ export class LiveObserver {
     return this.capacityDroppedWindows;
   }
   /** ADAAAA-7799: decide opportunities the rate cap dropped (fixed stride). */
+  /** ADAAAA-7799/8431: decide opportunities the rate cap dropped (funded rate
+   *  decisions — never folded into the supply skips, ADAAAA-7808). */
   throttleSkipCount(): number {
-    return this.throttleSkips;
+    return this.rateCappedSkips;
+  }
+  /** ADAAAA-8431: the absolute rate this pass is budgeted to (charged decides /
+   *  300 s of content clock); 0 = no rate cap. */
+  decideRatePer300s(): number {
+    return this.decideRate?.per300s ?? 0;
   }
   /** ADAAAA-7771: the last window ISSUED (content ts + measured lag), for the
    *  `[live-lag]` evidence line. Independent of the settle ordering. */
@@ -1381,29 +1489,37 @@ export class LiveObserver {
       }
       return;
     }
-    // ADAAAA-7799 (lever C): decide-rate CAP. An opportunity that would
-    // otherwise decide now is DROPPED when the fractional credit has not yet
-    // crossed 1: the cadence advances past the window (`lastFireTs` moves, so it
-    // is not retried frame by frame), no budget token is spent, and a due audio
-    // trigger is NOT consumed — it stays pending and anchors the next kept
-    // window (the trigger contract and the window span are untouched; only the
-    // decide slot rate is capped). The pattern is deterministic (credit accrues
-    // `r` per opportunity, so at 0.625 exactly 5 of every 8 windows decide, and
-    // at 2/3 two of every three), and every drop is counted. A FORCE fire (the
-    // end-of-stream tail) always decides: dropping it would lose the tail window.
-    if (this.decideKeepRatio < 1 && !force) {
+    // ADAAAA-8431: decide-rate CAP, in ABSOLUTE units (charged decides per 300 s
+    // of content clock). An opportunity that would otherwise decide now is
+    // DROPPED when the rate credit has not yet crossed 1: the cadence advances
+    // past the window (`lastFireTs` moves, so it is not retried frame by frame),
+    // no budget token is spent, and a due audio trigger is NOT consumed — it
+    // stays pending and anchors the next kept window (the trigger contract and
+    // the window span are untouched; only the charged rate is capped). A FORCE
+    // fire (the end-of-stream tail) always decides: dropping it would lose the
+    // tail window.
+    //
+    // ADAAAA-8431 (the ruling's core): this is NOT a fraction of the
+    // opportunities the rail happens to offer. A trigger-ANCHORED window also
+    // bypasses the gate and charges anyway (repaying as debt), so a fired audio
+    // event is decided at its cadence instead of waiting ~1 interval for a token
+    // — the anchored fire's live lens is 1-5 s and must not grow to ~4.5 s.
+    if (this.decideRate && !force && !anchored) {
+      // One opportunity per cadence window: a dropped window leaves a due
+      // trigger PENDING, and without this guard the trigger would re-present an
+      // opportunity on every intervening frame (measured on the first cut: 154
+      // opportunities / 300 s against 97 decides, which re-inflated the rate the
+      // cap exists to bound).
       if (this.lastOpportunityTs !== null && nowTs - this.lastOpportunityTs < this.cadenceS - 1e-9) {
         return;
       }
       this.lastOpportunityTs = nowTs;
       this.decideOpportunities++;
-      this.decideCredit += this.decideKeepRatio;
-      if (this.decideCredit < 1 - 1e-9) {
-        this.throttleSkips++;
+      if (!this.decideRate.available(nowTs)) {
+        this.rateCappedSkips++;
         this.lastFireTs = nowTs;
         return;
       }
-      this.decideCredit -= 1;
     }
     if (anchored) this.triggers.consume(dueTrigger);
     const prevFire = this.lastFireTs;
@@ -1412,6 +1528,12 @@ export class LiveObserver {
     // after this moment count as admission skips.
     this.lastAdmissionSkipTs = nowTs;
     this.budgetTokens -= 1;
+    // ADAAAA-8431: every CHARGED decide spends rate credit — cadence fires that
+    // passed the gate, and the latency-critical anchored/force fires that
+    // bypassed it (their balance goes negative and the following cadence windows
+    // repay it). That is what keeps the stream's total at the cap without ever
+    // delaying a due trigger.
+    this.decideRate?.charge(nowTs);
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
     if (anchored) this.anchoredFires++;
     else this.cadenceFires++;
