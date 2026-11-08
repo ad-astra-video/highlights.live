@@ -2849,6 +2849,9 @@ export interface AnalyzerConfig {
   /** ADAAAA-8081: per-call timeout for one side-lane transcription (ms).
    * `LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS`, default 6 000. */
   decideAsrPrefetchTimeoutMs?: number;
+  /** ADAAAA-8300: the side lane's in-flight budget.
+   * `LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY`, default 2 (the pre-8300 constant). */
+  decideAsrPrefetchConcurrency?: number;
   /** ADAAAA-8081: ASR base URL (`ASR_URL`) for the side lane. Unset => the lane
    *  cannot run and the decide service transcribes inline as before. */
   asrUrl?: string;
@@ -8952,6 +8955,9 @@ export async function analyzeJob(
       : new AsrPrefetcher({
           asrUrl: cfg.asrUrl,
           timeoutMs: cfg.decideAsrPrefetchTimeoutMs,
+          // ADAAAA-8300: the lane's in-flight budget is a config value now; the
+          // prefetcher's own default (2) is unchanged when it is unset.
+          maxConcurrent: cfg.decideAsrPrefetchConcurrency,
         });
   const liveObserver =
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
