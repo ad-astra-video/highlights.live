@@ -493,6 +493,40 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // Mean / max decide gemma end-to-end latency (ms).
   meanE2eMs: z.number().min(0),
   maxE2eMs: z.number().min(0),
+  // ADAAAA-8344: the per-decide STAGE breakdown (securing leg vs payload vs
+  // paid request vs parse), aggregated over the last ~100 calls of the run by
+  // `services/server/src/decide-stage-timings.ts`. Additive OPTIONAL: absent on
+  // every record written before this field existed, so old job rows stay
+  // readable and `meanE2eMs` above is unchanged.
+  //
+  // Declared here (not merely on the server type) because a zod object STRIPS
+  // undeclared keys: without this block the instrument's summary would be
+  // computed and then dropped when the job record is persisted (the
+  // `perceiveSource` lesson, ADAAAA-8102).
+  decideStages: z
+    .object({
+      /** Decide calls the summary is computed over (== instrumented calls). */
+      calls: z.number().int().min(0),
+      /** Per-stage {p50,p95,max,mean} ms keyed by the stage name. */
+      stages: z.record(
+        z.string(),
+        z.object({
+          p50: z.number().min(0),
+          p95: z.number().min(0),
+          max: z.number().min(0),
+          mean: z.number().min(0),
+        }),
+      ),
+      /** Unpaid 402 probes per decide (1.0 = the shipped unpaid-first flow). */
+      probesPerDecide: z.number().min(0),
+      /** (probe + signer) p50 / total p50 — the securing share of a call. */
+      securingShare: z.number().min(0),
+      /** paid p50 / total p50 — the request that actually returns the verdict. */
+      paidShare: z.number().min(0),
+      /** p50 of sum(named stages)/total per call; ~1.0 proves closure. */
+      closureP50: z.number().min(0),
+    })
+    .optional(),
   // Mean / max content-time cadence between consecutive fired ticks (ms).
   meanCadenceMs: z.number().min(0),
   maxCadenceMs: z.number().min(0),
