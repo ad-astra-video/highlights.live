@@ -37,10 +37,17 @@ import {
  *  window-relative instant, and the unmeasured play clause. */
 const CLEAN_REASON = "Scoreboard changes from 2-2 to 1-1 at t=-3.0s and ball enters net.";
 
-/** The LIVE scoring lane's refusal tail the demotion appends (audit, not copy). */
+/** The LIVE scoring lane's refusal tail the demotion appends (audit, not copy).
+ *  ADAAAA-8441 (D2): the leading clause names the real refusal instead of
+ *  asserting "no measured attestation" over a span that measured one — this row's
+ *  span read `scoreReads=9 preSamples=6 postSamples=3` and was refused because its
+ *  newest boundary was backward (`2-2 -> 1-1`), not because nothing was read. The
+ *  field parenthetical is unchanged. */
 const LANE_TAIL =
-  "live scoring lane: no measured attestation in this window (scoreBoardChanged=true goalCrossed=false " +
-  "ballOutcome=none corroborated=false goalConfirmed=none scoreReads=9 preSamples=6 postSamples=3 need=2); " +
+  "live scoring lane: the span's newest score boundary was not a legible single forward goal step " +
+  "(a backward read, a multi-goal jump, or a gap past the confirm bound) " +
+  "(scoreBoardChanged=true goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none " +
+  "scoreReads=9 preSamples=6 postSamples=3 need=2); " +
   "audio/motion reaction is corroborating evidence only and cannot attest a score — delivered as a celebration, not a GOAL";
 
 /** The row's own persisted `reason_raw` (sentence + audit tail, verbatim from
