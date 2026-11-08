@@ -3,6 +3,10 @@ import { execFile } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import { promisify } from "node:util";
 import path from "node:path";
+// ADAAAA-8377: the live extraction's frame-scale DEFAULT is the shipped live
+// scale (320:180), not a literal duplicated here. `LIVE_FRAME_SCALE` overrides
+// it through `ServerConfig.liveFrameScale`, which the live rails pass in.
+import { LIVE_FRAME_SCALE_DEFAULT } from "./config";
 
 const exec = promisify(execFile);
 
@@ -1084,7 +1088,10 @@ export function buildExtractArgs(opts: {
   window?: FrameWindow;
 }): string[] {
   const fps = opts.fps ?? 1;
-  const scale = opts.scale ?? "320:180";
+  // ADAAAA-8377: unset scale = the shipped LIVE frame scale (320:180). Callers
+  // that mean a rail pass it explicitly (VOD -> `vodFrameScale`, live ->
+  // `liveFrameScale`), so this default only covers legacy/ad-hoc extraction.
+  const scale = opts.scale ?? LIVE_FRAME_SCALE_DEFAULT;
   const inSec = opts.window?.inSec ?? 0;
   const hasIn = inSec > 0;
   const hasOut = opts.window?.outSec != null;
@@ -1113,7 +1120,7 @@ export async function extractFrames(
   source: string,
   outDir: string,
   fps = 1,
-  scale = "320:180",
+  scale = LIVE_FRAME_SCALE_DEFAULT,
   window?: FrameWindow,
   /** Optional cancel signal (ADAAAA-6625): a stopped VOD job kills the decode. */
   signal?: AbortSignal,

@@ -16,6 +16,7 @@ import {
   OBSERVE_CADENCE_S,
   OBSERVE_CONTENT_FPS,
 } from "./observe-loop";
+import { LIVE_FRAME_SCALE_DEFAULT } from "./config";
 
 /** Default in-flight budget (`LIVE_OBSERVE_IN_FLIGHT` unset). */
 export const LIVE_DECIDE_IN_FLIGHT_DEFAULT = 4;
@@ -31,6 +32,9 @@ export interface LiveDecidePosture {
   /** ADAAAA-8108: the live decide ENRICHMENT arm (`LIVE_DECIDE_ENRICH`), undefined
    *  = the shipped `on`. */
   liveDecideEnrich?: "on" | "off" | "alternate";
+  /** ADAAAA-8377: the LIVE rail's sampled-frame scale (`LIVE_FRAME_SCALE`,
+   * resolved to today's 320:180 when unset). Undefined = the shipped default. */
+  liveFrameScale?: string;
 }
 
 /**
@@ -44,6 +48,13 @@ export function liveDecideBootLines(cfg: LiveDecidePosture): string[] {
     `[boot] live decide image budget: ${cfg.liveObserveMaxFrames} image(s)/decide ` +
       `(LIVE_OBSERVE_MAX_FRAMES, default ${LIVE_DECIDE_IMAGE_BUDGET}, ceiling ${LIVE_DECIDE_IMAGE_CEILING}, ` +
       `trigger-anchored selection)`,
+    // ADAAAA-8377 (LFR-1): the live rail's sampled-frame SCALE, beside the image
+    // budget it multiplies with. `printenv` is not evidence, and the ON arm of
+    // the frame-scale A/B must be readable at boot — this line states what THIS
+    // process resolved, and every decide row carries the measured `imageW`/
+    // `imageH` so the grade compares the two instead of trusting the env dump.
+    `[boot] live frame scale: ${cfg.liveFrameScale ?? LIVE_FRAME_SCALE_DEFAULT} ` +
+      `(LIVE_FRAME_SCALE, default ${LIVE_FRAME_SCALE_DEFAULT}, live rail JPEG -> perceive + decide)`,
     `[boot] live decide concurrency: ${cfg.liveObserveInFlight} decide(s) in flight ` +
       `(LIVE_OBSERVE_IN_FLIGHT, default ${LIVE_DECIDE_IN_FLIGHT_DEFAULT}, ceiling 4)`,
     `[boot] live decide window: ${span} s span / ${cadenceMs} ms cadence ` +

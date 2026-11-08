@@ -153,6 +153,42 @@ def test_ledger_carries_the_decide_image_budget():
     assert off["imageBudgetApplied"] is False
 
 
+def test_ledger_carries_the_payload_image_dims():
+    """ADAAAA-8377 (LFR-1 AC-1): the decide_audit row states the REAL dims of the
+    images the call shipped, beside the count — the ON leg of the frame-scale A/B
+    grades 640x360 off `decide_audit` instead of `printenv`. An unmeasured payload
+    leaves both keys OFF the row (never a 0 that reads as a valid dimension)."""
+    _block, ledger = render_perceive_timeline(
+        {"perceiveTimeline": timeline(29)},
+        {"seeds": 4, "withFindings": 4, "imageCount": 4, "imagesPerDecide": 4,
+         "imageBudget": 4, "imageBudgetApplied": True,
+         "imageW": 640, "imageH": 360},
+    )
+    assert ledger["imageW"] == 640
+    assert ledger["imageH"] == 360
+
+    # The OFF arm (320x180) is equally explicit, so the two legs differ on the row.
+    _block, off = render_perceive_timeline(
+        {"perceiveTimeline": timeline(29)},
+        {"seeds": 4, "imagesPerDecide": 4, "imageBudgetApplied": True,
+         "imageW": "320", "imageH": "180"},
+    )
+    assert off["imageW"] == 320
+    assert off["imageH"] == 180
+
+    # A payload with no measured dims claims nothing.
+    _block, bare = render_perceive_timeline({"perceiveTimeline": timeline(29)}, {"seeds": 29})
+    assert "imageW" not in bare
+    assert "imageH" not in bare
+
+    # A junk value degrades to absent rather than a fabricated dimension.
+    _block, junk = render_perceive_timeline(
+        {"perceiveTimeline": timeline(29)}, {"seeds": 4, "imageW": "wide", "imageH": None}
+    )
+    assert "imageW" not in junk
+    assert "imageH" not in junk
+
+
 def test_ledger_carries_the_configured_span_and_cadence():
     """ADAAAA-8065 (AC-SPAN-1): the rev-7 cell is graded off the row, not off
     `printenv`. `spanSec` (seconds) and `cadenceMs` (ms) ride every live payload

@@ -125,8 +125,12 @@ describe("the boot posture readout names all four cell values (ADAAAA-8065 Step 
     // greps the axis it measured. ADAAAA-8108 adds the enrichment-arm axis as the
     // fifth, for the same reason: the AC-E3 leg's ON/OFF split is graded off the
     // decide rows, and the boot line states which arm this process resolved.
-    expect(lines).toHaveLength(5);
+    // ADAAAA-8377 adds the live frame-scale axis as the sixth: the LFR-1 ON arm
+    // is graded off the decide rows' measured imageW/imageH, and this line states
+    // what THIS process resolved so the two can be compared.
+    expect(lines).toHaveLength(6);
     expect(text).toContain("4 image(s)/decide");
+    expect(text).toContain("[boot] live frame scale: 320:180");
     expect(text).toContain("4 decide(s) in flight");
     expect(text).toContain("10 s span / 3000 ms cadence");
   });

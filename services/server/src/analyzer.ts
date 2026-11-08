@@ -6778,6 +6778,12 @@ export interface PerceiveWindowLedger {
    * through the budget. A payload from a path that never consulted one reports
    * false — the clause that catches the defect this AC closes. */
   imageBudgetApplied?: boolean;
+  /** ADAAAA-8377 (LFR-1 AC-1): the pixel dims of the images this call shipped,
+   *  measured off the payload's own JPEG headers (not the configured scale
+   *  string). Stamped beside `imagesPerDecide`, so the 640x360 ON leg grades the
+   *  decide row instead of `printenv`. */
+  imageW?: number;
+  imageH?: number;
   /** ADAAAA-8064 (AC-C3): largest gap between consecutive shipped images (ms).
    * ~3 s at a 4-image cap over a 10 s window is honest; sub-second at 4 images
    * would mean the frames are not actually spread over the span. */
@@ -7354,6 +7360,11 @@ export function buildObserveDecideRequest(
             imagesPerDecide: payload.frames.length,
             imageBudget: payload.imageBudget,
             imageBudgetApplied: payload.imageBudgetApplied === true,
+            // ADAAAA-8377 (AC-1): the payload's MEASURED image dims, stamped
+            // beside the count so an ON-leg row proves 640x360 without reading
+            // the config or `printenv`. Absent (never 0) when unmeasured.
+            ...(payload.imageW !== undefined ? { imageW: payload.imageW } : {}),
+            ...(payload.imageH !== undefined ? { imageH: payload.imageH } : {}),
             imageGapMaxMs,
             // A degenerate window (< 2 observed frames, e.g. the first tick of a
             // leg) has no span to divide by, so it publishes NO rate rather than
@@ -7419,6 +7430,52 @@ export function attachTriggerFamilyToAudit<T>(audit: T, trigger?: { thresholdId?
       ...params,
       triggerFamily: triggerFamily(trigger.thresholdId),
       triggerThresholdId: trigger.thresholdId,
+    },
+  } as T;
+}
+
+/**
+ * ADAAAA-8377 (LFR-1 AC-1): stamp the payload's MEASURED image dims onto the
+ * decide-audit row.
+ *
+ * The dims are measured server-side off the payload's own JPEG headers
+ * (`ObserveDecidePayload.imageW/imageH`), so this is the authoritative source —
+ * a decide image that predates the ledger passthrough cannot erase them. They
+ * land in two places on purpose:
+ *  - `timings.perceiveTimeline.imageW/imageH`, beside the image budget the AC
+ *    names, which is where the decide service echoes a ledger it received;
+ *  - `timings.imageDims`, always present on a live row, so an ON-leg row is
+ *    gradable even when the serving decide image does not echo the ledger.
+ * A value the decide service already reported is never overwritten, and a row
+ * with no payload dims is returned untouched (no fabricated measurement).
+ */
+export function attachPayloadImageDims<T>(
+  audit: T,
+  payload: { imageW?: number; imageH?: number }
+): T {
+  const w = payload?.imageW;
+  const h = payload?.imageH;
+  if (!audit || typeof audit !== "object" || w === undefined || h === undefined) return audit;
+  const desc = audit as any;
+  const timings = desc.timings && typeof desc.timings === "object" ? desc.timings : {};
+  const ledger =
+    timings.perceiveTimeline && typeof timings.perceiveTimeline === "object"
+      ? (timings.perceiveTimeline as any)
+      : null;
+  return {
+    ...desc,
+    timings: {
+      ...timings,
+      imageDims: { width: w, height: h },
+      ...(ledger
+        ? {
+            perceiveTimeline: {
+              ...ledger,
+              ...(ledger.imageW === undefined ? { imageW: w } : {}),
+              ...(ledger.imageH === undefined ? { imageH: h } : {}),
+            },
+          }
+        : {}),
     },
   } as T;
 }
@@ -7619,7 +7676,12 @@ export async function observeDecideOnly(
       // ADAAAA-7722: name the trigger FAMILY on the durable audit row, so a
       // whistle-anchored decide is countable after the run (`params
       // .triggerFamily` / `.triggerThresholdId` in `decide_audit`).
-      cfg.onDecideAudit(attachTriggerFamilyToAudit((decision as any)?.audit, payload.trigger));
+      cfg.onDecideAudit(
+        attachPayloadImageDims(
+          attachTriggerFamilyToAudit((decision as any)?.audit, payload.trigger),
+          payload
+        )
+      );
     } catch (e: any) {
       console.error(`[decide-audit:${cfg.jobId}] onDecideAudit failed:`, String(e?.message || e));
     }

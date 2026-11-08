@@ -114,8 +114,12 @@ export class LiveIngest {
       "-loglevel", "error",
       ...input,
       // sampled frames -> jpg rail
+      // ADAAAA-8377: the scale is a KNOB (`LIVE_FRAME_SCALE`, default 320:180),
+      // not the literal this filter hardcoded. These JPEGs feed BOTH perceive
+      // `/analyze` and the decide window, so the knob alone moves live to VOD
+      // parity (640:360) without touching span, cadence or the image budget.
       "-map", "0:v:0",
-      "-vf", `fps=${sampleFps},scale=320:180`,
+      "-vf", `fps=${sampleFps},scale=${this.cfg.liveFrameScale}`,
       "-q:v", "3",
       path.join(this.frameDir, "frame_%06d.jpg"),
       // full session recording -> seekable MPEG-TS for clip cutting.
