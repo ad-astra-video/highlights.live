@@ -485,12 +485,16 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
   /** Drive a 30 s content timeline at 5 fps through one observer. */
   async function drive(keepRatio: number | undefined, trigger?: AudioTriggerRecord, seconds = 30) {
     const fired: ObserveDecidePayload[] = [];
+    // ADAAAA-8431: the decide-rate budget accrues on the SERVED clock, so the
+    // drive advances a simulated served clock with the content timeline.
+    let servedS = 0;
     const obs = new LiveObserver({
       cadenceS: 3,
       windowS: 10,
       maxFrames: 30,
       fps: 2,
       decideKeepRatio: keepRatio,
+      wallClock: () => servedS * 1000,
       onDecide: async (p) => {
         fired.push(p);
         return true;
@@ -501,6 +505,7 @@ describe("LiveObserver decide-rate cap (ADAAAA-7799 lever C)", () => {
       const ts = i / fps;
       obs.record(ts, `f${i}`, { ts });
       if (trigger && i === 0) obs.recordTrigger(trigger);
+      servedS = ts;
       await obs.maybeFire(ts);
     }
     return { obs, fired };
