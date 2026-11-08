@@ -168,7 +168,9 @@ export class DecideStageRecorder {
     ];
     const stages: Record<string, DecideStageStats> = {};
     for (const name of names) {
-      const vals = xs.map((x) => Number((x as unknown as Record<string, number>)[name] || 0));
+      // Clamp at 0: a stage clock can round to a hair below zero when it wraps
+      // work another clock already covers, and the persisted schema is min(0).
+      const vals = xs.map((x) => Math.max(0, Number((x as unknown as Record<string, number>)[name] || 0)));
       const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
       stages[name] = {
         p50: round1(stagePercentile(vals, 0.5)),
@@ -179,7 +181,16 @@ export class DecideStageRecorder {
     }
     const totalP50 = stages.totalMs.p50 || 0;
     const securing = (stages.probeMs.p50 || 0) + (stages.signerMs.p50 || 0);
-    const closures = xs.map((x) => (x.totalMs > 0 ? decideStageSum(x) / x.totalMs : 1));
+    // Closure is computed from the SAME clamped values the snapshot persists, so
+    // `closureP50` and the stored stage table can never disagree.
+    const closures = xs.map((x) => {
+      if (!(x.totalMs > 0)) return 1;
+      const sum = DECIDE_STAGE_KEYS.reduce(
+        (a, k) => a + Math.max(0, Number((x as unknown as Record<string, number>)[k] || 0)),
+        0
+      );
+      return sum / x.totalMs;
+    });
     return {
       calls: xs.length,
       stages,

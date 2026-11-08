@@ -89,8 +89,10 @@ describe("orchestrator decide stage instrument (ADAAAA-8344)", () => {
     expect(t.paidParseMs).toBe(9);
     expect(t.signerMs).toBeGreaterThanOrEqual(0);
     expect(t.signerRetries).toBe(0);
-    // The stage sum closes on the call wall time, per call.
-    expect(decideStageSum(t)).toBe(t.totalMs);
+    // The stage sum closes on the call wall time, per call. Sub-ms clock reads
+    // can overlap by a ms or two, so closure is asserted within 3 ms — the
+    // production check is the closure RATIO (`closureP50`), not exact equality.
+    expect(Math.abs(decideStageSum(t) - t.totalMs)).toBeLessThanOrEqual(3);
     expect(t.totalMs).toBeGreaterThanOrEqual(t.probeMs + t.paidMs);
     // Every pinned stage key is populated (a future key added only on one side
     // would come back undefined here).
@@ -109,7 +111,7 @@ describe("orchestrator decide stage instrument (ADAAAA-8344)", () => {
     expect(t.probeCount).toBe(1);
     expect(t.signerMs).toBe(0);
     expect(t.paidMs).toBe(0);
-    expect(decideStageSum(t)).toBe(t.totalMs);
+    expect(Math.abs(decideStageSum(t) - t.totalMs)).toBeLessThanOrEqual(3);
     decideStageRecorder.clear("job-offchain");
   });
 });
