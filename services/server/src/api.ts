@@ -539,6 +539,9 @@ export async function attestDeferredGoalHighlight(
     // ADAAAA-8318: the copy target is part of the same surface set — a promoted
     // GOAL must never pair a scoring caption with a celebration title.
     postTitle: copy ? copy.postTitle : upgrade.postTitle,
+    // ADAAAA-8356: the pre-downgrade title's gate decision moves with the title,
+    // so the promoted row's audit token describes the surface it now serves.
+    postTitleGate: copy ? copy.postTitleGate : upgrade.postTitleGate,
     colour: copy ? copy.colour : upgrade.colour,
     reason_raw: copy ? copy.reason_raw : upgrade.reasonRaw,
     // ADAAAA-8212: the MEASURED attestation that resolved the transition replaces

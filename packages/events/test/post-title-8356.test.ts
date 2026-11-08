@@ -13,6 +13,7 @@
 // already appears on the job's cards, because a repeat is not copy (AC1/AC6).
 import { describe, expect, it } from "vitest";
 import {
+  gatePostTitleDetail,
   gatePostTitleValue,
   trimPostTitleShape,
   uniquePostTitle,
@@ -82,6 +83,55 @@ describe("gatePostTitleValue — the trimmed form must still pass every bar", ()
     expect(gatePostTitleValue("Goalkeeper holds ball", ctx("not_highlight"))).toBe("Goalkeeper holds ball");
     expect(gatePostTitleValue("", ctx("not_highlight"))).toBeNull();
     expect(gatePostTitleValue(undefined, ctx("not_highlight"))).toBeNull();
+  });
+});
+
+describe("gatePostTitleDetail — the gate NAMES its decision (PO addendum constraint 1)", () => {
+  it("accepted: a clean grounded title is served as written", () => {
+    const d = gatePostTitleDetail("Ordoñez carries ball", ctx("not_highlight"));
+    expect(d.title).toBe("Ordoñez carries ball");
+    expect(d.gate).toBe("accepted");
+    expect(d.violations).toEqual([]);
+  });
+
+  it("trimmed: a place chain is repaired by deletion, never rewritten", () => {
+    const d = gatePostTitleDetail("Player carries ball in midfield", ctx("not_highlight"));
+    expect(d.title).toBe("Player carries ball");
+    expect(d.gate).toBe("trimmed");
+  });
+
+  it("refused:<bar>: the reason names the bar that refused it", () => {
+    // a claim on a non-scoring verdict — the safety class, not a shape nit
+    const claim = gatePostTitleDetail("Ordoñez scores in the penalty area", ctx("not_highlight"));
+    expect(claim.title).toBeNull();
+    expect(claim.gate).toBe("refused:place-chain,goal-claim");
+    expect(claim.violations).toEqual(["place-chain", "goal-claim"]);
+    // a name THIS window's prompt cannot source
+    const name = gatePostTitleDetail("Manuel Ordoñez clears ball", ctx("not_highlight"));
+    expect(name.gate).toBe("refused:ungrounded-name");
+  });
+
+  it("absent: a reply that carried no title is a PROMPT miss, not a gate refusal", () => {
+    expect(gatePostTitleDetail(undefined, ctx("not_highlight"))).toMatchObject({
+      title: null,
+      gate: "absent",
+      violations: ["empty"],
+    });
+    expect(gatePostTitleDetail("   ", ctx("not_highlight")).gate).toBe("absent");
+  });
+
+  it("the token never changes the value `gatePostTitleValue` serves", () => {
+    for (const raw of [
+      "Ordoñez carries ball",
+      "Player carries ball in midfield",
+      "Ordoñez scores in the penalty area",
+      "Manuel Ordoñez clears ball",
+      "",
+    ]) {
+      expect(gatePostTitleDetail(raw, ctx("not_highlight")).title).toBe(
+        gatePostTitleValue(raw, ctx("not_highlight"))
+      );
+    }
   });
 });
 
