@@ -626,6 +626,20 @@ interface PendingObserveDecide {
  * the units both gates are written in.
  */
 export const LIVE_DECIDE_RATE_TARGET_PER_300S = 66;
+/**
+ * ADAAAA-8431: the largest SERVED-time step whose credit may bank in one accrual.
+ *
+ * A browser share's media session opens before the publisher sends its first
+ * frame (measured on `b8837d4a`: session open 20:19:38.867Z, first decide
+ * 20:20:08.746Z), so ~30-40 s of the served window offers no decide opportunity
+ * at all. Credit is earned on served time from the session open, so that head
+ * banks and is spent once content arrives — without it the charged rate reads
+ * `66 x content / served` (61.2 on that share) instead of 66 per served 300 s.
+ * The bank is bounded so a relay gap cannot accumulate an unbounded burst, and
+ * because credit is only ever EARNED from served seconds, the stream's
+ * charged-per-served-second rate can never exceed the target.
+ */
+export const LIVE_DECIDE_RATE_BANK_S = 60;
 /** The opportunity density `LIVE_DECIDE_KEEP_RATIO` was authored against (104
  *  cadence windows / 300 s, ADAAAA-7799). Kept as the conversion basis so an
  *  unchanged keep value (0.64 on the box) still states the same intended rate. */
@@ -633,13 +647,25 @@ export const LIVE_DECIDE_OPPORTUNITY_CONVENTION_PER_300S = 104;
 
 /**
  * ADAAAA-8431: decide-rate budget in ABSOLUTE units — charged decides per 300 s
- * of content clock, not a fraction of whatever opportunities a rail happens to
+ * of SERVED clock, not a fraction of whatever opportunities a rail happens to
  * offer.
  *
- * Credit accrues with CONTENT time at `per300s / 300` per second and one decide
- * charges 1. Accrual is clamped to one decide's worth of credit per interval, so
- * a mid-share relay gap cannot burst a backlog of decides when it resumes. The
- * balance starts at 1 so the first window of a stream still decides.
+ * Credit accrues on the SERVED (wall) clock at `per300s / 300` per second and one
+ * decide charges 1. Accrual is clamped to one decide's worth of credit per
+ * interval, so a mid-share relay gap cannot burst a backlog of decides when it
+ * resumes. The balance starts at 1 so the first window of a stream still decides.
+ *
+ * Why the SERVED clock and not the content tap (ADAAAA-8431 wake grading
+ * `b8837d4a`, the first natural browser share after the 17:52Z deploy): the
+ * spend cap and the coverage floor are both written per SERVED second (§1 of
+ * `decision-ac6`: `costUsd * 3600 / (stop - start)`), while the content tap
+ * starts ~30 s after the media session opens (warmup) and can trail the served
+ * clock further on a relay gap. Accruing on content time therefore charges
+ * `66 x (content / served)` per served 300 s: that share charged 93 decides /
+ * 455.93 s served = **61.2 charged / 300 s served** ($2.432/h — inside the cap)
+ * but 66.4 / 300 s of its 420.0 s content clock, i.e. under the 63-decide floor
+ * on the only denominator the cap is defined on. Accruing on the served clock
+ * holds the charged rate at ~66 per served 300 s regardless of tap lag.
  *
  * Anchored (audio-trigger) and force (end-of-stream tail) fires BYPASS the gate
  * and charge anyway: the balance goes negative and later cadence windows repay
@@ -649,38 +675,48 @@ export const LIVE_DECIDE_OPPORTUNITY_CONVENTION_PER_300S = 104;
 export class DecideRateCredit {
   private credit = 1;
   private lastTs: number | null = null;
+  private started = false;
   constructor(readonly per300s: number) {}
 
-  /** Credit earned per content second. */
+  /** Credit earned per served second. */
   ratePerS(): number {
     return Math.max(0, this.per300s) / 300;
   }
 
-  private accrue(ts: number): void {
-    if (!Number.isFinite(ts)) return;
-    if (this.lastTs === null) {
-      this.lastTs = ts;
-      return;
-    }
-    if (ts <= this.lastTs) return;
-    const rate = this.ratePerS();
-    if (rate <= 0) return;
-    // Clamp the accrual to ONE decide's worth (1 / rate content seconds): a
-    // longer gap banks no extra burst, it just restores one token.
-    const dt = Math.min(ts - this.lastTs, 1 / rate);
-    this.credit += dt * rate;
-    this.lastTs = ts;
+  /** Anchor the credit clock at the SERVED window's open (session handshake).
+   *  First write wins: a reconnect that reuses the session must not re-anchor. */
+  start(nowMs: number): void {
+    if (!Number.isFinite(nowMs) || this.started) return;
+    this.started = true;
+    this.lastTs = nowMs;
   }
 
-  /** Whether a charged decide may fire at `ts` (peek, no charge). */
-  available(ts: number): boolean {
-    this.accrue(ts);
+  /** `nowMs` is the SERVED (wall) clock in epoch milliseconds. */
+  private accrue(nowMs: number): void {
+    if (!Number.isFinite(nowMs)) return;
+    if (this.lastTs === null) {
+      this.lastTs = nowMs;
+      return;
+    }
+    if (nowMs <= this.lastTs) return;
+    const rate = this.ratePerS();
+    if (rate <= 0) return;
+    // Bank at most LIVE_DECIDE_RATE_BANK_S of served time per step: the head of
+    // a share banks (see the constant), a long relay gap cannot.
+    const dtS = Math.min((nowMs - this.lastTs) / 1000, LIVE_DECIDE_RATE_BANK_S);
+    this.credit += dtS * rate;
+    this.lastTs = nowMs;
+  }
+
+  /** Whether a charged decide may fire at `nowMs` (peek, no charge). */
+  available(nowMs: number): boolean {
+    this.accrue(nowMs);
     return this.credit >= 1 - 1e-9;
   }
 
-  /** Charge one decide at `ts`. A bypassing (anchored/force) fire may go negative. */
-  charge(ts: number): void {
-    this.accrue(ts);
+  /** Charge one decide at `nowMs`. A bypassing (anchored/force) fire may go negative. */
+  charge(nowMs: number): void {
+    this.accrue(nowMs);
     this.credit -= 1;
   }
 
@@ -816,10 +852,14 @@ export class LiveObserver {
    *  {@link DecideRateCredit}; `1`/unset keeps the pass unbounded. */
   private readonly decideKeepRatio: number;
   /** ADAAAA-8431: the absolute decide-rate budget (charged decides per 300 s of
-   *  content clock). Null = no rate cap (keep unset/1), byte-identical to the
+   *  SERVED clock). Null = no rate cap (keep unset/1), byte-identical to the
    *  shipped pass. Both live rails construct their observer here, so this one
    *  helper binds the analyzer/file-sim rail and the browser media rail alike. */
   private readonly decideRate: DecideRateCredit | null;
+  /** ADAAAA-8431: the SERVED clock the rate budget accrues on (epoch ms). Both
+   *  rails use the wall clock; tests inject a simulated one so a 300 s share can
+   *  be driven in milliseconds. */
+  private readonly wallClock: () => number;
   /** ADAAAA-8108 (AC-E3): the enrichment arm mode for this rail (`on` = the
    *  shipped posture; `off`/`alternate` are the AC-E3 measurement arms). */
   private readonly enrichmentMode: "on" | "off" | "alternate";
@@ -896,11 +936,15 @@ export class LiveObserver {
     /** ADAAAA-7799 (lever C): decide-rate cap. `0 < r < 1` = the fraction of the
      *  104-window / 300 s opportunity CONVENTION the funded cell allows; it is
      *  resolved to an absolute rate (`min(66, floor(r x 104))` charged decides /
-     *  300 s of content clock) so the cap holds the same rate on a rail offering
+     *  300 s of SERVED clock) so the cap holds the same rate on a rail offering
      *  73 opportunities as on one offering 104 (ADAAAA-8431). `undefined`/1 = off,
      *  byte-identical to the unbounded pass. Wired from
      *  `LIVE_DECIDE_KEEP_RATIO` on BOTH live rails. */
     decideKeepRatio?: number;
+    /** ADAAAA-8431: the SERVED clock the decide-rate budget accrues on, epoch
+     *  milliseconds. Defaults to `Date.now`; tests inject a simulated clock so a
+     *  300 s share can be driven without waiting 300 s of wall time. */
+    wallClock?: () => number;
     /** ADAAAA-8108 (AC-E3): the enrichment arm for this rail. `on` (default)
      *  sends the per-window `perceiveTimeline` exactly as shipped; `off` omits it
      *  from every window; `alternate` alternates per DECIDED window in content
@@ -968,6 +1012,7 @@ export class LiveObserver {
           )
         : 0;
     this.decideRate = ratePer300s > 0 ? new DecideRateCredit(ratePer300s) : null;
+    this.wallClock = opts.wallClock ?? (() => Date.now());
     // ADAAAA-8108 (AC-E3): the enrichment arm. Any value outside the two
     // measurement arms normalises to the shipped `on` posture, so a typo can
     // never silently ship a leg with the timeline missing.
@@ -986,6 +1031,13 @@ export class LiveObserver {
     // first would report a miss for evidence gemma actually saw. Only a trigger
     // older than the retained frames is genuinely unanchorable.
     this.triggers = new TriggerWindowScheduler({ maxStaleS: Math.max(AUDIO_TRIGGER_MAX_STALE_S, this.windowS) });
+  }
+
+  /** ADAAAA-8431: anchor the decide-rate credit clock at the SERVED window's
+   *  open (the media session handshake). Absent = the clock starts at the first
+   *  gate evaluation, which is the conservative (no head-bank) behaviour. */
+  startDecideRateClock(nowMs: number): void {
+    this.decideRate?.start(nowMs);
   }
 
   /** Record a frame + its perceive-derived seed context (no re-inference).
@@ -1490,7 +1542,9 @@ export class LiveObserver {
       return;
     }
     // ADAAAA-8431: decide-rate CAP, in ABSOLUTE units (charged decides per 300 s
-    // of content clock). An opportunity that would otherwise decide now is
+    // of SERVED clock — see DecideRateCredit for why the served clock, not the
+    // content tap, is the denominator both gates are written in). An opportunity
+    // that would otherwise decide now is
     // DROPPED when the rate credit has not yet crossed 1: the cadence advances
     // past the window (`lastFireTs` moves, so it is not retried frame by frame),
     // no budget token is spent, and a due audio trigger is NOT consumed — it
@@ -1515,7 +1569,7 @@ export class LiveObserver {
       }
       this.lastOpportunityTs = nowTs;
       this.decideOpportunities++;
-      if (!this.decideRate.available(nowTs)) {
+      if (!this.decideRate.available(this.wallClock())) {
         this.rateCappedSkips++;
         this.lastFireTs = nowTs;
         return;
@@ -1533,7 +1587,7 @@ export class LiveObserver {
     // bypassed it (their balance goes negative and the following cadence windows
     // repay it). That is what keeps the stream's total at the cap without ever
     // delaying a due trigger.
-    this.decideRate?.charge(nowTs);
+    this.decideRate?.charge(this.wallClock());
     const cadenceMs = prevFire === null ? 0 : (nowTs - prevFire) * 1000;
     if (anchored) this.anchoredFires++;
     else this.cadenceFires++;
