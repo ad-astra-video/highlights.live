@@ -8,6 +8,7 @@ import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation,
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-timings";
 import {
+  attestationDetailCopy,
   captionColour,
   gatePostTitleDetail,
   uniquePostTitle,
@@ -5945,7 +5946,23 @@ export function storedSurfaceFor(
   // serve, and a row with no honest sentence still stores no caption.
   // FAST rail only (`grounding` is set only when caption grounding is on): the
   // VOD seam keeps `reason`-only rows byte-identical (AC8 parity).
-  const storedCaption = card.caption || (grounding ? storedReason : "");
+  // ADAAAA-8411 (Phase D AC4 FAIL, measured 2/3 served cards): Phase C stored
+  // `caption := storedReason`, which structurally cannot fire when the gated
+  // sentence is EMPTY. A scoring row whose only model sentence is a
+  // clock-bracketed attestation line
+  // (`Scoreboard changes to 2-2 at t=-3.3s and ASR confirms 'il gol!'`, row
+  // f4407757 on job 755fd1f5) stores neither `reason` (the store-time
+  // post-condition refuses the audit marker) nor a card, so the detail route
+  // filled its caption with the deterministic TITLE and the card's "What
+  // happened" line was byte-identical to its headline. The row still owes detail
+  // copy, so the seam now derives the row's own FACT sentence from that same
+  // stored sentence by DELETION only (`attestationDetailCopy`: attestation
+  // clauses and the window marker dropped, claim/absence/name gates and the
+  // store-time post-condition applied, a scoreline only when this window's
+  // prompt carries it). No copy source is added and no gate is loosened: the
+  // words are the row's own and the sentence is one the gates accept.
+  const storedCaption =
+    card.caption || (grounding ? storedReason : "") || (grounding ? attestationDetailCopy(rawSurface, grounding) : "");
   // ADAAAA-8318 (ADAAAA-8302 Option 2): the CARD'S COPY TARGET. The model writes
   // the title in the same reply as the announcer line; it crosses the same v9
   // grounding gate here (goal claim on this row's verdict, names from this
@@ -5959,7 +5976,18 @@ export function storedSurfaceFor(
   // row carries the accept/reject reason. Without it a grade can only see a
   // missing title and cannot tell a prompt miss from a gate refusal — which is
   // exactly the attribution Phase B could not make from `postTitle` alone.
-  const postTitleGate = gatePostTitleDetail(decision.postTitle, grounding);
+  // ADAAAA-8411: the row's OWN copy rides the grounding so the title's names are
+  // held to the same bar the READ seam applies (S3) — the gated announcer line
+  // plus, when the gate refused it, the model's raw sentence for this window.
+  const postTitleGate = gatePostTitleDetail(
+    decision.postTitle,
+    grounding
+      ? {
+          ...grounding,
+          ownCopy: [storedCaption, storedReason, decision.reason].filter(Boolean).join(" \n "),
+        }
+      : grounding
+  );
   const postTitle = postTitleGate.title ?? undefined;
   return {
     ...(storedReason ? { reason: storedReason } : {}),

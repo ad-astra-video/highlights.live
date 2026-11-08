@@ -27,6 +27,7 @@
 // projection and the webapp card read the SAME function, so a served title can
 // never disagree with a rendered one.
 import {
+  attestationDetailCopy,
   gateGoalClaims,
   gateAbsenceClaims,
   groundNames,
@@ -299,6 +300,16 @@ export function postTitleViolations(title: string, ctx?: CaptionGroundingContext
     if (hasGoalClaim(title) && gateGoalClaims(title, ctx) !== title) out.push("goal-claim");
     if (gateAbsenceClaims(title, ctx) !== title) out.push("absence-claim");
     if (groundNames(title, ctx.promptText) !== title) out.push("ungrounded-name");
+    // ADAAAA-8411 (writer residue from the Phase D grade): prompt grounding alone
+    // accepts a name the window's TRANSCRIPT mentions on a DIFFERENT play — the
+    // measured class was `Manuel Ordoñez scores` / `Ordoña scores` where the ASR
+    // names the player in a save and the headline attributes the score. A
+    // headline's names are now held to the row's OWN copy, the same bar the READ
+    // seam already applies to a stored title (`servedPostTitleViolations`, S3), so
+    // the two seams can no longer disagree about who a card names.
+    if (typeof ctx.ownCopy === "string" && ctx.ownCopy.trim() && groundNames(title, ctx.ownCopy) !== title) {
+      out.push("ungrounded-name");
+    }
   }
   return out;
 }
@@ -450,7 +461,63 @@ export function projectAnnouncerCaption(row: PostTitleRow, servedTitle: string):
   // Never serve a caption byte-identical to the title: that is the degrade the
   // bar exists to catch, so a `reason` that repeats the title is not detail.
   if (own && own !== servedTitle.trim()) return own;
+  // ADAAAA-8411: a row whose ONLY model sentence is a clock-bracketed
+  // attestation line (`Scoreboard changes to 2-2 at t=-3.3s and ASR confirms 'il
+  // gol!'`) stores no `reason` at all — the store-time post-condition refuses the
+  // audit marker. The row still OWES detail copy, so the same fact sentence the
+  // write seam derives is derived here from the row's own audit line: deletion
+  // only (attestation clauses and the marker dropped), gated, and — with no
+  // prompt at read time — a scoreline is served only on a row whose stored
+  // verdict is `scoring_play`. Measured: this is the ONE holdout of the Phase D
+  // FAIL (row f4407757, card `GOAL · 2:38`).
+  const evidence = (row.reasonRaw ?? "").trim();
+  if (evidence) {
+    const fact = attestationDetailCopy(evidence, { verdict: row.outcome ?? null, eventType: row.eventType ?? null });
+    if (fact && fact !== servedTitle.trim()) return fact;
+  }
+  // ADAAAA-8411: the announcer line may never degrade to the headline, so a
+  // postable row with no honest model copy at all (nothing stored, nothing
+  // derivable) still serves a FACT sentence from its own stored facts: the
+  // verdict label the row itself carries and its own window instant — never a
+  // claim the row did not store, never a name, never the title. The title stays
+  // the last resort for a row with no instant at all (a non-postable shape).
+  const facts = storedFactAnnouncerCopy(row, servedTitle);
+  if (facts) return facts;
   return servedTitle;
+}
+
+/**
+ * ADAAAA-8411: the deterministic FACT sentence a row serves when it has no
+ * honest model copy — `<verdict label> at <m:ss>.` from the row's OWN stored
+ * verdict and window instant.
+ *
+ * It exists so the card's "What happened" line can never be byte-identical to
+ * its headline. Nothing is invented: the label is the row's own stored verdict
+ * (the `outcome` taxonomy wins over `eventType`, so a DEMOTED goal never asserts
+ * "Goal"), the instant is the row's own window start/localized stamp, and the
+ * sentence adds no name, no score and no goal claim the row did not store.
+ * `""` when the row carries no usable instant — the caller then keeps the title.
+ */
+export function storedFactAnnouncerCopy(row: PostTitleRow, servedTitle: string): string {
+  const windowTs =
+    typeof row.localizedTs === "number" && Number.isFinite(row.localizedTs)
+      ? row.localizedTs
+      : typeof row.start === "number" && Number.isFinite(row.start)
+        ? row.start
+        : null;
+  const clock = postTitleClock(windowTs);
+  if (!clock) return "";
+  const outcome = (row.outcome ?? "").trim().toLowerCase();
+  // The OUTCOME taxonomy governs a non-scoring row (a demoted goal is a
+  // `big_play`, never "Goal"); only a scoring row may carry its eventType label.
+  const label = postTitleLabel(outcome === "scoring_play" ? row.eventType : null, row.outcome);
+  // The label vocabulary is uppercase (it opens a title); a sentence opens on a
+  // capital and continues lowercase (`Goal at 2:38.`, `Near miss at 5:00.`).
+  const sentenceLabel = label.charAt(0) + label.slice(1).toLowerCase();
+  const sentence = `${sentenceLabel} at ${clock}.`;
+  if (sentence.trim() === servedTitle.trim()) return "";
+  if (outcome !== "scoring_play" && hasGoalClaim(sentence)) return "";
+  return sentence;
 }
 
 /**

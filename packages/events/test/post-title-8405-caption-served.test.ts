@@ -54,13 +54,21 @@ describe("ADAAAA-8405 S4 — a legacy row serves its own gated sentence, not the
   it("never lets the degrade back in: a `reason` equal to the title is not detail", () => {
     const r = row({ postTitle: "No. 7 scores", caption: null, reason: "No. 7 scores" });
     const title = titleOf(r);
-    expect(projectAnnouncerCaption(r, title)).toBe(title);
+    // ADAAAA-8411 (Phase D AC4 FAIL): the degrade is now unreachable for a row
+    // that carries an instant — a `reason` that repeats the headline is not
+    // detail, so the row serves its own FACT sentence (its stored verdict + its
+    // own window instant) instead of the title.
+    expect(projectAnnouncerCaption(r, title)).toBe("Goal at 2:38.");
+    expect(projectAnnouncerCaption(r, title)).not.toBe(title);
   });
 
-  it("never serves the un-gated audit line, and falls back to the title with no copy", () => {
-    // Measured row f4407757 (post-fix build): the seam refused the sentence, so
-    // the row carries ONLY `reasonRaw`. Serving that would publish copy that
-    // failed the claim gate, so the title stays the last resort.
+  it("never serves the un-gated audit line verbatim — it derives the row's own fact sentence", () => {
+    // Measured row f4407757 (Phase D FAIL, ADAAAA-8411): the seam refused the
+    // sentence as written (`at t=` is evidence provenance), so the row carries
+    // ONLY `reasonRaw`. Serving it byte-for-byte would publish copy the claim
+    // gate refused; dropping the attestation clause and the window marker leaves
+    // the row's own ledger frame, which the gates DO accept. Measured 3/3
+    // postable cards non-degrade after this change (2/3 before).
     const r = row({
       postTitle: "David Saez scores",
       caption: null,
@@ -68,8 +76,10 @@ describe("ADAAAA-8405 S4 — a legacy row serves its own gated sentence, not the
       reasonRaw: "Scoreboard changes to 2-2 at t=-3.3s and ASR confirms goal.",
     });
     const title = titleOf(r);
-    expect(projectAnnouncerCaption(r, title)).toBe(title);
-    expect(projectAnnouncerCaption(r, title)).not.toContain("Scoreboard changes");
+    const caption = projectAnnouncerCaption(r, title);
+    expect(caption).toBe("Scoreboard changes to 2-2.");
+    expect(caption).not.toBe(title);
+    expect(caption).not.toMatch(/t=|ASR|confirms/);
   });
 
   it("pairs with the read gate: an S3-refused title serves the label AND keeps its detail", () => {
