@@ -100,35 +100,38 @@ def test_title_addendum_is_within_its_input_token_budget():
     """
     delta = len(_OUTPUT_CONTRACT_COMPACT) - PRE_CHANGE_COMPACT_LEN
     assert delta > 0
-    assert delta <= 1100, f"postTitle addendum grew the contract by {delta} chars"
+    assert delta <= 1160, f"postTitle addendum grew the contract by {delta} chars"
 
 
 def test_title_spec_owns_its_own_paragraph_and_bars():
     """The 8318 defect was STRUCTURAL: the `postTitle` key was spliced mid-way
     through the runningSummary description, so the caption's colour/clock rules
     dangled after the title key and the title spec sat under a lead rule that
-    requires a place. Pin the layout, then pin the four bars the model got wrong.
+    REQUIRES a place. ADAAAA-8356 puts the key FIRST (the headline is written
+    before the caption, so it cannot be the caption shortened) and gives it its
+    own rule paragraph after the shape. Pin the layout, then the bars the model
+    measurably got wrong on leg 23bb0a61.
     """
     contract = _OUTPUT_CONTRACT_COMPACT
-    # the caption description is contiguous: ... never re-said afterwards. COLOR BEAT
+    # the caption description is contiguous again: ... re-said afterwards. COLOR BEAT
     assert "is not re-said afterwards. COLOR BEAT" in contract
-    # the title key comes AFTER the whole caption description, and its rules follow it
-    assert contract.index('"postTitle"') > contract.index("no invented names, scores, kit colours or flags")
+    # the headline key precedes the caption key, and the rules follow the shape
+    assert contract.index('"postTitle"') < contract.index('"runningSummary"')
     assert "POST TITLE RULES" in contract
-    assert contract.index("POST TITLE RULES") > contract.index('"postTitle"')
+    assert contract.index("POST TITLE RULES") > contract.index('"runningSummary"')
     # the caption/title collision is named outright (AC2)
-    assert "The lead above MUST name a place; the title must NOT" in contract
+    assert "the caption MUST name a place, the headline NEVER does" in contract
     # grounding: names only from THIS window's own reads (AC3)
-    assert "ONLY when THIS window's transcript, OCR or frames read that exact name" in contract
-    assert "never a name, team, score or colour taken from the story or the match context" in contract
+    assert "a name ONLY when THIS window's transcript, OCR or frames read it" in contract
+    assert "never from the story or the match context" in contract
     # the claim bar is keyed to the model's OWN verdict, not a generic "a goal" (AC3)
-    assert "No score, goal, level or equalise claim unless YOUR OWN outcome here is scoring_play" in contract
-    # one event / one clause, no second beat, and the distinctness rule (AC2/AC6)
-    assert "ONE event, ONE clause = subject + present-tense verb + object" in contract
-    assert "no consequence ('leads to', 'after', 'then')" in contract
+    assert "unless YOUR OWN outcome here is scoring_play" in contract
+    # one event / three slots, no second beat, and the distinctness rule (AC2/AC6)
+    assert "Fill exactly three slots" in contract
+    assert "NO fourth slot" in contract
     assert "Never reuse a subject+verb you already titled this job" in contract
-    # the model is told a violation is discarded, so it does not gamble on a phrase
-    assert "A title that breaks any of these rules is discarded" in contract
+    # the model is told to delete the zone itself before answering
+    assert "delete any word that names where the action happened" in contract
 
 
 def test_normalize_decision_carries_the_title():

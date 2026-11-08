@@ -78,7 +78,7 @@ STORY = "0-0, Portugal dominating the left channel."
 #: one-line parenthetical measurably failed on leg 23bb0a61.
 GOLDEN_PROMPT_SHA = {
     False: "0ba62dff7728e222f50dce4f2927d66698921eb14b52a7fb38cfa475154d6b7b",
-    True: "6f8d5c7d914a89405dc593ed9b9f7c9bf3180c81337c530a0ca7d2f89146bff5",
+    True: "35a2e41ff01acc2df4a0e18428ef8b150ba8d5675d8c8d3f66e32c8f9dce462a",
 }
 
 PORTUGAL_SPAIN = {
