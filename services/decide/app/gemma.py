@@ -411,6 +411,32 @@ def outcome_is_highlight(outcome: str) -> bool:
     return outcome == "scoring_play"
 
 
+# ADAAAA-8325 (Inc 2): FOOTAGE PHASE — did this window show live action, or a
+# replay of earlier action (broadcast replay, slow-motion repeat, a replay bug /
+# logo overlay)? This is ADDITIVE metadata beside `outcome`, never a change to
+# the outcome ladder: a replay is still judged on its own footage, and the
+# standing rule that a replay is never a `scoring_play` stays exactly as it is.
+# The server uses the signal only as CORROBORATION for attaching a replay window
+# to the moment it repeats; it may never create an attach on its own.
+PHASE_TAXONOMY = (
+    "live",  # footage of the action as it happened
+    "replay",  # footage repeating earlier action (broadcast replay / slow-mo / replay bug)
+)
+
+
+def normalize_phase(value) -> str | None:
+    """Coerce an arbitrary model ``phase`` value to a valid taxonomy member.
+
+    Absent, non-string or garbage becomes ``None`` — an UNKNOWN phase stays
+    unknown. It must never default to ``"live"``: defaulting would let an
+    unreadable reply assert live footage it never observed (AC8).
+    """
+    v = value.strip().lower() if isinstance(value, str) else ""
+    if v in PHASE_TAXONOMY:
+        return v
+    return None
+
+
 # ADAAAA-6855: map job-requested highlight labels (preferLabels) to the outcome
 # taxonomy members they authorize for export. A requested non-goal class may be
 # exported as a DISTINCT highlight (outcome/eventType preserved, never relabeled
@@ -629,6 +655,11 @@ def parse_decision(text: str) -> dict | None:
         # defaults to not_highlight). near_miss is notable but NOT a scoring
         # play — surfaced at a lower score, labeled distinctly below.
         "outcome": outcome,
+        # ADAAAA-8325 (Inc 2): the footage phase, normalized exactly like
+        # `outcome` BUT with no default — an absent/malformed phase stays None
+        # (unknown), never "live". Additive metadata; the outcome ladder above is
+        # untouched.
+        "phase": normalize_phase(obj.get("phase")),
         "nearMiss": outcome == "near_miss",
         # I1 reviewer-facing rationale (always present so the API response shape
         # is stable whether or not the model populated them).
@@ -1579,6 +1610,13 @@ _OUTPUT_CONTRACT_FULL = (
         "\"reason\": \"<short grounded reason that names the deciding evidence "
         "and its timestamp (timeline t=… or the ASR/window clock)>\", "
         "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
+        # ADAAAA-8325 (Inc 2): the footage-phase field, added to the VOD (FULL)
+        # contract only. It is additive metadata: the outcome ladder above is
+        # unchanged and the standing rule that a replay is NEVER scoring_play is
+        # repeated in the field's own wording. VOD only because the live rail is
+        # decode-bound (output tokens are its throughput ceiling) and replay
+        # attach corroboration is a VOD-only concern.
+        "\"phase\": \"live|replay\", "
         "\"reasoning\": \"<2-4 sentences: what you independently observed FIRST, then "
         "how that tests the hypothesis>\", "
         "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
@@ -1605,6 +1643,16 @@ _OUTPUT_CONTRACT_FULL = (
         "line with a boilerplate opener such as 'The video begins', 'The video starts with', "
         "'The video shows', or 'The sequence ...' — start directly with the concrete action/observation "
         "(e.g. 'Goal: player scores at 72s')>\"}"
+        # ADAAAA-8325 (Inc 2): the phase rule. Kept as a trailing sentence (not an
+        # inline `<...>` inside the JSON shape) so a strict JSON emitter cannot
+        # paste prose into the value. Bounded on purpose — measured delta reported
+        # in the ticket; the compact contract above is untouched.
+        "\nPHASE (the `phase` field): `live` = this window's frames show the action "
+        "as it happened; `replay` = the window re-shows EARLIER action (a broadcast "
+        "replay, a slow-motion repeat, or a replay bug/logo overlay). Judge the "
+        "FOOTAGE: a replay window is still judged on what it shows and is NEVER "
+        "`scoring_play` for re-showing a goal. Omit `phase` when the frames cannot "
+        "tell live from replay."
 )
 
 # ADAAAA-7993: the STATIC judge preamble, hoisted into the system turn so the
@@ -2420,6 +2468,8 @@ def _response_block(decision: dict) -> dict:
         "eventType": decision.get("eventType"),
         "reason": decision.get("reason"),
         "outcome": decision.get("outcome"),
+        # ADAAAA-8325: the footage phase, so a replay can compare raw vs served.
+        "phase": decision.get("phase"),
         "nearMiss": decision.get("nearMiss"),
         "reasoning": decision.get("reasoning"),
         "verdict": decision.get("verdict"),
@@ -2925,6 +2975,10 @@ def decide_with_gemma(
             # Increment F / ADAAAA-6465: the deterministic rule also emits the
             # outcome taxonomy so the response shape is identical on both paths.
             "outcome": _rule_outcome(d),
+            # ADAAAA-8325 (Inc 2): the deterministic fallback NEVER guesses a
+            # phase — a CPU-host rule path has no footage read, so the field is
+            # None (unknown), exactly like an absent model reply.
+            "phase": d.phase,
             "nearMiss": _rule_outcome(d) == "near_miss",
             "source": "rule-fallback",
         }
@@ -2977,9 +3031,10 @@ def decide_with_gemma(
         if isinstance(result["analysis"].get("audio"), dict):
             result["analysis"]["audio"]["path"] = "none"
     log.debug(
-        "gemma decide event=%s source=%s is_highlight=%s score=%s outcome=%s audio_path=%s",
+        "gemma decide event=%s source=%s is_highlight=%s score=%s outcome=%s phase=%s audio_path=%s",
         event_type, result.get("source"), result.get("isHighlight"),
-        result.get("score"), result.get("outcome"), result.get("audioContext", {}).get("path"),
+        result.get("score"), result.get("outcome"), result.get("phase"),
+        result.get("audioContext", {}).get("path"),
     )
     return result
 

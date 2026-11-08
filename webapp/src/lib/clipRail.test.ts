@@ -4,6 +4,7 @@ import {
   clipRailClampIndex,
   clipRailIdentityLabel,
   clipRailIndexFromScroll,
+  clipRailPickerLabel,
   clipRailScrollLeft,
   clipRailSlides,
   clipRailStepIndex,
@@ -140,6 +141,46 @@ describe("rail index math — clamped steps, one slide per client width", () => 
     expect(clipRailIndexFromScroll(390, 400, 3)).toBe(1);
     expect(clipRailIndexFromScroll(800, 400, 3)).toBe(2);
     expect(clipRailIndexFromScroll(9999, 400, 3)).toBe(2);
+  });
+});
+
+describe("ADAAAA-8325 phase provenance on an alternative (Inc 2)", () => {
+  it("carries the alternative's own phase and the corroborating evidence's phase", () => {
+    const replay = alt({
+      eventType: "replay",
+      start: 200,
+      end: 215,
+      phase: "replay",
+      replayEvidence: { kind: "footage_match", matches: 4, compared: 12, gapS: 48, phase: "replay" },
+    });
+    const slides = clipRailSlides(hl({ alternatives: [replay] }));
+    expect(slides).toHaveLength(2);
+    expect(slides[1].kind).toBe("replay");
+    expect(slides[1].phase).toBe("replay");
+    // TRUE only when the attach needed the phase-corroborated band.
+    expect(slides[1].phaseCorroborated).toBe(true);
+  });
+
+  it("a strict (hash-only) replay attach names no phase provenance", () => {
+    const replay = alt({ eventType: "replay", replayEvidence: { kind: "footage_match", matches: 6, compared: 12, gapS: 48 } });
+    const slides = clipRailSlides(hl({ alternatives: [replay] }));
+    expect(slides[1].phaseCorroborated).toBeUndefined();
+    expect(slides[1].phase).toBeUndefined();
+  });
+
+  it("labels the alternative with its provenance: 'Replay @ 207 s · phase'", () => {
+    const corroborated = clipRailSlides(
+      hl({
+        alternatives: [
+          alt({ eventType: "replay", start: 207, end: 222, phase: "replay", replayEvidence: { kind: "footage_match", matches: 4, compared: 12, gapS: 48, phase: "replay" } }),
+        ],
+      })
+    )[1];
+    expect(clipRailPickerLabel(corroborated)).toBe("Replay @ 207 s · phase");
+    const hashOnly = clipRailSlides(hl({ alternatives: [alt({ eventType: "replay", start: 207, end: 222 })] }))[1];
+    expect(clipRailPickerLabel(hashOnly)).toBe("Replay @ 207 s");
+    const celebration = clipRailSlides(hl({ alternatives: [alt({ start: 165, end: 180 })] }))[1];
+    expect(clipRailPickerLabel(celebration)).toBe("Celebration @ 165 s");
   });
 });
 

@@ -347,8 +347,10 @@ VOD_GOLDEN_MATCH_CONTEXT = {
 # ADAAAA-8103 (v3 emphasis) moves this deliberately: the full contract gained
 # the timestamp-citation ask (+69 chars) and the preamble the dossier block.
 # It stays pinned so a later caption edit cannot ride along.
-VOD_GOLDEN_LEN = 12313
-VOD_GOLDEN_SHA256 = "e9da074b7a0d62eee37d7cacf3934b561ca57dd32853ca9bd508d78940fc90ed"
+# ADAAAA-8325 (Inc 2) moves it once more: the VOD contract gained the `phase`
+# field + its rule (+411 chars). Re-pinned, not un-pinned.
+VOD_GOLDEN_LEN = 12724
+VOD_GOLDEN_SHA256 = "3e4c137f34cf54c2b79f8a0ce8ff905b9bdb658635d24b9a452910fe2c03ad2e"
 
 
 def _vod_prompt() -> str:

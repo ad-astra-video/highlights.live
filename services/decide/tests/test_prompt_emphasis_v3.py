@@ -199,9 +199,13 @@ def test_static_block_budget():
     # measured deltas vs v2 (reported on the ticket, bounded here)
     assert len(STATIC_PREAMBLE) - V2_PREAMBLE_CHARS <= 2500
     # v3 added +93; ADAAAA-8318 adds the `postTitle` field (+145) — bounded at 260
-    # so another field cannot ride along. The FULL/VOD contract stays at 0 delta.
+    # so another field cannot ride along.
     assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 260
-    assert len(_OUTPUT_CONTRACT_FULL) - V2_FULL_CONTRACT_CHARS <= 100
+    # ADAAAA-8325 (Inc 2): the VOD (FULL) contract gained the `phase` field and
+    # its rule (+411 chars); bounded so a later edit cannot inflate every VOD
+    # window's prefill any further. The COMPACT bound above is untouched — the
+    # live rail did not gain a character.
+    assert len(_OUTPUT_CONTRACT_FULL) - V2_FULL_CONTRACT_CHARS <= 480
 
 
 # --- AC4: retained semantics ------------------------------------------------

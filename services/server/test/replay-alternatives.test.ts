@@ -3,6 +3,9 @@ import { HighlightRecordSchema, type HighlightRecord } from "@highlights/events"
 import { perceptualHash } from "@highlights/events/training";
 import { buildPostableHighlights } from "../src/highlight-postable";
 import {
+  PHASE_REPLAY_MATCH_BITS,
+  PHASE_REPLAY_MIN_MATCHES,
+  PHASE_REPLAY_MIN_MATCH_RATIO,
   REPLAY_HASH_MATCH_BITS,
   REPLAY_MAX_GAP_S,
   REPLAY_MIN_GAP_S,
@@ -309,6 +312,180 @@ describe("read side", () => {
   });
 });
 
+// ADAAAA-8325 (Inc 2): a decide verdict that says `replay` is CORROBORATION,
+// never the attach itself. It opens a wider-but-still-bounded fingerprint band
+// (8 bits / >= 2 matches / ratio 0.15) for a window the strict Inc 1 bar (6 bits
+// / 4 matches / 0.35) misses — the case measured on job 545be947, where the
+// broadcast replay is a different camera. The gap band, the no-chain guard and
+// the "an owner must not itself be a replay" guard are unchanged, and a strict
+// attach keeps its pre-Inc-2 evidence shape byte-identically.
+describe("ADAAAA-8325 phase corroboration", () => {
+  /** Flip the low `n` bits of a 64-bit hex hash, so the Hamming distance is n. */
+  function flipLowBits(hexHash: string, n: number): string {
+    return (BigInt(`0x${hexHash}`) ^ ((1n << BigInt(n)) - 1n)).toString(16).padStart(16, "0");
+  }
+  function phaseEntry(id: string, anchorTs: number, hashes: string[], phase: "live" | "replay"): ReplayLedgerEntry {
+    return { id, anchorTs, hashes, phase };
+  }
+  /** Frame list over a 3 fps grid, one explicit hash per frame (no generated
+   * base), so a window's fingerprint set is exactly the list given. */
+  function windowFrames(startTs: number, hashes: string[]): ReplayFrameFingerprint[] {
+    return hashes.map((h, i) => ({ ts: startTs + i / 3, hash: h }));
+  }
+
+  it("never attaches on the phase alone — 0 agreeing pictures produces no attach (AC9)", () => {
+    const owner = entry("goal-h1", 159, [hash(1), hash(2), hash(3), hash(4)]);
+    const noise = Array.from({ length: 12 }, (_, i) => hash(800 + i));
+    const phaseOnly = phaseEntry("w-phase-only", 207, noise, "replay");
+    expect(matchReplayOwner(phaseOnly, [owner])).toBeNull();
+    // ... and the whole detector agrees: a phase-only window is not an attach.
+    const goal = record({ id: "goal-h1", localizedTs: 159 });
+    const replay = record({
+      id: "w-phase-only",
+      start: 200,
+      end: 215,
+      localizedTs: 207,
+      eventType: "BIG_PLAY",
+      outcome: "big_play",
+      score: 60,
+      phase: "replay",
+    });
+    const framesOut = [
+      ...windowFrames(151, Array.from({ length: 24 }, (_, i) => hash(1 + (i % 3)))),
+      ...windowFrames(203, noise),
+    ];
+    expect(detectReplayAttachments([goal, replay], framesOut, { windowS: 8 })).toHaveLength(0);
+  });
+
+  it("attaches a phase-replay window the strict bar misses (AC10 band)", () => {
+    // A different-camera replay: 2 pictures agree exactly, 2 more within 8 bits,
+    // the rest unrelated. Strict (6 bits, 4 matches): 2 matches -> miss.
+    const owner = entry("goal-h1", 159, Array.from({ length: 12 }, () => hash(1)));
+    const shared = hash(1);
+    const weak = [
+      shared,
+      shared,
+      flipLowBits(shared, 8),
+      flipLowBits(shared, 8),
+      ...Array.from({ length: 8 }, (_, i) => hash(900 + i)),
+    ];
+    expect(matchReplayOwner(entry("replay-h3", 207, weak), [owner])).toBeNull();
+    const m = matchReplayOwner(phaseEntry("replay-h3", 207, weak, "replay"), [owner]);
+    expect(m).not.toBeNull();
+    expect(m!.ownerId).toBe("goal-h1");
+    expect(m!.matches).toBe(4);
+    expect(m!.compared).toBe(12);
+    expect(m!.gapS).toBe(48);
+    expect(m!.phase).toBe("replay");
+    expect(m!.kind).toBe("footage_match");
+  });
+
+  it("still needs two agreeing fingerprints, not just the phase", () => {
+    const owner = entry("goal-h1", 159, Array.from({ length: 12 }, () => hash(1)));
+    const oneAgreeing = [hash(1), ...Array.from({ length: 11 }, (_, i) => hash(950 + i))];
+    expect(matchReplayOwner(phaseEntry("rep", 207, oneAgreeing, "replay"), [owner])).toBeNull();
+  });
+
+  it("does not widen the 20-300 s gap band", () => {
+    const owner = entry("goal-h1", 159, Array.from({ length: 12 }, () => hash(1)));
+    const agreeing = Array.from({ length: 12 }, () => hash(1));
+    expect(matchReplayOwner(phaseEntry("at19", 178, agreeing, "replay"), [owner])).toBeNull();
+    expect(matchReplayOwner(phaseEntry("at301", 460, agreeing, "replay"), [owner])).toBeNull();
+    expect(matchReplayOwner(phaseEntry("at20", 179, agreeing, "replay"), [owner])?.gapS).toBe(REPLAY_MIN_GAP_S);
+  });
+
+  it("a replay-phase window never owns a later replay (no chains, phase-aware)", () => {
+    const owner = phaseEntry("goal-h1", 159, [hash(1), hash(2), hash(3), hash(4)], "replay");
+    const later = phaseEntry("rep2", 207, [hash(1), hash(2), hash(3), hash(4)], "replay");
+    expect(matchReplayOwner(later, [owner])).toBeNull();
+  });
+
+  it("keeps a strict attach's evidence shape byte-identical (no phase key)", () => {
+    const goal = record({ id: "goal-h1", localizedTs: 159 });
+    const replay = record({
+      id: "play-h3",
+      start: 200,
+      end: 215,
+      localizedTs: 207,
+      eventType: "BIG_PLAY",
+      outcome: "big_play",
+      score: 60,
+    });
+    const strict = Array.from({ length: 24 }, (_, i) => hash(1 + (i % 3)));
+    const framesOut = [...windowFrames(151, strict), ...windowFrames(199, strict)];
+    const out = detectReplayAttachments([goal, replay], framesOut, { windowS: 8 });
+    expect(out).toHaveLength(1);
+    expect(out[0].evidence).toEqual({
+      kind: "footage_match",
+      matches: out[0].evidence.matches,
+      compared: out[0].evidence.compared,
+      gapS: out[0].evidence.gapS,
+    });
+    expect(out[0].evidence).not.toHaveProperty("phase");
+  });
+
+  it("carries the phase through the detector, the evidence and the grouped alternative", () => {
+    const goal = record({ id: "goal-h1", localizedTs: 159 });
+    const replay = record({
+      id: "play-h3",
+      start: 200,
+      end: 215,
+      localizedTs: 207,
+      eventType: "BIG_PLAY",
+      outcome: "big_play",
+      score: 60,
+      phase: "replay",
+    });
+    const shared = hash(1);
+    const replayHashes = [
+      shared,
+      shared,
+      flipLowBits(shared, 8),
+      flipLowBits(shared, 8),
+      ...Array.from({ length: 8 }, (_, i) => hash(900 + i)),
+    ];
+    const framesOut = [
+      ...windowFrames(151, Array.from({ length: 24 }, () => shared)),
+      ...windowFrames(203, replayHashes),
+    ];
+    const out = detectReplayAttachments([goal, replay], framesOut, { windowS: 8 });
+    expect(out).toHaveLength(1);
+    expect(out[0].replayOf).toBe("goal-h1");
+    expect(out[0].evidence).toMatchObject({ kind: "footage_match", matches: 4, compared: 12, gapS: 48, phase: "replay" });
+
+    // Read side: the attach is an alternative of the goal, and the phase the
+    // decide verdict produced rides the alternative so the rail can name it.
+    const attached = record({ ...replay, replayOf: out[0].replayOf, replayEvidence: out[0].evidence });
+    const { byOwner } = partitionAttachedReplays([goal, attached]);
+    const alt = replayAlternativeFrom(byOwner.get("goal-h1")![0], 167);
+    expect(alt.eventType).toBe("replay");
+    expect(alt.phase).toBe("replay");
+    expect(alt.replayEvidence?.phase).toBe("replay");
+  });
+
+  it("measures 0 phase-only attaches across a job's windows (AC9 count)", () => {
+    // 40 phase-replay windows, 20-300 s apart, none of them picturing anything
+    // the owner pictured: the phase signal alone must attach none of them.
+    const goal = record({ id: "goal-h1", localizedTs: 159 });
+    const framesOut: ReplayFrameFingerprint[] = windowFrames(151, Array.from({ length: 24 }, () => hash(1)));
+    const windows = Array.from({ length: 40 }, (_, i) => {
+      const anchor = 180 + i * 3; // 180 .. 297 s: all inside the 20-300 s band
+      framesOut.push(...windowFrames(anchor - 6, Array.from({ length: 18 }, (_, j) => hash(3000 + i * 18 + j))));
+      return record({
+        id: `w-${i}`,
+        start: anchor - 7.5,
+        end: anchor + 7.5,
+        localizedTs: anchor,
+        eventType: "BIG_PLAY",
+        outcome: "big_play",
+        score: 55,
+        phase: "replay",
+      });
+    });
+    expect(detectReplayAttachments([goal, ...windows], framesOut, { windowS: 8 })).toHaveLength(0);
+  });
+});
+
 describe("thresholds are the documented ones", () => {
   it("keeps the calibrated near-duplicate threshold and attach bars", () => {
     expect(REPLAY_HASH_MATCH_BITS).toBe(6);
@@ -316,5 +493,17 @@ describe("thresholds are the documented ones", () => {
     expect(REPLAY_MAX_GAP_S).toBe(300);
     expect(REPLAY_MIN_MATCHES).toBe(4);
     expect(REPLAY_MIN_MATCH_RATIO).toBe(0.35);
+  });
+
+  it("keeps the phase-corroborated band bounded (ADAAAA-8325)", () => {
+    expect(PHASE_REPLAY_MATCH_BITS).toBe(8);
+    expect(PHASE_REPLAY_MIN_MATCHES).toBe(2);
+    expect(PHASE_REPLAY_MIN_MATCH_RATIO).toBe(0.15);
+    // The phase band is strictly looser than the strict bar on every axis...
+    expect(PHASE_REPLAY_MATCH_BITS).toBeGreaterThan(REPLAY_HASH_MATCH_BITS);
+    expect(PHASE_REPLAY_MIN_MATCHES).toBeLessThan(REPLAY_MIN_MATCHES);
+    expect(PHASE_REPLAY_MIN_MATCH_RATIO).toBeLessThan(REPLAY_MIN_MATCH_RATIO);
+    // ...but it still needs at least two agreeing pictures — never 0, never 1.
+    expect(PHASE_REPLAY_MIN_MATCHES).toBeGreaterThanOrEqual(2);
   });
 });

@@ -35,6 +35,12 @@ export interface ClipRailSlide {
   /** ADAAAA-8321: the delivered alternative this slide shows (absent on the
    * moment's own clip). The picker posts THIS id. */
   alternativeId?: string;
+  /** ADAAAA-8325 (Inc 2): the alternative's footage phase from the decide
+   * verdict (`replay` on an attached replay window). Operator-facing only. */
+  phase?: "live" | "replay";
+  /** ADAAAA-8325: TRUE when the attach needed the phase-corroborated band (the
+   * Inc 1 hash bar alone missed it), so the picker names that provenance. */
+  phaseCorroborated?: boolean;
 }
 
 /**
@@ -65,6 +71,10 @@ export function clipRailSlides(h: JobDetailHighlight): ClipRailSlide[] {
       start: a.start,
       end: a.end,
       eventType: a.eventType,
+      // ADAAAA-8325 (Inc 2): carry the phase provenance so the picker can say
+      // WHY this alternative is offered.
+      ...(a.phase ? { phase: a.phase } : {}),
+      ...(a.replayEvidence?.phase === "replay" ? { phaseCorroborated: true } : {}),
     });
   }
   return slides;
@@ -82,10 +92,14 @@ export function clipRailDefaultIndex(h: JobDetailHighlight): number {
   return idx >= 0 ? idx + 1 : 0;
 }
 
-/** The picker's copy for an alternative: "Replay @ 207 s" / "Celebration @ 165 s". */
+/** The picker's copy for an alternative: "Replay @ 207 s" / "Celebration @ 165 s".
+ * ADAAAA-8325 (Inc 2): a replay whose attach needed the decide verdict's `phase`
+ * signal names that provenance ("Replay @ 207 s · phase") so an operator can see
+ * WHY the alternative is offered — a hash match alone reads as the plain label. */
 export function clipRailPickerLabel(slide: ClipRailSlide): string {
   const role = slide.kind === "replay" ? "Replay" : "Celebration";
-  return `${role} @ ${Math.round(slide.start)} s`;
+  const base = `${role} @ ${Math.round(slide.start)} s`;
+  return slide.phaseCorroborated ? `${base} · phase` : base;
 }
 
 /** The badge copy, or `null` when the card has exactly one clip (no badge). */
