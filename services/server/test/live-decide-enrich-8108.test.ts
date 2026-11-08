@@ -110,8 +110,9 @@ describe("the live enrichment knob (ADAAAA-8108 AC-E3)", () => {
 
   it("names the resolved arm at boot (a recreate that booted the wrong arm is readable)", () => {
     const lines = liveDecideBootLines(liveCfg({}));
-    // ADAAAA-8377 added the live frame-scale line (six boot axes now).
-    expect(lines).toHaveLength(6);
+    // ADAAAA-8377 added the live frame-scale line (six boot axes), ADAAAA-8395
+    // the perceive ROI-pass posture (seven).
+    expect(lines).toHaveLength(7);
     expect(lines.join("\n")).toContain("[boot] live decide enrichment: on");
     const offLines = liveDecideBootLines(liveCfg({ LIVE_DECIDE_ENRICH: "alternate" }));
     expect(offLines.join("\n")).toContain("[boot] live decide enrichment: alternate");

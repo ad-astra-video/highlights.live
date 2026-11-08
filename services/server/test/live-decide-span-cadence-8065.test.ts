@@ -128,7 +128,10 @@ describe("the boot posture readout names all four cell values (ADAAAA-8065 Step 
     // ADAAAA-8377 adds the live frame-scale axis as the sixth: the LFR-1 ON arm
     // is graded off the decide rows' measured imageW/imageH, and this line states
     // what THIS process resolved so the two can be compared.
-    expect(lines).toHaveLength(6);
+    // ADAAAA-8395 adds the perceive ROI-pass posture as the seventh: AC-5's fire
+    // count is graded off `observeMetrics.perceive.roiPasses`, and this line
+    // states whether the pass was armed at all.
+    expect(lines).toHaveLength(7);
     expect(text).toContain("4 image(s)/decide");
     expect(text).toContain("[boot] live frame scale: 320:180");
     expect(text).toContain("4 decide(s) in flight");

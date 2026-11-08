@@ -35,6 +35,11 @@ export interface LiveDecidePosture {
   /** ADAAAA-8377: the LIVE rail's sampled-frame scale (`LIVE_FRAME_SCALE`,
    * resolved to today's 320:180 when unset). Undefined = the shipped default. */
   liveFrameScale?: string;
+  /** ADAAAA-8395 (LFR-1 AC-5): the perceive runner's bounded ROI second pass
+   * posture (`PERCEIVE_ROI_ENABLED`). Undefined = unset (reported as off). */
+  perceiveRoiEnabled?: boolean;
+  /** ADAAAA-8395: the ROI tile grid (`PERCEIVE_ROI_GRID`), reported only. */
+  perceiveRoiGrid?: string;
 }
 
 /**
@@ -74,5 +79,13 @@ export function liveDecideBootLines(cfg: LiveDecidePosture): string[] {
     `[boot] live decide enrichment: ${cfg.liveDecideEnrich ?? "on"} ` +
       `(LIVE_DECIDE_ENRICH, default on; off/alternate are the AC-E3 measurement arms ` +
       `and alternate starts OFF)`,
+    // ADAAAA-8395 (LFR-1 AC-5): the perceive ROI-pass posture, on the SAME
+    // readout (no second readout). The pass is env-gated in the perceive runner;
+    // this line states the value the shared docker/.env hands both containers,
+    // and the MEASURED tell is `roiEnabled`/`roiPasses` on each observation plus
+    // the job's `observeMetrics.perceive`. `off` is the shipped posture.
+    `[boot] live perceive ROI pass: ${cfg.perceiveRoiEnabled ? "on" : "off"} ` +
+      `(PERCEIVE_ROI_ENABLED, default off, grid ${cfg.perceiveRoiGrid ?? "3x4"}; ` +
+      `perceive owns the gate, measured per frame as roiPasses/roiTiles)`,
   ];
 }

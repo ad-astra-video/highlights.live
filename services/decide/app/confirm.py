@@ -53,6 +53,7 @@ from .gemma import (  # noqa: E402
     _asr_url,
     _media_refs,
     transcribe_audio,
+    usage_fields,
 )
 
 # The closed confirmation taxonomy (mirror of the plan: confirmed_goal |
@@ -635,6 +636,13 @@ class ConfirmDecision(BaseModel):
     # the ConfirmDecision — so the server can record the confirm task verbatim.
     # Additive optional; absent on passthroughs that never built a prompt.
     analysis: Optional[dict] = Field(default=None)
+    # ADAAAA-8395 (LFR-1 AC-4): the confirmation pass's OWN gemma token meter
+    # (`{prompt_tokens, completion_tokens, total_tokens}`) and its provenance
+    # (`"vllm"` when the upstream reply carried a usage block, `"absent"` when it
+    # did not — NEVER a zero-filled block). Additive optional: null on a pass
+    # that never issued a call, so an old caller's contract is unchanged.
+    usage: Optional[dict] = None
+    usageSource: Optional[str] = None
 
 
 # --- prompt -----------------------------------------------------------------
@@ -1088,9 +1096,17 @@ def reconcile_confirmed_goal(goal_confirmed: str, stage1: dict, comment: str = "
 
 
 def _call_gemma(url: str, prompt: str, frames: list, keyframes: list,
-                reasoning_effort: str, timeout_s: float) -> str | None:
+                reasoning_effort: str, timeout_s: float,
+                usage_out: dict | None = None) -> str | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server) with the
-    confirmation prompt. Returns the raw text, or None on any transport error."""
+    confirmation prompt. Returns the raw text, or None on any transport error.
+
+    `usage_out` (ADAAAA-8395): an optional caller-owned dict that receives this
+    reply's token meter (`{"usage": {...}, "usageSource": "vllm"|"absent"}`, see
+    `gemma.usage_fields`). Additive: the return value, the payload and the error
+    path are unchanged, so a caller that passes nothing behaves exactly as
+    before.
+    """
     import httpx
 
     def _img(part: dict) -> dict | None:
@@ -1116,7 +1132,11 @@ def _call_gemma(url: str, prompt: str, frames: list, keyframes: list,
     try:
         resp = httpx.post(url.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
+        # ADAAAA-8395: meter the reply (additive; the returned text is unchanged).
+        data = resp.json()
+        if isinstance(usage_out, dict):
+            usage_out.update(usage_fields(data))
+        return data["choices"][0]["message"]["content"]
     except Exception as e:  # noqa: BLE001
         log.error("confirm gemma call failed event=%s url=%s: %s", prompt[:30], url, e)
         return None
@@ -1166,6 +1186,9 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         scoreboard_delta=req.get("scoreBoardDelta"),
     )
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
+    # ADAAAA-8395: this pass's own token meter (additive; empty when the call
+    # never returned, so an absent measurement is never recorded as a zero).
+    usage_holder: dict = {}
     raw = _call_gemma(
         u,
         prompt,
@@ -1173,11 +1196,18 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         keyframes,
         req.get("reasoningEffort", "none"),
         float(os.environ.get("DECIDE_TIMEOUT_S", "180")),
+        usage_out=usage_holder,
     )
     parsed = parse_confirm(raw) if raw else None
     if parsed is None:
         log.error("confirm reply unparseable event=%s reply=%r", req.get("eventType"), (raw or "")[:500])
-        return _passthrough(req, enabled=True, reason="confirmation pass unparseable (kept Stage-1)", prompt=prompt)
+        return _passthrough(
+            req,
+            enabled=True,
+            reason="confirmation pass unparseable (kept Stage-1)",
+            prompt=prompt,
+            usage=usage_holder,
+        )
 
     goal = parsed.get("goalConfirmed", "")
     comment = _as_text(parsed.get("reason"))
@@ -1314,6 +1344,13 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         "transcript": transcript,
         "decision": decision,
     }
+    # ADAAAA-8395 (LFR-1 AC-4): the pass's gemma token meter, additive and only
+    # when the decide service actually returned one — an old service (or a call
+    # that never ran) adds no key, so the response contract is otherwise
+    # byte-identical.
+    if usage_holder:
+        resp["usage"] = usage_holder.get("usage")
+        resp["usageSource"] = usage_holder.get("usageSource", "absent")
     # ADAAAA-7155 Incr A: record the confirm request/response analysis (exact
     # prompt + request context summary + decision) so the server can record the
     # confirm task verbatim. Observability only.
@@ -1343,8 +1380,14 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
     return resp
 
 
-def _passthrough(req: dict, *, enabled: bool, reason: str, prompt: str = "") -> dict:
-    """No-op result: the Stage-1 verdict passes through unchanged."""
+def _passthrough(req: dict, *, enabled: bool, reason: str, prompt: str = "",
+                 usage: dict | None = None) -> dict:
+    """No-op result: the Stage-1 verdict passes through unchanged.
+
+    `usage` (ADAAAA-8395): the token meter of a pass that DID bill a gemma call
+    but could not parse it. Additive — when it is empty the response is exactly
+    today's, so a disabled / never-called pass adds no key.
+    """
     req = req or {}
     stage1 = dict(req.get("stage1") or {})
     resp = {
@@ -1356,6 +1399,11 @@ def _passthrough(req: dict, *, enabled: bool, reason: str, prompt: str = "") -> 
         "stage1Disagreed": False,
         "decision": stage1,
     }
+    # ADAAAA-8395: additive token meter (see the docstring) — stamped BEFORE the
+    # analysis block so the pass's own record carries it too.
+    if usage:
+        resp["usage"] = usage.get("usage")
+        resp["usageSource"] = usage.get("usageSource", "absent")
     # ADAAAA-7155 Incr A: record what the confirm task was fed (or that it never
     # built a prompt on the disabled path) so the fallback is also inspectable.
     resp["analysis"] = _confirm_analysis(

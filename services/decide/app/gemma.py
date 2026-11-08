@@ -191,6 +191,60 @@ def _prompt_layout(parts: dict) -> dict:
     }
 
 
+# --- ADAAAA-8395 (LFR-1 AC-4): the per-decide token meter -------------------
+# The vLLM/llama.cpp OpenAI-compatible reply carries a `usage` block
+# (`prompt_tokens` / `completion_tokens` / `total_tokens`). The decide path used
+# to read ONLY `choices[0].message.content` and drop it, so the LFR-1 640:360
+# cell's AC-4 (per-decide token parity) could not be graded at all — nothing was
+# stored. These helpers carry the block into the audit record's `timings` JSON
+# (an existing column, no migration) as ADDITIVE keys, and mark a missing block
+# `usageSource: "absent"` instead of zero-filling it: a persisted 0 would grade
+# as token parity and turn a missing measurement into a pass (IN-4).
+_USAGE_SOURCE_PRESENT = "vllm"
+_USAGE_SOURCE_ABSENT = "absent"
+
+
+def _usage_int(v: object) -> int | None:
+    """A non-negative int from a usage counter, else None (never a guess)."""
+    try:
+        n = int(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 0 else None
+
+
+def usage_fields(reply: object) -> dict:
+    """The additive `usage` / `usageSource` audit keys for one gemma reply.
+
+    `{"usage": {prompt_tokens, completion_tokens, total_tokens}, "usageSource": "vllm"}`
+    when the upstream answered with a well-formed block, else
+    `{"usageSource": "absent"}`. Only a block whose `prompt_tokens` is a positive
+    int is accepted — a block that is present but unreadable is treated as
+    absent rather than half-recorded. Nothing else on the reply is read
+    differently, so the verdict path is byte-identical.
+    """
+    if not isinstance(reply, dict):
+        return {"usageSource": _USAGE_SOURCE_ABSENT}
+    raw = reply.get("usage")
+    if not isinstance(raw, dict):
+        return {"usageSource": _USAGE_SOURCE_ABSENT}
+    prompt_tokens = _usage_int(raw.get("prompt_tokens"))
+    completion_tokens = _usage_int(raw.get("completion_tokens"))
+    if prompt_tokens is None or completion_tokens is None or prompt_tokens <= 0:
+        return {"usageSource": _USAGE_SOURCE_ABSENT}
+    total_tokens = _usage_int(raw.get("total_tokens"))
+    if total_tokens is None or total_tokens < prompt_tokens:
+        total_tokens = prompt_tokens + completion_tokens
+    return {
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        },
+        "usageSource": _USAGE_SOURCE_PRESENT,
+    }
+
+
 def _audit_record(
     *,
     audit_ctx: dict | None,
@@ -2801,10 +2855,17 @@ def ask(
     )
     prompt_build_ms = round((time.time() - t_prompt) * 1000.0, 3)
     t_vllm = time.time()
+    # ADAAAA-8395 (LFR-1 AC-4): the reply's `usage` block, captured beside the
+    # content. Defaults to `{"usageSource": "absent"}` so a transport failure, a
+    # reply with no block, or an unreadable block all record the ABSENCE instead
+    # of a fabricated zero (IN-4).
+    metered: dict = {"usageSource": _USAGE_SOURCE_ABSENT}
     try:
         resp = httpx.post(url.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
         resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"]
+        reply = resp.json()
+        text = reply["choices"][0]["message"]["content"]
+        metered = usage_fields(reply)
     except Exception as e:  # noqa: BLE001
         log.error("gemma call failed event=%s url=%s: %s", event_type, url, e)
         return None
@@ -2845,6 +2906,12 @@ def ask(
         # audit record prove the enrichment actually landed.
         timings_extra={
             **(audio_timings or {}),
+            # ADAAAA-8395 (LFR-1 AC-4): the per-decide gemma token meter, beside
+            # the stage clocks. `usage` is present only when the upstream reply
+            # carried a well-formed block; `usageSource` is always stamped
+            # ("vllm" / "absent") so a missing measurement is READABLE as missing
+            # rather than graded as a zero-token pass (IN-4). Additive keys only.
+            **metered,
             # ADAAAA-8344: the decide-internal stage split, alongside the existing
             # `elapsedMs`/`asrLatencyS` (both kept untouched).
             "requestParseMs": round(request_parse_ms, 3) if request_parse_ms is not None else None,

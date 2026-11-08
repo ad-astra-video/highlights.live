@@ -43,6 +43,7 @@ from .florence import (
     get_ocr_detector,
     record_analyze,
     resolve_vocabulary,
+    roi_enabled as _roi_enabled,
 )
 from .perf import now as _perf_now, recorder as _perf_recorder
 from .sam_tracker import HybridTracker
@@ -1174,6 +1175,11 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
     # adapter uses its own detector (base+LoRA-merged model); every other
     # session keeps the shared base detector.
     detector = get_detector(state.lora_ref or None)
+    # ADAAAA-8395 (LFR-1 AC-5): the ROI-pass counters are monotonic on the
+    # (shared, per-stream) detector — snapshot here and report the delta on this
+    # frame's observation, so the server can sum a real per-analyze fire count.
+    _roi_passes_before = getattr(detector, "roi_passes", 0) if detector is not None else 0
+    _roi_tiles_before = getattr(detector, "roi_tiles", 0) if detector is not None else 0
     # ADAAAA-8004: per-frame accounting. `frame` covers this whole call; the
     # individual stages below are recorded as they run. `_rgb_snapshot` is the
     # frame this call actually works on, so the optional OCR lane (below) can
@@ -1454,6 +1460,21 @@ def process_frame(state, seq: int, timestamp: float, image_b64: str) -> tuple[di
         # verify bboxes stay labelable on a real clip (target Unknown < ~10%).
         **(
             {"detector": {"vocabulary": bool(vocabulary), "stats": getattr(detector, "stats", None)}}
+            if detector is not None
+            else {}
+        ),
+        # ADAAAA-8395 (LFR-1 AC-5): the bounded ROI second pass, measured per
+        # analyze request. `roiEnabled` is the gate THIS process resolved (the
+        # pass is env-gated), `roiPasses` the fires on this frame (>=1 inferred
+        # cropped tile), `roiTiles` the tile inferences those fires paid for.
+        # Additive: absent on the background-diff path (no Florence detector), so
+        # a non-detector session's observation is byte-identical to today.
+        **(
+            {
+                "roiEnabled": _roi_enabled(),
+                "roiPasses": max(0, int(getattr(detector, "roi_passes", 0)) - int(_roi_passes_before)),
+                "roiTiles": max(0, int(getattr(detector, "roi_tiles", 0)) - int(_roi_tiles_before)),
+            }
             if detector is not None
             else {}
         ),

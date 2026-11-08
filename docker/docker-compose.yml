@@ -803,6 +803,14 @@ services:
       # names the resolved value and every decide row carries the MEASURED
       # `imageW`/`imageH`, so a leg grades the row, not `printenv`.
       - LIVE_FRAME_SCALE=${LIVE_FRAME_SCALE:-}
+      # ADAAAA-8395 (LFR-1 AC-5): the perceive runner's bounded ROI second-pass
+      # posture. The GAIN lives in the perceive service (same `docker/.env` var);
+      # the server receives it ONLY so the boot readout can name the posture both
+      # containers resolved, and every frame's observation carries the MEASURED
+      # `roiPasses`/`roiTiles`/`roiEnabled` plus the job's
+      # `observeMetrics.perceive.roiPasses`. Read-only here: no gating.
+      - PERCEIVE_ROI_ENABLED=${PERCEIVE_ROI_ENABLED:-0}
+      - PERCEIVE_ROI_GRID=${PERCEIVE_ROI_GRID:-3x4}
       - LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}
       # ADAAAA-8081: transcribe the live window's clip in the server's fire-time
       # side lane instead of serially inside the decide call, so ASR runs while

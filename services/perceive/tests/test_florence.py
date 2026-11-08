@@ -724,6 +724,165 @@ def test_roi_should_run_flag_gates_detect(monkeypatch):
     assert any(o.get("label") == "soccer ball" for o in out)
 
 
+# --- ADAAAA-8395 (LFR-1 AC-5): the ROI-pass fire counter ---------------------
+
+
+def test_roi_counters_start_at_zero_and_are_monotonic(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "1x1")
+    det = FlorenceDetector()
+    assert det.roi_passes == 0 and det.roi_tiles == 0
+    det._infer = lambda pil, prompt: "<s>soccer ball<loc_200><loc_300><loc_600><loc_700></s>"
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    det._run_roi_pass(image, _SOCCER, [])
+    assert det.roi_passes == 1
+    assert det.roi_tiles == 1  # 1x1 grid = one cropped inference
+    det._run_roi_pass(image, _SOCCER, [])
+    assert det.roi_passes == 2 and det.roi_tiles == 2
+
+
+def test_roi_counters_count_every_tile_inferred(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "2x3")
+    det = FlorenceDetector()
+    det._infer = lambda pil, prompt: "<s>player<loc_100><loc_100><loc_200><loc_200></s>"
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    det._run_roi_pass(image, _SOCCER, [])
+    assert det.roi_passes == 1
+    assert det.roi_tiles == 6  # 2 rows x 3 cols
+
+
+def test_roi_counters_do_not_count_a_noop_pass():
+    """The no-op guards (ball already found / non-soccer vocab / tiny frame) cost
+    nothing, so they must not inflate the fired rate."""
+    det = FlorenceDetector()
+    det._infer = lambda pil, prompt: (_ for _ in ()).throw(AssertionError("must not run"))
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    det._run_roi_pass(image, _SOCCER, [{"label": "soccer ball", "bbox": [0.4, 0.5, 0.6, 0.7]}])
+    det._run_roi_pass(image, ["player", "goalkeeper"], [])
+    det._run_roi_pass(np.zeros((16, 16, 3), dtype=np.uint8), _SOCCER, [])
+    assert det.roi_passes == 0 and det.roi_tiles == 0
+
+
+def test_roi_counters_count_issued_tiles_even_when_infer_raises(monkeypatch):
+    """A GPU hiccup mid-pass still records the tiles that were issued — the cost
+    was paid, and the 0-crash invariant is unchanged."""
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "1x1")
+    det = FlorenceDetector()
+
+    def boom(pil, prompt):
+        raise RuntimeError("gpu hiccup")
+
+    det._infer = boom
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    det._run_roi_pass(image, _SOCCER, [])
+    assert det.roi_passes == 1 and det.roi_tiles == 1
+
+
+def test_detect_does_not_fire_the_pass_when_env_disabled(monkeypatch):
+    monkeypatch.delenv("PERCEIVE_ROI_ENABLED", raising=False)
+    det = FlorenceDetector()
+    det.load = lambda: None  # skip the model load
+    det._processor = object()
+    det._infer = lambda pil, prompt: "<s>player<loc_100><loc_100><loc_200><loc_200></s>"
+    image = np.zeros((180, 320, 3), dtype=np.uint8)
+    det.detect(image, vocabulary=_SOCCER)
+    assert det.roi_passes == 0
+    assert florence.roi_enabled() is False
+
+
+def test_detect_fires_and_counts_the_pass_when_env_enabled(monkeypatch):
+    monkeypatch.setenv("PERCEIVE_ROI_ENABLED", "1")
+    monkeypatch.setenv("PERCEIVE_ROI_GRID", "1x1")
+    det = FlorenceDetector()
+    det.load = lambda: None  # skip the model load
+    det._processor = object()
+    det._infer = lambda pil, prompt: "<s>player<loc_100><loc_100><loc_200><loc_200></s>"
+    image = np.zeros((180, 320, 3), dtype=np.uint8)
+    det.detect(image, vocabulary=_SOCCER)
+    assert det.roi_passes == 1
+    assert det.roi_tiles == 1
+    assert florence.roi_enabled() is True
+
+
+def test_observation_carries_the_per_request_roi_delta(monkeypatch):
+    """AC-5 wire shape: one analyze request reports ITS OWN ROI fire count (the
+    delta on the shared detector), the tile count behind it, and the gate that
+    was resolved — never the detector's lifetime total."""
+    from app import process_frame
+    from app.session import SessionRegistry
+    from app.tracker import IoUTracker
+
+    monkeypatch.setenv("PERCEIVE_ROI_ENABLED", "1")
+
+    class _RoiDetector:
+        """A detector that fires the ROI pass on every other frame."""
+
+        stats = None
+
+        def __init__(self):
+            self.roi_passes = 5  # lifetime totals from earlier requests
+            self.roi_tiles = 40
+            self._n = 0
+
+        def load(self):
+            pass
+
+        def detect(self, image, vocabulary=None, roi_pass=True):
+            self._n += 1
+            if self._n % 2 == 0:
+                self.roi_passes += 1
+                self.roi_tiles += 3
+            return [{"label": "player", "confidence": 0.8, "bbox": [0.2, 0.2, 0.4, 0.6]}]
+
+    det = _RoiDetector()
+    monkeypatch.setattr(florence, "get_detector", lambda _ref=None: det)
+    monkeypatch.setattr("app.get_detector", lambda _ref=None: det)
+
+    reg = SessionRegistry(max_sessions=1)
+    state = reg.get_or_create("sess-8395-roi", "", "")
+    state.last_rgb = np.zeros((180, 320, 3), dtype=np.uint8)
+    state.tracker = IoUTracker(capacity=2)
+
+    obs1, _ = process_frame(state, 1, 1.0, "ix.")
+    assert obs1["roiEnabled"] is True
+    assert obs1["roiPasses"] == 0  # odd frame: no fire
+    assert obs1["roiTiles"] == 0
+
+    obs2, _ = process_frame(state, 2, 2.0, "ix.")
+    assert obs2["roiPasses"] == 1  # this request's delta, not the 6 lifetime
+    assert obs2["roiTiles"] == 3
+
+    # the ROI fields never inflate the existing observation contract
+    assert "tracks" in obs2 and "objects" in obs2 and "detector" in obs2
+
+
+def test_observation_omits_roi_keys_without_a_detector(monkeypatch):
+    """The background-diff path has no Florence detector, so the ROI keys are
+    absent (not zero): an uninstrumented session's observation stays identical."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    from app import process_frame
+    from app.session import SessionRegistry
+    from app.tracker import IoUTracker
+
+    monkeypatch.setattr(florence, "get_detector", lambda _ref=None: None)
+    monkeypatch.setattr("app.get_detector", lambda _ref=None: None)
+
+    reg = SessionRegistry(max_sessions=1)
+    state = reg.get_or_create("sess-8395-nodetect", "", "")
+    state.last_rgb = np.zeros((180, 320, 3), dtype=np.uint8)
+    state.tracker = IoUTracker(capacity=2)
+
+    buf = io.BytesIO()
+    Image.new("RGB", (32, 18)).save(buf, format="JPEG")
+    obs, _ = process_frame(state, 1, 1.0, base64.b64encode(buf.getvalue()).decode("ascii"))
+    assert "roiPasses" not in obs
+    assert "roiTiles" not in obs
+    assert "roiEnabled" not in obs
+
+
 # --- <OCR> crop preparation (ADAAAA-7909) -----------------------------------
 def _crop(h, w, fill=90):
     return np.dstack([np.full((h, w), fill, dtype=np.uint8)] * 3)
