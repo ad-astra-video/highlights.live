@@ -85,6 +85,17 @@ describe("buildSections (ADAAAA-6851 Inc 3)", () => {
     expect(sections[2].decideNotes[0].status).toBe("rejected");
   });
 
+  it("echoes the decide verdict's footage phase on the decide note (ADAAAA-8325)", () => {
+    const observations = [obs(0, 0.2), obs(1, 2.9)];
+    const replay = cand({ timestamp: 2.1, eventType: "BIG_PLAY", outcome: "big_play", phase: "replay", reason: "replay insert" });
+    expect(buildSections(observations, [replay], "job-1")[0].decideNotes[0].phase).toBe("replay");
+    const live = cand({ timestamp: 2.1, phase: "live" });
+    expect(buildSections(observations, [live], "job-1")[0].decideNotes[0].phase).toBe("live");
+    // absent stays absent: unknown is never inferred as "live"
+    const unknown = cand({ timestamp: 2.1 });
+    expect(buildSections(observations, [unknown], "job-1")[0].decideNotes[0].phase).toBeUndefined();
+  });
+
   it("attaches the per-window analysis + confirm record to the decide note (ADAAAA-7156 Incr B)", () => {
     const observations = [obs(0, 0.2), obs(1, 2.9)];
     const candidates = [
