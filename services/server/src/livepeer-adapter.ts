@@ -157,18 +157,23 @@ export class OrchestratorAdapter implements PipelineClient {
         : undefined;
     this.client = new LivepeerClient(cfg.orchestratorUrl, undefined, {
       ...(cfg.decideConcurrency !== undefined ? { decideConcurrency: cfg.decideConcurrency } : {}),
+      // ADAAAA-8437: the safety cap on a discovered advertisement (default 32 in
+      // the client). `funded` above is reporting/fallback only now.
+      ...(cfg.decideMaxAdmission !== undefined ? { decideMaxAdmission: cfg.decideMaxAdmission } : {}),
       ...(decideCapacityProbe ? { decideCapacityProbe } : {}),
       ...(cfg.decideCapacityRefreshS !== undefined
         ? { decideCapacityRefreshMs: Math.max(0, cfg.decideCapacityRefreshS * 1000) }
         : {}),
       ...(cfg.decideQueueMaxWaitMs !== undefined ? { decideQueueMaxWaitMs: cfg.decideQueueMaxWaitMs } : {}),
-      // AC1 startup/refresh log line: the three numbers, never the token or the
+      // AC1 startup/refresh log line: the numbers, never the token or the
       // signer URL. Only fires when the snapshot changes. ADAAAA-8262 appends the
-      // provenance so a failed probe is not mistaken for an empty fleet.
+      // provenance so a failed probe is not mistaken for an empty fleet;
+      // ADAAAA-8437 adds the admission safety `cap` (`effective` follows
+      // `advertised` up as well as down).
       onDecideCapacity: (snapshot) => {
         console.log(
           `[decide-capacity] advertised=${snapshot.advertised} funded=${snapshot.funded} effective=${snapshot.effective}` +
-            ` probeOk=${snapshot.probeOk} runners=${snapshot.runners} source=${snapshot.source}`,
+            ` probeOk=${snapshot.probeOk} runners=${snapshot.runners} source=${snapshot.source} cap=${snapshot.cap}`,
         );
       },
       onDecideCapacityError: (err) => {

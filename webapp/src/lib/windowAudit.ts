@@ -24,6 +24,9 @@ export interface WindowAuditCapacity {
   probeOk?: boolean;
   runners?: number;
   source?: "probe" | "last-known" | "funded";
+  /** ADAAAA-8437: the `DECIDE_MAX_ADMISSION` safety bound `effective` was
+   *  clamped to (absent on records written before the field existed). */
+  cap?: number;
 }
 
 export interface WindowAuditPayload {

@@ -26,13 +26,13 @@ export interface WindowAuditCause {
   count: number | null;
 }
 
-/** The decide pool ceiling the job ran at, from ADAAAA-8254/8262. */
+/** The decide pool ceiling the job ran at, from ADAAAA-8254/8262/8437. */
 export interface WindowAuditCapacity {
   /** Slots the runner fleet advertised (discovery probe). */
   advertised: number;
-  /** Funded ceiling (`DECIDE_CONCURRENCY`). */
+  /** Funded value (`DECIDE_CONCURRENCY`) — reporting only since ADAAAA-8437. */
   funded: number;
-  /** What the gate actually admitted: `min(funded, advertised)`, never 0. */
+  /** What the gate actually admitted: `advertised` clamped to [1, cap], never 0. */
   effective: number;
   /** False = the last probe failed (distinct from an empty fleet). */
   probeOk?: boolean;
@@ -40,6 +40,9 @@ export interface WindowAuditCapacity {
   runners?: number;
   /** Provenance of `advertised`. */
   source?: "probe" | "last-known" | "funded";
+  /** ADAAAA-8437: the `DECIDE_MAX_ADMISSION` safety bound `effective` was
+   * clamped to (absent on records written before the field existed). */
+  cap?: number;
 }
 
 export interface WindowAuditPayload {
@@ -131,6 +134,7 @@ export function windowAuditForJob(job: AuditJob): WindowAuditPayload {
         ...(rawCapacity.probeOk !== undefined ? { probeOk: rawCapacity.probeOk } : {}),
         ...(rawCapacity.runners !== undefined ? { runners: counter(rawCapacity.runners) ?? 0 } : {}),
         ...(rawCapacity.source !== undefined ? { source: rawCapacity.source } : {}),
+        ...(rawCapacity.cap !== undefined ? { cap: Math.max(1, counter(rawCapacity.cap) ?? 1) } : {}),
       }
     : null;
   return {

@@ -744,13 +744,16 @@ services:
       # unbounded 5.7x lag was a window labelled T+42s decided at wall +242s.
       # 30 s = the cadence + decide-E2E budget; 0 disables the drop.
       - LIVE_OBSERVE_LAG_BUDGET_S=${LIVE_OBSERVE_LAG_BUDGET_S:-30}
-      # ADAAAA-7771: how many decide windows a LIVE stream keeps IN FLIGHT. The
-      # serial pass (1) awaits each decide, so it can only land
+      # ADAAAA-7771 -> ADAAAA-8437: how many decide windows a LIVE stream keeps IN
+      # FLIGHT. The serial pass (1) awaits each decide, so it can only land
       # cadence/decideWall of its windows (~33 % at one stream, measured) and the
       # lag budget drops the rest as stale. 2-4 pipelines the decide work while
       # acceptance stays serial in content order; the queue is bounded (a full
       # queue is backpressure, counted as backpressureSkippedWindows) and the lag
-      # budget remains the outer bound. 1 restores the serial behaviour exactly.
+      # budget remains the outer bound. ADAAAA-8437: this is the CEILING — the
+      # effective per-stream depth is `min(this, floor(effective admission /
+      # active live streams))`, so a lone stream is unchanged and a 2-stream box
+      # splits the advertised capacity instead of being pinned at the funded 8.
       - LIVE_OBSERVE_IN_FLIGHT=${LIVE_OBSERVE_IN_FLIGHT:-4}
       # ADAAAA-7791: the four LIVE perceive knobs. `config.ts` has parsed these
       # since ADAAAA-7774/7152 but compose never passed them into the server (no
@@ -851,18 +854,27 @@ services:
       # decide_audit row (`perceiveTimeline.enrichmentArm`), so a leg is graded off
       # the payload rather than `printenv`.
       - LIVE_DECIDE_ENRICH=${LIVE_DECIDE_ENRICH:-}
-      # ADAAAA-7773: how many decide app-calls the orchestrated decide CLIENT
-      # admits at once (`LivepeerClient` decideConcurrency). ADAAAA-7771 kept 4
-      # windows in flight per stream but the client gate was still 2 (the compose
-      # default was unset), so depth above 2 only QUEUED: measured at depth 4 with
-      # a 2-wide gate, decide E2E was 24.8-26.6 s at 2 streams and lag p50
-      # 50.8-52.0 s. The box has 8 real decide slots (vLLM --max-num-seqs 4 on
-      # each of gemma + gemma-b, fronted by decide-router), so the admission is 8
-      # = 4 per card. With 8 the ADAAAA-7771 shared budget gives a lone stream its
-      # full depth and gives 2 streams 4 each (= 8 concurrent) instead of 1 each.
-      # Lower it to degrade to the serial pass; the client falls back to its own
-      # default (2) only when this is unset.
+      # ADAAAA-8254 + ADAAAA-8437: the FUNDED decide value the capacity snapshot
+      # reports and the fallback when discovery is dark (`effective == funded`, so
+      # a box that never probes is unchanged). It is NO LONGER the admission
+      # ceiling: the board ruling on ADAAAA-8418 ("The DECIDE_CONCURRENCY
+      # artificially limiting to 8 is wrong. It should just be limited by the
+      # capacity available") makes admission follow the capacity the fleet
+      # advertises. The routed set since ADAAAA-8281 is the three 5090 workers at
+      # `--max-num-seqs 2` (docker/decide-router.conf primaries; the x99 pair is
+      # `backup` only), so the registrar advertises 3 x 2 = 6 and `effective` is 6
+      # today — and 12 the moment `DECIDE_WORKER_SEQS` is raised to 4 (that
+      # re-create is cost-gated on ADAAAA-8418, not on this knob). Lower it only
+      # to shrink the dark-discovery fallback; the client uses its own default (2)
+      # when this is unset.
       - DECIDE_CONCURRENCY=${DECIDE_CONCURRENCY:-8}
+      # ADAAAA-8437: the SAFETY CAP on a discovered advertisement, not a funding
+      # posture. `effective = clamp(advertised, 1, DECIDE_MAX_ADMISSION)`. It
+      # exists so a malformed advertisement (a truncated pool read, a mis-set
+      # `--max-num-seqs`, a signer that sums the failover `backup` pair) cannot
+      # open admission unboundedly. 32 is deliberately far above any plausible
+      # pool; the box's own GPU budget is still the real limit.
+      - DECIDE_MAX_ADMISSION=${DECIDE_MAX_ADMISSION:-32}
       # ADAAAA-7758: one live decide slot per box. When on, a second concurrent
       # live job's decide is skipped (counted as observeMetrics
       # .admissionSkippedWindows) instead of interleaving a second decide that
