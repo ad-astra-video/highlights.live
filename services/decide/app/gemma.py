@@ -2576,6 +2576,7 @@ def ask(
     prior_game_state: object = None,
     perceive_window: object = None,
     audio_timings: dict | None = None,
+    request_parse_ms: float | None = None,
 ) -> dict | None:
     """Call the gemma multimodal completion (vLLM OpenAI-compat server). Returns
     a parsed/validated HighlightDecision dict, or None on any transport/parse
@@ -2609,6 +2610,14 @@ def ask(
     # unsloth/gemma-4-12b-it-GGUF (audio-capable) is served, flip
     # GEMMA_SEND_AUDIO=1 to use the native `input_audio` path.
     send_audio = bool(audio_b64) and os.environ.get("GEMMA_SEND_AUDIO", "0") == "1"
+
+    # ADAAAA-8344: stage clocks for this decide call. `promptBuildMs` covers the
+    # image/content assembly + the prompt parts + the request payload, i.e. the
+    # whole pre-network cost of the call; `vllmMs` the model round trip;
+    # `parseReplyMs` the reply parse + contract guard; `auditWriteMs` the audit
+    # record build + JSONL append. `requestParseMs` (arrival -> parsed body) is
+    # stamped by the HTTP layer and passed in.
+    t_prompt = time.time()
 
     def _img(part: dict) -> dict | None:
         b64 = part.get("base64") or part.get("image") or ""
@@ -2692,6 +2701,8 @@ def ask(
         "gemma call event=%s frames=%d images=%d audio=%s effort=%s",
         event_type, len(frames), len(images), bool(audio_b64), reasoning_effort,
     )
+    prompt_build_ms = round((time.time() - t_prompt) * 1000.0, 3)
+    t_vllm = time.time()
     try:
         resp = httpx.post(url.rstrip("/") + "/v1/chat/completions", json=payload, timeout=timeout_s)
         resp.raise_for_status()
@@ -2699,6 +2710,8 @@ def ask(
     except Exception as e:  # noqa: BLE001
         log.error("gemma call failed event=%s url=%s: %s", event_type, url, e)
         return None
+    vllm_ms = round((time.time() - t_vllm) * 1000.0, 3)
+    t_parse = time.time()
     result = parse_decision(text)
     log.debug("gemma result event=%s parsed=%s", event_type, result)
     if result is None:
@@ -2717,6 +2730,8 @@ def ask(
             transcript=transcript,
             perceive_window=perceive_window,
         )
+    parse_reply_ms = round((time.time() - t_parse) * 1000.0, 3)
+    t_audit = time.time()
     _record = _audit_record(
         audit_ctx=audit_ctx,
         mode="single",
@@ -2732,12 +2747,29 @@ def ask(
         # audit record prove the enrichment actually landed.
         timings_extra={
             **(audio_timings or {}),
+            # ADAAAA-8344: the decide-internal stage split, alongside the existing
+            # `elapsedMs`/`asrLatencyS` (both kept untouched).
+            "requestParseMs": round(request_parse_ms, 3) if request_parse_ms is not None else None,
+            "promptBuildMs": prompt_build_ms,
+            "vllmMs": vllm_ms,
+            "parseReplyMs": parse_reply_ms,
             "perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1],
             # ADAAAA-8120 (AC-G5): the guard's verdict + refuting evidence.
             **({"contractGuard": guard_record} if guard_record is not None else {}),
         },
     )
     _emit_audit(_record)
+    # ADAAAA-8344: the audit write cost is only knowable AFTER the append, so it
+    # is stamped onto the record before the compact descriptor is built — the
+    # descriptor is what the server persists to `decide_audit.timings`, so the
+    # server-visible row carries it. (The on-disk JSONL line carries every other
+    # stage; its own append cost is the one value it cannot report.)
+    audit_write_ms = round((time.time() - t_audit) * 1000.0, 3)
+    try:
+        if isinstance(_record.get("timings"), dict):
+            _record["timings"]["auditWriteMs"] = audit_write_ms
+    except Exception:  # noqa: BLE001
+        pass
     # Emit the compact audit descriptor on the decision (ADAAAA-7028 Inc 2) so
     # the server can index it. The descriptor is attached to the returned dict;
     # it never carries the base64 media bytes (those stay in the audit dir).
@@ -2794,6 +2826,9 @@ def decide_with_gemma(
     asr_prefetched: bool = False,
     asr_transcript: str = "",
     asr_latency_s: float = 0.0,
+    # ADAAAA-8344: arrival -> parsed-request-body wall measured by the HTTP layer,
+    # forwarded into the audit record's `timings.requestParseMs`.
+    request_parse_ms: float | None = None,
 ) -> dict:
     """Primary path: Gemma. On any failure, deterministic rule fallback so the
     caller always gets a valid HighlightDecision.
@@ -2867,6 +2902,7 @@ def decide_with_gemma(
         prior_game_state=prior_game_state,
         perceive_window=perceive_window,
         audio_timings=audio_timings,
+        request_parse_ms=request_parse_ms,
     )
     if g is not None:
         result = g
