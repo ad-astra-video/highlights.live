@@ -34,6 +34,7 @@ import pg from "pg";
 import {
   gatePostTitleDetail,
   postTitleShapeViolations,
+  projectAnnouncerCaption,
   projectPostTitle,
   servedPostTitleViolations,
   hasGoalClaim,
@@ -148,6 +149,10 @@ async function main() {
       localizedTs: rec.localizedTs ?? rec.start ?? null,
     };
     const servedTitle = projectPostTitle(row, { subject: "" });
+    // ADAAAA-8405 S4: census the caption the SURFACE serves, not only the
+    // stored field — the read path mirrors the write seam (`caption` else the
+    // row's own gated `reason`), which is what a card actually renders.
+    const servedCaption = projectAnnouncerCaption(row, servedTitle);
     const violations = rec.postTitle ? servedPostTitleViolations(rec.postTitle, row) : [];
     served.push({
       id: r.id.slice(0, 8),
@@ -158,9 +163,10 @@ async function main() {
       served: servedTitle,
       served_is_stored: servedTitle === (rec.postTitle ?? null),
       violations,
-      caption: rec.caption ?? null,
-      caption_nonempty: !!String(rec.caption ?? "").trim(),
-      caption_eq_title: String(rec.caption ?? "") === String(rec.postTitle ?? ""),
+      stored_caption: rec.caption ?? null,
+      caption: servedCaption,
+      caption_nonempty: !!String(servedCaption ?? "").trim(),
+      caption_eq_title: String(servedCaption ?? "") === String(servedTitle ?? ""),
       claim_on_non_scoring: hasGoalClaim(servedTitle) && String(rec.outcome ?? "") !== "scoring_play",
       place_in_served: PLACE.test(servedTitle),
       words: servedTitle.split(/\s+/).length,

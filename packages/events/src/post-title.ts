@@ -426,6 +426,34 @@ export function projectPostTitle(
 }
 
 /**
+ * The collapsed ANNOUNCER detail a surface SERVES for a row (ADAAAA-8405 S4).
+ *
+ * The write seam stores `caption` from the row's own gated announcer sentence
+ * (`storedSurfaceFor`: `card.caption || storedReason`), so a row written after
+ * that change always carries detail copy. A row written BEFORE it stores
+ * `reason` and no `caption`, and the detail route used to fall back to the post
+ * TITLE — measured on the 20 stored rows: 6 of 10 postable cards served
+ * `caption == postTitle`, which is a headline, not announcer copy.
+ *
+ * The read path therefore mirrors the seam: a row with no stored caption serves
+ * its own gated `reason` — the same string the fixed seam would have stored.
+ * Nothing is invented and no gate is bypassed: `reason` is the sentence the
+ * write seam already certified for this row and already serves on it. A row
+ * whose only copy is the audit `reasonRaw` (which never crossed the gates) gets
+ * no caption from the audit line, so the deterministic title stays the last
+ * resort exactly as before.
+ */
+export function projectAnnouncerCaption(row: PostTitleRow, servedTitle: string): string {
+  const stored = (row.caption ?? "").trim();
+  if (stored) return stored;
+  const own = (row.reason ?? "").trim();
+  // Never serve a caption byte-identical to the title: that is the degrade the
+  // bar exists to catch, so a `reason` that repeats the title is not detail.
+  if (own && own !== servedTitle.trim()) return own;
+  return servedTitle;
+}
+
+/**
  * The team name a row's own stored copy names, from the job's `matchContext` —
  * the only team attribution the deterministic title may use (a stored fact, not
  * a guess about which side scored). "" when the match context is ambiguous, the
