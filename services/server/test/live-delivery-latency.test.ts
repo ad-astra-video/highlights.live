@@ -372,3 +372,114 @@ describe("LiveObserver registers a DEMOTED window so the upgrade delivery is mea
     expect(deliveredStageSum(snap.rows[0])).toBe(snap.rows[0].deliveredLatencyMs);
   });
 });
+
+// ADAAAA-8495 (AC2): the off-by-one window pairing.
+//
+// ADAAAA-8487 AC-A proved on leg `2c4124fe` that every delivered row carried the
+// PREVIOUS decided window's clocks: `noteWindow` registered a window only after
+// `accept()` returned (observe-loop), the store ack fires DURING accept, and a
+// live-localized trigger (a 3 s-multiple offset from the judged centre) never
+// matches `centerTs` exactly — so the `pending[pending.length - 1]` fallback
+// consumed the previous entry. `ackAt - persistAckMs` reproduced a stored
+// `job_candidates.created_at` on 9/9 rows, and 43,051 of 140,554 ms (30.6 %) of
+// the reported `persistAckMs` was that previous window's decide cadence.
+describe("delivered-latency window pairing (ADAAAA-8495 AC2)", () => {
+  /** A decided window's clocks. `decideMs` is fire -> decide settle; the accept
+   *  is fast (`acceptMs`) unless told otherwise, exactly like a window that
+   *  shipped no row. */
+  function windowAt(centerTs: number, decideMs: number, acceptMs: number, atMs: number) {
+    const firedAtMs = atMs;
+    const settledAtMs = firedAtMs + decideMs;
+    return {
+      centerTs,
+      lagMs: 200,
+      firedAtMs,
+      settledAtMs,
+      acceptStartMs: settledAtMs,
+      acceptDoneMs: settledAtMs + acceptMs,
+    };
+  }
+
+  it("reproduces the pre-8495 mis-pairing when the window is registered only AFTER its accept", () => {
+    const tracker = new LiveDeliveryTracker();
+    // Window A (centre 100) was decided and accepted 5 ms after settling; it is
+    // the window that happened to be pending when B's row acked.
+    const a = windowAt(100, 5_000, 5, ORIGIN + 100_000 + 200);
+    tracker.noteWindow(a); // legacy order: registered once accept() returned
+    // Window B (centre 106) is still being accepted when its own row acks: the
+    // trigger is localized to 103, so the exact-centre match fails.
+    const ackAtB = a.acceptDoneMs + 1_200;
+    tracker.notePersisted(103, ackAtB);
+    const row = tracker.rows()[0];
+    // The row reports A's decide cost and A's acceptDone — the bug.
+    expect(row.decideE2eMs).toBe(5_000);
+    expect(row.acceptMs).toBe(5);
+    expect(row.persistAckMs).toBe(1_200);
+    expect(row.triggerTs).toBe(103);
+  });
+
+  it("pairs a row emitted DURING its own accept with its own window (the fix)", () => {
+    const tracker = new LiveDeliveryTracker();
+    // A previous, faster window is still pending (it shipped no row).
+    const a = windowAt(100, 5_000, 5, ORIGIN + 100_000 + 200);
+    tracker.noteWindow(a);
+    // Window B: registered BEFORE its accept runs (acceptDoneMs unknown yet).
+    const firedAtB = ORIGIN + 106_000 + 200;
+    const settledAtB = firedAtB + 1_400; // its own decide (fast, like the leg)
+    const acceptStartB = settledAtB + 10; // content-order head of line
+    tracker.noteWindow({
+      centerTs: 106,
+      lagMs: 200,
+      firedAtMs: firedAtB,
+      settledAtMs: settledAtB,
+      acceptStartMs: acceptStartB,
+      acceptDoneMs: null,
+    });
+    // The row is persisted (acked) 42 ms into B's accept, with its trigger
+    // localized to 103 — it must still pair with B.
+    const ackAtB = acceptStartB + 42;
+    tracker.notePersisted(103, ackAtB, "hl-b");
+    expect(tracker.rows().length).toBe(0); // not finalised until accept returns
+    const acceptDoneB = acceptStartB + 60;
+    tracker.noteAcceptDone(106, acceptDoneB);
+    const row = tracker.rows()[0];
+    expect(row.highlightId).toBe("hl-b");
+    expect(row.triggerTs).toBe(103);
+    // Its OWN window: 1,400 ms decide (not A's 5,000), 10 ms head of line.
+    expect(row.decideE2eMs).toBe(1_400);
+    expect(row.acceptWaitMs).toBe(10);
+    // The ack landed inside the accept, so there is no post-accept ack wait.
+    expect(row.persistAckMs).toBe(0);
+    expect(row.acceptMs).toBe(ackAtB - acceptStartB);
+    // The total still reconstructs from the stages + the localization term.
+    expect(row.localizeOffsetMs).toBe((106 - 103) * 1000);
+    expect(deliveredStageSum(row)).toBe(row.deliveredLatencyMs);
+    // The delivered instant IS the ack: total = ackAtB - (origin + 103 s).
+    expect(row.deliveredLatencyMs).toBe(ackAtB - (ORIGIN + 103_000));
+  });
+
+  it("keeps a deferred (post-accept) ack measurable with its own window", () => {
+    const tracker = new LiveDeliveryTracker();
+    const firedAtMs = ORIGIN + 40_000 + 200;
+    const settledAtMs = firedAtMs + 900;
+    const acceptStartMs = settledAtMs + 5;
+    tracker.noteWindow({
+      centerTs: 40,
+      lagMs: 200,
+      firedAtMs,
+      settledAtMs,
+      acceptStartMs,
+      acceptDoneMs: null,
+    });
+    // No ack during accept: the row is only reported later (the deferred
+    // re-attestation path), 3 s after the accept returned.
+    const acceptDoneMs = acceptStartMs + 70;
+    tracker.noteAcceptDone(40, acceptDoneMs);
+    expect(tracker.rows().length).toBe(0);
+    tracker.notePersisted(40, acceptDoneMs + 3_000, "hl-attested");
+    const row = tracker.rows()[0];
+    expect(row.acceptMs).toBe(70);
+    expect(row.persistAckMs).toBe(3_000);
+    expect(deliveredStageSum(row)).toBe(row.deliveredLatencyMs);
+  });
+});

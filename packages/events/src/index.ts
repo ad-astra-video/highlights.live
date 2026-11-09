@@ -774,6 +774,18 @@ export const ObserveMetricsSnapshotSchema = z.object({
             acceptMs: z.number().min(0),
             /** Emit -> store write-through ack. */
             persistAckMs: z.number().min(0),
+            /** ADAAAA-8495 (additive optional): the judged window centre -> the
+             *  row's own (localized) trigger, `(centerTs - triggerTs) * 1000`.
+             *  Without this the stored row cannot reconstruct its total on a
+             *  localized trigger (`@108.8 s` shape) — `deliveredLatencyRow`
+             *  emits 9 keys and `JobSchema.parse` was stripping 2 of them.
+             *  Absent on rows written before this field existed. */
+            localizeOffsetMs: z.number().optional(),
+            /** ADAAAA-8495 (additive optional): the persisted highlight row id —
+             *  the metric's dedupe key, so a stored row can be joined to its
+             *  highlight and a re-attested row cannot double-count. Absent on
+             *  rows written before this field existed. */
+            highlightId: z.string().optional(),
           })
         )
         .max(200),
