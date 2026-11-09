@@ -884,6 +884,7 @@ export function liveUnattestedGoalRefusal(used: LiveGoalAttestationUsed): string
   const pre = used.preSamples ?? 0;
   const need = used.need ?? SCOREBOARD_MIN_CONSISTENT_READS;
   if (used.scoreBoardChanged) {
+    // ATTEST-4 (ADAAAA-8492): dead through the demote seam — a hint with scoreReads=0 attests and no stored live row has ever had the shape; kept for a direct copy caller.
     if (reads === 0) {
       return "the scorebug was never read in this span, so the scoreboard-change hint could not be measured";
     }
