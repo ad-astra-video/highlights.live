@@ -124,7 +124,12 @@ export interface WindowDeliveryTimings {
 /** Bounded ring: a 300 s share yields < 100 delivered rows, so 200 is slack. */
 const MAX_ROWS = 200;
 
-function percentile(sorted: number[], p: number): number {
+/** Nearest-interpolated percentile over an already-sorted sample list. Exported
+ * so the AC-B grader (`live-leg-grade.ts`, ADAAAA-8487) computes p50/p95 with
+ * exactly the arithmetic `deliveredLatencySummary` writes into the record — a
+ * grader that re-derives its own percentile would disagree with the stored
+ * number it is grading. */
+export function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
   if (sorted.length === 1) return sorted[0];
   const rank = (p / 100) * (sorted.length - 1);
