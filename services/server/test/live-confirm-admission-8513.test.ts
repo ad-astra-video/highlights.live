@@ -284,6 +284,17 @@ describe("AC3 — the reserved goal slice and the published admission block", ()
     expect(ConfirmDiveBudget.reservedTokens(1)).toBe(1);
   });
 
+  it("publishes the configured cap, not the compile-time default", () => {
+    // ADAAAA-8513 verification defect: the pump admits against
+    // cfg.liveConfirmMaxDivesPer300S, so the stored `diveBudget.cap` must be
+    // that same number (an operator-composed 4 used to report cap: 8).
+    const composed = new LiveRunShared({ audioRetainS: 400, liveConfirmMaxDivesPer300S: 4 });
+    expect(composed.confirmDiveMaxPer300s()).toBe(4);
+    expect(composed.confirmDiveBudget()).toMatchObject({ cap: 4, reserved: LIVE_CONFIRM_RESERVED_DIVES });
+    // The default is still the shipped constant (AC7: unchanged at 8).
+    expect(new LiveRunShared().confirmDiveBudget().cap).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
+  });
+
   it("a general dive cannot spend the reserved slice", async () => {
     const b = new ConfirmDiveBudget();
     // cap 8 -> 5 general tokens; the provisional rows still get their 3.
