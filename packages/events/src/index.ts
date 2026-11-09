@@ -1871,6 +1871,11 @@ export const HighlightRecordSchema = z.object({
       diveAt: z.string(),
       diveLatencyMs: z.number().min(0),
       contextDegraded: z.array(z.string()),
+      /** ADAAAA-8506 (AC4): why the dive settled WITHOUT a model verdict
+       *  (`budget` / `pool_busy` / `no_persisted_frames` / `frame_unreadable` /
+       *  `timeout` / `transport_failure` / `passthrough`). Additive optional; a
+       *  verdict-producing dive never carries it. */
+      dropReason: z.string().optional(),
     })
     .optional(),
   deferredAttestation: z

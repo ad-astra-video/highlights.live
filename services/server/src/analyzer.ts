@@ -8993,6 +8993,42 @@ export function liveWindowDescription(d: DecisionResult | null | undefined): str
   return typeof d.runningSummary === "string" ? d.runningSummary.trim() : "";
 }
 
+/** ADAAAA-8506: the CANDIDATE-level reason to skip the Stage-2 dive, on the
+ * live rail.
+ *
+ * Before this the skip read `hasIndependentAttestation(candidate)`, which asks
+ * only whether the RAW `scoreBoardChanged` flag is true. The ROW-level live
+ * scoring gate (`liveGoalHasMeasuredEvidence`) asks something stricter: the
+ * claim must agree with the measured score span (`scoreChangeAttests`). On job
+ * `c4d33a26` every goal-shaped window carried
+ * `scoreboard score change observed: yes` from OCR that was reading sponsor
+ * banners, so the candidate gate called ~12/16 windows "attested" and skipped
+ * the dive — while the row gate refused the same windows as un-attested
+ * (`postSamples: 0`, `need: 2`) and demoted them. The same signal was
+ * "attested" to skip the dive and "not attested" to promote the row.
+ *
+ * The dive is the only gate that can turn one of those rows into a GOAL, so the
+ * skip must be the SAME predicate the row gate applies — a noisy flag can never
+ * suppress the dive that exists to check it. The confirm-derived channels
+ * (`corroborated` / `goalConfirmed`) are deliberately absent: they only exist
+ * AFTER a dive, and using them here would be circular.
+ */
+export function candidateHasMeasuredAttestation(c: {
+  ballOutcome?: string | null;
+  goalCrossed?: boolean;
+  scoreBoardChanged?: boolean;
+  scoreBoardDelta?: ScoreboardDeltaEvidence | null;
+  scoreReads?: ScoreReadDiagnostics | null;
+}): boolean {
+  return liveGoalHasMeasuredEvidence({
+    scoreBoardChanged: c.scoreBoardChanged,
+    goalCrossed: c.goalCrossed,
+    ballOutcome: c.ballOutcome,
+    scoreBoardDelta: c.scoreBoardDelta,
+    scoreReads: c.scoreReads,
+  });
+}
+
 /** The Stage-2 trigger: an un-attested goal-type candidate whose Stage-1 read
  * is a scoring_play accept (goal-shaped), OR a goal-shaped read left as a bare
  * non-accept for lack of in-window corroboration (the delayed-corroboration
@@ -9003,7 +9039,14 @@ export function liveWindowDescription(d: DecisionResult | null | undefined): str
  * config gate is `cfg.confirmEnabled` — off is a strict no-op. */
 export function shouldRunConfirm(
   cfg: AnalyzerConfig,
-  candidate: { eventType: string; ballOutcome?: string; goalCrossed?: boolean; scoreBoardChanged?: boolean },
+  candidate: {
+    eventType: string;
+    ballOutcome?: string;
+    goalCrossed?: boolean;
+    scoreBoardChanged?: boolean;
+    scoreBoardDelta?: ScoreboardDeltaEvidence | null;
+    scoreReads?: ScoreReadDiagnostics | null;
+  },
   stage1Decision: DecisionResult
 ): boolean {
   if (!cfg.confirmEnabled) return false;
@@ -9014,7 +9057,12 @@ export function shouldRunConfirm(
   // alone made the gate inert for the delayed-corroboration goal whose Stage-1
   // read was outcome=not_highlight / eventType=GOAL (ADAAAA-7357).
   if (!isGoalShaped(stage1Decision)) return false;
-  if (hasIndependentAttestation(candidate)) return false;
+  // ADAAAA-8506: on the LIVE rail the skip must agree with the row-level gate,
+  // so a noisy `scoreBoardChanged` cannot suppress the dive that checks it. VOD
+  // keeps the legacy flag read: its promote path is the inline dive verdict, not
+  // `liveGoalHasMeasuredEvidence`.
+  const liveRail = cfg.liveObserveLoop === true && cfg.decideWindowN === undefined;
+  if (liveRail ? candidateHasMeasuredAttestation(candidate) : hasIndependentAttestation(candidate)) return false;
   // Accepted highlights: fire ONLY for a genuine goal read (scoring_play /
   // legacy goal-type). A requested near-miss / big-play highlight
   // (isHighlight=true, outcome != scoring_play) is never a goal, so no confirm.
@@ -9195,6 +9243,9 @@ export async function confirmReconcile(
     goalCrossed?: boolean;
     scoreBoardChanged?: boolean;
     scoreBoardDelta?: ScoreboardDeltaEvidence;
+    /** ADAAAA-8506: the pooled score-read span, so the dive skip and the row
+     *  gate read the SAME attestation. */
+    scoreReads?: ScoreReadDiagnostics;
   },
   /** ADAAAA-7365: the goal EVENT's stable content timestamp (goal trigger /
    * localized instant). For the VOD observe path this is the goal's own content
