@@ -3788,7 +3788,8 @@ export interface LiveObserveMetricsSnapshot {
    *  term (`costUsd = decideFee * (decideCalls + confirmCalls) + perceive`).
    *  Absent when the lane never ran. */
   confirmCalls?: number;
-  /** ADAAAA-8205: dives that produced a verdict (<= 8 per 300 s per stream). */
+  /** ADAAAA-8205: dives that produced a verdict (bounded by the configured
+   *  per-300 s dive cap, `diveBudget.cap`). */
   confirmDiveCount?: number;
   /** ADAAAA-8205: dives dropped fail-closed (busy pool / budget / timeout /
    *  transport / parse) — every one leaves its card unchanged. */
@@ -5088,7 +5089,8 @@ export class LiveRunShared {
   private confirmBudgetAttemptCounts = new Map<string, number>();
   /** ADAAAA-8513 (AC4): drops keyed by cause (never a bare integer). */
   private confirmDiveDropsByReason = new Map<string, number>();
-  /** Sliding per-stream dive budget (<= 8 per 300 s by default, 3 reserved). */
+  /** Sliding per-stream dive budget (the configured per-300 s cap, with
+   *  `min(3, cap)` reserved for provisional-goal rows — AC3). */
   readonly confirmBudget = new ConfirmDiveBudget();
   /** Confirm calls this run made — metered like a decide call. */
   private confirmDiveCallCount = 0;
