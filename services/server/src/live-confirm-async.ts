@@ -111,6 +111,11 @@ export interface ConfirmAttestation {
   diveAt: string;
   diveLatencyMs: number;
   contextDegraded: DegradedSignal[];
+  /** ADAAAA-8506 (AC4): why a dive ended WITHOUT a model verdict (budget,
+   *  pool_busy, no_persisted_frames, timeout, transport_failure, passthrough).
+   *  Present so a finished job's provisional row always carries a stored verdict
+   *  field instead of staying `status:"provisional"` with nothing to read. */
+  dropReason?: string;
 }
 
 /**
@@ -394,17 +399,21 @@ export interface ConfirmDiveAdoption {
 export function confirmDiveAdoption(
   row: { outcome?: string; eventType?: string; provisionalGoal?: Record<string, unknown> } & RowMeasuredScoreEvidence,
   verdict: ConfirmDiveVerdict | undefined,
-  meta: { diveAt: string; diveLatencyMs: number; contextDegraded: DegradedSignal[] }
+  meta: { diveAt: string; diveLatencyMs: number; contextDegraded: DegradedSignal[]; droppedReason?: string }
 ): ConfirmDiveAdoption {
   const goalConfirmed = verdict?.goalConfirmed ?? null;
   const corroborated = verdict?.corroborated === true;
   const attestation: ConfirmAttestation = {
-    goalConfirmed: goalConfirmed ?? "passthrough",
+    // ADAAAA-8506 (AC4): a dropped dive is a settled attempt with a stored
+    // verdict field of its own — never a row left `provisional` with nothing to
+    // read on a finished job.
+    goalConfirmed: goalConfirmed ?? (meta.droppedReason ? "dropped" : "passthrough"),
     corroborated,
     corroborationSource: verdict?.corroborationSource ?? null,
     diveAt: meta.diveAt,
     diveLatencyMs: Math.max(0, Math.round(meta.diveLatencyMs)),
     contextDegraded: meta.contextDegraded,
+    ...(meta.droppedReason ? { dropReason: meta.droppedReason } : {}),
   };
   // A row that already left the provisional lane (e.g. a later scoreboard read
   // re-attested it first) is not rewritten by a late dive: one verdict move.
@@ -522,7 +531,14 @@ export interface ConfirmDiveIo {
 export interface ConfirmDiveResult {
   ok: boolean;
   /** Why the dive was dropped (absent when it produced a verdict). */
-  droppedReason?: "no_persisted_frames" | "frame_unreadable" | "timeout" | "transport_failure" | "passthrough";
+  droppedReason?:
+    | "no_persisted_frames"
+    | "frame_unreadable"
+    | "timeout"
+    | "transport_failure"
+    | "passthrough"
+    | "budget"
+    | "pool_busy";
   verdict?: ConfirmDiveVerdict;
   context: ConfirmDiveContext;
   latencyMs: number;
@@ -546,6 +562,33 @@ export function confirmDiveMadeCall(result: ConfirmDiveResult): boolean {
     default:
       return false;
   }
+}
+
+/** ADAAAA-8506 (AC4): the result a DROPPED dive hands the adoption writer.
+ *
+ *  Before this a drop only cleared the run's in-memory descriptor, so the row
+ *  kept `pendingConfirmDive` + `provisionalGoal.status:"provisional"` with no
+ *  verdict field at all — on a finished job that row is unreadable ("did the
+ *  dive run?"). Every drop is settled exactly once, so its row gets the terminal
+ *  stamp (`goalConfirmed:"dropped"`, `dropReason`) through the same in-place
+ *  verdict writer a promoted/refuted row uses. No model call, no spend. */
+export function droppedDiveResult(reason: ConfirmDiveResult["droppedReason"], latencyMs = 0): ConfirmDiveResult {
+  return {
+    ok: false,
+    droppedReason: reason,
+    context: {
+      frames: [],
+      keyframes: [],
+      trajectories: [],
+      opticalFlowMagnitude: 0,
+      flowMagnitudes: [],
+      audioLevels: [],
+      audioB64: "",
+      contextDegraded: [],
+    },
+    latencyMs,
+    framesSent: 0,
+  };
 }
 
 /**
@@ -718,6 +761,9 @@ export async function runDueConfirmDives(deps: {
       deps.run.noteConfirmDiveDropped(`pool_busy:${busyReason}`);
       out.dropped++;
       log(`[live-confirm:${deps.jobId}] dive for ${entry.highlightId} dropped: decide pool busy (${busyReason})`);
+      // AC4: a drop is terminal — stamp the row so no finished job keeps a
+      // provisional row with no stored verdict field.
+      await deps.adopt(entry, droppedDiveResult("pool_busy"));
       continue;
     }
     // One attempt per entry, marked BEFORE the call so a retried pump can never
@@ -731,6 +777,7 @@ export async function runDueConfirmDives(deps: {
         `[live-confirm:${deps.jobId}] budget (${deps.maxDivesPer300s ?? LIVE_CONFIRM_MAX_DIVES_PER_300S}/` +
           `${LIVE_CONFIRM_BUDGET_WINDOW_S}s) exhausted — dive for ${entry.highlightId} dropped`
       );
+      await deps.adopt(entry, droppedDiveResult("budget"));
       continue;
     }
     const result = await runConfirmDive(entry, deps.io, { jobId: deps.jobId, log });
@@ -745,6 +792,10 @@ export async function runDueConfirmDives(deps: {
       deps.run.dropPendingConfirmDive(key);
       deps.run.noteConfirmDiveDropped(result.droppedReason ?? "failed");
       out.dropped++;
+      // AC4: stamp the terminal drop verdict on the row (the descriptor is
+      // cleared by the same patch), so a finished job never keeps a provisional
+      // row with no stored verdict field.
+      await deps.adopt(entry, result);
       continue;
     }
     const kind = await deps.adopt(entry, result);
