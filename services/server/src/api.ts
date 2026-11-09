@@ -26,6 +26,7 @@ import {
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
+  type DecideCapacityLatch,
   type DeferredGoalAttestationUpgrade,
   type GoalLineCalibration,
   type PipelineClient,
@@ -1868,6 +1869,37 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // perceive session and without routing the share back onto the control-plane
   // `/ingest` rail (which would regress the Phase-2 media-server migration,
   // ADAAAA-6867). Lazily created on the first relayed observation/audio chunk.
+  /**
+   * ADAAAA-8504: latch the decide-admission snapshot ONCE at a decide job's start
+   * and hand back a getter for the record.
+   *
+   * Why a latch and not a read at settle: a live job can refresh capacity mid-run
+   * (`DECIDE_CAPACITY_REFRESH_S`), and the pre-registered condition is about the
+   * ceiling the gate ADMITTED the job at. The latch ALSO awaits the job-start
+   * probe (`primeDecideCapacity`, the same single-flight refresh the analyzer
+   * kicks in `beginDecideJob`), so the recorded numbers are this job's
+   * `[decide-capacity]` line — not the previous job's leftovers.
+   *
+   * Nothing is fabricated: with no probe/gate the client still reports the funded
+   * fallback snapshot (its documented "dark discovery" posture), and a client with
+   * no admission metrics at all latches nothing, which the record reads as
+   * "not recorded" (null). Fire-and-forget: a probe failure can never fail a job.
+   */
+  function latchDecideCapacityAtStart(client: PipelineClient): () => DecideCapacityLatch | undefined {
+    const at = new Date().toISOString();
+    let latched: DecideCapacityLatch | undefined;
+    void (async () => {
+      try {
+        const snap = client.primeDecideCapacity
+          ? await client.primeDecideCapacity()
+          : client.decideAdmissionMetrics?.()?.capacity;
+        if (snap) latched = { capacity: snap, at };
+      } catch {
+        /* observation only: the posture stays unrecorded rather than invented */
+      }
+    })();
+    return () => latched;
+  }
   async function ensureMediaRail(
     job: { id: string; ownerId?: string; gameHint?: string; preferLabels?: string[]; cameraId?: string; perceiveSessionId?: string },
     bj: {
@@ -2100,6 +2132,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // depth follows the fleet (a probe landing mid-run widens it); the static
         // funded number is the fallback.
         decideAdmission: anaCfg.liveDecideEffectiveAdmission ?? anaCfg.liveDecideAdmission,
+        // ADAAAA-8504: the capacity snapshot this share started under, folded into
+        // `observeMetrics.decideCapacity` at share end (the reason this ticket
+        // exists: a browser share recorded no capacity posture at all).
+        decideCapacityLatch: latchDecideCapacityAtStart(adapter),
         observeDecideOffLoop: cfg.observeDecideOffLoop,
       },
       shared

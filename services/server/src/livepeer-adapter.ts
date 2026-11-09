@@ -12,6 +12,7 @@ import {
   type DecideAdmissionMetrics,
   type DecideAttemptTiming,
   type DecideCapacityProbeResult,
+  type DecideCapacitySnapshot,
   type LivePayment,
   type RemotePaymentStateSig,
   type SignerClient,
@@ -198,6 +199,17 @@ export class OrchestratorAdapter implements PipelineClient {
   /** ADAAAA-8254: the job's decide admission counters + capacity snapshot. */
   decideAdmissionMetrics(): DecideAdmissionMetrics {
     return this.client.decideAdmissionMetrics();
+  }
+
+  /**
+   * ADAAAA-8504: the capacity snapshot a decide job STARTS under. The job-start
+   * probe is already kicked by {@link beginDecideJob} (fire-and-forget); this
+   * awaits that same single-flight refresh, so the caller records the value the
+   * `[decide-capacity]` line printed instead of the previous job's leftovers.
+   * Never throws (the client's refresh swallows probe failures).
+   */
+  primeDecideCapacity(): Promise<DecideCapacitySnapshot> {
+    return this.client.refreshDecideCapacity(true);
   }
 
   /**

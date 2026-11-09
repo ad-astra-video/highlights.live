@@ -479,11 +479,24 @@ export const DecideCapacitySnapshotSchema = z.object({
   // advertisement that genuinely lists no decide runner. Optional because rows
   // written before this change carry only the three numbers.
   probeOk: z.boolean().optional(),
+  // ADAAAA-8504 (AC3): how many decide REGISTRATIONS the last well-formed
+  // answer carried. This is the honest name for the old `runners` key: the box
+  // registers exactly ONE decide app (`highlights-decide`) on any worker/seq
+  // width, so `runners >= 3` can never hold and is not evidence of a bad deploy.
+  // Written instead of `runners` from this change on.
+  decideRegistrations: z.number().int().min(0).optional(),
+  // LEGACY: `runners` is the pre-ADAAAA-8504 name of `decideRegistrations`. Kept
+  // readable so rows written by ADAAAA-8262..8437 still parse; the writer no
+  // longer emits it.
   runners: z.number().int().min(0).optional(),
   source: z.enum(["probe", "last-known", "funded"]).optional(),
   // ADAAAA-8437: the safety cap the advertisement was clamped to. Optional for
   // the same reason: pre-8437 rows carry no cap.
   cap: z.number().int().min(1).optional(),
+  // ADAAAA-8504: ISO wall clock this snapshot was taken (latched at decide-job
+  // start). Optional so every row written before this change still parses; a row
+  // with no `decideCapacity` block at all reads as "not recorded" (null), never 0.
+  at: z.string().optional(),
 });
 export type DecideCapacitySnapshot = z.infer<typeof DecideCapacitySnapshotSchema>;
 

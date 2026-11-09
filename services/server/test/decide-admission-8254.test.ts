@@ -102,8 +102,20 @@ describe("ADAAAA-8254 AC4: admission counters persist on the job record", () => 
       decide503: 4,
       decidePauses: 3,
       capacityProbeErrors: 1,
-      decideCapacity: { advertised: 4, funded: 8, effective: 4, probeOk: true, runners: 1, source: "probe", cap: 32 },
+      // ADAAAA-8504 (AC3): the RECORD names the count `decideRegistrations`; the
+      // client/log line keeps `runners` (ops greps it). `at` dates the snapshot.
+      decideCapacity: {
+        advertised: 4,
+        funded: 8,
+        effective: 4,
+        probeOk: true,
+        decideRegistrations: 1,
+        source: "probe",
+        cap: 32,
+        at: expect.any(String),
+      },
     });
+    expect((merged.decideCapacity as any).runners).toBeUndefined();
     // No gate (direct-dev / older client) => byte-identical snapshot.
     expect(withDecideAdmissionMetrics(baseObserveMetrics, undefined)).toEqual(baseObserveMetrics);
   });

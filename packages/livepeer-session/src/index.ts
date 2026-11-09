@@ -416,7 +416,11 @@ export interface DecideCapacitySnapshot {
    * `false` means "probe failed" — distinct from a probe that answered with an
    * empty fleet (`probeOk: true, runners: 0`). Never affects the arithmetic. */
   probeOk: boolean;
-  /** ADAAAA-8262: decide runners in the last well-formed answer (0 = none). */
+  /** ADAAAA-8262: decide REGISTRATIONS in the last well-formed answer (0 = none).
+   * ADAAAA-8504: the name is historical — on the fleet the box registers exactly
+   * one `highlights-decide` app at any worker/seq width, so this counts
+   * registrations, NOT workers. The job record carries it as
+   * `decideRegistrations`. */
   runners: number;
   /** ADAAAA-8262: provenance of `advertised` (see {@link DecideCapacitySource}). */
   source: DecideCapacitySource;

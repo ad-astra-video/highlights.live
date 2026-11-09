@@ -36,13 +36,18 @@ export interface WindowAuditCapacity {
   effective: number;
   /** False = the last probe failed (distinct from an empty fleet). */
   probeOk?: boolean;
-  /** Decide runners in the last well-formed answer. */
+  /** ADAAAA-8504: decide REGISTRATIONS in the last well-formed answer (one
+   *  `highlights-decide` app however wide the worker set is). */
+  decideRegistrations?: number;
+  /** LEGACY: the pre-8504 name of `decideRegistrations` (older rows only). */
   runners?: number;
   /** Provenance of `advertised`. */
   source?: "probe" | "last-known" | "funded";
   /** ADAAAA-8437: the `DECIDE_MAX_ADMISSION` safety bound `effective` was
    * clamped to (absent on records written before the field existed). */
   cap?: number;
+  /** ADAAAA-8504: ISO wall clock the snapshot was taken (latched at job start). */
+  at?: string;
 }
 
 export interface WindowAuditPayload {
@@ -132,9 +137,16 @@ export function windowAuditForJob(job: AuditJob): WindowAuditPayload {
         funded: counter(rawCapacity.funded) ?? 0,
         effective: counter(rawCapacity.effective) ?? 0,
         ...(rawCapacity.probeOk !== undefined ? { probeOk: rawCapacity.probeOk } : {}),
-        ...(rawCapacity.runners !== undefined ? { runners: counter(rawCapacity.runners) ?? 0 } : {}),
+        // ADAAAA-8504: `decideRegistrations` is the written name; `runners` is
+        // only read back from rows written before the rename.
+        ...(rawCapacity.decideRegistrations !== undefined
+          ? { decideRegistrations: counter(rawCapacity.decideRegistrations) ?? 0 }
+          : rawCapacity.runners !== undefined
+            ? { runners: counter(rawCapacity.runners) ?? 0 }
+            : {}),
         ...(rawCapacity.source !== undefined ? { source: rawCapacity.source } : {}),
         ...(rawCapacity.cap !== undefined ? { cap: Math.max(1, counter(rawCapacity.cap) ?? 1) } : {}),
+        ...(rawCapacity.at !== undefined ? { at: rawCapacity.at } : {}),
       }
     : null;
   return {
