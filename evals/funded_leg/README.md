@@ -17,12 +17,18 @@ cap.
 | quiet-window preflight | samples the gate for the whole window before any metered call: 0 nonterminal jobs, media `capacity.activeSessions 0`, all lease counters 0, 0 pool `session=` markers (the workers log `session=<jobId>`; `session=cyc-` is a subset). Any bad sample, unreadable probe, or missing pool container refuses the leg. | `3` |
 | hard wall-clock stop | stop fires at `--authorized-duration-s`, driven only by the monotonic clock. Media progress / `liveEdge` is never a stop input. | — |
 | stop confirmation | if the job is not terminal within `--hard-stop-slack-s` (<= 10 s) the run exits non-zero; it never reports an unconfirmed stop as a valid leg. | `4` |
-| metered-cost ceiling | stops early at `--abort-at-usd` (default `cap - min($0.05, 5%)`; a $0.65 cap aborts at $0.60, per ADAAAA-8487). | — |
+| metered-cost guard | aborts at `--abort-at-usd` on whichever is higher: the live `costUsd` read or `perceiveSessionS x --metered-rate-usd-per-s`. A wall-clock-only stop cannot hold the cap when metered seconds inflate (8483: 544.5 s metered inside a 300 s window). | — |
+| no cost source | if neither `costUsd` nor `perceiveSessionS` is readable within `--cost-source-grace-s`, the leg is stopped and refused (exit 5). A leg with no metered guard is not authorized to run. | `5` |
 | authorized-vs-actual | evidence JSON `shape` block + a ready-to-paste table and `AUTHORIZED-VS-ACTUAL:` line. Overshoot is a field, not a discovery. | `0` within / `2` over |
 | setup failure | job/session/driver failure stops whatever was created. | `5` |
 
 Exit codes: `0` within, `2` over, `3` gate closed (nothing metered), `4` stop
-unconfirmed or overshoot beyond slack, `5` setup refused/failed.
+unconfirmed or overshoot beyond slack, `5` setup refused/failed (including "no
+readable cost source").
+
+The harness owns **stop + preflight + metered abort**. It does not grade a leg:
+PASS/FAIL/UNMEASURED belongs to the offline grader on `origin/master` 123da6b
+(`services/server/src/live-leg-grade.ts`, `scripts/live-leg-grade.ts`).
 
 ## Dry-run (how the guard is proved, $0)
 
@@ -49,6 +55,11 @@ python3 -m unittest discover -s evals/funded_leg -v
 
 ## Funded cell (the ADAAAA-8516 leg)
 
+The authorized shape is **read from the leg ticket, not hard-coded**: 480 s with
+a 500 s hard-stop ceiling, $0.65 metered (ADAAAA-8515), metered guard at $0.60.
+Pass `--authorized-duration-s 480`; the harness stops at 480 s and tolerates
+<= 10 s of overshoot, which is stricter than the card's 500 s ceiling.
+
 Run from the repo root. The control stack (server, postgres, media node) is on
 `livepeer-ai-x99`; the decide pool workers (`decide-gpu0/1/2`) are on the 5090
 host, which is **not** reachable from x99 (ssh and docker TCP are closed). Two
@@ -57,7 +68,7 @@ ways to satisfy the pool clause, both machine-checked:
 ```sh
 # (a) run on the box; the pool probe goes out through a host that can see it
 HL_LEG_USER_ID=<qa user id> python3 evals/funded_leg/funded_leg.py \
-  --authorized-duration-s 300 --cap-usd 0.65 --quiet-window-min 10 \
+  --authorized-duration-s 480 --cap-usd 0.65 --quiet-window-min 10 \
   --job-source browser --game-hint soccer \
   --driver-cmd 'sh docker/qa-drive-8035.sh --sid {sid} --seconds {seconds} --no-wait --log /state/drive-{sid}.log' \
   --cyc-box-cmd '<command that reaches ai-server-5090x3-1>' \
@@ -67,17 +78,15 @@ HL_LEG_USER_ID=<qa user id> python3 evals/funded_leg/funded_leg.py \
 python3 evals/funded_leg/funded_leg.py \
   --box-cmd 'python3 /paperclip/.hermes/skills/komodo/scripts/komodo.py livepeer-ai-x99' \
   --cyc-box-cmd 'python3 /paperclip/.hermes/skills/komodo/scripts/komodo.py ai-server-5090x3-1' \
-  --authorized-duration-s 300 --cap-usd 0.65 --quiet-window-min 10 \
+  --authorized-duration-s 480 --cap-usd 0.65 --quiet-window-min 10 \
   --job-source browser --game-hint soccer \
   --driver-cmd 'cd /home/brad/highlights.live && sh docker/qa-drive-8035.sh --sid {sid} --seconds {seconds} --no-wait --log /state/drive-{sid}.log' \
+  --gpu-hours <measured> \
   --evidence-out /tmp/leg8516-evidence.json
 ```
 
 If no route to the pool host exists, the preflight refuses (exit 3) rather than
 assuming it is idle — that refusal is the guard working, not a harness bug.
-
-The stop fires at 300 s (tolerance <= 10 s). That is stricter than the 320 s
-ceiling in the ADAAAA-8516 card, which remains an upper bound, not a target.
 
 `--token` / `HL_LEG_TOKEN` may be supplied instead of `--user-id`; otherwise the
 harness mints a 4 h JWT inside `highlights-server` (needs `jsonwebtoken`, which
