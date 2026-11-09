@@ -97,7 +97,11 @@ class GateClosed(RuntimeError):
 
 
 class SetupFailed(RuntimeError):
-    """The leg could not be created or driven."""
+    """The leg could not be created, driven, or metered."""
+
+    def __init__(self, message: str, job_id: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.job_id = job_id
 
 
 @dataclass
@@ -403,6 +407,11 @@ class StubApi:
     def __init__(self, scenario: str, cost_per_s: float = 0.0016) -> None:
         self.scenario = scenario
         self.cost_per_s = cost_per_s
+        # `clean-no-cost` models a leg whose billed costUsd stays 0 mid-leg while
+        # perceiveSessionS advances (the projection path). `no-cost-source`
+        # models both being unreadable: the leg must be refused.
+        self.live_cost = scenario not in ("clean-no-cost", "no-cost-source")
+        self.metered = scenario != "no-cost-source"
         busy = scenario == "busy"
         self.gate = {
             "nonterminal": 1 if busy else 0,
@@ -526,9 +535,8 @@ class StubApi:
             return None
         elapsed = time.monotonic() - float(self.job["_t0"])
         if self.job["status"] == "running":
-            cost = round(elapsed * self.cost_per_s, 6)
-            self.job["costUsd"] = cost
-            self.job["perceiveSessionS"] = round(elapsed, 1)
+            self.job["costUsd"] = round(elapsed * self.cost_per_s, 6) if self.live_cost else 0.0
+            self.job["perceiveSessionS"] = round(elapsed, 1) if self.metered else 0.0
         out = {k: v for k, v in self.job.items() if not k.startswith("_")}
         return out
 
@@ -570,6 +578,9 @@ class Config:
     user_id: Optional[str]
     email: Optional[str]
     mint_token_container: str
+    metered_rate_usd_per_s: float
+    cost_source_grace_s: float
+    gpu_hours: Optional[float]
 
 
 def sample_gate(runner: Any, cfg: Config, quiet_since: datetime) -> GateSample:
@@ -657,6 +668,8 @@ class LegResult:
     duration_s: float
     stop_calls: int
     driver_rc: Optional[int]
+    cost_source: str = "none"
+    projected_cost_usd: float = 0.0
     driver_output_tail: str = ""
 
 
@@ -751,16 +764,38 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
     stop_calls = 0
     stop_lock = threading.Lock()
     stop_reason = "ended"
-    state: Dict[str, Any] = {"cost": 0.0, "perceive_session_s": 0.0, "status": "running"}
+    state: Dict[str, Any] = {
+        "cost": 0.0,
+        "perceive_session_s": 0.0,
+        "status": "running",
+        "cost_source": "none",
+        "projected": 0.0,
+        "live_readable": False,
+    }
 
     def poll_state() -> str:
         res = runner.http("GET", f"{cfg.job_base}/jobs/{job_id}", headers=headers)
         status = _job_field(res.body, "status", "unknown")
+        raw = res.body.get("job") if isinstance(res.body, dict) and isinstance(res.body.get("job"), dict) else res.body
+        has_cost_field = isinstance(raw, dict) and "costUsd" in raw
+        has_session_field = isinstance(raw, dict) and "perceiveSessionS" in raw
         state["status"] = status
         state["cost"] = float(_job_field(res.body, "costUsd", 0.0) or 0.0)
         state["perceive_session_s"] = float(
             _job_field(res.body, "perceiveSessionS", 0.0) or 0.0
         )
+        state["projected"] = round(
+            state["perceive_session_s"] * cfg.metered_rate_usd_per_s, 6
+        )
+        if state["cost"] > 0:
+            state["cost_source"] = "live_cost"
+            state["live_readable"] = True
+        elif state["perceive_session_s"] > 0 and has_session_field:
+            # Metered seconds are readable, so the projection is a valid guard
+            # even while the billed figure is still 0.
+            state["cost_source"] = "projected_cost"
+        if has_cost_field:
+            state["live_readable"] = True
         return status
 
     def issue_stop(reason: str, allow_retry: bool = True) -> bool:
@@ -819,11 +854,36 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
                 # thread having run, and never on a stop moment.
                 issue_stop("authorized_duration")
                 break
-            if state["cost"] >= cfg.abort_at_usd:
-                log(f"cost ceiling {cfg.abort_at_usd:.4f} reached "
-                    f"(cost={state['cost']:.4f}) — stopping")
-                issue_stop("cost_cap")
+            # CEO A1: a wall-clock stop alone cannot hold the cap when metered
+            # seconds inflate (8483: 544.5 s metered inside a 300 s window).
+            # Abort on whichever source is higher: the billed figure or the
+            # metered-second projection at the authorized $/s.
+            effective = max(state["cost"], state["projected"])
+            if effective >= cfg.abort_at_usd:
+                source = (
+                    "live_cost"
+                    if state["cost"] >= state["projected"]
+                    else "projected_cost"
+                )
+                log(
+                    f"metered ceiling {cfg.abort_at_usd:.4f} reached on {source} "
+                    f"(live=${state['cost']:.4f}, projected="
+                    f"${state['projected']:.4f} at {cfg.metered_rate_usd_per_s:.7f}/s, "
+                    f"metered={state['perceive_session_s']:.1f} s) — stopping"
+                )
+                issue_stop(source)
                 break
+            if (
+                state["cost_source"] == "none"
+                and now - t0 >= cfg.cost_source_grace_s
+            ):
+                issue_stop("no_cost_source")
+                raise SetupFailed(
+                    "no readable cost source: neither costUsd nor perceiveSessionS "
+                    f"moved in {cfg.cost_source_grace_s:.0f} s — a leg without a "
+                    "metered guard is not authorized to run",
+                    job_id=job_id,
+                )
             time.sleep(cfg.poll_s)
     finally:
         # Any exit path stops the leg: exception, keyboard, or normal end.
@@ -857,6 +917,8 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         duration_s=max(0.0, stop_time - t0),
         stop_calls=stop_calls,
         driver_rc=driver_rc,
+        cost_source=state["cost_source"],
+        projected_cost_usd=float(state["projected"]),
         driver_output_tail=driver_tail,
     )
 
@@ -873,6 +935,10 @@ def compare_shape(
     actual_cost_usd: float,
     duration_tolerance_s: float = 10.0,
     cost_epsilon_usd: float = 1e-6,
+    metered_session_s: Optional[float] = None,
+    metered_rate_usd_per_s: Optional[float] = None,
+    gpu_hours: Optional[float] = None,
+    abort_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Grade the leg against its authorization.
 
@@ -885,6 +951,26 @@ def compare_shape(
     duration_over = over_duration > duration_tolerance_s + 1e-9
     cost_over = over_cost > cost_epsilon_usd
     verdict = "OVER" if (duration_over or cost_over) else "WITHIN"
+    ratio = (
+        (metered_session_s / actual_duration_s)
+        if (metered_session_s is not None and actual_duration_s > 0)
+        else None
+    )
+    projected = (
+        (metered_session_s * metered_rate_usd_per_s)
+        if (metered_session_s is not None and metered_rate_usd_per_s is not None)
+        else None
+    )
+    metered_bits = ""
+    if metered_session_s is not None:
+        metered_bits = (
+            f", metered perceiveSessionS {metered_session_s:.1f} s"
+            + (f" ({ratio:.3f}x wall)" if ratio is not None else "")
+        )
+        if projected is not None:
+            metered_bits += f", projected ${projected:.4f}"
+            if projected > cap_usd + 1e-9:
+                metered_bits += " (OVER cap)"
     line = (
         f"AUTHORIZED-VS-ACTUAL: authorized duration <= {authorized_duration_s:.1f} s / "
         f"cap ${cap_usd:.4f} -> actual {actual_duration_s:.1f} s / "
@@ -892,17 +978,32 @@ def compare_shape(
         f"(duration {'over by ' if over_duration else 'headroom '}"
         f"{over_duration or authorized_duration_s - actual_duration_s:.2f} s, "
         f"cost {'over by ' if over_cost else 'headroom '}$"
-        f"{over_cost or cap_usd - actual_cost_usd:.4f}) — {verdict}"
+        f"{over_cost or cap_usd - actual_cost_usd:.4f}{metered_bits}) — {verdict}"
     )
     table = (
         "| shape | authorized | actual | delta |\n"
         "|---|---:|---:|---:|\n"
-        f"| duration | <= {authorized_duration_s:.1f} s | "
+        f"| duration (wall) | <= {authorized_duration_s:.1f} s | "
         f"{actual_duration_s:.1f} s | "
         f"{'+' if over_duration else ''}{actual_duration_s - authorized_duration_s:.1f} s |\n"
         f"| metered cost | <= ${cap_usd:.4f} | ${actual_cost_usd:.4f} | "
         f"{'+' if over_cost else ''}${actual_cost_usd - cap_usd:.4f} |"
     )
+    if metered_session_s is not None:
+        table += (
+            f"\n| perceiveSessionS | - | {metered_session_s:.1f} s | "
+            + (f"{ratio:.3f}x wall |" if ratio is not None else "n/a |")
+        )
+    if projected is not None:
+        table += (
+            f"\n| projected cost @ ${metered_rate_usd_per_s:.7f}/s | <= ${cap_usd:.4f} | "
+            f"${projected:.4f} | {'+' if projected > cap_usd else ''}"
+            f"${projected - cap_usd:.4f} |"
+        )
+    if gpu_hours is not None:
+        table += f"\n| GPU-hours | - | {gpu_hours:.3f} | n/a |"
+    if abort_source:
+        table += f"\n| stop source | - | `{abort_source}` | - |"
     return {
         "authorizedDurationS": authorized_duration_s,
         "authorizedCapUsd": cap_usd,
@@ -910,6 +1011,15 @@ def compare_shape(
         "actualCostUsd": round(actual_cost_usd, 6),
         "durationOvershootS": round(over_duration, 3),
         "costOvershootUsd": round(over_cost, 6),
+        "meteredPerceiveSessionS": (
+            round(metered_session_s, 3) if metered_session_s is not None else None
+        ),
+        "meteredWallRatio": round(ratio, 4) if ratio is not None else None,
+        "meteredRateUsdPerS": metered_rate_usd_per_s,
+        "projectedCostUsd": round(projected, 6) if projected is not None else None,
+        "projectedOverCap": bool(projected is not None and projected > cap_usd + 1e-9),
+        "gpuHours": gpu_hours,
+        "abortSource": abort_source,
         "verdict": verdict,
         "line": line,
         "table": table,
@@ -936,6 +1046,14 @@ def build_parser() -> argparse.ArgumentParser:
                         "unconfirmed (must be <= 10; default 10)")
     p.add_argument("--abort-at-usd", type=float, default=None,
                    help="stop early at this metered cost (default: cap - min(0.05, 5%%))")
+    p.add_argument("--metered-rate-usd-per-s", type=float, default=0.0011381,
+                   help="authorized $/perceive-second for the cost projection "
+                        "(default 0.0011381, the 8515 rate)")
+    p.add_argument("--cost-source-grace-s", type=float, default=15.0,
+                   help="how long a leg may run before neither costUsd nor "
+                        "perceiveSessionS is readable; then it is refused (default 15)")
+    p.add_argument("--gpu-hours", type=float, default=None,
+                   help="actual GPU-hours for the evidence block (operator-measured)")
     p.add_argument("--poll-s", type=float, default=1.0)
     p.add_argument("--settle-timeout-s", type=float, default=60.0,
                    help="how long to wait for the job to reach a terminal status")
@@ -973,7 +1091,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="run against the in-process stub; no box, no metered call")
     p.add_argument("--stub-scenario", default="clean",
-                   choices=["clean", "busy", "stop-stuck"])
+                   choices=["clean", "clean-no-cost", "no-cost-source", "busy", "stop-stuck"])
     p.add_argument("--preflight-only", action="store_true",
                    help="run the quiet-window preflight and exit; creates nothing "
                         "(the $0 way to verify the real probes)")
@@ -1022,6 +1140,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         user_id=args.user_id,
         email=args.email,
         mint_token_container=args.mint_token_container,
+        metered_rate_usd_per_s=args.metered_rate_usd_per_s,
+        cost_source_grace_s=args.cost_source_grace_s,
+        gpu_hours=args.gpu_hours,
     )
 
     stub: Optional[StubApi] = None
@@ -1054,6 +1175,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "durationS": cfg.authorized_duration_s,
             "capUsd": cfg.cap_usd,
             "abortAtUsd": round(cfg.abort_at_usd, 6),
+            "meteredRateUsdPerS": cfg.metered_rate_usd_per_s,
             "hardStopSlackS": cfg.hard_stop_slack_s,
             "quietWindowS": cfg.quiet_window_s,
         },
@@ -1129,6 +1251,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "exitCode": 5,
             "message": str(exc),
         }
+        if getattr(exc, "job_id", None):
+            evidence["leg"] = {"jobId": exc.job_id, "stopReason": "setup_failed"}
         log(f"SETUP FAILED: {exc}")
         return finish(5)
     except Exception as exc:  # unexpected: never leave a live job unflagged
@@ -1146,6 +1270,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         result.duration_s,
         result.cost_usd,
         duration_tolerance_s=cfg.hard_stop_slack_s,
+        metered_session_s=result.perceive_session_s,
+        metered_rate_usd_per_s=cfg.metered_rate_usd_per_s,
+        gpu_hours=cfg.gpu_hours,
+        abort_source=result.stop_reason,
     )
     within_slack = shape["durationOvershootS"] <= cfg.hard_stop_slack_s
     evidence["leg"] = {
@@ -1159,6 +1287,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "durationS": round(result.duration_s, 3),
         "costUsd": round(result.cost_usd, 6),
         "perceiveSessionS": result.perceive_session_s,
+        "costSource": result.cost_source,
+        "projectedCostUsd": round(result.projected_cost_usd, 6),
+        "meteredRateUsdPerS": cfg.metered_rate_usd_per_s,
+        "gpuHours": cfg.gpu_hours,
         "driverRc": result.driver_rc,
         "driverOutputTail": result.driver_output_tail,
     }

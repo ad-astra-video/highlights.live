@@ -50,6 +50,28 @@ class CompareShapeTest(unittest.TestCase):
         self.assertIn("<= 60.0 s", shape["table"])
         self.assertIn("<= $0.1000", shape["table"])
 
+    def test_metered_seconds_and_ratio_are_in_the_block(self):
+        shape = funded_leg.compare_shape(
+            300, 0.65, 300.0, 0.6197,
+            metered_session_s=544.5, metered_rate_usd_per_s=0.0011381,
+            gpu_hours=0.373, abort_source="authorized_duration",
+        )
+        self.assertAlmostEqual(shape["meteredWallRatio"], 1.815)
+        self.assertIn("perceiveSessionS 544.5 s", shape["line"])
+        self.assertIn("1.815x wall", shape["line"])
+        self.assertIn("| perceiveSessionS |", shape["table"])
+        self.assertIn("| GPU-hours |", shape["table"])
+        self.assertIn("authorized_duration", shape["table"])
+        self.assertAlmostEqual(shape["projectedCostUsd"], 544.5 * 0.0011381, places=4)
+
+    def test_metered_projection_row_flags_over_cap(self):
+        shape = funded_leg.compare_shape(
+            300, 0.65, 300.0, 0.6197,
+            metered_session_s=908, metered_rate_usd_per_s=0.0011381,
+        )
+        # 908 s x 0.0011381 = $1.033 — the A1 inflation case.
+        self.assertGreater(shape["projectedCostUsd"], 0.65)
+
 
 class GateClosedTest(unittest.TestCase):
     def test_busy_gate_refuses_before_any_metered_call(self):
@@ -147,9 +169,48 @@ class HardStopTest(unittest.TestCase):
             ]
         )
         self.assertEqual(code, 0)
-        self.assertEqual(evidence["leg"]["stopReason"], "cost_cap")
+        self.assertEqual(evidence["leg"]["stopReason"], "live_cost")
+        self.assertEqual(evidence["leg"]["costSource"], "live_cost")
         self.assertLess(evidence["leg"]["durationS"], 10.0)
         self.assertLess(evidence["leg"]["costUsd"], 0.65)
+
+    def test_projected_cost_stops_when_the_billed_figure_is_not_readable(self):
+        # CEO A1: if costUsd stays 0 mid-leg, metered seconds x the authorized
+        # $/s is the guard. 0.002 / 0.0011381 = 1.76 s of metered time.
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "clean-no-cost",
+                "--authorized-duration-s", "60",
+                "--cap-usd", "0.65",
+                "--abort-at-usd", "0.002",
+                "--quiet-window-min", "0.08",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(evidence["leg"]["stopReason"], "projected_cost")
+        self.assertEqual(evidence["leg"]["costSource"], "projected_cost")
+        self.assertLess(evidence["leg"]["durationS"], 10.0)
+        self.assertGreater(evidence["leg"]["perceiveSessionS"], 0)
+        self.assertAlmostEqual(evidence["shape"]["meteredWallRatio"], 1.0, places=1)
+
+    def test_a_leg_with_no_cost_source_is_refused(self):
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "no-cost-source",
+                "--authorized-duration-s", "60",
+                "--cap-usd", "0.65",
+                "--quiet-window-min", "0.08",
+                "--cost-source-grace-s", "1",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "2",
+            ]
+        )
+        self.assertEqual(code, 5)
+        self.assertEqual(evidence["result"]["outcome"], "setup_failed")
+        self.assertIn("no readable cost source", evidence["result"]["message"])
+        self.assertEqual(evidence["stub"]["job"]["status"], "cancelled")
 
     def test_slack_above_ten_seconds_is_refused(self):
         code, evidence = run_harness(
