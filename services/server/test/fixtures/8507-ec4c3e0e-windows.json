@@ -1,0 +1,2375 @@
+{
+"job": "ec4c3e0e-aa74-4068-949f-d263b9a824d9",
+"note": "extracted from decide_audit.prompt_text; ocr field is the rendered (24-char, <=2 line) timeline string joined by the prompt builder",
+"windows": [
+{
+"gk": "g0",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": 0.0,
+"ocr": [
+"0|S"
+]
+}
+]
+},
+{
+"gk": "g3",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"0|S"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"0|COURTESY"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"A.S|COURTESY"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"AS|\u0660\u0660"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"25:40 IRMA 2-2 BAR"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"25:41 |RM2-2 BAR"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"25:43 |RMA2-2 BAR"
+]
+}
+]
+},
+{
+"gk": "g4",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"A.S|COURTESY"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"AS|\u0660\u0660"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"25:40 IRMA 2-2 BAR"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"25:41 |RM2-2 BAR"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"25:43 |RMA2-2 BAR"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"25:54 |RMA2-2 BAR"
+]
+}
+]
+},
+{
+"gk": "g4:call2",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.7,
+"ocr": [
+"AS|\u0660\u0660"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"25:40 IRMA 2-2 BAR"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"25:41 |RM2-2 BAR"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"25:43 |RMA2-2 BAR"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"25:54 |RMA2-2 BAR"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"25:56 |RMA 2-2 BAR"
+]
+}
+]
+},
+{
+"gk": "g6",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.0,
+"ocr": [
+"25:54 |RMA2-2 BAR"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"25:56 |RMA 2-2 BAR"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"25:59 |RMA2-2 BAR"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"25:59 IRMA 2-2 BARJeepTU"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"26.01 RMA2-2 BAR"
+]
+}
+]
+},
+{
+"gk": "g7",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.3,
+"ocr": [
+"25:56 |RMA 2-2 BAR"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"25:59 |RMA2-2 BAR"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"25:59 IRMA 2-2 BARJeepTU"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"26.01 RMA2-2 BAR"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"26.02 RMA2-2 BAR"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"26.12 RMA-2 BAR|26.12RMA 2-2 BARVITALDEY"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"26:13 RMA 2-2 BAR"
+]
+}
+]
+},
+{
+"gk": "g8",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"25:59 |RMA2-2 BAR"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"25:59 IRMA 2-2 BARJeepTU"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"26.01 RMA2-2 BAR"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"26.02 RMA2-2 BAR"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"26.12 RMA-2 BAR|26.12RMA 2-2 BARVITALDEY"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"26:13 RMA 2-2 BAR"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"26:14 RMA2-2 BAR"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"26:15 RMA2-2 BAR"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"26:16 |RMA2-2 BAR"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"VIT26:17 |RM2-2 BAR"
+]
+}
+]
+},
+{
+"gk": "g9",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"26.02 RMA2-2 BAR"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"26.12 RMA-2 BAR|26.12RMA 2-2 BARVITALDEY"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"26:13 RMA 2-2 BAR"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"26:14 RMA2-2 BAR"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"26:15 RMA2-2 BAR"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"26:16 |RMA2-2 BAR"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"VIT26:17 |RM2-2 BAR"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Aszende26:18 RMA-2-BARLA|26.18RM2-2-BARAszendeAsz"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"1"
+]
+}
+]
+},
+{
+"gk": "g12",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"1"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"H|PABLO IAGO ALVAREZ 7"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"AszendeHOCELONA PREMIUM "
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"AszendeACLONA PREMIUM BA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"Aszende|AszendeGOLDCARPATRICKGOL"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"REAL MADRID1-1FC BARCELO"
+]
+}
+]
+},
+{
+"gk": "g13",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"H|PABLO IAGO ALVAREZ 7"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"AszendeHOCELONA PREMIUM "
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"AszendeACLONA PREMIUM BA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"Aszende|AszendeGOLDCARPATRICKGOL"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"REAL MADRID1-1FC BARCELO"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|16:41 RMA 1-1 BARzen8ckS"
+]
+}
+]
+},
+{
+"gk": "g14",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"AszendeHOCELONA PREMIUM "
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"AszendeACLONA PREMIUM BA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Aszende|AszendeGOLDCARPATRICKGOL"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"REAL MADRID1-1FC BARCELO"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|16:41 RMA 1-1 BARzen8ckS"
+]
+}
+]
+},
+{
+"gk": "g16",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|16:53RMA 1-1 BARAszendeA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|16:58 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|17:48RM1-1 BARArt Soccer"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|17:49RMA 1-1 BARArt Socc"
+]
+}
+]
+},
+{
+"gk": "g18",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Art Soccer|16:53RMA 1-1 BARAszendeA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"Art Soccer|16:58 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|17:48RM1-1 BARArt Soccer"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|17:49RMA 1-1 BARArt Socc"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"Art Soccer|17.52 RMA 1-1 BARCALDCAR"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"Art Soccer|17.53 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"Art Soccer|17.54 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|17.54 RMA 1-1 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g21",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Art Soccer|17.53 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|17.54 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|17.54 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|17:55 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"Art Soccer|17:56RMA 1-1 BARVITALIDE"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|17:57 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|17:58 RMA 1-1 BARndeAsze"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|17:59 RMA 1-1 BARASOLDCA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|18:00 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|18:01 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|18.02RMA 1-1 BARVITALDEN"
+]
+}
+]
+},
+{
+"gk": "g22",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|17:56RMA 1-1 BARVITALIDE"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|17:57 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|17:58 RMA 1-1 BARndeAsze"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"Art Soccer|17:59 RMA 1-1 BARASOLDCA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|18:00 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|18:01 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|18.02RMA 1-1 BARVITALDEN"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|18.04RMA 1-1 BARPRICIOVI"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|18:06RMA 1-1 BARVITALDEN"
+]
+}
+]
+},
+{
+"gk": "g23",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Art Soccer|18:00 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|18:01 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|18.02RMA 1-1 BARVITALDEN"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"Art Soccer|18.04RMA 1-1 BARPRICIOVI"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"Art Soccer|18:06RMA 1-1 BARVITALDEN"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|18:11 RMA 2-1 BARArt Soc"
+]
+}
+]
+},
+{
+"gk": "g23:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|17:59 RMA 1-1 BARASOLDCA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|18:00 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|18:01 RMA 1-1 BARArt Soc"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"Art Soccer|18.02RMA 1-1 BARVITALDEN"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|18.04RMA 1-1 BARPRICIOVI"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|18:06RMA 1-1 BARVITALDEN"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|18:11 RMA 2-1 BARArt Soc"
+]
+}
+]
+},
+{
+"gk": "g25",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|18:11 RMA 2-1 BARArt Soc"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"11MANUEL ORD\u00d3NEZGOLES:1A|ONARIOBMWOtra. de18:16 R"
+]
+}
+]
+},
+{
+"gk": "g28",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|20:00 RMA 2-1 BAR25%ASZe"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|20:00 RMA 2-1 BARAscande"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"Art Soccer|20-01 RMA 2-1 BARAzendAs"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|19.34RMA 2-1 BARAszendeM"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|19:35RMA 2-1 BARzendePAT"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|19:36RMA 2-1 BARREMIUM S"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|19:37RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|19:38RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|19:39RMA 2-1 BARAszendeA"
+]
+}
+]
+},
+{
+"gk": "g29",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"Art Soccer|20:00 RMA 2-1 BAR25%ASZe"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|20:00 RMA 2-1 BARAscande"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|20-01 RMA 2-1 BARAzendAs"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|19.34RMA 2-1 BARAszendeM"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|19:35RMA 2-1 BARzendePAT"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|19:36RMA 2-1 BARREMIUM S"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|19:37RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|19:38RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|19:39RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|19:40RMA 2-1 BARAszendeA"
+]
+}
+]
+},
+{
+"gk": "g31",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|19:39RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|19:40RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|19:41 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|19:43 RMA 2-1 BARAsenteA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|19.44 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|19:46 RMA 2-1 BARArt Soc"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|19:47 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|19:48 RMA 2-1 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g32",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Art Soccer|19:41 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|19:43 RMA 2-1 BARAsenteA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|19.44 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|19:46 RMA 2-1 BARArt Soc"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|19:47 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|19:48 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|19:49 RMA 2-1 BARade Asz"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|19.50 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|19.51 RMA 2-1 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g34",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|19:48 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|19:49 RMA 2-1 BARade Asz"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|19.50 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|19.51 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|19.52 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|719:54 RMA 2-1 BAR681Art"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|20:24 RM2-1 BARFlyImirat"
+]
+}
+]
+},
+{
+"gk": "g35",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Art Soccer|19.50 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|19.51 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|19.52 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|719:54 RMA 2-1 BAR681Art"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|20:24 RM2-1 BARFlyImirat"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|20:27 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|20.28RMA 2-1 BARAszendeA"
+]
+}
+]
+},
+{
+"gk": "g36",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.7,
+"ocr": [
+"Art Soccer|20:24 RM2-1 BARFlyImirat"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"Art Soccer|20:27 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|20.28RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|20:29RMA 2-1 BARadeAszen"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"Art Soccer|20:30 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"Art Soccer|20-21 RMA 2-1 BARadeAsze"
+]
+}
+]
+},
+{
+"gk": "g38",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.7,
+"ocr": [
+"Art Soccer|20:27 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|20.28RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|20:29RMA 2-1 BARadeAszen"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"Art Soccer|20:30 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"Art Soccer|20-21 RMA 2-1 BARadeAsze"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"Art Soccer|20:32RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|20:34RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|22:00 RMA 2-1 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g40",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"Art Soccer|20:32RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|20:34RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|22:00 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"Art Soccer|22.02RM2-2-1 BARAszendeB"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|22.03 RMA 2-1 BARArt Soc"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|22:04 RMA 2-1 BARGOLGOLD"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|22.05 RMA 2-1 BARAsendeA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|22.06 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|22.07 RMA 2-1 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g40:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|20:34RMA 2-1 BARAszendeA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|22:00 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|22.02RM2-2-1 BARAszendeB"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|22.03 RMA 2-1 BARArt Soc"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|22:04 RMA 2-1 BARGOLGOLD"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|22.05 RMA 2-1 BARAsendeA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|22.06 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|22.07 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|22.08 RMA 2-1 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g41",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|22.03 RMA 2-1 BARArt Soc"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|22:04 RMA 2-1 BARGOLGOLD"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|22.05 RMA 2-1 BARAsendeA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|22.06 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|22.07 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|22.08 RMA 2-1 BARAszende"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"Art Soccer|22:10 RM2-2-1 BARAszende"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|22:11 RIM2-2-1 BARAszend"
+]
+}
+]
+},
+{
+"gk": "g45",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|22:17 RMA 2-2 BARFlyEmir"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"4DAVID SAEZFCBGOLES:1Art|22:21 RMA 2-2 BAR4DAVID "
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"4DAVID SAEZFCBGOLES:1Art|22.22 RMA 2-2 BAR4DAVID "
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Soccer|22:23 RMA 2-2 BAR4Soccer"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|22:24 RMA 2-2 BARdasFlyE"
+]
+}
+]
+},
+{
+"gk": "g46",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.0,
+"ocr": [
+"4DAVID SAEZFCBGOLES:1Art|22:21 RMA 2-2 BAR4DAVID "
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"4DAVID SAEZFCBGOLES:1Art|22.22 RMA 2-2 BAR4DAVID "
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Soccer|22:23 RMA 2-2 BAR4Soccer"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|22:24 RMA 2-2 BARdasFlyE"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|22:32 RMA 2-2 BARGOLD A8"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|22:34 RMA 2-2 BARGOLAR16"
+]
+}
+]
+},
+{
+"gk": "g47",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Soccer|22:23 RMA 2-2 BAR4Soccer"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|22:24 RMA 2-2 BARdasFlyE"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|22:32 RMA 2-2 BARGOLD A8"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|22:34 RMA 2-2 BARGOLAR16"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"Art Soccer|22:35 RMA 2-2 BAR16Art S"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"Art Soccer|22:36 RMA 2-2 BARde.Asze"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Soccer|22:38 RMA-2-2 BARAszens "
+]
+}
+]
+},
+{
+"gk": "g49",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"Art Soccer|22:35 RMA 2-2 BAR16Art S"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"Art Soccer|22:36 RMA 2-2 BARde.Asze"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Soccer|22:38 RMA-2-2 BARAszens "
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"Art Soccer|23:12 RMA 2-2 BARVITALDE"
+]
+}
+]
+},
+{
+"gk": "g50",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Soccer|22:38 RMA-2-2 BARAszens "
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"Art Soccer|23:12 RMA 2-2 BARVITALDE"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"Art Soccer|23:14 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"Art Soccer|23:15 RMA 2-2 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g52",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|23:12 RMA 2-2 BARVITALDE"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|23:14 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|23:15 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|23:16RMA 2-2 BARAszendeB"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|23-18RM2-2 BARAszendende"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|23-19 RMA 2-2 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g54",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"Art Soccer|23:15 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|23:16RMA 2-2 BARAszendeB"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|23-18RM2-2 BARAszendende"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"Art Soccer|23-19 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|23.20 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|23-21 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|23:23 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|23:24RM2-2 BARAscenteAsz"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|23.25RMA 2-2 BARAszendeA"
+]
+}
+]
+},
+{
+"gk": "g55",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|23-19 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|23.20 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|23-21 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|23:23 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|23:24RM2-2 BARAscenteAsz"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|23.25RMA 2-2 BARAszendeA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|23.26RMA 2-2 BARVITALIDE"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|24:41 RMA 2-2 BARAszende"
+]
+}
+]
+},
+{
+"gk": "g56",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|23:23 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer|23:24RM2-2 BARAscenteAsz"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|23.25RMA 2-2 BARAszendeA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|23.26RMA 2-2 BARVITALIDE"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|24:41 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"Art Soccer|24:43 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"ArtSoccer|24:35RMA 2-2 BARMULAN SA"
+]
+}
+]
+},
+{
+"gk": "g57",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|24:41 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"Art Soccer|24:43 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"ArtSoccer|24:35RMA 2-2 BARMULAN SA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"Art Soccer|24:36RMA 2-2 BARAszendeA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|24:47 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Art Soccer|24:40 RMA 2-2 BARArt Soc"
+]
+}
+]
+},
+{
+"gk": "g58",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.7,
+"ocr": [
+"ArtSoccer|24:35RMA 2-2 BARMULAN SA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"Art Soccer|24:36RMA 2-2 BARAszendeA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|24:47 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"Art Soccer|24:40 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"Art Soccer|25:21 RM2-2 BARArt Socce"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|25:23RM2-2 BARArt Soccer"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|25.24RMA 2-2 BARAszendeA"
+]
+}
+]
+},
+{
+"gk": "g60",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|24:47 RMA 2-2 BARAszende"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|24:40 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|25:21 RM2-2 BARArt Socce"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|25:23RM2-2 BARArt Soccer"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|25.24RMA 2-2 BARAszendeA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|25.25RMA 2-2 BARAszendeA"
+]
+}
+]
+},
+{
+"gk": "g63",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|25:30 IRMA 2-2 BARASE SO"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"Soccer|25:41 RMA 2-2 BARASzende"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|25:52RM42-2 BARAszendeAs"
+]
+}
+]
+},
+{
+"gk": "g64",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -6.7,
+"ocr": [
+"Soccer|25:41 RMA 2-2 BARASzende"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"Art Soccer|25:52RM42-2 BARAszendeAs"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|25.53 RMA 2-2 BARFlyEmid"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"Art Soccer|25:56 RMA 2-2 BARArt Soc"
+]
+}
+]
+},
+{
+"gk": "g66",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|25.53 RMA 2-2 BARFlyEmid"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|25:56 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|25.58 RMA 2-2 BAR2-Art S"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|25.59 RMA 2-2 BARSportJe"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|26:00 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"Art Soccer|26.01 RMA 2-2 BARGOLAsGO"
+]
+}
+]
+},
+{
+"gk": "g67",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|25:56 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"Art Soccer|25.58 RMA 2-2 BAR2-Art S"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|25.59 RMA 2-2 BARSportJe"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"Art Soccer|26:00 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"Art Soccer|26.01 RMA 2-2 BARGOLAsGO"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|26.02RMA 2-2 BARSzendeVI"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|26.12RMA 2-2 BARVITALBEN"
+]
+}
+]
+},
+{
+"gk": "g68",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|25.58 RMA 2-2 BAR2-Art S"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|25.59 RMA 2-2 BARSportJe"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|26:00 RMA 2-2 BARArt Soc"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"Art Soccer|26.01 RMA 2-2 BARGOLAsGO"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|26.02RMA 2-2 BARSzendeVI"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|26.12RMA 2-2 BARVITALBEN"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|26.14 RMA 2-2 BARArt Soc"
+]
+}
+]
+},
+{
+"gk": "g69",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"Art Soccer|26.01 RMA 2-2 BARGOLAsGO"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"Art Soccer|26.02RMA 2-2 BARSzendeVI"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"Art Soccer|26.12RMA 2-2 BARVITALBEN"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|26.14 RMA 2-2 BARArt Soc"
+]
+}
+]
+},
+{
+"gk": "g71",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer"
+]
+}
+]
+},
+{
+"gk": "g73",
+"sbStored": "yes",
+"scoreStored": "1-1",
+"observations": [
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"REAL MADRID1-1FC BARCELO|AszendeASzendeAszendeAsz"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"REAL MADRID1-1FC BARCELO|PREMIUM SANTEMAYASZendeA"
+]
+}
+]
+},
+{
+"gk": "g73:call2",
+"sbStored": "yes",
+"scoreStored": "1-1",
+"observations": [
+{
+"ts": -8.0,
+"ocr": [
+"Art Soccer"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"REAL MADRID1-1FC BARCELO|AszendeASzendeAszendeAsz"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"REAL MADRID1-1FC BARCELO|PREMIUM SANTEMAYASZendeA"
+]
+}
+]
+},
+{
+"gk": "g75",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"REAL MADRID1-1FC BARCELO|AszendeASzendeAszendeAsz"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"REAL MADRID1-1FC BARCELO|PREMIUM SANTEMAYASZendeA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|16:51 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"Art Soccer|16:52RMA 1-1 BARAszendeA"
+]
+}
+]
+},
+{
+"gk": "g76",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.3,
+"ocr": [
+"Art Soccer|16:51 RMA 1-1 BARAszende"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"Art Soccer|16:52RMA 1-1 BARAszendeA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"Art Soccer|17:47 RMA 1-1 BARGOLDCAR"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"Art Soccer|17:49RM1-1 BARArt Soccer"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|17:50 RMA 1-1 BARAscende"
+]
+}
+]
+},
+{
+"gk": "g77",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"Art Soccer|16:52RMA 1-1 BARAszendeA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"Art Soccer|17:47 RMA 1-1 BARGOLDCAR"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"Art Soccer|17:49RM1-1 BARArt Soccer"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"Art Soccer|17:50 RMA 1-1 BARAscende"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"Art Soccer|17:51 RMA 1-1 BARGOLD JA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"Art Soccer|17.53 RMA 1-1 BARAszende"
+]
+}
+]
+}
+]
+}

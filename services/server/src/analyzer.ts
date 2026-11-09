@@ -1357,8 +1357,63 @@ function ocrPairTeamAdjacent(text: string, index: number, len: number): { left: 
   return { left: token.test(before), right: tokenRight.test(after) };
 }
 
+/** ADAAAA-8507: the broadcast/sponsor chrome a browser-share score crop reads
+ * instead of the score plate. Measured on job `c4d33a26` (customer screen
+ * share): the crop's lines are `LALIGA`, `LAUGATIEMPO…`, `LALIGASPOTIFY CAMP
+ * NOU`, `whitebitwhitebitLALIGA`, `LAUGASTANLEY STANLEYSTAN`,
+ * `LALIGA|0JALIGA05-40 AL1UberFC B`. None of it is a scoreboard. */
+const OCR_CHROME_TOKEN_RE = /(?:laliga|stanley|spotify|whitebit|lauga|culers|nike\.com)/i;
+
 /**
- * ADAAAA-8071: parse the clean two-integer score line out of one timeline
+ * ADAAAA-8507: is this dash pair a CLOCK / chrome fragment rather than a score
+ * plate?
+ *
+ * The browser (customer) live path feeds goal attestation from OCR that read
+ * the sponsor banner as the scoreboard. 79 of 147 judged windows then carried
+ * `scoreboard score change observed: yes` in 11.1 minutes of a STATIC scorebug,
+ * which is what made the Stage-2 dive skip. Read from the stored audits, every
+ * one of those claims was a clock or chrome fragment parsed as a score:
+ *
+ *   `LALIGA|0JALIGA05-40 AL1UberFC B`            -> (5,40)
+ *   `LALIGA|LALIGA09-40-1GIMODGIMOOG`            -> (9,40)
+ *   `LALIGAMootballnike.com/f|LALIGA02:28-1om…`  -> (28,1)
+ *   `…|ALB 04:53-1NEWALBUM-0 NE`                 -> (53,1)
+ *
+ * A score plate renders the two digit groups as ONE token. Three shapes are
+ * refused (fail closed — an unreadable plate stays absent evidence):
+ *
+ *  1. CLOCK GLUE — the pair sits immediately after a `H:` / `HH:` clock
+ *     (`02:28-1`, `04:53-1`, `03:29-1`), or immediately before a `:MM` one.
+ *  2. CLOCK SHAPE — a `mm:ss` clock that OCR'd with a dash (`05-40`, `09-40`,
+ *     `08-10`). A two-digit group with a LEADING ZERO is the discriminator: a
+ *     real double-digit basketball score (`45-42`, which perceive's suite pins)
+ *     has none, so it stays legible.
+ *  3. CHROME LINE — the line carries a broadcast/sponsor token and the pair is
+ *     not sandwiched between the two team tokens (a real LaLiga scorebug line
+ *     still reads `…LALIGA RMA 1-1 BAR…`, whose pair IS sandwiched).
+ *
+ * Pure + deterministic, so the parse, the delta derivation and the census all
+ * read one verdict.
+ */
+export function ocrScorePairIsNoise(
+  text: string,
+  rawLeft: string,
+  rawRight: string,
+  index: number,
+  length: number,
+  adj: { left: boolean; right: boolean }
+): boolean {
+  // 1. clock glue, both directions.
+  if (/\d{1,2}:$/.test(text.slice(0, index))) return true;
+  if (/^:\d{1,2}/.test(text.slice(index + length))) return true;
+  // 2. clock shape: `0H` on the left, `MM` (0..59) on the right.
+  if (/^0\d$/.test(rawLeft) && /^\d{2}$/.test(rawRight) && Number(rawRight) <= 59) return true;
+  // 3. chrome line with no score-plate sandwich.
+  if (OCR_CHROME_TOKEN_RE.test(text) && !(adj.left && adj.right)) return true;
+  return false;
+}
+
+/** ADAAAA-8071: parse the clean two-integer score line out of one timeline
  * record's OCR lines, or `null`. The pair pattern mirrors perceive's
  * `_SCORE_LINE_RE` (`(\d{1,3})\s*[-–—]\s*(\d{1,3})`, ints <= 99) so a clock
  * ("18:13") can never become a score and the two layers agree on what a
@@ -1407,6 +1462,8 @@ export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [nu
       const b = Number(m[2]);
       if (!Number.isInteger(a) || !Number.isInteger(b) || a > 99 || b > 99) continue;
       const adj = ocrPairTeamAdjacent(text, m.index, m[0].length);
+      // ADAAAA-8507: a clock / sponsor-chrome fragment is not a score plate.
+      if (ocrScorePairIsNoise(text, m[1], m[2], m.index, m[0].length, adj)) continue;
       if (adj.left && !leftPick) leftPick = [a, b];
       else if (adj.right && !rightPick) rightPick = [a, b];
       else if (!adj.left && !adj.right && !anyPick) anyPick = [a, b];
@@ -1847,31 +1904,50 @@ export function deriveWindowAttestation(
   // Live payload only: `observations` is the pre-image-cap perceive frame set,
   // exactly what the decide timeline renders. A payload without it (VOD symmetric
   // window / stub) keeps the pre-8071 fold byte-identical.
-  if (payload.observations?.length && !scoreboardDeltaLegible(out.scoreBoardDelta)) {
-    const derived = scoreboardDeltaFromReadings(
-      scoreReadingsFromTimeline(payload.observations),
-      livePayloadWindow({
-        centerTs: payload.centerTs,
-        frames: payload.frames,
-        observations: payload.observations,
-      }),
-      { minSamples: opts.minSamples }
-    );
-    // ADAAAA-8152 (ACC-2): the MEASURED instant is an ANCHOR, not a credit. Keep
-    // it on the attestation even when the one-transition ledger refuses to credit
-    // this window, because the delivered clip must still centre on where the goal
-    // actually happened (credit only decides which window may claim it).
-    if (scoreboardDeltaLegible(derived)) out.scoreTransitionTs = derived!.deltaTs;
-    // ADAAAA-8078: one score transition is credited ONCE per run. The derive
-    // path now accepts any post side >= minSamples, so every overlapping window
-    // covering the boundary would otherwise derive the same delta — and the
-    // accept path reads a legible delta as independent transition evidence
-    // (ADAAAA-7865), which would mint one GOAL per window.
-    const credit = derived ? (opts.claimScoreTransition ? opts.claimScoreTransition(derived) : true) : false;
-    if (derived && credit) {
-      out.scoreBoardChanged = true;
-      out.scoreBoardDelta = derived;
-      out.scoreAttestationSource = out.scoreAttestationSource ?? "perceive_timeline";
+  if (payload.observations?.length) {
+    // ADAAAA-8507 (AC3): a hint-carried `scoreBoardChanged` is a CLAIM, not a
+    // measurement. On the browser share `c4d33a26` the hint fired on OCR that
+    // read the sponsor banner, so 79/147 windows told decide "score change
+    // observed: yes" over a static scorebug — and rows printed
+    // `scoreBoardChanged: true` with `postSamples: 0`. Live attestation now has
+    // to be the accepted reads' verdict: keep a hint delta only when it is a
+    // legible, forward single-goal step (its pre/post ARE accepted reads), and
+    // drop the bare boolean otherwise.
+    const hintDelta = scoreboardDeltaLegible(out.scoreBoardDelta) ? out.scoreBoardDelta : undefined;
+    if (hintDelta && scoreboardDeltaSingleGoalStep(hintDelta)) {
+      out.scoreBoardDelta = hintDelta;
+      out.scoreTransitionTs = hintDelta.deltaTs;
+    } else {
+      out.scoreBoardChanged = undefined;
+      out.scoreBoardDelta = undefined;
+      out.scoreAttestationSource = undefined;
+    }
+    if (!scoreboardDeltaLegible(out.scoreBoardDelta)) {
+      const derived = scoreboardDeltaFromReadings(
+        scoreReadingsFromTimeline(payload.observations),
+        livePayloadWindow({
+          centerTs: payload.centerTs,
+          frames: payload.frames,
+          observations: payload.observations,
+        }),
+        { minSamples: opts.minSamples }
+      );
+      // ADAAAA-8152 (ACC-2): the MEASURED instant is an ANCHOR, not a credit. Keep
+      // it on the attestation even when the one-transition ledger refuses to credit
+      // this window, because the delivered clip must still centre on where the goal
+      // actually happened (credit only decides which window may claim it).
+      if (scoreboardDeltaLegible(derived)) out.scoreTransitionTs = derived!.deltaTs;
+      // ADAAAA-8078: one score transition is credited ONCE per run. The derive
+      // path now accepts any post side >= minSamples, so every overlapping window
+      // covering the boundary would otherwise derive the same delta — and the
+      // accept path reads a legible delta as independent transition evidence
+      // (ADAAAA-7865), which would mint one GOAL per window.
+      const credit = derived ? (opts.claimScoreTransition ? opts.claimScoreTransition(derived) : true) : false;
+      if (derived && credit) {
+        out.scoreBoardChanged = true;
+        out.scoreBoardDelta = derived;
+        out.scoreAttestationSource = out.scoreAttestationSource ?? "perceive_timeline";
+      }
     }
   } else if (scoreboardDeltaLegible(out.scoreBoardDelta)) {
     // A hint-carried (perceive) delta is legible evidence of the same instant.
