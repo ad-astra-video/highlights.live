@@ -609,6 +609,8 @@ export async function attestConfirmDiveHighlight(
     diveAt: meta.diveAt,
     diveLatencyMs: result.latencyMs,
     contextDegraded: result.context.contextDegraded,
+    // ADAAAA-8506 (AC4): a dropped dive still writes a terminal verdict field.
+    ...(result.droppedReason ? { droppedReason: result.droppedReason } : {}),
   });
   const rec = await deps.store.attestDeferredGoal(highlightId, adoption.patch as any);
   if (adoption.kind === "promoted") {
