@@ -75,15 +75,15 @@ describe("planDueConfirmDives — post-window, one per distinct goal", () => {
   });
 });
 
-describe("ConfirmDiveBudget — <= 8 dives per 300 s per stream", () => {
-  it("allows the default eight and refuses the ninth, counting the refusal", () => {
+describe("ConfirmDiveBudget — <= LIVE_CONFIRM_MAX_DIVES_PER_300S dives per 300 s per stream", () => {
+  it("allows the shipped budget and refuses the next one, counting the refusal", () => {
     const b = new ConfirmDiveBudget();
     for (let i = 0; i < LIVE_CONFIRM_MAX_DIVES_PER_300S; i++) {
       expect(b.allow(100 + i, LIVE_CONFIRM_MAX_DIVES_PER_300S)).toBe(true);
     }
     expect(b.allow(110, LIVE_CONFIRM_MAX_DIVES_PER_300S)).toBe(false);
     expect(b.refusalsCount()).toBe(1);
-    expect(b.count(110)).toBe(8);
+    expect(b.count(110)).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
   });
 
   it("slides: a dive 300 s later is allowed again", () => {
