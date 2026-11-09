@@ -91,7 +91,7 @@ import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
 import { buildStageTimings } from "./vod-stage-timings";
 // ADAAAA-7928: pure admin aggregate behind GET /admin/vod-breakdown.
 import { buildVodBreakdown, type VodBreakdownScopeKind } from "./vod-breakdown";
-import { jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
+import { isAdminRole, jobDetailForRole, jobEventForRole, jobForRole, jobsForRole } from "./job-visibility";
 import { appliedDecideWatermark, deriveLiveProgress, newestObservationTs } from "./live-progress";
 import { deriveLiveCapture } from "./live-capture";
 import { appendSummaryEntry } from "./summary-log";
@@ -1924,7 +1924,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const cw = await resolveClipWindow();
     // ADAAAA-8005 (gate 3): carry the job id so the delivery metric's per-row
     // evidence line names the share it belongs to.
-    const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id });
+    const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id, liveConfirmMaxDivesPer300S: cfg.liveConfirmMaxDivesPer300S });
     // ADAAAA-8408 (W2): write the match context the decide prompt reads. The
     // share already produces both inputs (per-window ASR transcript + perceive's
     // scorebug/kit evidence), so this adds 4 CPU-only folds per run and no
@@ -2032,6 +2032,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const rail = new MediaRailObserver(
       {
         jobId: job.id,
+        // ADAAAA-8513 (AC3): the rail publishes `diveBudget.cap` from the same
+        // configured cap its pump admits against.
+        liveConfirmMaxDivesPer300S: cfg.liveConfirmMaxDivesPer300S,
         // The INGEST/sample clock: the media node samples at `sampleFps`, and this
         // rail persists frames + cuts clips on that clock.
         fps: railFps,
@@ -2209,6 +2212,45 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // Every failure is a drop: the card is never touched and the run counts it.
   let confirmDivesInFlight = 0;
   const confirmDiveChains = new Map<string, Promise<void>>();
+  /** The dive's IO for one job (persisted artifacts + the decide `/confirm`). */
+  function confirmDiveIoFor(jobId: string, client: PipelineClient): ConfirmDiveIo {
+    return {
+      framesInSpan: (lo: number, hi: number) =>
+        (store.observationsForJob(jobId) ?? [])
+          .filter((o) => Number.isFinite(o.timestamp) && o.timestamp >= lo && o.timestamp <= hi)
+          .map((o) => ({ seq: o.seq, ts: o.timestamp })),
+      loadFrame: diskFrameLoader(cfg.dataDir, jobId),
+      confirm: (req) => client.confirm(req as any, { jobId }),
+      gameHint: cfg.gameHintDefault,
+    };
+  }
+  /** The one verdict writer both the pump and the stream-end drain use. */
+  function confirmDiveAdopter(
+    jobId: string,
+    deliveryOf: () => LiveDeliveryTracker | null | undefined
+  ) {
+    return async (entry: PendingConfirmDive, result: ConfirmDiveResult) => {
+      const written = await attestConfirmDiveHighlight(
+        { store, cfg, billing, entitlements, db },
+        entry.highlightId,
+        result,
+        {
+          diveAt: new Date().toISOString(),
+          onDelivered: (triggerTs, atMs, highlightId) =>
+            deliveryOf()?.notePersisted(triggerTs, atMs, highlightId),
+        }
+      );
+      if (written && written.kind !== "unchanged") {
+        emitJobEvent(jobId, {
+          seq: 0,
+          timestamp: entry.goalEventTs,
+          type: "highlightAttested",
+          highlight: written.rec,
+        });
+      }
+      return written?.kind ?? "unchanged";
+    };
+  }
   function asyncConfirmDiveHook(
     jobId: string,
     client: PipelineClient,
@@ -2216,15 +2258,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     deliveryOf: () => LiveDeliveryTracker | null | undefined
   ) {
     return (descriptor: PendingConfirmDive) => {
-      const io: ConfirmDiveIo = {
-        framesInSpan: (lo: number, hi: number) =>
-          (store.observationsForJob(jobId) ?? [])
-            .filter((o) => Number.isFinite(o.timestamp) && o.timestamp >= lo && o.timestamp <= hi)
-            .map((o) => ({ seq: o.seq, ts: o.timestamp })),
-        loadFrame: diskFrameLoader(cfg.dataDir, jobId),
-        confirm: (req) => client.confirm(req as any, { jobId }),
-        gameHint: cfg.gameHintDefault,
-      };
+      const io = confirmDiveIoFor(jobId, client);
       // The descriptor queued at the accept's own content instant (the judged
       // window's close), so the wait is the lookahead the deferred lanes already
       // apply. Bounded: a stalled stream cannot park the chain forever.
@@ -2254,27 +2288,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
                 confirmDivesInFlight > Math.max(1, cfg.decideConcurrency ?? 2)
                   ? `inflight=${confirmDivesInFlight}`
                   : null,
-              adopt: async (entry, result) => {
-                const written = await attestConfirmDiveHighlight(
-                  { store, cfg, billing, entitlements, db },
-                  entry.highlightId,
-                  result,
-                  {
-                    diveAt: new Date().toISOString(),
-                    onDelivered: (triggerTs, atMs, highlightId) =>
-                      deliveryOf()?.notePersisted(triggerTs, atMs, highlightId),
-                  }
-                );
-                if (written && written.kind !== "unchanged") {
-                  emitJobEvent(jobId, {
-                    seq: 0,
-                    timestamp: entry.goalEventTs,
-                    type: "highlightAttested",
-                    highlight: written.rec,
-                  });
-                }
-                return written?.kind ?? "unchanged";
-              },
+              adopt: confirmDiveAdopter(jobId, deliveryOf),
             });
           } finally {
             confirmDivesInFlight = Math.max(0, confirmDivesInFlight - 1);
@@ -2286,6 +2300,80 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         });
       confirmDiveChains.set(jobId, task);
     };
+  }
+  /**
+   * ADAAAA-8513 (AC5): END-OF-STREAM drain.
+   *
+   * The pump is descriptor-driven, so a goal inside the last
+   * `LIVE_CONFIRM_LOOKAHEAD_S` of a stream never dives and its row stays
+   * `provisional` on a finished job. Run the pump ONCE with
+   * `nowTs = lastContentTs + LIVE_CONFIRM_LOOKAHEAD_S` so every still-pending
+   * descriptor gets a terminal verdict — dived, or dropped with a stamped reason
+   * and no model call. Serialized behind the per-stream dive chain (one dive in
+   * flight per stream) and bounded by the existing 30 s drain budget, the same
+   * bound the clip drain uses, so a dead decide service can never hang the
+   * terminal write.
+   */
+  async function drainConfirmDives(
+    jobId: string,
+    run: LiveRunShared,
+    client: PipelineClient,
+    deliveryOf: () => LiveDeliveryTracker | null | undefined
+  ): Promise<void> {
+    if (!run.confirmDivePendingCount()) return;
+    const pending = run.pendingConfirmDives();
+    const lastWindowHi = pending.reduce(
+      (m, e) => (Number.isFinite(e.window?.hi) ? Math.max(m, e.window.hi) : m),
+      0
+    );
+    const lastContentTs = Math.max(run.lastTimestamp(), lastWindowHi);
+    const nowTs = lastContentTs + LIVE_CONFIRM_LOOKAHEAD_S;
+    const io = confirmDiveIoFor(jobId, client);
+    const prev = confirmDiveChains.get(jobId) ?? Promise.resolve();
+    const task = prev
+      .then(async () => {
+        // Re-read after the chain settles: an in-flight dive may have settled
+        // the last descriptor, in which case there is nothing to drain.
+        if (!run.confirmDivePendingCount()) return;
+        confirmDivesInFlight++;
+        try {
+          const out = await runDueConfirmDives({
+            run,
+            io,
+            nowTs,
+            jobId,
+            maxDivesPer300s: cfg.liveConfirmMaxDivesPer300S,
+            reuseWindowS: cfg.decideConfirmLiveReuseWindowS,
+            drain: true,
+            busy: () =>
+              confirmDivesInFlight > Math.max(1, cfg.decideConcurrency ?? 2)
+                ? `inflight=${confirmDivesInFlight}`
+                : null,
+            adopt: confirmDiveAdopter(jobId, deliveryOf),
+          });
+          if (out.dives || out.dropped || out.overflowDropped) {
+            console.log(
+              `[live-confirm:${jobId}] stream-end drain (lastContentTs=${lastContentTs.toFixed(1)}s): ` +
+                `dives=${out.dives} promoted=${out.promoted} refuted=${out.refuted} dropped=${out.dropped} ` +
+                `retries=${out.retries} overflow=${out.overflowDropped}`
+            );
+          }
+        } finally {
+          confirmDivesInFlight = Math.max(0, confirmDivesInFlight - 1);
+        }
+      })
+      .catch((e: any) => console.error(`[live-confirm:${jobId}] stream-end drain failed:`, String(e?.message || e)))
+      .finally(() => {
+        if (confirmDiveChains.get(jobId) === task) confirmDiveChains.delete(jobId);
+      });
+    confirmDiveChains.set(jobId, task);
+    await Promise.race([task, new Promise<void>((r) => setTimeout(r, 30_000))]).catch(() => {});
+    if (run.confirmDivePendingCount()) {
+      console.error(
+        `[live-confirm:${jobId}] stream-end drain hit its 30 s budget with ` +
+          `${run.confirmDivePendingCount()} descriptor(s) still pending`
+      );
+    }
   }
   // Shared analyze hook: fans to SSE subscribers AND persists observations so
   // the frame debugger can overlay boxes on any past frame (VOD + live).
@@ -2364,6 +2452,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // the live path never recorded one, so live inference spend could not be
     // attributed to a node (or counted by /admin/monitoring) at all.
     const t0 = Date.now();
+    // ADAAAA-8513 (AC5): the run context is hoisted so the error path can drain
+    // the confirm lane too (a stop that races an error still settles terminal).
+    let liveRun: LiveRunShared | undefined;
     try {
       // Reserve ONE perceive session for this live job, shared by the video
       // /analyze leg and the Stage-A audio /audio tap (INC-2 / ADAAAA-4325) so
@@ -2483,7 +2574,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7671: retain LIVE_AUDIO_RETAIN_S of tapped audio (20 s) so a
       // window's whole 10 s span + margins survives even when the decide loop
       // lags the real-time tap.
-      const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id });
+      const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id, liveConfirmMaxDivesPer300S: cfg.liveConfirmMaxDivesPer300S });
+      liveRun = shared;
       // ADAAAA-8310: the settlement snapshot this pass can hand to a writer that
       // pre-empts it. `observeSnapshot` is filled by `onObserveSnapshot` once the
       // decide observer exists, so every value here is the pass's own
@@ -2572,6 +2664,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // the onEvent `highlight` hook above — nothing to re-persist here.
       await ingest.stop();
       await audioLoop;
+      // ADAAAA-8513 (AC5): settle the confirm lane BEFORE the terminal patch.
+      // The pump is descriptor-driven, so a goal inside the last lookahead of
+      // the stream would otherwise keep a `provisional` row with nothing to read
+      // on a finished job. The drain dives or stamps every still-pending
+      // descriptor, bounded by the same 30 s budget the clip drain uses.
+      await drainConfirmDives(job.id, shared, adapter, () => shared.delivery);
+      // ADAAAA-8513 (AC3/AC4): the drain spends/refuses against the same run
+      // counters, so read the pass's own snapshot AFTER it — the settlement and
+      // the stored observe block must describe the run's final admission state.
+      const finalObserveMetrics = observeSnapshot?.() ?? outcome.observeMetrics;
       // Durable Stage-A FP-rate + latency metric (INC-2 / ADAAAA-4325 slice 5):
       // snapshotted onto the job so the noise-trigger cost bound (<= 60% of
       // audio candidates rejected by Gemma) is inspectable/queryable post-run.
@@ -2592,14 +2694,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // silently excluded it. Decide calls come from the observe pass (the only
       // decide path a live job has; absent => 0 recorded calls).
       const perceiveSessionS = (Date.now() - t0) / 1000;
-      const liveDecideCalls = outcome.observeMetrics?.decideCalls ?? 0;
+      const liveDecideCalls = finalObserveMetrics?.decideCalls ?? 0;
       // ADAAAA-8205: confirm dives are decide-service calls and are metered in
       // the same term: decideFee * (decideCalls + confirmCalls) + perceive.
       // ADAAAA-8242: read that count through the ONE source the settlement patch
       // also uses, so the cost term can never bill a confirm count the persisted
       // `observeMetrics` does not carry (leg `0705e2b5`: cost 75 calls, meter
       // none). The snapshot wins; absent => the lane made no call.
-      const liveConfirmCalls = billableConfirmCalls(outcome.observeMetrics);
+      const liveConfirmCalls = billableConfirmCalls(finalObserveMetrics);
       const liveCostUsd = computeCostUsd(liveDecideCalls, perceiveSessionS, cfg.decideFee, liveConfirmCalls);
       // ADAAAA-8061: a pass stopped mid-stream settles as `cancelled` with the
       // spend it actually incurred. The stop path flips `slot.stopped` (and
@@ -2615,14 +2717,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // with the stop route's drain-timeout fallback (`markJobCancelled`), so
         // whichever writer wins persists the same observe fields — including
         // `liveWatchMinutes`, the AC4 stored-field denominator.
-        const stoppedDecideCalls = outcome.observeMetrics?.decideCalls ?? store.candidatesForJob(job.id).length;
+        const stoppedDecideCalls = finalObserveMetrics?.decideCalls ?? store.candidatesForJob(job.id).length;
         const stoppedSettlement = liveCancelledSettlement({
           decideFee: cfg.decideFee,
           // ADAAAA-8242: the snapshot carries the meter, and the settlement
           // bills exactly that count — one source, so `costUsd` and
           // `observeMetrics.confirmCalls` cannot disagree on the stored row.
           perceiveSessionS,
-          observeMetrics: outcome.observeMetrics,
+          observeMetrics: finalObserveMetrics,
           decideRows: store.candidatesForJob(job.id).length,
           stageA,
           persistedHighlights: store.highlightsForJob(job.id).length,
@@ -2650,7 +2752,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         endedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
         // ADAAAA-7624/7667: Stage-A status + the live candidate counters.
-        ...completedLiveCounterFields(stageA, outcome.observeMetrics, store.highlightsForJob(job.id).length),
+        ...completedLiveCounterFields(stageA, finalObserveMetrics, store.highlightsForJob(job.id).length),
         // ADAAAA-7011: cadence + decide gemma E2E latency snapshot from the live
         // decide-observer, so the Livepeer runner shows the ~30 s budget
         // utilization. Absent when the observer was not enabled.
@@ -2658,8 +2760,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // mirror it onto the job-level `decideCalls` field (only the VOD path
         // used to write it). Without this, a live job with 17 real decides
         // reported `decideCalls: null` and the job-detail header read 0.
-        ...(outcome.observeMetrics
-          ? { observeMetrics: outcome.observeMetrics, decideCalls: outcome.observeMetrics.decideCalls }
+        ...(finalObserveMetrics
+          ? { observeMetrics: finalObserveMetrics, decideCalls: finalObserveMetrics.decideCalls }
           : {}),
       });
       // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches
@@ -2686,6 +2788,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // with accounting — a stop must never end up as an unattributed `failed`
       // just because the decide runner objected while the pass unwound.
       if (store.getJob(job.id)?.stopRequestedAt) {
+        // ADAAAA-8513 (AC5): settle the confirm lane before the terminal
+        // cancellation too, so an unwind that raced the stop cannot leave a
+        // provisional row with no verdict field. Best-effort and bounded.
+        if (liveRun) {
+          await drainConfirmDives(job.id, liveRun, adapter, () => liveRun!.delivery).catch(() => {});
+        }
         // ADAAAA-8310: hand the pass's own snapshot over so this settle carries
         // the same observe fields the clean `stoppedMidPass` path writes.
         await markJobCancelled(job.id, "stopped (cancelled via API)", livePerceiveSlots.get(job.id)?.settlement?.());
@@ -5760,6 +5868,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       user.role
     );
   });
+
 
   // ADAAAA-7742: incremental section stream for an OPEN live job-detail page.
   // `/jobs/:id/detail` is a composite payload whose `sections` grow with every
