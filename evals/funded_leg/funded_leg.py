@@ -947,10 +947,6 @@ def compare_shape(
     The cost bar has no tolerance: any metered overshoot is OVER.
     """
     over_duration = max(0.0, actual_duration_s - authorized_duration_s)
-    over_cost = max(0.0, actual_cost_usd - cap_usd)
-    duration_over = over_duration > duration_tolerance_s + 1e-9
-    cost_over = over_cost > cost_epsilon_usd
-    verdict = "OVER" if (duration_over or cost_over) else "WITHIN"
     ratio = (
         (metered_session_s / actual_duration_s)
         if (metered_session_s is not None and actual_duration_s > 0)
@@ -961,6 +957,19 @@ def compare_shape(
         if (metered_session_s is not None and metered_rate_usd_per_s is not None)
         else None
     )
+    # Grade on the same figure the guard aborts on. When costUsd is not readable
+    # and the projection is the cost source, grading $0.00 as "actual" would
+    # report an over-cap leg as WITHIN — the exact after-the-fact blind spot
+    # this evidence block exists to close (8515 A1 item 4).
+    graded_cost = (
+        max(actual_cost_usd, projected)
+        if projected is not None
+        else actual_cost_usd
+    )
+    over_cost = max(0.0, graded_cost - cap_usd)
+    duration_over = over_duration > duration_tolerance_s + 1e-9
+    cost_over = over_cost > cost_epsilon_usd
+    verdict = "OVER" if (duration_over or cost_over) else "WITHIN"
     metered_bits = ""
     if metered_session_s is not None:
         metered_bits = (
@@ -978,7 +987,7 @@ def compare_shape(
         f"(duration {'over by ' if over_duration else 'headroom '}"
         f"{over_duration or authorized_duration_s - actual_duration_s:.2f} s, "
         f"cost {'over by ' if over_cost else 'headroom '}$"
-        f"{over_cost or cap_usd - actual_cost_usd:.4f}{metered_bits}) — {verdict}"
+        f"{over_cost or cap_usd - graded_cost:.4f}{metered_bits}) — {verdict}"
     )
     table = (
         "| shape | authorized | actual | delta |\n"
@@ -986,9 +995,13 @@ def compare_shape(
         f"| duration (wall) | <= {authorized_duration_s:.1f} s | "
         f"{actual_duration_s:.1f} s | "
         f"{'+' if over_duration else ''}{actual_duration_s - authorized_duration_s:.1f} s |\n"
-        f"| metered cost | <= ${cap_usd:.4f} | ${actual_cost_usd:.4f} | "
-        f"{'+' if over_cost else ''}${actual_cost_usd - cap_usd:.4f} |"
+        f"| metered cost (graded) | <= ${cap_usd:.4f} | ${graded_cost:.4f} | "
+        f"{'+' if over_cost else ''}${graded_cost - cap_usd:.4f} |"
     )
+    if projected is not None and abs(projected - actual_cost_usd) > cost_epsilon_usd:
+        table += (
+            f"\n| live costUsd | - | ${actual_cost_usd:.4f} | - |"
+        )
     if metered_session_s is not None:
         table += (
             f"\n| perceiveSessionS | - | {metered_session_s:.1f} s | "
@@ -1009,6 +1022,7 @@ def compare_shape(
         "authorizedCapUsd": cap_usd,
         "actualDurationS": round(actual_duration_s, 3),
         "actualCostUsd": round(actual_cost_usd, 6),
+        "gradedCostUsd": round(graded_cost, 6),
         "durationOvershootS": round(over_duration, 3),
         "costOvershootUsd": round(over_cost, 6),
         "meteredPerceiveSessionS": (
@@ -1030,6 +1044,18 @@ def compare_shape(
 # Main
 # --------------------------------------------------------------------------
 
+# ADAAAA-8515 A1: the guard point sits below the cap so the leg can never
+# meter the cap itself. At $0.0011381/s the $0.65 cap is 571 s of metered
+# time; $0.60 is 527 s, so the projection crosses the abort point with ~44 s
+# of metered headroom left before the cap.
+ABORT_MARGIN_USD = 0.05
+
+
+def default_abort_at_usd(cap_usd: float) -> float:
+    """Cap less the $0.05 guard margin (10% for caps under $0.50)."""
+    margin = min(ABORT_MARGIN_USD, cap_usd * 0.1)
+    return max(0.0, cap_usd - margin)
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -1045,7 +1071,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="max seconds after the deadline before a stop is declared "
                         "unconfirmed (must be <= 10; default 10)")
     p.add_argument("--abort-at-usd", type=float, default=None,
-                   help="stop early at this metered cost (default: cap - min(0.05, 5%%))")
+                   help="stop early at this metered cost (default: cap - $0.05, "
+                        "i.e. $0.60 on the $0.65 cap)")
     p.add_argument("--metered-rate-usd-per-s", type=float, default=0.0011381,
                    help="authorized $/perceive-second for the cost projection "
                         "(default 0.0011381, the 8515 rate)")
@@ -1108,6 +1135,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.authorized_duration_s <= 0 or args.cap_usd <= 0:
         print("refusing: duration and cap must be positive", file=sys.stderr)
         return 5
+    if args.metered_rate_usd_per_s <= 0:
+        print("refusing: --metered-rate-usd-per-s must be positive; the "
+              "session-time projection is a required cost source", file=sys.stderr)
+        return 5
+    abort_at_usd = (
+        args.abort_at_usd
+        if args.abort_at_usd is not None
+        else default_abort_at_usd(args.cap_usd)
+    )
+    if abort_at_usd <= 0 or abort_at_usd >= args.cap_usd:
+        print(
+            f"refusing: abort point ${abort_at_usd:.4f} must be > 0 and below "
+            f"the ${args.cap_usd:.4f} cap; the guard needs margin to hold the cap",
+            file=sys.stderr,
+        )
+        return 5
 
     lines: List[str] = []
 
@@ -1121,11 +1164,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cap_usd=args.cap_usd,
         quiet_window_s=args.quiet_window_min * 60.0,
         hard_stop_slack_s=args.hard_stop_slack_s,
-        abort_at_usd=(
-            args.abort_at_usd
-            if args.abort_at_usd is not None
-            else args.cap_usd - min(0.05, args.cap_usd * 0.05)
-        ),
+        abort_at_usd=abort_at_usd,
         poll_s=args.poll_s,
         settle_timeout_s=args.settle_timeout_s,
         job_base=args.job_base,
@@ -1175,7 +1214,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "durationS": cfg.authorized_duration_s,
             "capUsd": cfg.cap_usd,
             "abortAtUsd": round(cfg.abort_at_usd, 6),
+            "abortMarginUsd": round(cfg.cap_usd - cfg.abort_at_usd, 6),
             "meteredRateUsdPerS": cfg.metered_rate_usd_per_s,
+            "abortAtMeteredS": (
+                round(cfg.abort_at_usd / cfg.metered_rate_usd_per_s, 2)
+                if cfg.metered_rate_usd_per_s > 0
+                else None
+            ),
+            "capMeteredS": (
+                round(cfg.cap_usd / cfg.metered_rate_usd_per_s, 2)
+                if cfg.metered_rate_usd_per_s > 0
+                else None
+            ),
             "hardStopSlackS": cfg.hard_stop_slack_s,
             "quietWindowS": cfg.quiet_window_s,
         },

@@ -17,9 +17,9 @@ cap.
 | quiet-window preflight | samples the gate for the whole window before any metered call: 0 nonterminal jobs, media `capacity.activeSessions 0`, all lease counters 0, 0 pool `session=` markers (the workers log `session=<jobId>`; `session=cyc-` is a subset). Any bad sample, unreadable probe, or missing pool container refuses the leg. | `3` |
 | hard wall-clock stop | stop fires at `--authorized-duration-s`, driven only by the monotonic clock. Media progress / `liveEdge` is never a stop input. | — |
 | stop confirmation | if the job is not terminal within `--hard-stop-slack-s` (<= 10 s) the run exits non-zero; it never reports an unconfirmed stop as a valid leg. | `4` |
-| metered-cost guard | aborts at `--abort-at-usd` on whichever is higher: the live `costUsd` read or `perceiveSessionS x --metered-rate-usd-per-s`. A wall-clock-only stop cannot hold the cap when metered seconds inflate (8483: 544.5 s metered inside a 300 s window). | — |
+| metered-cost guard | aborts at `--abort-at-usd` (default: cap minus $0.05, i.e. **$0.60** on the $0.65 cap) on whichever is higher: the live `costUsd` read or `perceiveSessionS x --metered-rate-usd-per-s`. A wall-clock-only stop cannot hold the cap when metered seconds inflate (8483: 544.5 s metered inside a 300 s window). | — |
 | no cost source | if neither `costUsd` nor `perceiveSessionS` is readable within `--cost-source-grace-s`, the leg is stopped and refused (exit 5). A leg with no metered guard is not authorized to run. | `5` |
-| authorized-vs-actual | evidence JSON `shape` block + a ready-to-paste table and `AUTHORIZED-VS-ACTUAL:` line. Overshoot is a field, not a discovery. | `0` within / `2` over |
+| authorized-vs-actual | evidence JSON `shape` block + a ready-to-paste table and `AUTHORIZED-VS-ACTUAL:` line. Cost is graded on the same figure the guard uses (`max(costUsd, projection)`), so a projection-only leg that would meter over the cap reads `OVER`, not `WITHIN`. Overshoot is a field, not a discovery. | `0` within / `2` over |
 | setup failure | job/session/driver failure stops whatever was created. | `5` |
 
 Exit codes: `0` within, `2` over, `3` gate closed (nothing metered), `4` stop
@@ -45,9 +45,16 @@ python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario clean \
 python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario busy \
   --authorized-duration-s 300 --cap-usd 0.65 \
   --evidence-out /tmp/funded-leg-gate-closed.json
+
+# the metered guard fires on the session-time projection when costUsd is
+# unreadable; $0.60 is the default abort point on a $0.65 cap. Rate compressed
+# so the crossing happens in seconds (same max(live, metered x rate) branch).
+python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario clean-no-cost \
+  --authorized-duration-s 480 --cap-usd 0.65 --metered-rate-usd-per-s 0.06 \
+  --evidence-out /tmp/funded-leg-metered-abort.json
 ```
 
-Unit tests (stdlib `unittest`, ~20 s, no network beyond localhost):
+Unit tests (stdlib `unittest`, ~1 min, no network beyond localhost):
 
 ```sh
 python3 -m unittest discover -s evals/funded_leg -v
@@ -59,6 +66,14 @@ The authorized shape is **read from the leg ticket, not hard-coded**: 480 s with
 a 500 s hard-stop ceiling, $0.65 metered (ADAAAA-8515), metered guard at $0.60.
 Pass `--authorized-duration-s 480`; the harness stops at 480 s and tolerates
 <= 10 s of overshoot, which is stricter than the card's 500 s ceiling.
+
+At the authorized $0.0011381/perceive-second the cap is **571 s** of metered
+time; the **$0.60** guard point is **527 s**, so the leg stops with ~44 s of
+metered headroom before it could meter the cap. The evidence `authorized` block
+records `abortAtMeteredS`, `capMeteredS`, and `abortMarginUsd` next to the dollar
+figures, and `shape` records `meteredPerceiveSessionS`, `meteredWallRatio`,
+`projectedCostUsd`, and `gpuHours`. `--abort-at-usd` may override the guard
+point but the harness refuses an abort point at or above the cap.
 
 Run from the repo root. The control stack (server, postgres, media node) is on
 `livepeer-ai-x99`; the decide pool workers (`decide-gpu0/1/2`) are on the 5090
