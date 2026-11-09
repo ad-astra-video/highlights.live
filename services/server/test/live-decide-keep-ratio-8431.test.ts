@@ -351,4 +351,69 @@ describe("latency-critical fires bypass the rate cap and repay as debt (AC-N4)",
     await obs.flush();
     expect(obs.decideCalls()).toBe(before + 1);
   });
+
+  it("anchored bypasses repay as debt — a trigger-dense stream still holds 63..69 / 300 s", async () => {
+    // The funded leg's envelope requires the content to carry several
+    // audio-noise-change events, and an anchored fire BYPASSES the gate while
+    // still charging (AC-N4). The clause that decides AC-N2 on such a share is
+    // that the bypass is booked as DEBT — the following cadence windows repay
+    // it — so the stream's total charged rate stays inside the band. Without
+    // that accounting every anchored event would be a decide spent ABOVE the
+    // cap, and a trigger-dense share could pass AC-N4 while failing AC-N2.
+    const LONG_SECONDS = 900; // 3 x 300 s, so the rate is a real long-run average
+    const ANCHOR_EVERY_S = 30; // 30 audible events: "several", not a trickle
+    const run = async (withTriggers: boolean) => {
+      const clock = skewClock(0);
+      const obs = new LiveObserver({
+        cadenceS: 3,
+        windowS: 10,
+        maxFrames: 30,
+        fps: 2,
+        decideKeepRatio: 0.64,
+        wallClock: clock.now,
+        onDecide: async () => true,
+      });
+      let anchoredEvents = 0;
+      for (let t = 0; t <= LONG_SECONDS; t += 3) {
+        if (withTriggers && t > 0 && t % ANCHOR_EVERY_S === 0) {
+          const onset = t - 1; // fired 1 s before the window that anchors it
+          obs.recordTrigger({
+            kind: "burst",
+            onsetTs: onset,
+            firedAt: onset,
+            onsetLatencyS: 0.2,
+            peakEnergy: 0.9,
+            baselineEnergy: 0.2,
+            thresholdId: "stageA/roar",
+          });
+          anchoredEvents++;
+        }
+        obs.record(t, `f${t}`, { ts: t });
+        clock.at(t);
+        await obs.maybeFire(t);
+      }
+      return { obs, anchoredEvents };
+    };
+    const { obs, anchoredEvents } = await run(true);
+    const { obs: quiet } = await run(false);
+    const charged = obs.decideCalls();
+    const chargedQuiet = quiet.decideCalls();
+    const ratePer300 = (charged * 300) / LONG_SECONDS;
+    // Every audio event fired its own anchored window (AC-N4: no due trigger
+    // dropped by the cap).
+    expect(obs.triggerFireCount()).toBe(anchoredEvents);
+    // The cap is binding on this stream, so the band is a real constraint.
+    expect(obs.throttleSkipCount()).toBeGreaterThan(0);
+    // Debt accounting: the anchored charges are repaid by the following
+    // windows, so the long-run rate stays in the funded band.
+    expect(ratePer300).toBeLessThanOrEqual(CAP_PER_300S);
+    expect(ratePer300).toBeGreaterThanOrEqual(FLOOR_PER_300S);
+    // Falsifier, and the point of this test: charging anchored fires ON TOP of
+    // the cap (no debt) would add ~30 decides (~76 / 300 s, outside the band),
+    // so the trigger-dense run must charge what the trigger-free run charges.
+    expect(Math.abs(charged - chargedQuiet)).toBeLessThanOrEqual(3);
+    // And an anchored fire still never waits more than one cadence.
+    const maxAnchoredMs = Math.max(0, ...obs.anchoredLatencyByFamilyStats().map((s) => s.maxMs));
+    expect(maxAnchoredMs).toBeLessThanOrEqual(3 * 1000);
+  });
 });
