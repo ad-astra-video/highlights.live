@@ -76,27 +76,43 @@ describe("planDueConfirmDives — post-window, one per distinct goal", () => {
 });
 
 describe("ConfirmDiveBudget — <= 8 dives per 300 s per stream", () => {
-  it("allows the default eight and refuses the ninth, counting the refusal", () => {
+  it("allows the default eight goal-slice dives and refuses the ninth, counting the refusal", () => {
     const b = new ConfirmDiveBudget();
     for (let i = 0; i < LIVE_CONFIRM_MAX_DIVES_PER_300S; i++) {
-      expect(b.allow(100 + i, LIVE_CONFIRM_MAX_DIVES_PER_300S)).toBe(true);
+      // ADAAAA-8513 (AC3): a provisional-goal row spends the reserved slice
+      // (`min(3, cap)`) and may use the whole cap.
+      expect(b.allow(100 + i, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(true);
     }
-    expect(b.allow(110, LIVE_CONFIRM_MAX_DIVES_PER_300S)).toBe(false);
+    expect(b.allow(110, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(false);
     expect(b.refusalsCount()).toBe(1);
-    expect(b.count(110)).toBe(8);
+    expect(b.count(110)).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
+  });
+
+  it("ADAAAA-8513 (AC3): the reserved slice is never spent on a general dive", () => {
+    const b = new ConfirmDiveBudget();
+    // cap 8 -> 3 reserved, 5 general. Five general dives fit, the sixth does not
+    // even though the window still has 3 tokens (they belong to the goal slice).
+    for (let i = 0; i < 5; i++) expect(b.allow(100 + i, 8, false)).toBe(true);
+    expect(b.allow(106, 8, false)).toBe(false);
+    // ...but a provisional-goal dive can still spend those 3 tokens.
+    expect(b.allow(107, 8, true)).toBe(true);
+    expect(b.allow(108, 8, true)).toBe(true);
+    expect(b.allow(109, 8, true)).toBe(true);
+    expect(b.allow(110, 8, true)).toBe(false);
+    expect(b.snapshot(110, 8)).toMatchObject({ cap: 8, reserved: 3, spentReserved: 3, spentGeneral: 5, retries: 0 });
   });
 
   it("slides: a dive 300 s later is allowed again", () => {
     const b = new ConfirmDiveBudget();
-    for (let i = 0; i < LIVE_CONFIRM_MAX_DIVES_PER_300S; i++) b.allow(0 + i, LIVE_CONFIRM_MAX_DIVES_PER_300S);
-    expect(b.allow(299, LIVE_CONFIRM_MAX_DIVES_PER_300S)).toBe(false);
-    expect(b.allow(300.5, LIVE_CONFIRM_MAX_DIVES_PER_300S)).toBe(true);
+    for (let i = 0; i < LIVE_CONFIRM_MAX_DIVES_PER_300S; i++) b.allow(0 + i, LIVE_CONFIRM_MAX_DIVES_PER_300S, true);
+    expect(b.allow(299, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(false);
+    expect(b.allow(300.5, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(true);
   });
 
   it("counts the configured max, not a hard-coded one", () => {
     const b = new ConfirmDiveBudget();
-    expect(b.allow(10, 1)).toBe(true);
-    expect(b.allow(11, 1)).toBe(false);
+    expect(b.allow(10, 1, true)).toBe(true);
+    expect(b.allow(11, 1, true)).toBe(false);
   });
 });
 
@@ -349,23 +365,54 @@ describe("runDueConfirmDives — budget, busy pool, adoption", () => {
     expect(state.dropped[0]).toMatch(/pool_busy/);
   });
 
-  it("drops when the 300 s budget is exhausted", async () => {
+  it("ADAAAA-8513 (AC1): a budget refusal stays PENDING and runs once the window slides", async () => {
     const confirm = vi.fn(async () => ({ goalConfirmed: "confirmed_goal" as const, corroborated: true }));
+    const dropped: string[] = [];
     const state = runState(
-      Array.from({ length: 9 }, (_, i) => entry({ highlightId: `hl-${i}`, goalEventTs: 100 + i * 20 }))
+      Array.from({ length: 9 }, (_, i) =>
+        entry({
+          highlightId: `hl-${i}`,
+          goalEventTs: 20 + i * 20,
+          window: { lo: 10 + i * 20, hi: 20 + i * 20 },
+          evidence: { provisional: true, scoreMeasured: true },
+        })
+      )
     );
-    const out = await runDueConfirmDives({
-      run: state as any,
-      io: { ...io, confirm },
-      nowTs: 400,
-      jobId: "job-8205",
-      maxDivesPer300s: 2,
-      adopt: () => "promoted",
-      log: () => {},
-    });
-    expect(out.dives).toBe(2);
-    expect(out.dropped).toBe(7);
-    expect(confirm).toHaveBeenCalledTimes(2);
+    const originalDrop = state.dropPendingConfirmDive.bind(state);
+    state.dropPendingConfirmDive = (k: string) => {
+      dropped.push(k);
+      originalDrop(k);
+    };
+    const adopt = vi.fn(async () => "promoted" as const);
+    const run = async (nowTs: number) =>
+      runDueConfirmDives({
+        run: state as any,
+        io: { ...io, confirm },
+        nowTs,
+        jobId: "job-8205",
+        maxDivesPer300s: 8,
+        adopt,
+        log: () => {},
+      });
+
+    // Tick 1: 8 tokens spent, the 9th (highest goalEventTs, ranked last inside
+    // its tier) is REFUSED — it must stay pending and must not be stamped.
+    const first = await run(400);
+    expect(first.dives).toBe(8);
+    expect(first.dropped).toBe(0);
+    expect(first.retries).toBe(1);
+    expect(state.pendingConfirmDives()).toHaveLength(1);
+    expect(state.pendingConfirmDives()[0].highlightId).toBe("hl-8");
+    // No adoption for the still-pending descriptor: its row is NOT dropped.
+    expect(adopt).toHaveBeenCalledTimes(8);
+    expect(dropped).not.toContain(confirmDiveKey(state.pendingConfirmDives()[0]));
+
+    // Tick 2: the 300 s window has slid, so the retry runs and is spent.
+    const second = await run(701);
+    expect(second.dives).toBe(1);
+    expect(second.dropped).toBe(0);
+    expect(state.pendingConfirmDives()).toHaveLength(0);
+    expect(confirm).toHaveBeenCalledTimes(9);
   });
 
   it("promotes and refutes on the same row, and counts them", async () => {

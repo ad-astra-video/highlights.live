@@ -264,6 +264,10 @@ describe("ADAAAA-8506 AC4 — a dropped dive is terminal, never an unread provis
       nowTs: 30 + 20,
       jobId: "job-8506",
       maxDivesPer300s: 0,
+      // ADAAAA-8513 (AC5): at stream end a budget refusal is terminal and the
+      // descriptor is stamped — AC1 keeps it pending only while the stream can
+      // still retry it.
+      drain: true,
       adopt: async (_e, result) => {
         budgetAdopted.push(result.droppedReason);
         return "unchanged" as const;
