@@ -45,6 +45,14 @@ export const LIVE_CONFIRM_TRAIL_S = 4;
  *  Matches the ADAAAA-8006 deferred lookahead: the score re-read lane and the
  *  frame re-read lane both own the window until then. */
 export const LIVE_CONFIRM_LOOKAHEAD_S = 20;
+/** ADAAAA-8513 (AC1): budget refusals one descriptor may absorb before the
+ *  retry is ABANDONED and the row is stamped `dropped:budget`. A budget refusal
+ *  is TRANSIENT (the 300 s window slides), so it must never be terminal on the
+ *  first refusal the way a pool-busy drop already is. */
+export const LIVE_CONFIRM_BUDGET_ATTEMPTS = 3;
+/** ADAAAA-8513 (AC3): tokens per 300 s RESERVED for provisional-goal rows.
+ *  The effective slice is `min(this, maxDivesPer300s)`. */
+export const LIVE_CONFIRM_RESERVED_DIVES = 3;
 
 /** One pending dive, persisted with the row that published it. */
 export interface PendingConfirmDive {
@@ -76,6 +84,33 @@ export interface PendingConfirmDive {
   };
   /** Content instant the accept that published the row was decided at. */
   queuedAt: number;
+  /** ADAAAA-8513 (AC2/AC3): the evidence the ACCEPT measured for this window,
+   *  copied from the persisted row so admission never has to reload it.
+   *
+   *  Additive optional: a descriptor written before this field existed (and a
+   *  hand-built fixture) ranks on its `signals` alone, exactly as before. */
+  evidence?: ConfirmDiveEvidence;
+}
+
+/**
+ * ADAAAA-8513 (AC2): what the accept MEASURED, ranked before any budget token
+ * is spent. `provisional` names the AC3 reservation: the row carries
+ * `provisionalGoal.status === "provisional"`.
+ */
+export interface ConfirmDiveEvidence {
+  /** AC3: the persisted row carries a provisional goal marker. */
+  provisional?: boolean;
+  /** AC2 tier 2: a MEASURED score transition (the row's own attestation read a
+   *  scoreboard change, or a deferred read recorded a real pre -> post delta). */
+  scoreMeasured?: boolean;
+  /** AC2 tier 2: the score re-read's post samples against the required count. */
+  postSamples?: number;
+  need?: number;
+  /** AC2 tier 1: the goal-line / net attestation. */
+  ballInGoal?: boolean;
+  goalCrossed?: boolean;
+  /** AC2 tier 0 (audio/motion only): a burst with no goal channel. */
+  audioBurst?: boolean;
 }
 
 /** Signals the persisted artifacts cannot reconstruct. Always stamped, never
@@ -124,42 +159,146 @@ export interface ConfirmAttestation {
  * Content-clock based (the same clock the window schedule uses), so a 300 s
  * window means 300 s of STREAM, not 300 s of wall time — a stalled stream cannot
  * bank dives. Refusals are counted, so AC-A4/A6 are readable off the record.
+ *
+ * ADAAAA-8513 (AC3): `min(LIVE_CONFIRM_RESERVED_DIVES, max)` tokens in every
+ * 300 s window are RESERVED for provisional-goal rows. A general dive (a row
+ * with no provisional marker) draws from the remainder — the reserved slice is
+ * never spent on one, so a celebration-shaped window cannot starve the goal the
+ * stream still has to confirm. Note the published consequence: at a cap of 3 or
+ * less the whole budget is the goal slice and general dives are refused (they
+ * stay pending, then are stamped at stream end — AC5).
  */
 export class ConfirmDiveBudget {
-  private stamps: number[] = [];
+  private stamps: { ts: number; reserved: boolean }[] = [];
   private refusals = 0;
+  private retries = 0;
+
+  /** AC3: the reserved slice for a given cap (`min(3, max)`). */
+  static reservedTokens(max: number = LIVE_CONFIRM_MAX_DIVES_PER_300S): number {
+    return Math.min(LIVE_CONFIRM_RESERVED_DIVES, Math.max(0, Math.floor(max)));
+  }
 
   /** Spend one dive at `nowTs`, or refuse when the window is exhausted. */
-  allow(nowTs: number, max: number = LIVE_CONFIRM_MAX_DIVES_PER_300S): boolean {
+  allow(
+    nowTs: number,
+    max: number = LIVE_CONFIRM_MAX_DIVES_PER_300S,
+    reserved: boolean = false
+  ): boolean {
     if (!Number.isFinite(nowTs)) return false;
+    const cap = Math.max(0, Math.floor(max));
     const cutoff = nowTs - LIVE_CONFIRM_BUDGET_WINDOW_S;
-    this.stamps = this.stamps.filter((t) => t > cutoff);
-    if (this.stamps.length >= Math.max(0, Math.floor(max))) {
+    this.stamps = this.stamps.filter((s) => s.ts > cutoff);
+    if (this.stamps.length >= cap) {
       this.refusals++;
       return false;
     }
-    this.stamps.push(nowTs);
+    if (!reserved) {
+      // AC3: a general dive may only draw from the remainder.
+      const generalSpent = this.stamps.filter((s) => !s.reserved).length;
+      if (generalSpent >= cap - ConfirmDiveBudget.reservedTokens(cap)) {
+        this.refusals++;
+        return false;
+      }
+    }
+    this.stamps.push({ ts: nowTs, reserved });
     return true;
   }
 
   /** Dives spent inside the sliding window ending at `nowTs`. */
   count(nowTs: number): number {
     const cutoff = nowTs - LIVE_CONFIRM_BUDGET_WINDOW_S;
-    return this.stamps.filter((t) => t > cutoff).length;
+    return this.stamps.filter((s) => s.ts > cutoff).length;
   }
 
   refusalsCount(): number {
     return this.refusals;
   }
+
+  /** AC1: count a budget refusal that left its descriptor PENDING (a retry). */
+  noteRetry(): void {
+    this.retries++;
+  }
+
+  retriesCount(): number {
+    return this.retries;
+  }
+
+  /** AC3: the published `observeMetrics.diveBudget` block at `nowTs`. */
+  snapshot(
+    nowTs: number,
+    max: number = LIVE_CONFIRM_MAX_DIVES_PER_300S
+  ): ConfirmDiveBudgetSnapshot {
+    const cap = Math.max(0, Math.floor(max));
+    const cutoff = (Number.isFinite(nowTs) ? nowTs : 0) - LIVE_CONFIRM_BUDGET_WINDOW_S;
+    const live = this.stamps.filter((s) => s.ts > cutoff);
+    return {
+      cap,
+      reserved: ConfirmDiveBudget.reservedTokens(cap),
+      spentReserved: live.filter((s) => s.reserved).length,
+      spentGeneral: live.filter((s) => !s.reserved).length,
+      retries: this.retries,
+    };
+  }
+}
+
+/** ADAAAA-8513 (AC3): the admission block a stored live row publishes. */
+export interface ConfirmDiveBudgetSnapshot {
+  /** The configured per-300 s cap (`LIVE_CONFIRM_MAX_DIVES_PER_300S`). */
+  cap: number;
+  /** Tokens reserved for provisional-goal rows (`min(3, cap)`). */
+  reserved: number;
+  /** Reserved tokens spent inside the sliding window. */
+  spentReserved: number;
+  /** General tokens spent inside the sliding window. */
+  spentGeneral: number;
+  /** AC1: budget refusals that left a descriptor pending for a later tick. */
+  retries: number;
+}
+
+/**
+ * ADAAAA-8513 (AC2): evidence strength of one due dive, highest first.
+ *   2 = a MEASURED score transition (`liveGoalHasMeasuredEvidence`'s score
+ *       channel, or `postSamples >= need`),
+ *   1 = a goal-line / net attestation (`ballOutcome=goal` / `goalCrossed`),
+ *   0 = audio/motion only (a celebration burst with no goal channel).
+ * The accept's recorded `evidence` wins; a pre-change descriptor falls back to
+ * its candidate `signals`, which is exactly what the accept had.
+ */
+export function confirmDiveEvidenceTier(entry: PendingConfirmDive): 0 | 1 | 2 {
+  const ev = entry?.evidence;
+  const signals = entry?.signals;
+  if (ev?.scoreMeasured === true) return 2;
+  if (
+    typeof ev?.postSamples === "number" &&
+    typeof ev?.need === "number" &&
+    ev.need > 0 &&
+    ev.postSamples >= ev.need
+  ) {
+    return 2;
+  }
+  if (signals?.scoreBoardChanged === true) return 2;
+  if (ev?.ballInGoal === true || ev?.goalCrossed === true || signals?.goalCrossed === true) return 1;
+  if (typeof signals?.ballOutcome === "string" && /^goal$/i.test(signals.ballOutcome.trim())) return 1;
+  return 0;
 }
 
 /**
  * The dives that are DUE: their judged window's lookahead has closed (so the
  * persisted artifacts are final) and the goal has not already had a dive.
  *
- * One dive per distinct goal: entries are ordered by `goalEventTs` and an entry
- * within `reuseWindowS` of an already-selected goal is skipped — the same rule
- * `confirmReconcile` applies to overlapping rolling windows (ADAAAA-7663).
+ * One dive per distinct goal: entries are ordered by evidence strength then
+ * `goalEventTs` and an entry within `reuseWindowS` of an already-selected goal
+ * is skipped — the same rule `confirmReconcile` applies to overlapping rolling
+ * windows (ADAAAA-7663).
+ *
+ * ADAAAA-8513 (AC2): the order is EVIDENCE FIRST, then stream time. Before this
+ * the list was `goalEventTs` ascending, so the budget was spent oldest-first and
+ * noise earlier in the window beat a real goal later in it (16 goal-shaped reads
+ * in 668 s on `c4d33a26`, 12 of them false `scoreboard changed`). Ranking the
+ * measured-transition / goal-line tiers ahead of the audio-burst tier means a
+ * high-evidence goal can never lose the last token to a lower-evidence
+ * celebration; `goalEventTs` ascending inside a tier keeps the order
+ * deterministic (and keeps the older window first among equal evidence).
  */
 export function planDueConfirmDives(
   pending: ReadonlyArray<PendingConfirmDive>,
@@ -179,7 +318,13 @@ export function planDueConfirmDives(
   const seen: number[] = [];
   const ordered = [...(pending ?? [])]
     .filter((e) => !!e?.highlightId && Number.isFinite(e?.goalEventTs))
-    .sort((a, b) => a.goalEventTs - b.goalEventTs);
+    .sort((a, b) => {
+      // AC2: measured score -> goal-line/net -> audio-only; then stream time.
+      const rank = confirmDiveEvidenceTier(b) - confirmDiveEvidenceTier(a);
+      if (rank !== 0) return rank;
+      if (a.goalEventTs !== b.goalEventTs) return a.goalEventTs - b.goalEventTs;
+      return a.highlightId < b.highlightId ? -1 : a.highlightId > b.highlightId ? 1 : 0;
+    });
   for (const e of ordered) {
     if (input.attempted?.has(confirmDiveKey(e))) continue;
     if (!Number.isFinite(e.window?.lo) || !Number.isFinite(e.window?.hi) || e.window.hi < e.window.lo) continue;
@@ -538,12 +683,35 @@ export interface ConfirmDiveResult {
     | "transport_failure"
     | "passthrough"
     | "budget"
-    | "pool_busy";
+    | "pool_busy"
+    /** ADAAAA-8513 (AC4): the 16-entry pending ring evicted the descriptor. */
+    | "descriptor_overflow"
+    /** ADAAAA-8513 (AC5): a descriptor whose judged window is malformed. */
+    | "descriptor_invalid";
   verdict?: ConfirmDiveVerdict;
   context: ConfirmDiveContext;
   latencyMs: number;
   framesSent: number;
 }
+
+/**
+ * ADAAAA-8513 (AC4): the closed cause list a stored `confirmDroppedByReason`
+ * always carries. `descriptor_overflow` and `frame_unreadable` are extra
+ * causes the lane can actually observe; they are kept distinct instead of being
+ * folded into a neighbour, because "the ring evicted it" and "the frames would
+ * not load" are different repairs.
+ */
+export const CONFIRM_DROP_REASONS = [
+  "pool_busy",
+  "budget",
+  "timeout",
+  "transport_failure",
+  "passthrough",
+  "no_persisted_frames",
+  "frame_unreadable",
+  "descriptor_overflow",
+  "descriptor_invalid",
+] as const;
 
 /**
  * ADAAAA-8205 AC-A4: did this dive actually issue a decide call? The two
@@ -722,12 +890,51 @@ export interface ConfirmDiveRunState {
   confirmDiveCalls(): number;
   confirmDiveCount(): number;
   confirmDiveDropped(): number;
+  /** ADAAAA-8513 (AC4): descriptors the pending ring evicted, awaiting a
+   *  stamped `descriptor_overflow` verdict. Optional so older fakes still run. */
+  takeOverflowedConfirmDives?(): readonly PendingConfirmDive[];
+  /** ADAAAA-8513 (AC1): budget refusals this descriptor already absorbed. */
+  budgetAttempts?(key: string): number;
+  /** ADAAAA-8513 (AC1): record one budget refusal; returns the new count. */
+  noteBudgetAttempt?(key: string): number;
+  /** ADAAAA-8513 (AC4): drops keyed by cause. */
+  confirmDroppedByReason?(): Record<string, number>;
+  /** ADAAAA-8513 (AC3): the published admission block. */
+  confirmDiveBudget?(): ConfirmDiveBudgetSnapshot;
+  /** ADAAAA-8513 (AC7): the configured cap this run used. */
+  confirmDiveMaxPer300s?(): number;
+}
+
+/** The pump's per-tick accounting (what the tests and logs read). */
+export interface ConfirmDivePumpOutcome {
+  dives: number;
+  dropped: number;
+  promoted: number;
+  refuted: number;
+  /** ADAAAA-8513 (AC1): budget refusals that stayed pending for a later tick. */
+  retries: number;
+  /** ADAAAA-8513 (AC4): overflow descriptors stamped on this tick. */
+  overflowDropped: number;
 }
 
 /**
  * Pump the due dives for one window: plan -> budget -> busy check -> dive ->
  * adopt. Called OFF the accept path (fire-and-forget by the caller), so a slow
  * dive can never stall the live pass.
+ *
+ * ADAAAA-8513 changes admission, all `$0`:
+ *  - AC1: a `budget` refusal is TRANSIENT. The descriptor stays pending, is not
+ *    marked attempted, and re-plans on a later tick; only the third refusal
+ *    (or stream end, AC5) abandons it with a stamped `budget` drop. Pool-busy
+ *    stays terminal because a saturated pool has no promise of later capacity.
+ *  - AC2: `planDueConfirmDives` ranks evidence first, so the last token goes to
+ *    the strongest window rather than the oldest.
+ *  - AC3: provisional-goal rows spend the reserved slice; everything else draws
+ *    from the remainder (`deps.maxDivesPer300s` still caps the total, so this is
+ *    cost-neutral by construction).
+ *  - AC4: the ring's evicted descriptors are stamped `descriptor_overflow`.
+ *  - AC5 (`drain`): every still-pending descriptor gets a terminal verdict, and
+ *    a budget refusal at stream end is stamped instead of retried.
  */
 export async function runDueConfirmDives(deps: {
   run: ConfirmDiveRunState;
@@ -737,16 +944,32 @@ export async function runDueConfirmDives(deps: {
   maxDivesPer300s?: number;
   lookaheadS?: number;
   reuseWindowS?: number;
+  /** AC5: end-of-stream drain — no retries, no descriptor left pending. */
+  drain?: boolean;
   /** Returns a drop reason when the decide pool is saturated, else null. */
   busy?: () => string | null;
   /** Persist the adoption (the promote-in-place write path). */
   adopt: (entry: PendingConfirmDive, result: ConfirmDiveResult) => Promise<ConfirmDiveAdoption["kind"] | void> | ConfirmDiveAdoption["kind"] | void;
   log?: (line: string) => void;
-}): Promise<{ dives: number; dropped: number; promoted: number; refuted: number }> {
-  const out = { dives: 0, dropped: 0, promoted: 0, refuted: 0 };
+}): Promise<ConfirmDivePumpOutcome> {
+  const out: ConfirmDivePumpOutcome = { dives: 0, dropped: 0, promoted: 0, refuted: 0, retries: 0, overflowDropped: 0 };
   const log = deps.log ?? ((line: string) => console.error(line));
+  const tag = `[live-confirm:${deps.jobId}]`;
+  const nowTs = deps.nowTs;
+  const maxDives = deps.maxDivesPer300s ?? LIVE_CONFIRM_MAX_DIVES_PER_300S;
+  // AC4: a ring eviction is a DROP with a stamped reason, never a silent shift().
+  // The count was taken at eviction time; this only settles the row (adoption).
+  const pendingKeys = new Set(deps.run.pendingConfirmDives().map(confirmDiveKey));
+  for (const evicted of deps.run.takeOverflowedConfirmDives?.() ?? []) {
+    // A re-produced descriptor with the same key is still pending — diving it
+    // wins, so the evicted stale copy is not stamped over the live one.
+    if (pendingKeys.has(confirmDiveKey(evicted))) continue;
+    out.overflowDropped++;
+    log(`${tag} descriptor overflow: ${evicted.highlightId} dropped (pending ring full)`);
+    await deps.adopt(evicted, droppedDiveResult("descriptor_overflow"));
+  }
   const due = planDueConfirmDives(deps.run.pendingConfirmDives(), {
-    nowTs: deps.nowTs,
+    nowTs,
     lookaheadS: deps.lookaheadS,
     attempted: deps.run.confirmDiveAttempted(),
     reuseWindowS: deps.reuseWindowS,
@@ -760,26 +983,44 @@ export async function runDueConfirmDives(deps: {
       deps.run.dropPendingConfirmDive(key);
       deps.run.noteConfirmDiveDropped(`pool_busy:${busyReason}`);
       out.dropped++;
-      log(`[live-confirm:${deps.jobId}] dive for ${entry.highlightId} dropped: decide pool busy (${busyReason})`);
+      log(`${tag} dive for ${entry.highlightId} dropped: decide pool busy (${busyReason})`);
       // AC4: a drop is terminal — stamp the row so no finished job keeps a
       // provisional row with no stored verdict field.
       await deps.adopt(entry, droppedDiveResult("pool_busy"));
       continue;
     }
-    // One attempt per entry, marked BEFORE the call so a retried pump can never
-    // double-bill the same goal.
-    deps.run.noteConfirmDiveAttempt(key);
-    if (!deps.run.confirmBudget.allow(deps.nowTs, deps.maxDivesPer300s)) {
+    // AC3: a provisional-goal row spends the reserved slice; every other row
+    // draws from the remainder.
+    const reserved = entry.evidence?.provisional === true;
+    if (!deps.run.confirmBudget.allow(nowTs, maxDives, reserved)) {
+      // AC1: a budget refusal is TRANSIENT — the sliding window releases tokens
+      // later. Never mark it attempted and never clear its descriptor, or the
+      // goal loses its only dive to a timing accident.
+      const attempts = deps.run.noteBudgetAttempt?.(key) ?? 1;
+      deps.run.confirmBudget.noteRetry();
+      out.retries++;
+      if (deps.drain !== true && attempts < LIVE_CONFIRM_BUDGET_ATTEMPTS) {
+        log(
+          `${tag} budget (${maxDives}/${LIVE_CONFIRM_BUDGET_WINDOW_S}s) exhausted — dive for ` +
+            `${entry.highlightId} stays PENDING (attempt ${attempts}/${LIVE_CONFIRM_BUDGET_ATTEMPTS}), retried on the next tick`
+        );
+        continue;
+      }
+      // Terminal: the per-descriptor retry bound is spent, or the stream ended.
+      // Settle the descriptor with a stamped reason (AC4/AC5), no model call.
       deps.run.dropPendingConfirmDive(key);
       deps.run.noteConfirmDiveDropped("budget");
       out.dropped++;
       log(
-        `[live-confirm:${deps.jobId}] budget (${deps.maxDivesPer300s ?? LIVE_CONFIRM_MAX_DIVES_PER_300S}/` +
-          `${LIVE_CONFIRM_BUDGET_WINDOW_S}s) exhausted — dive for ${entry.highlightId} dropped`
+        `${tag} budget (${maxDives}/${LIVE_CONFIRM_BUDGET_WINDOW_S}s) exhausted — dive for ` +
+          `${entry.highlightId} abandoned after ${attempts} attempt(s)${deps.drain ? " at stream end" : ""}`
       );
       await deps.adopt(entry, droppedDiveResult("budget"));
       continue;
     }
+    // One attempt per entry, marked BEFORE the call so a retried pump can never
+    // double-bill the same goal. (A budget REFUSAL above returns before this.)
+    deps.run.noteConfirmDiveAttempt(key);
     const result = await runConfirmDive(entry, deps.io, { jobId: deps.jobId, log });
     out.dives++;
     // AC-A4: only a dive that actually ISSUED a decide call is billable. The two
@@ -804,6 +1045,21 @@ export async function runDueConfirmDives(deps: {
     deps.run.dropPendingConfirmDive(key);
     if (kind === "promoted") out.promoted++;
     else if (kind === "refuted") out.refuted++;
+  }
+  // AC5: a drained pump must leave NO descriptor pending. Anything the plan
+  // could not judge (a malformed window) is settled with its own stamped reason
+  // rather than left `provisional` with nothing to read on a finished job.
+  if (deps.drain === true) {
+    const planned = new Set(due.map(confirmDiveKey));
+    for (const entry of deps.run.pendingConfirmDives()) {
+      const key = confirmDiveKey(entry);
+      if (planned.has(key)) continue;
+      deps.run.dropPendingConfirmDive(key);
+      deps.run.noteConfirmDiveDropped("descriptor_invalid");
+      out.dropped++;
+      log(`${tag} descriptor ${entry.highlightId} has no judgeable window — stamped descriptor_invalid at stream end`);
+      await deps.adopt(entry, droppedDiveResult("descriptor_invalid"));
+    }
   }
   return out;
 }

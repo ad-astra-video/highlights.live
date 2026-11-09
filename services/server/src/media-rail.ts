@@ -852,6 +852,10 @@ export class MediaRailObserver {
         calls: this.run.confirmDiveCalls(),
         dives: this.run.confirmDiveCount(),
         dropped: this.run.confirmDiveDropped(),
+        // ADAAAA-8513 (AC3/AC4): the same per-cause + admission block the
+        // analyzer pass publishes, so a media-rail share's row carries it too.
+        byReason: this.run.confirmDroppedByReason(),
+        budget: this.run.confirmDiveBudget(),
       },
       // ADAAAA-8344: the adapter's per-job decide-stage summary, read at share
       // end like the decide counters. Absent when no decide was instrumented.
