@@ -214,3 +214,75 @@ describe("ADAAAA-8504: the admin readout carries the renamed field", () => {
     expect(audit.decideCapacity!.decideRegistrations).toBeUndefined();
   });
 });
+
+describe("ADAAAA-8504 end-to-end: a browser share's stored record carries the posture", () => {
+  it("POST /jobs (browser) -> /observe -> /stop leaves decideCapacity on the record", async () => {
+    const { buildTestApp, fakePipeline } = await import("./helpers");
+    const base = fakePipeline();
+    const adapter = {
+      ...base,
+      // The shared admission gate, as the OrchestratorAdapter exposes it.
+      primeDecideCapacity: async () => START_SNAPSHOT,
+      decideAdmissionMetrics: () => ({
+        decideQueued: 0,
+        decideDropped: 0,
+        decide503: 0,
+        decidePauses: 0,
+        capacityProbeErrors: 0,
+        capacity: START_SNAPSHOT,
+      }),
+    };
+    const { app, store } = await buildTestApp({ LIVE_OBSERVE_LOOP: "1" }, { adapter });
+    const reg = await app.inject({
+      method: "POST",
+      url: "/auth/register",
+      payload: { email: "capacity8504@test.dev", password: "password123" },
+    });
+    expect(reg.statusCode).toBe(200);
+    const token = reg.json().token as string;
+
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { source: "browser", gameHint: "soccer" },
+    });
+    expect([200, 202]).toContain(jr.statusCode);
+    const jobId = jr.json().job.id as string;
+
+    // The media node relays a frame: the rail is created here, which is the
+    // share's decide-job start and where the latch primes the probe.
+    const obs = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/observe`,
+      payload: { seq: 0, timestamp: Date.now() / 1000, tracks: [], frameB64: Buffer.from("f0").toString("base64") },
+    });
+    expect(obs.statusCode).toBe(200);
+
+    // End the share so the rail's observe snapshot is written to the record.
+    const stop = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/stop`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect([200, 202]).toContain(stop.statusCode);
+
+    // The record — the read AC1/AC4 make — not the in-memory rail.
+    let stored: any;
+    for (let i = 0; i < 100; i++) {
+      stored = store.getJob(jobId);
+      if (stored?.observeMetrics?.decideCapacity) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(stored?.observeMetrics?.decideCapacity).toMatchObject({
+      advertised: 12,
+      funded: 8,
+      effective: 12,
+      probeOk: true,
+      decideRegistrations: 1,
+      source: "probe",
+      cap: 32,
+    });
+    expect(stored?.observeMetrics?.decideCapacity?.at).toEqual(expect.any(String));
+  }, 30000);
+});
