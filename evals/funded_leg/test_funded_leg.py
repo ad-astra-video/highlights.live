@@ -151,6 +151,65 @@ class HardStopTest(unittest.TestCase):
         self.assertLess(evidence["leg"]["durationS"], 10.0)
         self.assertLess(evidence["leg"]["costUsd"], 0.65)
 
+class MeteredProjectionTest(unittest.TestCase):
+    """ADAAAA-8516 A1: the stop bounds metered time, not only wall clock."""
+
+    def test_projection_stops_before_the_wall_clock(self):
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "clean",
+                "--authorized-duration-s", "30",
+                "--cap-usd", "0.65",
+                "--abort-at-usd", "0.05",
+                # 10x the cap record's rate: the projection, not the clock or the
+                # stub's own cost field, has to end this leg.
+                "--metered-usd-per-s", "0.01",
+                "--quiet-window-min", "0.08",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        leg = evidence["leg"]
+        self.assertEqual(leg["stopReason"], "metered_projection_cap")
+        self.assertLess(leg["durationS"], 30.0)
+        self.assertGreaterEqual(leg["meteredProjectionS"], 4.9)
+        self.assertLess(leg["meteredProjectedUsd"], 0.65)
+        self.assertEqual(evidence["authorized"]["meteredUsdPerS"], 0.01)
+
+    def test_evidence_carries_the_metered_wall_ratio(self):
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "clean",
+                "--authorized-duration-s", "2",
+                "--cap-usd", "0.65",
+                "--quiet-window-min", "0.05",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        leg = evidence["leg"]
+        self.assertIn("meteredProjectionS", leg)
+        self.assertIn("perceiveSessionS", leg)
+        self.assertIn("costUsd", leg)
+        self.assertIsNotNone(leg["meteredWallRatio"])
+
+    def test_missing_projection_rate_refuses_the_leg(self):
+        # A1: neither a live meter nor a session-time projection = not authorized.
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "clean",
+                "--authorized-duration-s", "1",
+                "--cap-usd", "0.65",
+                "--metered-usd-per-s", "0",
+            ]
+        )
+        self.assertEqual(code, 5)
+        self.assertIsNone(evidence)
+
+
+class LegShapeTest(unittest.TestCase):
     def test_slack_above_ten_seconds_is_refused(self):
         code, evidence = run_harness(
             [
