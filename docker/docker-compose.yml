@@ -828,6 +828,17 @@ services:
       # timeout above. Default 0 = inert (await the whole prefetch).
       - LIVE_DECIDE_ASR_WAIT_MS=${LIVE_DECIDE_ASR_WAIT_MS:-0}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
+      # ADAAAA-8506: the live Stage-2 dive's per-300 s budget. A dive bills the
+      # SAME $0.0033 decideFee as a Stage-1 read, so the budget is a cost cell:
+      # at the ratified 66 charged decides / 300 s the CEO-locked $2.75/h ceiling
+      # allows 69.4 calls, i.e. at most 3 dives (66 + 3 = $2.7324/h). The default
+      # mirrors `LIVE_CONFIRM_MAX_DIVES_PER_300S` in live-confirm-async.ts (a
+      # test pins all three: this line, the config default and the constant).
+      # Before this line the knob was parsed by config.ts but never passed
+      # through, so `/confirm` budget could only be changed by an image rebuild
+      # (measured ADAAAA-8506: `printenv` had no LIVE_CONFIRM_MAX_DIVES_PER_300S
+      # on the armed-cell probe).
+      - LIVE_CONFIRM_MAX_DIVES_PER_300S=${LIVE_CONFIRM_MAX_DIVES_PER_300S:-3}
       # ADAAAA-7781: COMPACT verdict contract on the live decide rail. The live
       # pass is decode-bound (measured: p50 9.4 s for a ~1340-char verdict; the
       # box's gemma pair decodes ~150 output tok/s), so decisions/s = tok/s /
