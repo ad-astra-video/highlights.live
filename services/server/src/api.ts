@@ -1782,7 +1782,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const cw = await resolveClipWindow();
     // ADAAAA-8005 (gate 3): carry the job id so the delivery metric's per-row
     // evidence line names the share it belongs to.
-    const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id });
+    const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id, liveConfirmMaxDivesPer300S: cfg.liveConfirmMaxDivesPer300S });
     // ADAAAA-8408 (W2): write the match context the decide prompt reads. The
     // share already produces both inputs (per-window ASR transcript + perceive's
     // scorebug/kit evidence), so this adds 4 CPU-only folds per run and no
@@ -1883,6 +1883,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const rail = new MediaRailObserver(
       {
         jobId: job.id,
+        // ADAAAA-8513 (AC3): the rail publishes `diveBudget.cap` from the same
+        // configured cap its pump admits against.
+        liveConfirmMaxDivesPer300S: cfg.liveConfirmMaxDivesPer300S,
         // The INGEST/sample clock: the media node samples at `sampleFps`, and this
         // rail persists frames + cuts clips on that clock.
         fps: railFps,
@@ -2390,7 +2393,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7671: retain LIVE_AUDIO_RETAIN_S of tapped audio (20 s) so a
       // window's whole 10 s span + margins survives even when the decide loop
       // lags the real-time tap.
-      const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id });
+      const shared = new LiveRunShared({ audioRetainS: LIVE_AUDIO_RETAIN_S, jobId: job.id, liveConfirmMaxDivesPer300S: cfg.liveConfirmMaxDivesPer300S });
       liveRun = shared;
       // ADAAAA-8310: the settlement snapshot this pass can hand to a writer that
       // pre-empts it. `observeSnapshot` is filled by `onObserveSnapshot` once the

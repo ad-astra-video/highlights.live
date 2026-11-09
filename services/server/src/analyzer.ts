@@ -4340,12 +4340,24 @@ export class LiveRunShared {
     lastNotedTs: number;
   } = { story: "", priorAsr: "", score: null, lastScoreTs: null, scored: false, lastNotedTs: -Infinity };
 
-  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number; jobId?: string } = {}) {
+  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number; jobId?: string; liveConfirmMaxDivesPer300S?: number } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
     this.goalBurstWindowS = opts.goalBurstWindowS ?? DEFAULT_GOAL_BURST_SUPPRESS_S;
     this.audioRetainS = opts.audioRetainS ?? AUDIO_CLIP_KEEP_S;
     this.delivery = new LiveDeliveryTracker(opts.jobId ?? "");
+    // ADAAAA-8513 (AC3): the cap the PUMP admits against and the cap the
+    // published `diveBudget` reports must be the same number. The pump reads
+    // `cfg.liveConfirmMaxDivesPer300S`; before this the snapshot fell back to
+    // the compile-time default, so an operator-composed cap (e.g. 4) admitted 4
+    // while the stored row claimed `cap: 8`. ADAAAA-8513 verification defect.
+    this.confirmDiveMax =
+      Number.isFinite(opts.liveConfirmMaxDivesPer300S as number) && (opts.liveConfirmMaxDivesPer300S as number) >= 0
+        ? Math.floor(opts.liveConfirmMaxDivesPer300S as number)
+        : LIVE_CONFIRM_MAX_DIVES_PER_300S;
   }
+
+  /** ADAAAA-8513 (AC3/AC7): the configured per-300 s dive cap this run uses. */
+  private readonly confirmDiveMax: number;
 
   /** ADAAAA-8005 (gate 3): the per-row trigger -> delivered collector for this
    *  run. The live observers feed it the window stage clocks; the server's
@@ -4851,7 +4863,10 @@ export class LiveRunShared {
   }
   /** ADAAAA-8205: the configured default budget for this run. */
   confirmDiveMaxPer300s(): number {
-    return LIVE_CONFIRM_MAX_DIVES_PER_300S;
+    // ADAAAA-8513: the SAME cap the pump admits against (cfg value), never the
+    // compile-time fallback — otherwise `diveBudget.cap` can disagree with the
+    // spend the lane actually enforced.
+    return this.confirmDiveMax;
   }
 
   /** ADAAAA-8006: resolve ONE demoted row against a later window's scoreboard
