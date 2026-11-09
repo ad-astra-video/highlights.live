@@ -12,7 +12,14 @@ const src = path.join(tmpdir(), "hl-live-src.mp4");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function cfg() {
-  return { ffmpegPath: "ffmpeg", dataDir, clipBeforeS: 1, clipAfterS: 1 } as any;
+  // `liveFrameScale` is REQUIRED, not optional: ADAAAA-8377 made the frame scale
+  // a server-config knob, and `live.ts` interpolates it into the recorder filter
+  // unconditionally (`-vf fps=…,scale=${cfg.liveFrameScale}`). A raw cfg like this
+  // one bypasses the config default, so omitting it builds `scale=undefined`, ffmpeg
+  // rejects the filter and exits before writing `frame_%06d.jpg` or `session.ts` —
+  // every case below then hangs to its timeout (ADAAAA-8496). Same value the prod
+  // default (`LIVE_FRAME_SCALE_DEFAULT`) resolves to.
+  return { ffmpegPath: "ffmpeg", dataDir, clipBeforeS: 1, clipAfterS: 1, liveFrameScale: "320:180" } as any;
 }
 
 beforeAll(() => {
