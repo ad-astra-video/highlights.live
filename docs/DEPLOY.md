@@ -213,14 +213,21 @@ pause queue):
 Observability: the gate's counters land on the job's `observeMetrics` record
 (`decideQueued`, `decideDropped`, `decide503`, `decidePauses`,
 `capacityProbeErrors`, and
-`decideCapacity: {advertised, funded, effective, probeOk, runners, source, cap}`), so
-QA can grade a run from `GET /jobs/:id` without reading container logs.
-`probeOk`/`runners`/`source` are provenance only (ADAAAA-8262): `probeOk: false`
-means the last discovery probe FAILED, while `probeOk: true, runners: 0` means
+`decideCapacity: {advertised, funded, effective, probeOk, decideRegistrations, source, cap, at}`), so
+QA can grade a run from `GET /admin/jobs/:id/window-audit` (admin) or the stored record without
+reading container logs — including a media-rail (browser/RTMP) share, which folds
+the snapshot it LATCHED at job start. `at` dates that snapshot (ISO wall clock).
+ADAAAA-8504 renamed the old `runners` field to `decideRegistrations` in the
+RECORD: the number counts decide registrations, and the box registers exactly one
+`highlights-decide` app however wide the worker set is, so it is not a worker
+count. Old rows still parse (`runners` is read back when present) and the
+`[decide-capacity]` log line keeps its `runners=` label because ops greps it.
+`probeOk`/`source` are provenance only (ADAAAA-8262): `probeOk: false`
+means the last discovery probe FAILED, while `probeOk: true, decideRegistrations: 0` means
 the signer answered and advertised no decide runner. `source` names where
 `advertised` came from (`probe`, `last-known`, `funded`); none of the three
 changes the ceiling arithmetic. The server also prints one
-`[decide-capacity] advertised=… funded=… effective=… probeOk=… runners=… source=…`
+`[decide-capacity] advertised=… funded=… effective=… probeOk=… runners=… source=… cap=…`
 line whenever the snapshot changes.
 
 What must NOT change with this feature: `OBSERVE_CADENCE_S` (3 s), the 10 s live

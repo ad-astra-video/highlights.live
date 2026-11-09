@@ -54,8 +54,10 @@ import { decideStageRecorder } from "./decide-stage-timings";
 import {
   LiveRunShared,
   buildLiveObserveMetrics,
+  withDecideAdmissionMetrics,
   seedSignalFromEvidence,
   scoreboardDeltaLegible,
+  type DecideCapacityLatch,
   type LiveObserveMetricsSnapshot,
   type ScoreboardDeltaEvidence,
 } from "./analyzer";
@@ -183,6 +185,13 @@ export interface MediaRailObserverOptions {
    *  (the fleet advertises 6 on the routed 5090 set) instead of the static
    *  funded number, so the depth grows with the fleet mid-run. */
   decideAdmission?: number | (() => number);
+  /** ADAAAA-8504: the admission snapshot this share STARTED under, latched once
+   *  by the caller (which primes the probe and stamps `at`). The rail folds it
+   *  into `observeMetrics.decideCapacity` at share end, so the capacity condition
+   *  is gradeable from the stored record instead of the `[decide-capacity]` log
+   *  line. Absent (an older caller / a rail built in a test) leaves the record
+   *  byte-identical — an unrecorded posture stays absent, never 0. */
+  decideCapacityLatch?: () => DecideCapacityLatch | undefined;
   /** ADAAAA-7987: the two-phase decide fork (`decide()` may run K-wide,
    *  `accept()` always in CONTENT order), so the media rail pipelines exactly
    *  like the analyzer live-observe path (ADAAAA-7771/7878). */
@@ -389,10 +398,13 @@ export class MediaRailObserver {
   private flushing = false;
   /** ADAAAA-7987: whether this rail runs the pipelined (staged) decide fork. */
   private readonly pipelined: boolean;
+  /** ADAAAA-8504: the admission snapshot this share latched at its start. */
+  private readonly decideCapacityLatch?: () => DecideCapacityLatch | undefined;
 
   constructor(opts: MediaRailObserverOptions, run?: LiveRunShared) {
     this.jobId = opts.jobId;
     this.onFrame = opts.onFrame;
+    this.decideCapacityLatch = opts.decideCapacityLatch;
     this.lagBudgetMs = Math.max(0, (opts.lagBudgetS ?? LIVE_OBSERVE_LAG_BUDGET_S) * 1000);
     // ADAAAA-8102: the CONTENT consume rate, separate from the ingest clock
     // (`opts.fps` = `sampleFps`, still the persistence/clip-cut clock). A
@@ -876,17 +888,30 @@ export class MediaRailObserver {
     // ADAAAA-8205: the async confirm lane's meter rides the run, exactly like the
     // analyzer pass's snapshot, so a media-rail share's `costUsd` is derivable
     // from its record (decideFee * (decideCalls + confirmCalls) + perceive).
-    const metrics = buildLiveObserveMetrics(
-      this.live,
+    //
+    // ADAAAA-8504: the capacity snapshot this share started under is folded here
+    // too. Before this, a browser/RTMP share (which decides through the SHARED
+    // server gate) never published `decideCapacity` at all — the analyzer live
+    // pass did — so the pre-registered capacity condition had to be graded off a
+    // rotating `[decide-capacity]` log line. Only the capacity is folded: this
+    // rail owns no per-job admission COUNTERS (the gate's baseline belongs to
+    // whichever pass called `beginDecideJob`), and inventing zeros for them would
+    // read as "measured" rather than "not recorded".
+    const metrics = withDecideAdmissionMetrics(
+      buildLiveObserveMetrics(
+        this.live,
+        undefined,
+        {
+          calls: this.run.confirmDiveCalls(),
+          dives: this.run.confirmDiveCount(),
+          dropped: this.run.confirmDiveDropped(),
+        },
+        // ADAAAA-8344: the adapter's per-job decide-stage summary, read at share
+        // end like the decide counters. Absent when no decide was instrumented.
+        decideStageRecorder.summary(this.jobId)
+      ),
       undefined,
-      {
-        calls: this.run.confirmDiveCalls(),
-        dives: this.run.confirmDiveCount(),
-        dropped: this.run.confirmDiveDropped(),
-      },
-      // ADAAAA-8344: the adapter's per-job decide-stage summary, read at share
-      // end like the decide counters. Absent when no decide was instrumented.
-      decideStageRecorder.summary(this.jobId)
+      this.decideCapacityLatch?.()
     );
     // ADAAAA-8102: prove the consume rate from the JOB RECORD, not from
     // `printenv`. Before this the media rail published no `perceive` block at all

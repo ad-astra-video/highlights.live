@@ -3,7 +3,7 @@
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
-import type { DecideAdmissionMetrics } from "@highlights/livepeer-session";
+import type { DecideAdmissionMetrics, DecideCapacitySnapshot } from "@highlights/livepeer-session";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-timings";
@@ -2845,6 +2845,13 @@ export interface PipelineClient {
    */
   beginDecideJob?(): void;
   /**
+   * ADAAAA-8504: the capacity snapshot this decide job STARTS under. Awaits the
+   * refresh {@link beginDecideJob} just kicked (single-flight, so it can never
+   * double-probe) and never throws. Optional like the two hooks above, so a
+   * FAKE/older client simply records no latch.
+   */
+  primeDecideCapacity?(): Promise<DecideCapacitySnapshot>;
+  /**
    * ADAAAA-8254: the decide admission counters + `{advertised, funded,
    * effective}` capacity snapshot for the job's `observeMetrics`. Optional;
    * absent on a client with no admission gate (e.g. the direct-dev adapter).
@@ -3717,40 +3724,92 @@ export interface LiveObserveMetricsSnapshot {
   /** ADAAAA-8254: `{advertised, funded, effective}` decide ceiling.
    *  ADAAAA-8262 adds `probeOk` / `runners` / `source` provenance.
    *  ADAAAA-8437 adds `cap`: admission follows `advertised` (up or down) clamped
-   *  to the safety cap; `funded` is reporting only. */
+   *  to the safety cap; `funded` is reporting only.
+   *  ADAAAA-8504 adds `decideRegistrations` (the honest name for `runners`, kept
+   *  readable for older rows) and `at` (when the snapshot was taken). */
   decideCapacity?: {
     advertised: number;
     funded: number;
     effective: number;
     /** False = the last probe failed (distinct from an empty fleet). */
     probeOk?: boolean;
-    /** Decide runners in the last well-formed answer (0 = none). */
+    /** ADAAAA-8504: decide REGISTRATIONS in the last well-formed answer (0 =
+     *  none) — one `highlights-decide` app however wide the worker set is. */
+    decideRegistrations?: number;
+    /** LEGACY: the pre-8504 name of `decideRegistrations` (read-only). */
     runners?: number;
     /** Provenance of `advertised`. */
     source?: "probe" | "last-known" | "funded";
     /** ADAAAA-8437: the `DECIDE_MAX_ADMISSION` bound `effective` was clamped to
      *  (absent on records written before the field existed). */
     cap?: number;
+    /** ADAAAA-8504: ISO wall clock this snapshot was taken (latched at job
+     *  start); absent on rows written before the field existed. */
+    at?: string;
   };
+}
+
+/**
+ * ADAAAA-8504: the capacity object EXACTLY as it is written to the job record.
+ *
+ * Two things this guarantees:
+ * - `runners` is emitted as `decideRegistrations` (AC3). On this fleet the number
+ *   counts decide REGISTRATIONS — the box registers one `highlights-decide` even
+ *   at 3 workers x 4 seqs — so the old name invited the false `runners >= 3`
+ *   check. The `[decide-capacity]` log line keeps printing `runners=` because ops
+ *   greps it (AC2); only the RECORD field is renamed.
+ * - `at` dates the snapshot, so a grader can tell a job-start posture from a
+ *   mid-job refresh. A record with no snapshot still reads `null` on read: this
+ *   function is only called when the gate actually produced one, and no field is
+ *   ever defaulted to 0 to stand in for "not measured".
+ */
+export function decideCapacityOnRecord(capacity: DecideCapacitySnapshot, at: string) {
+  const { runners, ...rest } = capacity;
+  return {
+    ...rest,
+    ...(typeof runners === "number" ? { decideRegistrations: runners } : {}),
+    at,
+  };
+}
+
+/**
+ * ADAAAA-8504: the admission snapshot a decide job LATCHED at its start, plus the
+ * wall clock it was taken. `withDecideAdmissionMetrics` prefers it over the gate's
+ * CURRENT value: a mid-job capacity refresh must not rewrite the posture the job
+ * actually started (and admitted) under.
+ */
+export interface DecideCapacityLatch {
+  capacity: DecideCapacitySnapshot;
+  at: string;
 }
 
 /**
  * ADAAAA-8254: fold the admission counters onto the live observe snapshot.
  * Absent admission (no gate / older client) leaves `base` byte-identical.
+ *
+ * ADAAAA-8504: also folds the capacity snapshot the job LATCHED at start (a
+ * media rail has no per-job admission counters, so it passes `admission`
+ * undefined and only the latch — the record still gets `decideCapacity`).
  */
 export function withDecideAdmissionMetrics(
   base: LiveObserveMetricsSnapshot,
-  admission?: DecideAdmissionMetrics
+  admission?: DecideAdmissionMetrics,
+  latched?: DecideCapacityLatch
 ): LiveObserveMetricsSnapshot {
-  if (!admission) return base;
+  if (!admission && !latched) return base;
+  const capacity = latched?.capacity ?? admission?.capacity;
   return {
     ...base,
-    decideQueued: admission.decideQueued,
-    decideDropped: admission.decideDropped,
-    decide503: admission.decide503,
-    decidePauses: admission.decidePauses,
-    capacityProbeErrors: admission.capacityProbeErrors,
-    decideCapacity: { ...admission.capacity },
+    ...(admission
+      ? {
+          decideQueued: admission.decideQueued,
+          decideDropped: admission.decideDropped,
+          decide503: admission.decide503,
+          decidePauses: admission.decidePauses,
+          capacityProbeErrors: admission.capacityProbeErrors,
+        }
+      : {}),
+    ...(capacity ? { decideCapacity: decideCapacityOnRecord(capacity, latched?.at ?? new Date().toISOString()) } : {}),
   };
 }
 
@@ -9477,6 +9536,24 @@ export async function analyzeJob(
   // ADAAAA-8254: this pass owns a decide job — reset the admission counters and
   // kick ONE capacity refresh (fire-and-forget). Nothing here awaits a signer.
   client.beginDecideJob?.();
+  // ADAAAA-8504: LATCH the admission snapshot this job starts under, so the stored
+  // record answers "what ceiling did the gate admit this job at" without a log
+  // grep. `primeDecideCapacity` awaits the probe begun above (single-flight: it
+  // cannot spend a second probe) and never throws; a client without the hook
+  // simply records nothing, and the record then falls back to the gate's current
+  // value at settle. `at` dates the snapshot as the job-start instant.
+  const decideCapacityAt = new Date().toISOString();
+  let decideCapacityLatch: DecideCapacityLatch | undefined;
+  if (client.primeDecideCapacity) {
+    void client
+      .primeDecideCapacity()
+      .then((snap) => {
+        if (snap && !decideCapacityLatch) decideCapacityLatch = { capacity: snap, at: decideCapacityAt };
+      })
+      .catch(() => {
+        /* observation only: a probe failure never touches the pass */
+      });
+  }
   const maxReReserves = cfg.maxReReserves ?? 3;
   // ADAAAA-6577: bounded exponential backoff between a perceive session-lost
   // re-reserve and the retry of the same frame. A flapping perceive runner
@@ -9972,7 +10049,10 @@ export async function analyzeJob(
           ),
           // ADAAAA-8254: the decide admission counters + capacity snapshot, read
           // off the gate at the same instant.
-          client.decideAdmissionMetrics?.()
+          client.decideAdmissionMetrics?.(),
+          // ADAAAA-8504: ...and the snapshot this job LATCHED at its start, which
+          // wins over the gate's current value for the record's `decideCapacity`.
+          decideCapacityLatch
         )
     : undefined;
   // ADAAAA-8310: publish the getter so a stop that pre-empts this pass settles

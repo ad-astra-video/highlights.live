@@ -22,11 +22,17 @@ export interface WindowAuditCapacity {
   funded: number;
   effective: number;
   probeOk?: boolean;
+  /** ADAAAA-8504: decide REGISTRATIONS in the probe's answer (0 = none) — the
+   *  honest name for `runners`; the box registers one decide app at any width. */
+  decideRegistrations?: number;
+  /** LEGACY: the pre-8504 name of `decideRegistrations` (older rows only). */
   runners?: number;
   source?: "probe" | "last-known" | "funded";
   /** ADAAAA-8437: the `DECIDE_MAX_ADMISSION` safety bound `effective` was
    *  clamped to (absent on records written before the field existed). */
   cap?: number;
+  /** ADAAAA-8504: ISO wall clock the snapshot was taken at job start. */
+  at?: string;
 }
 
 export interface WindowAuditPayload {
