@@ -48,6 +48,37 @@ _SCORE_LINE_RE = re.compile(
     r"(?P<a>\d{1,3})\s*[-–—]\s*(?P<b>\d{1,3})",
 )
 
+# ADAAAA-8459: the scorebug OCR does not always put a hyphen between the two
+# scores. The measured LaLiga share (`b55c5781`, 480-wide) printed the pair
+# glued to the team plates and the watermark (`BAR0LALIGA 022 ALAMERCUR`) and
+# the older measured live leg `348bd511` reached the prompt as `RMA 1/2 FCB36:54`
+# / `RMA 1.0 FCB 17:22HOTELSK` — 1450 `/`-glued readings, 0 dashes. The server's
+# `parseOcrScoreLine` (`services/server/src/analyzer.ts`, ADAAAA-8189) already
+# reads those families, so perceive's own score/delta lane disagreed with the
+# layer that owns the attestation: a line the server parsed as a pair left
+# `ScoreboardTracker` with `None`, and `scoreBoardChanged` / `scoreboardDelta`
+# never fired. These families mirror that parser exactly.
+_GLUED_SEPARATORS = (
+    # `(?<!\d)` / `(?!\d)`: the pair must be a WHOLE numeric token on both
+    # sides, so a longer digit run (`FCB2110`, a clock glued to a stat) can
+    # never be sliced into a score by a coincidental separator.
+    ("slash", re.compile(r"(?<!\d)(\d{1,3})\s*/\s*(\d{1,3})(?!\d)")),
+    ("dot", re.compile(r"(?<!\d)(\d{1,3})\.(\d{1,3})(?!\d)")),
+    ("space", re.compile(r"(?<!\d)(\d{1,3})[ \t]+(\d{1,3})(?!\d)")),
+)
+
+# Per-side ceiling for the glued families. Both sides of a real scoreboard pair
+# are single digits on the measured fixtures, while a clock that OCR'd with the
+# score's separator carries a two-digit component (`10/47`, `17.141`). Hyphen
+# pairs keep the historical `<= 99` bar (`_MAX_SCORE_INT`).
+_GLUED_MAX_SIDE = 9
+
+# A team-like token butting against a pair: one separator character (space,
+# pipe, dot, hyphen) is allowed because OCR glues both ways ("|RHA2-1 BAR",
+# "2-1 BAR", "BAR1 1").
+_TEAM_TOKEN_LEFT_RE = re.compile(r"[A-Za-z]{2,}[^A-Za-z0-9]{0,1}$")
+_TEAM_TOKEN_RIGHT_RE = re.compile(r"^[^A-Za-z0-9]{0,1}[A-Za-z]{2,}")
+
 # Guard against absurd non-score integers (clock minutes, jersey numbers, etc.)
 _MAX_SCORE_INT = 99
 
@@ -530,6 +561,78 @@ def fallback_score_eligible(
         return False
 
 
+def _pair_team_adjacent(text: str, index: int, length: int) -> Tuple[bool, bool]:
+    """``(left, right)``: does a team-like token butt against the pair there?
+
+    ADAAAA-8459 (mirrors ``ocrPairTeamAdjacent`` in the server analyzer). The
+    scorebug renders both scores BETWEEN/next to the team abbreviations, so
+    adjacency is the cheapest signal that a digit pair is the score and not a
+    clock or a stat the line also carries.
+    """
+    before = text[max(0, index - 3):index]
+    after = text[index + length:index + length + 3]
+    return (
+        bool(_TEAM_TOKEN_LEFT_RE.search(before)),
+        bool(_TEAM_TOKEN_RIGHT_RE.search(after)),
+    )
+
+
+def _glued_score_pair(text: str) -> Optional[Tuple[int, int]]:
+    """The score pair when the line glues it with ``/``, ``.`` or one space.
+
+    Both sides must be team-adjacent (the pair sits between the two
+    abbreviations) and each side must be a single digit. The EARLIEST such pair
+    wins: the score follows the home abbreviation, while a clock that OCR'd with
+    the same separator comes after the away one.
+    """
+    best: Optional[Tuple[int, int, Tuple[int, int]]] = None
+    for kind_index, (_kind, pattern) in enumerate(_GLUED_SEPARATORS):
+        for m in pattern.finditer(text):
+            a, b = int(m.group(1)), int(m.group(2))
+            if a > _GLUED_MAX_SIDE or b > _GLUED_MAX_SIDE:
+                continue
+            left, right = _pair_team_adjacent(text, m.start(), len(m.group(0)))
+            if not (left and right):
+                continue
+            if best is None or m.start() < best[0] or (
+                m.start() == best[0] and kind_index < best[1]
+            ):
+                best = (m.start(), kind_index, (a, b))
+    return best[2] if best is not None else None
+
+
+def _score_pair_in_line(text: str) -> Optional[Tuple[int, int]]:
+    """The one score pair a single OCR line carries, or ``None``.
+
+    Ordered by how score-shaped the pair looks, NOT by position (ADAAAA-8134):
+    a hyphen pair with a team token immediately BEFORE it wins (the score sits
+    after the home abbreviation in every measured variant), then one with a team
+    token immediately AFTER it, then a team-adjacent glued pair, then the first
+    hyphen pair of the line. Selection only decides WHICH pair a line yields; it
+    never widens what counts as a score.
+    """
+    left = right = any_pair = None
+    for m in _SCORE_LINE_RE.finditer(text):
+        a, b = int(m.group("a")), int(m.group("b"))
+        if a > _MAX_SCORE_INT or b > _MAX_SCORE_INT:
+            continue
+        adj_left, adj_right = _pair_team_adjacent(text, m.start(), len(m.group(0)))
+        if adj_left and left is None:
+            left = (a, b)
+        elif adj_right and right is None:
+            right = (a, b)
+        elif not adj_left and not adj_right and any_pair is None:
+            any_pair = (a, b)
+    if left is not None:
+        return left
+    if right is not None:
+        return right
+    glued = _glued_score_pair(text)
+    if glued is not None:
+        return glued
+    return any_pair
+
+
 def parse_ocr_score(
     frame_ocr,
     roi: Optional[ScoreboardRoi] = None,
@@ -548,6 +651,12 @@ def parse_ocr_score(
     text outside the ROI can never produce a score. When the caller crops the
     frame to the ROI before ``<OCR>`` (the production path), pass just the
     ROI-scoped ``frame_ocr`` and this behaviour is unchanged.
+
+    ADAAAA-8459: a line may also carry the pair glued with ``/``, ``.`` or a
+    space (``RMA 1/2 FCB``), or a clock ahead of it (``19-41 RMA-2-1 BAR``). The
+    per-line decision is made by :func:`_score_pair_in_line`, which mirrors the
+    server's ``parseOcrScoreLine`` so perceive's delta lane reads the same pairs
+    the attestation layer does.
     """
     if not frame_ocr:
         return None
@@ -558,13 +667,9 @@ def parse_ocr_score(
         box = ocr_boxes[i] if ocr_boxes is not None and i < len(ocr_boxes) else None
         if not _line_in_roi(roi, box):
             continue
-        m = _SCORE_LINE_RE.search(text)
-        if not m:
-            continue
-        a = int(m.group("a"))
-        b = int(m.group("b"))
-        if a <= _MAX_SCORE_INT and b <= _MAX_SCORE_INT:
-            return (a, b)
+        pair = _score_pair_in_line(text)
+        if pair is not None:
+            return pair
     return None
 
 
