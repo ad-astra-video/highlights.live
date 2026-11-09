@@ -1559,6 +1559,106 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!chain) return;
     await Promise.race([chain, new Promise<void>((r) => setTimeout(r, timeoutMs))]).catch(() => {});
   }
+
+  /** ADAAAA-8495: cut an INGEST-rail highlight off the serial accept chain.
+   *
+   * The ingest (`file-sim` / `rtmp` / `screen`) rail used to cut its clip inside
+   * `acceptVideoDecision`, i.e. inline on the serial accept chain: a 250 ms
+   * flush poll over the growing MPEG-TS + ffmpeg cut + duration probe + re-cuts
+   * (5.1-33.3 s per accepted row on leg 2c4124fe, and every later window waited
+   * behind it). The row is now emitted + persisted at accept with an empty
+   * `clipUri` (the media/browser rail's shape) and cut HERE, on the same
+   * per-share serial cut chain (`liveClipChains`), then patched + republished
+   * over the job's SSE channel. The whole-window guard is unchanged: a live cut
+   * publishes the WHOLE window or fails, and a failure leaves the honest
+   * `clipError` on the row instead of a truncated card. The stop path
+   * (`cutRemainingIngestClips`) re-cuts anything this leaves empty. */
+  function scheduleIngestClipCut(jobId: string, highlightId: string): void {
+    const job = store.getJob(jobId);
+    const ingest = liveSessions.get(jobId);
+    if (!job || job.status !== "active" || !ingest) return;
+    const h = store.getHighlight(highlightId);
+    if (!h || h.clipUri) return;
+    const key = `ingest:${jobId}:${highlightId}`;
+    if (liveClipScheduled.has(key)) return;
+    liveClipScheduled.add(key);
+    const task = (async () => {
+      // Re-read: the row may have been cut by the stop path while we waited for
+      // the chain (one ffmpeg per share, never two on the same file).
+      const cur = store.getHighlight(highlightId);
+      if (!cur || cur.clipUri) return;
+      const ts = Number.isFinite(cur.localizedTs as number)
+        ? (cur.localizedTs as number)
+        : Number(cur.trigger?.timestamp);
+      if (!Number.isFinite(ts)) return;
+      // `ingest.cut` owns the flush watermark wait + the whole-window guard; on
+      // the live rail a window that never flushes is a refusal (throws), which
+      // the caller turns into `clipError`.
+      const rec = await ingest.cut(ts);
+      const still = store.getHighlight(highlightId);
+      if (!still || still.clipUri) return;
+      await store.patchHighlight(highlightId, {
+        clipUri: rec.clipUri,
+        ...(rec.clipAudit ? rec.clipAudit : {}),
+        clipError: undefined as any,
+      } as any);
+      console.log(`[live-clip:${jobId}] deferred clip ${rec.clipId || ""} ready for ${highlightId}`);
+      emitJobEvent(jobId, {
+        seq: -1,
+        timestamp: -1,
+        type: "clip",
+        highlightId,
+        clipUri: rec.clipUri,
+      });
+    })()
+      .catch(async (e: any) => {
+        const msg = `Clip cut failed: ${String(e?.message || e)}`;
+        console.error(`[live-clip:${jobId}] deferred cut failed for ${highlightId}: ${msg}`);
+        await store.patchHighlight(highlightId, { clipError: msg } as any).catch(() => {});
+      });
+
+    const prev = liveClipChains.get(jobId) ?? Promise.resolve();
+    const chained = prev
+      .then(() => task)
+      .catch(() => {})
+      .finally(() => {
+        liveClipScheduled.delete(key);
+        if (liveClipChains.get(jobId) === chained) liveClipChains.delete(jobId);
+      });
+    liveClipChains.set(jobId, chained);
+  }
+
+  /** ADAAAA-8495: the ingest stop path. Nothing will land after the recorder is
+   * gone, so every row still missing its clip is cut here (serially, one ffmpeg
+   * per share) with `requireFullWindow: false` — the honest short-share case.
+   * `ingest.stop()` sets `running = false` first, so `cut` publishes the short
+   * share instead of waiting 45 s for footage that can never arrive. */
+  async function cutRemainingIngestClips(jobId: string, ingest: LiveIngest): Promise<void> {
+    const rows = store.highlightsForJob(jobId).filter((h) => !h.clipUri);
+    if (rows.length === 0) return;
+    let cutCount = 0;
+    for (const h of rows) {
+      const ts = Number.isFinite(h.localizedTs as number)
+        ? (h.localizedTs as number)
+        : Number(h.trigger?.timestamp);
+      if (!Number.isFinite(ts)) continue;
+      try {
+        const rec = await ingest.cut(ts, { requireFullWindow: false });
+        await store.patchHighlight(h.id, {
+          clipUri: rec.clipUri,
+          ...(rec.clipAudit ? rec.clipAudit : {}),
+          clipError: undefined as any,
+        } as any);
+        cutCount++;
+      } catch (e: any) {
+        const msg = `Clip cut failed: ${String(e?.message || e)}`;
+        console.error(`[live-clip:${jobId}] stop-path cut failed for ${h.id}: ${msg}`);
+        await store.patchHighlight(h.id, { clipError: msg } as any).catch(() => {});
+      }
+    }
+    console.log(`[live-clip:${jobId}] stop path cut ${cutCount}/${rows.length} deferred clip(s)`);
+  }
+
   // The client flushes its final MediaRecorder chunk before POST /stop, but a
   // chunk can still land a few hundred ms behind (base64 encode + retry over a
   // flaky link). Wait a bounded window for the recording to materialize before
@@ -2305,6 +2405,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-8205: the async Stage-2 confirm lane's hand-off (runs post-window,
       // off this accept path, on a per-share serial chain).
       onConfirmDivePending: asyncConfirmDiveHook(job.id, adapter, () => shared, () => shared.delivery),
+      // ADAAAA-8495: the ingest rail publishes at accept and cuts the clip on
+      // this share's serial cut chain (`scheduleIngestClipCut`), so an accepted
+      // row never waits on `waitForFlushedCoverage` + ffmpeg inside the accept.
+      deferLiveClipCut: true,
       });
       // Persist + publish each accepted highlight at DECISION time, not at
       // session end, so the user's feed streams highlights continuously while
@@ -2324,9 +2428,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             sub,
             ev.highlight,
             (triggerTs, atMs, highlightId) => shared.delivery.notePersisted(triggerTs, atMs, highlightId)
-          ).catch((e) =>
-            console.error(`[live:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
-          );
+          )
+            // ADAAAA-8495: the row is now persisted with an empty `clipUri` (the
+            // cut is deferred off the accept chain); cut it on this share's
+            // serial cut chain as soon as the record exists.
+            .then((rec) => scheduleIngestClipCut(job.id, rec.id))
+            .catch((e) =>
+              console.error(`[live:${job.id}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e)
+            );
         }
       };
       // Shared live-run context (INC-2 / ADAAAA-4325 slice 4): the video
@@ -2549,6 +2658,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       }
     } finally {
       await ingest.stop();
+      // ADAAAA-8495: the deferred live cut is this rail's only mid-share cut
+      // path, so the stop path must finish anything still empty: wait for the
+      // scheduled cuts (one ffmpeg per share), then cut the remaining rows from
+      // the finished recording. Runs BEFORE the session is dropped from the
+      // registry so the cuts stay serialised per share.
+      await drainLiveClipCuts(job.id, 30_000).catch(() => {});
+      await cutRemainingIngestClips(job.id, ingest).catch((e: any) =>
+        console.error(`[live-clip:${job.id}] stop-path sweep failed:`, String(e?.message || e))
+      );
       liveSessions.delete(job.id);
       livePerceiveSlots.delete(job.id);
       liveMatchWriters.delete(job.id);
@@ -7391,6 +7509,10 @@ export interface LiveAnalyzerConfigDeps {
    * per-stream in-flight depth follows the capacity the fleet advertises. Unset
    * (tests / older wiring) falls back to `cfg.liveDecideAdmission`. */
   decideEffectiveAdmission?: AnalyzerConfig["liveDecideEffectiveAdmission"];
+  /** ADAAAA-8495: the ingest rail publishes the row at accept and cuts the clip
+   * afterwards on its own serial cut chain. Unset (the media/browser rail, which
+   * passes a no-op `cut`, and every test) keeps the inline cut. */
+  deferLiveClipCut?: boolean;
 }
 
 /**
@@ -7447,12 +7569,15 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     onConfirmDivePending,
     onObserveWindowEvidence,
     decideEffectiveAdmission,
+    deferLiveClipCut,
   } = deps;
   return {
     jobId: job.id,
     clipBeforeS: cw.clipBeforeS,
     clipAfterS: cw.clipAfterS,
     clipWindowMinSec: cw.clipWindowMinSec,
+    // ADAAAA-8495: the ingest rail defers its clip cut off the accept chain.
+    deferLiveClipCut: deferLiveClipCut === true,
     gameHint: job.gameHint || cfg.gameHintDefault,
     preferLabels: job.preferLabels,
     // ADAAAA-6577: bounded exponential backoff between a perceive

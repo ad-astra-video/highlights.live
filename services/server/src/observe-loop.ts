@@ -28,7 +28,7 @@ import type { StageAOutcomeLedger } from "./stage-a-metrics";
 // ADAAAA-8005 (gate 3): the trigger -> delivered metric. The observer owns the
 // fire / settle / accept clocks; the server's persist path owns the delivered
 // (write-through ack) clock and reports it back through the same tracker.
-import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot, type WindowDeliveryTimings } from "./live-delivery";
+import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot } from "./live-delivery";
 // ADAAAA-7844: provenance type for the measured scoreboard delta carried on a
 // window bias hint (defined next to the confirm/attestation types in analyzer).
 import type { ScoreboardDeltaEvidence } from "./analyzer";
@@ -1201,20 +1201,28 @@ export class LiveObserver {
     // is the localize/suppress/record/emit work.
     const acceptStartMs = Date.now();
     const settledAtMs = entry.settledAtMs ?? acceptStartMs;
+    // ADAAAA-8495: register the window BEFORE the accept runs. The persist ack
+    // fires DURING this accept, and the ack's row timestamp is the localized
+    // trigger (not the judged centre), so a window registered afterwards (the
+    // pre-8495 order) could only be matched by the PREVIOUS entry — which is how
+    // the previous window's decide cadence and acceptDoneMs ended up inside
+    // `persistAckMs` on 9/9 rows of leg 2c4124fe. The accept gate's own done
+    // clock is stamped after it returns (`noteAcceptDone`).
+    this.delivery?.noteWindow({
+      centerTs: entry.centerTs,
+      lagMs: entry.lagMs,
+      firedAtMs: entry.firedAtMs,
+      settledAtMs,
+      acceptStartMs,
+      acceptDoneMs: null,
+    });
     const accepted = await entry.staged.accept();
     const acceptDoneMs = Date.now();
+    this.delivery?.noteAcceptDone(entry.centerTs, acceptDoneMs);
     this.recordOutcome({
       ...entry,
       accepted,
       e2eMs,
-      delivery: {
-        centerTs: entry.centerTs,
-        lagMs: entry.lagMs,
-        firedAtMs: entry.firedAtMs,
-        settledAtMs,
-        acceptStartMs,
-        acceptDoneMs,
-      },
     });
   }
 
@@ -1242,9 +1250,6 @@ export class LiveObserver {
     frameCount: number;
     accepted: boolean;
     e2eMs: number;
-    /** ADAAAA-8005 (gate 3): the window's stage clocks, when the caller has
-     *  them (staged live path). Absent on the VOD/serial shape. */
-    delivery?: WindowDeliveryTimings;
   }): void {
     if (r.accepted) this.accepts++;
     // ADAAAA-8005: one delivered-row candidate per DECIDED window. The row is
@@ -1256,7 +1261,9 @@ export class LiveObserver {
     // fire/settle/accept clocks must already be here or the delivery cannot be
     // measured (that is exactly the @108.8 s row that `samples` lost). A window
     // alone emits nothing: the sample still requires a persist ack for a row.
-    if (r.delivery && this.delivery) this.delivery.noteWindow(r.delivery);
+    // ADAAAA-8495: the window is registered by the caller BEFORE its accept (see
+    // `applyEntry` / the serial `onDecide` path), never here — this method runs
+    // after the accept, i.e. after the ack it must be pair-able with.
     const dueTrigger = r.dueTrigger ?? null;
     // ADAAAA-7694: this decided window IS the judgement of every Stage-A
     // trigger whose onset it covers.
@@ -1657,8 +1664,19 @@ export class LiveObserver {
     }
     if (this.onDecide) {
       const started = Date.now();
+      // ADAAAA-8495: register the window BEFORE the combined decide+accept call
+      // for the same reason as the staged path — the persist ack fires inside it.
+      this.delivery?.noteWindow({
+        centerTs: nowTs,
+        lagMs: lag,
+        firedAtMs: started,
+        settledAtMs: started,
+        acceptStartMs: started,
+        acceptDoneMs: null,
+      });
       const accepted = await this.onDecide(payload);
       const acceptDoneMs = Date.now();
+      this.delivery?.noteAcceptDone(nowTs, acceptDoneMs);
       // ADAAAA-7694/7707: the verdict is written into the counters, the
       // Stage-A/B ledgers and the latency samples by `recordOutcome`, which the
       // pipelined path calls in content order at settle time.
@@ -1672,17 +1690,6 @@ export class LiveObserver {
         frameCount: payload.frames.length,
         accepted,
         e2eMs: acceptDoneMs - started,
-        // ADAAAA-8005: the serial `onDecide` runs decide + accept in ONE call,
-        // so there is no settle/accept boundary to report; the whole call is the
-        // decide stage and the accept waits are zero.
-        delivery: {
-          centerTs: nowTs,
-          lagMs: lag,
-          firedAtMs: started,
-          settledAtMs: started,
-          acceptStartMs: started,
-          acceptDoneMs,
-        },
       });
     }
   }
