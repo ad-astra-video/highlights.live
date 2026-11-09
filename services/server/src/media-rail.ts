@@ -113,6 +113,9 @@ export interface MediaRailObserverOptions {
   cadenceS?: number;
   windowS?: number;
   maxFrames?: number;
+  /** ADAAAA-8513 (AC3): the configured confirm-dive cap this rail's run uses,
+   *  so its published `diveBudget.cap` matches the pump's admission. */
+  liveConfirmMaxDivesPer300S?: number;
   /** The rail's INGEST/sample clock (the cadence the media node samples at and
    *  the clock this rail persists + cuts clips on). ADAAAA-8102: this is NOT the
    *  analysis rate any more — use {@link contentFps} for that. */
@@ -420,7 +423,11 @@ export class MediaRailObserver {
     // ADAAAA-8005 (gate 3): the run carries the per-row trigger -> delivered
     // collector, so the rail's persisted rows report the AC's number and the
     // media-rail job record carries it under `observeMetrics.deliveredLatency`.
-    this.run = run ?? new LiveRunShared({ audioRetainS: opts.audioRetainS, jobId: opts.jobId });
+    this.run = run ?? new LiveRunShared({
+      audioRetainS: opts.audioRetainS,
+      jobId: opts.jobId,
+      liveConfirmMaxDivesPer300S: opts.liveConfirmMaxDivesPer300S,
+    });
     // ADAAAA-7987: pipeline the decide pass exactly like the analyzer
     // live-observe path (ADAAAA-7771 depth + ADAAAA-7878 off-loop issue). The
     // media rail used to hand `LiveObserver` only `onDecide`, so the serial path
@@ -905,6 +912,10 @@ export class MediaRailObserver {
           calls: this.run.confirmDiveCalls(),
           dives: this.run.confirmDiveCount(),
           dropped: this.run.confirmDiveDropped(),
+          // ADAAAA-8513 (AC3/AC4): the same per-cause + admission block the
+          // analyzer pass publishes, so a media-rail share's row carries it too.
+          byReason: this.run.confirmDroppedByReason(),
+          budget: this.run.confirmDiveBudget(),
         },
         // ADAAAA-8344: the adapter's per-job decide-stage summary, read at share
         // end like the decide counters. Absent when no decide was instrumented.

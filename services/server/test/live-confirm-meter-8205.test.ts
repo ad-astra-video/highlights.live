@@ -98,6 +98,9 @@ describe("ADAAAA-8205 meter — pump -> observeMetrics -> stored row (AC-A4/A6)"
       io: io(),
       nowTs: 400,
       jobId: "job-meter",
+      // ADAAAA-8513: the shipped cap is a cost cell (3); this meter fixture
+      // composes 8 so its general descriptors admit their dives.
+      maxDivesPer300s: 8,
       busy: () => (busyCalls++ === 0 ? "running=8 above idle" : null),
       adopt: async () => "promoted" as const,
       log: () => {},
@@ -154,6 +157,9 @@ describe("ADAAAA-8205 meter — pump -> observeMetrics -> stored row (AC-A4/A6)"
       io: io({ framesInSpan: () => [{ seq: 1, ts: 100 }] }),
       nowTs: 400,
       jobId: "job-meter",
+      // ADAAAA-8513: the shipped cap is a cost cell (3); this meter fixture
+      // composes 8 so its general descriptors admit their dives.
+      maxDivesPer300s: 8,
       reuseWindowS: 12,
       adopt: async () => "promoted" as const,
       log: () => {},
@@ -181,6 +187,7 @@ describe("ADAAAA-8205 meter — pump -> observeMetrics -> stored row (AC-A4/A6)"
       }),
       nowTs: 400,
       jobId: job.id,
+      maxDivesPer300s: 8,
       adopt: async (e, result) => {
         const { confirmDiveAdoption } = await import("../src/live-confirm-async.js");
         const adoption = confirmDiveAdoption(store.getHighlight(e.highlightId) as any, result.verdict, {

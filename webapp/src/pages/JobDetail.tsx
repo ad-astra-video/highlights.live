@@ -22,6 +22,8 @@ import { WindowAuditReadout } from "../components/WindowAudit";
 import { useIsAdmin } from "../lib/auth";
 import { WindowAnalysisPanel } from "../components/WindowAnalysis";
 import { CostTimePanel, CostTimeToggle } from "../components/CostTimePanel";
+// ADAAAA-8425: the admin window audit (five skip causes + the decide ceiling).
+import { WindowSkipAuditPanel } from "../components/WindowSkipAuditPanel";
 import { SummaryLadderView } from "../components/SummaryLadder";
 import { batchManifest, clipFileName, copyExportLink, copyText, exportUrl, highlightGrounding, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitleOf, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
@@ -3285,6 +3287,12 @@ export function JobDetail() {
             {costTimeOpen && (
               <CostTimePanel admin={admin} jobId={detail.job.id} onClose={() => setCostTimeOpen(false)} />
             )}
+            {/* ADAAAA-8425: the operator window audit — the five skip causes side
+                by side with the decide count and the decide ceiling the run
+                actually used. Admin-only (the panel itself returns null for a
+                non-admin, and a `role=user` payload carries no `windowAudit`), so
+                the customer analysis surface is unchanged. */}
+            <WindowSkipAuditPanel audit={detail.windowAudit} admin={admin} />
             {visibleSections.length === 0 ? (
               <div className="mt-3 text-mut" data-analysis-empty>No Analysis windows match.</div>
             ) : (
