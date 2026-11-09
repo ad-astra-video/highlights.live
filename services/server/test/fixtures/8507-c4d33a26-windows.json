@@ -1,0 +1,15669 @@
+{
+"job": "c4d33a26-e78b-4c6b-9cf6-3317446f3d20",
+"note": "extracted from decide_audit.prompt_text; ocr field is the rendered (24-char, <=2 line) timeline string joined by the prompt builder",
+"windows": [
+{
+"gk": "g1",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": 0.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+}
+]
+},
+{
+"gk": "g3",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+}
+]
+},
+{
+"gk": "g3:call2",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -6.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+}
+]
+},
+{
+"gk": "g4",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+}
+]
+},
+{
+"gk": "g7",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+}
+]
+},
+{
+"gk": "g8",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.5,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+}
+]
+},
+{
+"gk": "g9",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+}
+]
+},
+{
+"gk": "g11",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LAUGATIEMPOmico football"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGASP"
+]
+}
+]
+},
+{
+"gk": "g12",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGAWELCOME"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g15",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.4,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGASP"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g16",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"CALIGA"
+]
+}
+]
+},
+{
+"gk": "g18",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g19",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g20",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"CALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g21",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g24",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+}
+]
+},
+{
+"gk": "g25",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g25:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g27",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.0,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"SPOTTY CAMP NOLALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g30",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g31",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g32",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g34",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+}
+]
+},
+{
+"gk": "g35",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+}
+]
+},
+{
+"gk": "g37",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"UMNEWALBUMNEW ALBUMLALIG"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+}
+]
+},
+{
+"gk": "g38",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -6.9,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGAFINALLY OVERITFINA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+}
+]
+},
+{
+"gk": "g40",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.7,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGASUMMER WALKE"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g41",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LACIGA"
+]
+}
+]
+},
+{
+"gk": "g42",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LACIGA"
+]
+}
+]
+},
+{
+"gk": "g44",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LACIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+}
+]
+},
+{
+"gk": "g47",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGAPHANTON"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+}
+]
+},
+{
+"gk": "g48",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+}
+]
+},
+{
+"gk": "g49",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGAmite footballAMERC"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -0.5,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"TIEMPOLALIGA"
+]
+}
+]
+},
+{
+"gk": "g50",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGAMootballnike.com/f|LALIGA02:28-1om/football"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGAMike footballPHANT"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g52",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.4,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"TIEMPOLALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g54",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+}
+]
+},
+{
+"gk": "g55",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+}
+]
+},
+{
+"gk": "g56",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA CERTIR DE 3 ENTRA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+}
+]
+},
+{
+"gk": "g59",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGAS EN WWW.FCBARCELO"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -0.5,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+}
+]
+},
+{
+"gk": "g60",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g61",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA ENTRADAS EN WWW.F"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGAL ESTADIO JOHAN CR"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g63",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGACULERS"
+]
+}
+]
+},
+{
+"gk": "g65",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+}
+]
+},
+{
+"gk": "g66",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGACULERS"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g67",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g68",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g71",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+}
+]
+},
+{
+"gk": "g72",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA O1IMNEW AL RIIMNE"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+}
+]
+},
+{
+"gk": "g73",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.6,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+}
+]
+},
+{
+"gk": "g74",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.1,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LAUGA OJADCEVIVIRI"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"ALIGA JC REYESJC REYES"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+}
+]
+},
+{
+"gk": "g77",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGAWSINGLENEWSINGLE"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g78",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g79",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g81",
+"sbStored": "no",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+}
+]
+},
+{
+"gk": "g83",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.5,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LACIGAWUMAN OOKINAWAN WU"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+}
+]
+},
+{
+"gk": "g84",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGAWICHAVICH"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGAKwnkwn"
+]
+}
+]
+},
+{
+"gk": "g86",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGACcomiglow GLOW Fre|0LALIGA04:15-0LOW-free-t"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+}
+]
+},
+{
+"gk": "g87",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGAKwnkwn"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g88",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g90",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGAMotily.com/glowGLO"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGANEWALBUMNEW ALBUM|ALB 04:53-1NEWALBUM-0 NE"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGANEWALBUMNEW ALBUM|ALB 04:53-1NEWALBUM-0 NE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGANEWALBUMNEW ALBUM|ALB 04:53-1NEWALBUM-0 NE"
+]
+}
+]
+},
+{
+"gk": "g91",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGANEWALBUMNEW ALBUM|ALB 04:53-1NEWALBUM-0 NE"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGANEWALBUMNEW ALBUM|ALB 04:53-1NEWALBUM-0 NE"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGANEWALBUMNEW ALBUM|ALB 04:53-1NEWALBUM-0 NE"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGAFINAL'OVERITFINALL"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGAFINAL'OVERITFINALL"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+}
+]
+},
+{
+"gk": "g94",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -6.7,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+}
+]
+},
+{
+"gk": "g94:call2",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.0,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+}
+]
+},
+{
+"gk": "g96",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGASUMMER WALKERSUMME"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g97",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGAOx Androidx Androi"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g99",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+}
+]
+},
+{
+"gk": "g101",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAOME CULERS"
+]
+}
+]
+},
+{
+"gk": "g102",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGASPOTIFY CAMP NOU"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g104",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGAOME CULERS"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+}
+]
+},
+{
+"gk": "g106",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LA CAVALALIGA"
+]
+}
+]
+},
+{
+"gk": "g106:call2",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LA CAVALALIGA"
+]
+}
+]
+},
+{
+"gk": "g108",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LA CAVILALIGALBUM"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LA CAVALALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g110",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g111",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g112",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g113",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g114",
+"sbStored": "yes",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+}
+]
+},
+{
+"gk": "g117",
+"sbStored": "yes",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -0.9,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+}
+]
+},
+{
+"gk": "g118",
+"sbStored": "no",
+"scoreStored": "53-1",
+"observations": [
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA|0JALIGA05-40 AL1UberFC B"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+}
+]
+},
+{
+"gk": "g120",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.2,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGAAWICHAWICH"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"- GLOW-LALIGA"
+]
+}
+]
+},
+{
+"gk": "g122",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"- GLOW-LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAKwnKwn"
+]
+}
+]
+},
+{
+"gk": "g124",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.5,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+}
+]
+},
+{
+"gk": "g125",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGAKwnKwn"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g126",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"EROSUMMER WALKERLALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g128",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g130",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g131",
+"sbStored": "yes",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+}
+]
+},
+{
+"gk": "g134",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA|LALIGA00:30-1STRELLI28%4"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g135",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+}
+]
+},
+{
+"gk": "g137",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+}
+]
+},
+{
+"gk": "g137:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+}
+]
+},
+{
+"gk": "g139",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g140",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA OESTRELLI"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g141",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA OLLA DAMN"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g143",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g145",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"\u0660\u0660"
+]
+}
+]
+},
+{
+"gk": "g146",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"+"
+]
+}
+]
+},
+{
+"gk": "g148",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"\u0660\u0660"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g149",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g150",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g153",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g154",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g155",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGACUPRA"
+]
+}
+]
+},
+{
+"gk": "g156",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGACUPRA"
+]
+}
+]
+},
+{
+"gk": "g158",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g159",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.5,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGACUPRA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g160",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g163",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g165",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g166",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g167",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g168",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g169",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g173",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"+"
+]
+}
+]
+},
+{
+"gk": "g173:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"+"
+]
+}
+]
+},
+{
+"gk": "g174",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -8.1,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"+"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+}
+]
+},
+{
+"gk": "g178",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+}
+]
+},
+{
+"gk": "g179",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGAPLAY CRAZYPLAYSPOT"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGAINLEYV STARLEYSTAN"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+}
+]
+},
+{
+"gk": "g180",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -6.5,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+}
+]
+},
+{
+"gk": "g181",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGASTANLEY STANLEYSTA|TAN1ANLEY-STANLEY STANLE"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGALEY STANLEY STANLE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGALEY STANLEY STANLE"
+]
+}
+]
+},
+{
+"gk": "g182",
+"sbStored": "no",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGASTANLEYSTANLEY STA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGALEY STANLEY STANLE"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGALEY STANLEY STANLE"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+}
+]
+},
+{
+"gk": "g183",
+"sbStored": "yes",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGALEY STANLEY STANLE"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGALEY STANLEY STANLE"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+}
+]
+},
+{
+"gk": "g184",
+"sbStored": "yes",
+"scoreStored": "5-40",
+"observations": [
+{
+"ts": -7.7,
+"ocr": [
+"LALIGALEY STANLEY STANLE"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -3.5,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+}
+]
+},
+{
+"gk": "g186",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.6,
+"ocr": [
+"LAUGASTANLEY STANLEYSTAN"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGALALIGASTANLEYSTANL|EY08-10 AM1STANLEYSTANLE"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g189",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+}
+]
+},
+{
+"gk": "g190",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"BIMDOBIMDLALIGA|LALIGA03:29-1at a Spotif"
+]
+},
+{
+"ts": -3.2,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+}
+]
+},
+{
+"gk": "g191",
+"sbStored": "no",
+"scoreStored": "29-1",
+"observations": [
+{
+"ts": -6.9,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+}
+]
+},
+{
+"gk": "g193",
+"sbStored": "no",
+"scoreStored": "29-1",
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGADIMDOIMDO"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+}
+]
+},
+{
+"gk": "g194",
+"sbStored": "yes",
+"scoreStored": "29-1",
+"observations": [
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+}
+]
+},
+{
+"gk": "g194:call2",
+"sbStored": "yes",
+"scoreStored": "29-1",
+"observations": [
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA OESABIMBO80 A\u00d1OS "
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+}
+]
+},
+{
+"gk": "g197",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGABIMOOBIMOO"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -5.9,
+"ocr": [
+"LALIGA|LALIGA09-40-1GIMODGIMOOG"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"L'ALIGAWhitebitwhitebit"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"L'ALIGAWhitebitwhitebit"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"L'ALIGAWhitebitwhitebit"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"L'ALIGAWhitebitwhitebit"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"L'ALIGAWhitebitwhitebit"
+]
+}
+]
+},
+{
+"gk": "g199",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -6.5,
+"ocr": [
+"L'ALIGAWhitebitwhitebit"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+}
+]
+},
+{
+"gk": "g201",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LA CAVALALIGARRENCY EXCH"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+}
+]
+},
+{
+"gk": "g201:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -7.5,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LA CAVELALIGARENCY EXCHA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+}
+]
+},
+{
+"gk": "g204",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGAMER OF FC BARCELON"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGARCELONA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGARCELONA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -0.5,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+}
+]
+},
+{
+"gk": "g205",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -6.8,
+"ocr": [
+"LALIGARCELONA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGARCELONA"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -5.4,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -4.7,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -4.3,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -0.8,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g205:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -8.4,
+"ocr": [
+"LALIGARCELONA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGARCELONA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -2.7,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"whitebitwhitebitLALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g208",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g209",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g211",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g213",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g215",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g215:call2",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGA"
+]
+}
+]
+},
+{
+"gk": "g216",
+"sbStored": "yes",
+"scoreStored": null,
+"observations": [
+{
+"ts": -10.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -3.3,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -2.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -0.7,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+}
+]
+},
+{
+"gk": "g218",
+"sbStored": "no",
+"scoreStored": "9-40",
+"observations": [
+{
+"ts": -9.9,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.6,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -9.1,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.4,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -8.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.7,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -7.0,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.5,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -6.2,
+"ocr": [
+"LALIGA"
+]
+},
+{
+"ts": -5.5,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -5.1,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -4.4,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -4.0,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -3.7,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+}
+]
+},
+{
+"gk": "g220",
+"sbStored": "no",
+"scoreStored": "9-40",
+"observations": [
+{
+"ts": -9.7,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -9.4,
+"ocr": [
+"LARIGAMFRICAR.D.CONOO HE"
+]
+},
+{
+"ts": -5.7,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -5.3,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -4.6,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -4.2,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -3.9,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": 0.0,
+"ocr": [
+"LALIGAOOMO HEART OF AFRI"
+]
+}
+]
+},
+{
+"gk": "g220:call2",
+"sbStored": "no",
+"scoreStored": "9-40",
+"observations": [
+{
+"ts": -7.5,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -7.1,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -6.3,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -6.0,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -5.6,
+"ocr": [
+"LALIGAOCEUR DE L'AFRIQUE"
+]
+},
+{
+"ts": -1.8,
+"ocr": [
+"LALIGAOOMO HEART OF AFRI"
+]
+},
+{
+"ts": -1.4,
+"ocr": [
+"LALIGAOOMO HEART OF AFRI"
+]
+},
+{
+"ts": -1.1,
+"ocr": [
+"LALIGAOOMO HEART OF AFRI"
+]
+},
+{
+"ts": -0.3,
+"ocr": [
+"LALIGAOOMO HEART OF AFRI"
+]
+},
+{
+"ts": -0.0,
+"ocr": [
+"LALIGAOOMO HEART OF AFRI"
+]
+}
+]
+}
+]
+}
