@@ -72,6 +72,31 @@ class CompareShapeTest(unittest.TestCase):
         # 908 s x 0.0011381 = $1.033 — the A1 inflation case.
         self.assertGreater(shape["projectedCostUsd"], 0.65)
 
+    def test_projected_over_cap_is_over_even_when_costusd_reads_zero(self):
+        # A1 item 4: when the projection is the cost source, grading the live
+        # $0.00 as "actual" would publish an over-cap leg as WITHIN.
+        shape = funded_leg.compare_shape(
+            480, 0.65, 11.0, 0.0,
+            metered_session_s=580.0, metered_rate_usd_per_s=0.0011381,
+            abort_source="projected_cost",
+        )
+        self.assertAlmostEqual(shape["projectedCostUsd"], 0.6601, places=4)
+        self.assertEqual(shape["verdict"], "OVER")
+        self.assertAlmostEqual(shape["costOvershootUsd"], 0.0101, places=4)
+        self.assertAlmostEqual(shape["gradedCostUsd"], shape["projectedCostUsd"])
+        self.assertIn("OVER", shape["line"])
+        self.assertIn("| live costUsd |", shape["table"])
+
+    def test_default_abort_point_holds_the_ceo_margin(self):
+        # 8515 A1: $0.65 cap -> abort at $0.60 -> 527 s at the authorized rate,
+        # 44 s short of the 571 s the cap itself would meter.
+        self.assertAlmostEqual(funded_leg.default_abort_at_usd(0.65), 0.60)
+        self.assertAlmostEqual(funded_leg.default_abort_at_usd(2.00), 1.95)
+        self.assertAlmostEqual(funded_leg.default_abort_at_usd(0.03), 0.027)
+        rate = 0.0011381
+        self.assertAlmostEqual(0.65 / rate, 571.1, places=1)
+        self.assertAlmostEqual(0.60 / rate, 527.2, places=1)
+
 
 class GateClosedTest(unittest.TestCase):
     def test_busy_gate_refuses_before_any_metered_call(self):
@@ -194,6 +219,42 @@ class HardStopTest(unittest.TestCase):
         self.assertLess(evidence["leg"]["durationS"], 10.0)
         self.assertGreater(evidence["leg"]["perceiveSessionS"], 0)
         self.assertAlmostEqual(evidence["shape"]["meteredWallRatio"], 1.0, places=1)
+
+    def test_default_abort_point_is_sixty_cents_on_the_065_cap(self):
+        # No --abort-at-usd: the 8515 A1 guard point must be $0.60, and the
+        # evidence must say what that is in metered seconds (527 s) versus the
+        # cap itself (571 s). Rate compressed so the crossing is quick; the
+        # comparison is the same max(live, metered x rate) >= abort check.
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "clean-no-cost",
+                "--authorized-duration-s", "60",
+                "--cap-usd", "0.65",
+                "--metered-rate-usd-per-s", "0.2",
+                "--quiet-window-min", "0.08",
+                "--poll-s", "0.05",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(evidence["authorized"]["abortAtUsd"], 0.60)
+        self.assertEqual(evidence["authorized"]["abortMarginUsd"], 0.05)
+        self.assertEqual(evidence["authorized"]["abortAtMeteredS"], 3.0)
+        self.assertEqual(evidence["authorized"]["capMeteredS"], 3.25)
+        self.assertEqual(evidence["leg"]["stopReason"], "projected_cost")
+        self.assertEqual(evidence["shape"]["verdict"], "WITHIN")
+
+    def test_an_abort_point_at_or_above_the_cap_is_refused(self):
+        code, evidence = run_harness(
+            [
+                "--authorized-duration-s", "60",
+                "--cap-usd", "0.65",
+                "--abort-at-usd", "0.65",
+                "--quiet-window-min", "0.08",
+            ]
+        )
+        self.assertEqual(code, 5)
+        self.assertIsNone(evidence)
 
     def test_a_leg_with_no_cost_source_is_refused(self):
         code, evidence = run_harness(
