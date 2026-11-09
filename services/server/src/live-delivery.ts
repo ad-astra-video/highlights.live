@@ -95,10 +95,15 @@ interface PendingDelivery {
   firedAtMs: number;
   settledAtMs: number;
   acceptStartMs: number;
-  acceptDoneMs: number;
-  /** Set by `notePersisted`; the row is emitted into the snapshot only then. */
+  /** ADAAAA-8495: null while the accept is still running. The window is
+   *  registered BEFORE its accept (the store ack fires DURING accept), so the
+   *  accept gate's own done clock only lands afterwards via `noteAcceptDone`. */
+  acceptDoneMs: number | null;
+  /** Set by `notePersisted`; the row is emitted once the accept is done too. */
   triggerTs?: number;
   persistAckAtMs?: number;
+  /** ADAAAA-8024/8495: the persisted row id carried until the row is built. */
+  highlightId?: string;
 }
 
 /** Stage timings one window's accept contributes (all wall-clock epoch ms). */
@@ -108,7 +113,12 @@ export interface WindowDeliveryTimings {
   firedAtMs: number;
   settledAtMs: number;
   acceptStartMs: number;
-  acceptDoneMs: number;
+  /** ADAAAA-8495: leave unset (or null) when the window is registered BEFORE
+   *  its accept returns. The persist ack fires inside `accept`, so the row can
+   *  only be finalised once the accept gate's own done clock is known —
+   *  `noteAcceptDone` supplies it. A finite value keeps the legacy shape (a
+   *  window handed over already accepted, e.g. the serial `onDecide` path). */
+  acceptDoneMs?: number | null;
 }
 
 /** Bounded ring: a 300 s share yields < 100 delivered rows, so 200 is slack. */
@@ -129,7 +139,10 @@ function percentile(sorted: number[], p: number): number {
  * tested without driving a live pass.
  */
 export function deliveredLatencyRow(
-  input: WindowDeliveryTimings & {
+  input: Omit<WindowDeliveryTimings, "acceptDoneMs"> & {
+    /** The accept gate's own done clock. Required here: a row is only built
+     *  once the accept has completed (ADAAAA-8495). */
+    acceptDoneMs: number;
     triggerTs: number;
     persistAckAtMs: number;
     contentOriginMs: number;
@@ -140,7 +153,15 @@ export function deliveredLatencyRow(
   const fireLagMs = Math.max(0, Math.round(input.lagMs));
   const decideE2eMs = Math.max(0, Math.round(input.settledAtMs - input.firedAtMs));
   const acceptWaitMs = Math.max(0, Math.round(input.acceptStartMs - input.settledAtMs));
-  const acceptMs = Math.max(0, Math.round(input.acceptDoneMs - input.acceptStartMs));
+  // ADAAAA-8495: on the live rails the store ack fires DURING `accept`, so the
+  // accept gate's contribution to the delivered path ends at the earlier of the
+  // two clocks (the row is readable then). Whatever the ack waits AFTER the
+  // accept returned stays in `persistAckMs`. Splitting it this way keeps
+  // `acceptMs + persistAckMs === ack - acceptStart` on both shapes, so the
+  // stages still reconstruct the AC's number exactly instead of losing the
+  // post-emit accept tail (or double-counting it).
+  const readableAtMs = Math.min(input.persistAckAtMs, input.acceptDoneMs);
+  const acceptMs = Math.max(0, Math.round(readableAtMs - input.acceptStartMs));
   const persistAckMs = Math.max(0, Math.round(input.persistAckAtMs - input.acceptDoneMs));
   // ADAAAA-8024: a localized live trigger sits INSIDE the judged window, so the
   // window centre contributes a constant offset that the five wall-clock stages
@@ -229,23 +250,71 @@ export class LiveDeliveryTracker {
     return this.contentOriginMs;
   }
 
-  /** Record one accepted window's stage clocks. Idempotent per centre. */
+  /** Record one window's stage clocks. Idempotent per centre.
+   *
+   *  ADAAAA-8495: call this BEFORE `await accept()` with `acceptDoneMs` omitted.
+   *  The store ack fires DURING accept, and the ack's row timestamp is the
+   *  LOCALIZED trigger (a 3 s-multiple offset from the judged centre on the live
+   *  rail), so an exact-centre match cannot find it — the fallback would take
+   *  whatever window happened to be pending, i.e. the PREVIOUS one, and report
+   *  its decide cadence and its `acceptDoneMs` as this row's delivery stages.
+   *  Registering the window first makes it the row's own match, and
+   *  `noteAcceptDone` closes it once the accept returns. */
   noteWindow(t: WindowDeliveryTimings): void {
-    if (!Number.isFinite(t.centerTs) || !Number.isFinite(t.acceptDoneMs)) return;
+    if (!Number.isFinite(t.centerTs) || !Number.isFinite(t.acceptStartMs)) return;
+    if (t.acceptDoneMs != null && !Number.isFinite(t.acceptDoneMs)) return;
     if (this.contentOriginMs === null) {
       // Same derivation the rail's own lag measurement uses, so the metric and
       // the `[live-lag]` number share one content clock.
       this.contentOriginMs = t.firedAtMs - Math.max(0, t.lagMs) - t.centerTs * 1000;
     }
+    // Always push (one entry per decided window), exactly like the pre-8495
+    // shape: the end-of-stream force fire re-observes the newest window, so a
+    // centre can legitimately appear twice and merging them would move a row's
+    // stages onto the wrong window.
     this.pending.push({
       centerTs: t.centerTs,
       lagMs: t.lagMs,
       firedAtMs: t.firedAtMs,
       settledAtMs: t.settledAtMs,
       acceptStartMs: t.acceptStartMs,
-      acceptDoneMs: t.acceptDoneMs,
+      acceptDoneMs: t.acceptDoneMs ?? null,
     });
     if (this.pending.length > MAX_ROWS) this.pending.shift();
+  }
+
+  /** ADAAAA-8495: the accept gate returned. Stamps the window's own done clock
+   *  and finalises the row if the persist ack already arrived during the accept
+   *  (which is the normal live shape). */
+  noteAcceptDone(centerTs: number, acceptDoneMs: number): void {
+    if (!Number.isFinite(centerTs) || !Number.isFinite(acceptDoneMs)) return;
+    const idx = this.pending.findIndex(
+      (p) => Math.abs(p.centerTs - centerTs) <= 1e-6 && p.acceptDoneMs == null
+    );
+    if (idx < 0) return;
+    this.pending[idx].acceptDoneMs = acceptDoneMs;
+    if (this.pending[idx].persistAckAtMs != null) this.finalize(idx);
+  }
+
+  /** Pick the pending window a persist ack belongs to.
+   *
+   *  ADAAAA-8495: an exact centre match first (unchanged), then the NEWEST
+   *  window whose accept had already started when the ack fired — the row's own
+   *  clocks. A window registered after the ack (the pre-8495 shape) is never a
+   *  candidate for it, which is the bug this replaces. A claimed entry is
+   *  skipped so one ack can never be booked twice. */
+  private matchWindow(triggerTs: number, ackAtMs: number): number {
+    const unclaimed = (p: PendingDelivery) => p.persistAckAtMs == null;
+    const exact = this.pending.findIndex(
+      (p) => unclaimed(p) && Math.abs(p.centerTs - triggerTs) <= 1e-6
+    );
+    if (exact >= 0) return exact;
+    for (let i = this.pending.length - 1; i >= 0; i--) {
+      const p = this.pending[i];
+      if (unclaimed(p) && p.acceptStartMs <= ackAtMs) return i;
+    }
+    const last = this.pending.length - 1;
+    return last >= 0 && unclaimed(this.pending[last]) ? last : -1;
   }
 
   /**
@@ -269,17 +338,31 @@ export class LiveDeliveryTracker {
     // emitted rows, so the dedupe window matches the ring's own retention.
     if (highlightId && this.delivered.some((r) => r.highlightId === highlightId)) return;
     const key = Number.isFinite(triggerTs) ? triggerTs : NaN;
-    let idx = this.pending.findIndex((p) => Math.abs(p.centerTs - key) <= 1e-6);
-    if (idx < 0) idx = this.pending.length - 1;
+    const idx = this.matchWindow(key, persistAckAtMs);
     if (idx < 0) return;
-    const win = this.pending.splice(idx, 1)[0];
+    const win = this.pending[idx];
+    win.triggerTs = Number.isFinite(key) ? key : win.centerTs;
+    win.persistAckAtMs = persistAckAtMs;
+    if (highlightId) win.highlightId = highlightId;
+    // ADAAAA-8495: the ack normally lands DURING the accept, so the row cannot
+    // be built yet — `noteAcceptDone` finishes it. A window handed over already
+    // accepted (legacy shape) is finalised here, as before.
+    if (win.acceptDoneMs != null) this.finalize(idx);
+  }
+
+  /** Materialise one claimed window into a delivered row (splice + emit). */
+  private finalize(idx: number): void {
+    const win = this.pending[idx];
+    if (win.acceptDoneMs == null || win.persistAckAtMs == null) return;
     const row = deliveredLatencyRow({
       ...win,
-      triggerTs: Number.isFinite(key) ? key : win.centerTs,
-      persistAckAtMs,
-      contentOriginMs: this.contentOriginMs,
-      ...(highlightId ? { highlightId } : {}),
+      acceptDoneMs: win.acceptDoneMs,
+      triggerTs: win.triggerTs ?? win.centerTs,
+      persistAckAtMs: win.persistAckAtMs,
+      contentOriginMs: this.contentOriginMs as number,
+      ...(win.highlightId ? { highlightId: win.highlightId } : {}),
     });
+    this.pending.splice(idx, 1);
     this.delivered.push(row);
     if (this.delivered.length > MAX_ROWS) this.delivered.shift();
     // Per-row evidence line: the deployed run's AC is readable straight from

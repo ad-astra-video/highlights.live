@@ -20,6 +20,14 @@ export type LiveKind = "screen" | "rtmp" | "file-sim";
  * still short of `win.end` used to ship a sub-floor file. */
 export const LIVE_CLIP_MAX_WAIT_MS = 45_000;
 const LIVE_CLIP_POLL_MS = 250;
+/** ADAAAA-8495: how often the flush wait may spend a DEMUX of the growing
+ * recording to confirm the recorder's own muxed clock. The wait used to spawn
+ * one `ffprobe` of the whole MPEG-TS every 250 ms (25,425 ms of the 51,737 ms
+ * accept stage on leg 2c4124fe's 7 separable rows); the recorder now reports
+ * its own flushed clock via `-progress`, and the demux is only a ONE-per-second
+ * cross-check so a stalled/looping progress clock can never publish a short
+ * file. */
+const LIVE_CLIP_CONFIRM_MS = 1_000;
 /** A stream-copy cut from this rail's MPEG-TS session lands on the source's
  * keyframes, so the delivered file comes back up to ~0.5 s SHORT of the window
  * it was asked for (measured 14.700 s for a 15.000 s request). The floor is a
@@ -37,6 +45,46 @@ export interface LiveSpec {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * ADAAAA-8495: the recorder's own WRITE WATERMARK.
+ *
+ * The recording ffmpeg runs with `-progress pipe:1`, so it reports the muxed
+ * output clock (`out_time_us`, microseconds relative to the output start) on
+ * stdout every ~0.5 s. That is a flushed-duration watermark available with NO
+ * subprocess: the flush wait used to spawn one `ffprobe` demux of the whole
+ * growing MPEG-TS every 250 ms, which was the dominant single bucket inside the
+ * live accept stage (25,425 ms of 51,737 ms across the 7 separable rows of leg
+ * 2c4124fe).
+ *
+ * `parseRecorderProgress` is pure: feed it the accumulated stream and it returns
+ * the newest COMPLETE progress block's `out_time_us` (a `progress=` line closes
+ * a block, so a half-written `out_time_us=` can never be read as a newer clock).
+ * Returns null until a block completes.
+ */
+export function parseRecorderProgress(text: string): { outTimeSec: number | null; end: boolean; rest: string } {
+  const cutoff = text.lastIndexOf("progress=");
+  if (cutoff < 0) return { outTimeSec: null, end: false, rest: text };
+  const completed = text.slice(0, cutoff);
+  const end = /^progress=\s*end\b/m.test(text.slice(cutoff));
+  let outTimeSec: number | null = null;
+  // `out_time_us` is the microsecond field on every supported build; older
+  // builds label the same microseconds `out_time_ms` (ffmpeg's long-standing
+  // misnomer), so either carries the same value.
+  const re = /^out_time_(?:us|ms)=(-?\d+)\s*$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(completed)) !== null) {
+    const us = Number(m[1]);
+    if (Number.isFinite(us) && us >= 0) outTimeSec = us / 1e6;
+  }
+  if (outTimeSec == null) {
+    const t = /^out_time=(\d+):(\d+):(\d+(?:\.\d+)?)\s*$/m.exec(completed);
+    if (t) outTimeSec = Number(t[1]) * 3600 + Number(t[2]) * 60 + Number(t[3]);
+  }
+  // Keep only the incomplete tail (a block still being written).
+  const tailStart = cutoff;
+  return { outTimeSec, end, rest: text.slice(tailStart) };
+}
 
 // Stage-A audio tap (INC-2 / ADAAAA-4325). The server decodes the stream's
 // audio track to mono pcm_s16le and POSTs short chunks to perceive /audio so
@@ -84,6 +132,14 @@ export class LiveIngest {
 
   private kind: LiveKind;
   private inputUrl: string | undefined;
+  /** ADAAAA-8495: the recorder's own flushed-duration watermark (seconds of
+   *  muxed output), parsed from its `-progress` stream. Null until the first
+   *  complete progress block lands. */
+  private recorderFlushedSec: number | null = null;
+  /** Unparsed tail of the `-progress` stream (a block still being written). */
+  private progressBuf = "";
+  /** Injectable for tests: the demux confirm of the recording FILE. */
+  private probeFlushed = probeFlushedDuration;
 
   constructor(
     private cfg: ServerConfig,
@@ -112,6 +168,10 @@ export class LiveIngest {
     const args = [
       "-hide_banner",
       "-loglevel", "error",
+      // ADAAAA-8495: the recorder reports its own muxed clock every ~0.5 s
+      // (`out_time_us`), which is the flush watermark the live clip cut waits on
+      // instead of demuxing the growing file per poll.
+      "-progress", "pipe:1",
       ...input,
       // sampled frames -> jpg rail
       // ADAAAA-8377: the scale is a KNOB (`LIVE_FRAME_SCALE`, default 320:180),
@@ -140,6 +200,9 @@ export class LiveIngest {
     this.proc.stderr.on("data", (d: Buffer) => {
       this.stderrTail = (this.stderrTail + d.toString()).slice(-4000);
     });
+    // ADAAAA-8495: the muxer's own progress stream is the flush watermark (see
+    // `parseRecorderProgress`). Cheap by construction: a string scan per chunk.
+    this.proc.stdout.on("data", (d: Buffer) => this.noteRecorderProgress(d.toString()));
     this.proc.on("exit", (code, sig) => {
       if (this.running) console.error(`[live:${this.jobId}] ffmpeg exited code=${code} sig=${sig}`);
       this.running = false;
@@ -188,6 +251,26 @@ export class LiveIngest {
         // Loop a local file at real-time rate as a synthetic live source.
         return ["-re", "-stream_loop", "-1", "-i", this.inputUrl || ""];
     }
+  }
+
+  /** ADAAAA-8495: fold a chunk of the recorder's `-progress` stream into the
+   *  flush watermark. Only a COMPLETE block (closed by a `progress=` line) moves
+   *  the watermark, so a half-written `out_time_us=` is never read as newer. */
+  private noteRecorderProgress(chunk: string): void {
+    this.progressBuf += chunk;
+    const { outTimeSec, rest } = parseRecorderProgress(this.progressBuf);
+    if (outTimeSec != null && (this.recorderFlushedSec == null || outTimeSec > this.recorderFlushedSec)) {
+      this.recorderFlushedSec = outTimeSec;
+    }
+    // Keep only the incomplete tail of the current block (bounded so a garbage
+    // stream cannot grow without limit).
+    this.progressBuf = rest.length > 8192 ? rest.slice(-8192) : rest;
+  }
+
+  /** The newest flushed duration the RECORDER itself reported (seconds), or null
+   *  before its first complete `-progress` block. */
+  flushedSec(): number | null {
+    return this.recorderFlushedSec;
   }
 
   async stop(): Promise<void> {
@@ -387,23 +470,55 @@ export class LiveIngest {
   }
 
   /** ADAAAA-8168: wait until the recording FILE holds `needFileSec` of flushed
-   * footage — the browser rail's `waitForRecordingFlush` on this rail. The
-   * container's declared duration is not that number while the file is still
-   * growing (`-flush_packets 1` writes clusters continuously), so measure the
-   * packets. `ended` means the recorder is gone and nothing more will ever
-   * land; `timeout` means the budget ran out with the recorder still writing. */
+   * footage — the browser rail's `waitForRecordingFlush` on this rail.
+   *
+   * ADAAAA-8495: the recorder's own `-progress` clock (`recorderFlushedSec`) is
+   * the watermark, so the wait no longer spawns one `ffprobe` demux of the
+   * growing MPEG-TS every 250 ms (25,425 ms of the 51,737 ms accept stage on the
+   * 7 separable rows of leg 2c4124fe). The older demux probe is kept as a
+   * ONE-per-second cross-check the first time the watermark claims coverage, and
+   * as the fallback when the recorder reports no progress at all: a stalled
+   * progress clock must never publish a short file. `LIVE_CLIP_MAX_WAIT_MS` and
+   * the timeout refusal are unchanged. `ended` means the recorder is gone and
+   * nothing more will ever land; `timeout` means the budget ran out with the
+   * recorder still writing. */
   private async waitForFlushedCoverage(
     needFileSec: number,
     deadline: number
   ): Promise<{ state: "flushed" | "ended" | "timeout"; fileDur: number | null }> {
+    let lastProbeAt = 0;
     for (;;) {
-      // An unmeasurable file (nothing written yet / not demuxable) keeps the
-      // historical behaviour: proceed and let the post-cut guard decide.
-      const fileDur = await probeFlushedDuration(this.cfg.ffmpegPath, this.sessionTs).catch(() => null);
-      if (fileDur == null) return { state: "flushed", fileDur };
-      if (fileDur + 0.05 >= needFileSec) return { state: "flushed", fileDur };
-      if (!this.running) return { state: "ended", fileDur };
-      if (Date.now() >= deadline) return { state: "timeout", fileDur };
+      const watermark = this.recorderFlushedSec;
+      // ADAAAA-8495: the watermark is trusted once the FILE agrees — a single
+      // demux confirm per second at most, never per poll.
+      if (watermark != null && watermark + 0.05 >= needFileSec) {
+        if (Date.now() - lastProbeAt < LIVE_CLIP_CONFIRM_MS) {
+          // Already confirmed coverage and the file is still absorbing the tail;
+          // keep waiting for the next watermark rather than re-demuxing.
+          if (Date.now() >= deadline) return { state: "timeout", fileDur: watermark };
+          await sleep(LIVE_CLIP_POLL_MS);
+          continue;
+        }
+        lastProbeAt = Date.now();
+        const fileDur = await this.probeFlushed(this.cfg.ffmpegPath, this.sessionTs).catch(() => null);
+        // An unmeasurable file keeps the historical behaviour: proceed and let
+        // the post-cut guard decide.
+        if (fileDur == null || fileDur + 0.05 >= needFileSec) return { state: "flushed", fileDur: fileDur ?? watermark };
+        if (!this.running) return { state: "ended", fileDur };
+        if (Date.now() >= deadline) return { state: "timeout", fileDur };
+        continue;
+      }
+      // No watermark yet (the first progress block can take ~0.5 s, and a
+      // recorder that will not report one at all is measured on the file, at
+      // most once per second).
+      if (watermark == null && Date.now() - lastProbeAt >= LIVE_CLIP_CONFIRM_MS) {
+        lastProbeAt = Date.now();
+        const fileDur = await this.probeFlushed(this.cfg.ffmpegPath, this.sessionTs).catch(() => null);
+        if (fileDur == null) return { state: "flushed", fileDur };
+        if (fileDur + 0.05 >= needFileSec) return { state: "flushed", fileDur };
+      }
+      if (!this.running) return { state: "ended", fileDur: watermark };
+      if (Date.now() >= deadline) return { state: "timeout", fileDur: watermark };
       await sleep(LIVE_CLIP_POLL_MS);
     }
   }

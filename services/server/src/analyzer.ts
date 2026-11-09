@@ -3306,6 +3306,21 @@ export interface AnalyzerConfig {
    * {@link liveDecideAdmission}.
    */
   liveDecideEffectiveAdmission?: () => number;
+  /**
+   * ADAAAA-8495: when set, `acceptVideoDecision` does NOT await the ingest clip
+   * cut. It emits + persists the row with an empty `clipUri` (exactly the shape
+   * the media/browser rail ships via `deferredCut`), and the caller cuts the clip
+   * afterwards on its per-share serial cut chain and patches `clipUri` /
+   * `clipError` onto the row. The cut used to run inline on the serial accept
+   * chain (`waitForFlushedCoverage` ffprobe poll + ffmpeg cut + probe + re-cuts),
+   * so one accepted row blocked the accept of every later window and the whole
+   * cost landed inside the delivered-latency `acceptMs`/`persistAckMs` stages.
+   * The AC2 guard is unchanged: a deferred live cut still publishes the WHOLE
+   * window or the row keeps its `clipError` (never a truncated card), and the
+   * stop path still cuts anything left. Unset = today's inline cut (VOD + the
+   * media rail, which passes its own no-op `cut`).
+   */
+  deferLiveClipCut?: boolean;
   /** ADAAAA-7799 (lever C): decide-rate cap, as the fraction of the 104-window /
    *  300 s convention the funded cell allows. ADAAAA-8431: `LiveObserver`
    *  resolves it to an absolute rate — `min(66, floor(r x 104))` charged decides
@@ -6812,11 +6827,23 @@ export async function acceptVideoDecision(
   // browser rail's stop path uses.
   let clip: ClipCut = { clipId: "", clipUri: "" };
   let clipError: string | undefined;
-  try {
-    clip = await cut(loc.ts);
-  } catch (e: any) {
-    clipError = `Clip cut failed: ${String(e?.message || e)}`;
-    console.error(`[live-clip:${cfg.jobId}] ${clipError} (row ${loc.ts.toFixed(3)}s kept as an unclipped highlight)`);
+  // ADAAAA-8495: a LIVE ingest accept must not await the cut. The cut is
+  // `LiveIngest.cut`: a 250 ms flush poll over a growing MPEG-TS + an ffmpeg
+  // cut + a duration probe + up to two re-cuts, all on the serial accept chain
+  // (leg 2c4124fe: 5.1-33.3 s per accepted row, 30.6 % of it the previous
+  // window's cadence). With `deferLiveClipCut` the row is emitted + persisted
+  // here with an empty `clipUri` and the caller cuts it on its own serial cut
+  // chain, patching `clipUri`/`clipError` afterwards — the same contract the
+  // media/browser rail has shipped since ADAAAA-8032 (`deferredCut` +
+  // `scheduleLiveClipCut`). The whole-window guard lives in the cut itself, so a
+  // deferred cut publishes the whole window or leaves `clipError` on the row.
+  if (!cfg.deferLiveClipCut) {
+    try {
+      clip = await cut(loc.ts);
+    } catch (e: any) {
+      clipError = `Clip cut failed: ${String(e?.message || e)}`;
+      console.error(`[live-clip:${cfg.jobId}] ${clipError} (row ${loc.ts.toFixed(3)}s kept as an unclipped highlight)`);
+    }
   }
   const { clipUri } = clip;
 
