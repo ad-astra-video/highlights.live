@@ -13,6 +13,7 @@ import type { ServerConfig } from "./config";
 import { Store } from "./store";
 import {
   analyzeJob,
+  confirmAuditDescriptor,
   EvidenceTracker,
   LIVE_AUDIO_RETAIN_S,
   LiveRunShared,
@@ -39,6 +40,7 @@ import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
 import {
   LIVE_CONFIRM_LOOKAHEAD_S,
   confirmDiveAdoption,
+  runConfirmDiveCall,
   runDueConfirmDives,
   type ConfirmDiveIo,
   type ConfirmDiveResult,
@@ -2220,7 +2222,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           .filter((o) => Number.isFinite(o.timestamp) && o.timestamp >= lo && o.timestamp <= hi)
           .map((o) => ({ seq: o.seq, ts: o.timestamp })),
       loadFrame: diskFrameLoader(cfg.dataDir, jobId),
-      confirm: (req) => client.confirm(req as any, { jobId }),
+      // ADAAAA-8506 (AC2/AC6): a dive must leave the same self-describing
+      // Stage-2 `decide_audit` row the inline `confirmReconcile` path writes.
+      // The async lane called `client.confirm` bare, so a fired dive was
+      // invisible to the ledger: measured on the first armed live job
+      // (7d99d651) the log said "dive ... verdict=confirmed_goal" three times
+      // while `decide_audit` held 0 rows with a non-null `timestamp` and no
+      // `gNNN:confirm` group. Without the row a dive cannot be graded (AC2) or
+      // costed (AC6: elapsedMs + the pass's own gemma meter ride `timings`).
+      // Identity/timestamp/frames are the dive's OWN request, so the row
+      // describes exactly what was sent; the sink is the same best-effort
+      // `persistDecideAudit` the decide path uses, and a failed ingest can only
+      // log — it never changes the verdict.
+      confirm: (req) =>
+        runConfirmDiveCall({
+          jobId,
+          req,
+          confirm: () => client.confirm(req as any, { jobId }),
+          emit: persistDecideAudit,
+          buildDescriptor: (input) => confirmAuditDescriptor({ jobId }, input as any),
+          log: (line) => console.error(line),
+        }),
       gameHint: cfg.gameHintDefault,
     };
   }

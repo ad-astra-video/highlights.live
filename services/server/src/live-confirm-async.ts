@@ -767,6 +767,53 @@ export function droppedDiveResult(reason: ConfirmDiveResult["droppedReason"], la
   };
 }
 
+/** ADAAAA-8506 (AC2/AC6): run the paid `/confirm` call ONCE and emit the same
+ * self-describing Stage-2 `decide_audit` descriptor the inline
+ * `confirmReconcile` path writes.
+ *
+ *  The async lane called `client.confirm` bare, so a fired dive left no ledger
+ *  row: measured on the first armed live job (`7d99d651`) the log printed
+ *  "dive ... verdict=confirmed_goal" three times while `decide_audit` held 0
+ *  rows with a non-null `timestamp` and no `gNNN:confirm` group. Without that
+ *  row a dive can be neither graded (AC2) nor costed (AC6 — `timings.elapsedMs`
+ *  and the pass's own gemma meter ride it), and the prompt + per-frame sha256
+ *  are what make the dive replayable at $0.
+ *
+ *  The builder is injected (`buildDescriptor`) so this module keeps no import
+ *  cycle with `analyzer.ts`. Emission is best-effort: a throwing sink can only
+ *  log, never change or lose the verdict. */
+export async function runConfirmDiveCall<V>(args: {
+  req: { timestamp: number; frames?: { role?: string; base64?: string }[] };
+  confirm: () => Promise<V>;
+  emit: (desc: Record<string, unknown>) => void;
+  buildDescriptor: (input: {
+    timestamp: number;
+    frames?: { role?: string; base64?: string }[];
+    elapsedMs: number;
+    confirm: V;
+  }) => Record<string, unknown>;
+  jobId?: string;
+  log?: (line: string) => void;
+}): Promise<V> {
+  const log = args.log ?? ((line: string) => console.error(line));
+  const startedAt = Date.now();
+  const verdict = await args.confirm();
+  const elapsedMs = Date.now() - startedAt;
+  try {
+    args.emit(
+      args.buildDescriptor({
+        timestamp: args.req.timestamp,
+        frames: args.req.frames,
+        elapsedMs,
+        confirm: verdict,
+      })
+    );
+  } catch (e: any) {
+    log(`[confirm-audit:${args.jobId ?? "?"}] ingest failed: ${String(e?.message || e)}`);
+  }
+  return verdict;
+}
+
 /**
  * Run ONE dive over the persisted artifacts. NEVER throws: every failure is a
  * fail-closed result the caller counts as `confirmDropped`.
