@@ -82,6 +82,22 @@ _TEAM_TOKEN_RIGHT_RE = re.compile(r"^[^A-Za-z0-9]{0,1}[A-Za-z]{2,}")
 # Guard against absurd non-score integers (clock minutes, jersey numbers, etc.)
 _MAX_SCORE_INT = 99
 
+# ADAAAA-8507: broadcast/sponsor chrome a browser-share score crop reads instead
+# of the score plate (`LALIGA`, `STANLEY`, `SPOTIFY`, `whitebit`, `LAUGA`,
+# `CULERS`, the `nike.com/football` banner). Mirrors `OCR_CHROME_TOKEN_RE` in the
+# server analyzer.
+_CHROME_TOKEN_RE = re.compile(
+    r"(?:laliga|stanley|spotify|whitebit|lauga|culers|nike\.com)", re.IGNORECASE
+)
+# ADAAAA-8507: a `mm:ss` clock that OCR'd with the score's dash separator
+# (`05-40`, `09-40`, `08-10`). The leading zero on a two-digit group is the
+# discriminator: a real double-digit score (`45-42`) has none.
+_CLOCK_MMSS_LEFT_RE = re.compile(r"0\d")
+_CLOCK_MMSS_RIGHT_RE = re.compile(r"\d{2}")
+_CLOCK_GLUE_BEFORE_RE = re.compile(r"\d{1,2}:$")
+_CLOCK_GLUE_AFTER_RE = re.compile(r":\d{1,2}")
+
+
 # --- Scoreboard region-of-interest (ADAAAA-7081) ------------------------------
 # The scoreboard graphic occupies a bounded region of the broadcast frame. OCR
 # must only ever read inside that region. It is configured as a normalized box
@@ -601,6 +617,51 @@ def _glued_score_pair(text: str) -> Optional[Tuple[int, int]]:
     return best[2] if best is not None else None
 
 
+def _pair_is_noise(
+    text: str,
+    raw_left: str,
+    raw_right: str,
+    index: int,
+    length: int,
+    adjacent: Tuple[bool, bool],
+) -> bool:
+    """Whether this dash pair is a clock / chrome fragment, not a score plate.
+
+    ADAAAA-8507 (mirrors ``ocrScorePairIsNoise`` in the server analyzer). The
+    browser (customer) live path read the sponsor banner as the scoreboard: on
+    job ``c4d33a26`` the crop's lines are ``LALIGA``, ``LALIGASPOTIFY CAMP NOU``,
+    ``whitebitwhitebitLALIGA``, ``LALIGA|0JALIGA05-40 AL1UberFC B`` and the
+    clock-glued ``…|LALIGA02:28-1om/football``. The dash lane turned those into
+    scores ``(5,40)``, ``(9,40)``, ``(28,1)``, ``(53,1)``, so 79 of 147 judged
+    windows claimed a score change over a STATIC scorebug.
+
+    Three shapes are refused (fail closed — an unreadable plate stays absent
+    evidence, never a forged delta):
+
+    1. CLOCK GLUE — the pair sits right after a ``H:`` / ``HH:`` clock
+       (``02:28-1``, ``04:53-1``, ``03:29-1``), or right before a ``:MM`` one;
+    2. CLOCK SHAPE — a ``mm:ss`` clock that OCR'd with a dash (``05-40``,
+       ``09-40``, ``08-10``). A leading zero on the left group is the
+       discriminator; ``45-42`` (pinned by the suite) stays a score;
+    3. CHROME LINE — the line carries a broadcast/sponsor token and the pair is
+       not sandwiched between the two team tokens (``…LALIGA RMA 1-1 BAR…``
+       still parses, its pair IS sandwiched).
+    """
+    if _CLOCK_GLUE_BEFORE_RE.search(text[:index]):
+        return True
+    if _CLOCK_GLUE_AFTER_RE.match(text[index + length:]):
+        return True
+    if (
+        _CLOCK_MMSS_LEFT_RE.fullmatch(raw_left)
+        and _CLOCK_MMSS_RIGHT_RE.fullmatch(raw_right)
+        and int(raw_right) <= 59
+    ):
+        return True
+    if _CHROME_TOKEN_RE.search(text) and not (adjacent[0] and adjacent[1]):
+        return True
+    return False
+
+
 def _score_pair_in_line(text: str) -> Optional[Tuple[int, int]]:
     """The one score pair a single OCR line carries, or ``None``.
 
@@ -617,6 +678,12 @@ def _score_pair_in_line(text: str) -> Optional[Tuple[int, int]]:
         if a > _MAX_SCORE_INT or b > _MAX_SCORE_INT:
             continue
         adj_left, adj_right = _pair_team_adjacent(text, m.start(), len(m.group(0)))
+        # ADAAAA-8507: a clock / sponsor-chrome fragment is not a score plate.
+        if _pair_is_noise(
+            text, m.group("a"), m.group("b"), m.start(), len(m.group(0)),
+            (adj_left, adj_right),
+        ):
+            continue
         if adj_left and left is None:
             left = (a, b)
         elif adj_right and right is None:
