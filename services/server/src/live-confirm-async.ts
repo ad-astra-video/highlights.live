@@ -18,7 +18,7 @@
 //
 // Bounds are enforced HERE, not by convention:
 //  - one dive per distinct goal (`goalEventTs` + `confirmReuseWindowS`);
-//  - `LIVE_CONFIRM_MAX_DIVES_PER_300S` (default 8) per stream;
+//  - `LIVE_CONFIRM_MAX_DIVES_PER_300S` (default 3) per stream;
 //  - one dive in flight per stream, and a BUSY decide pool drops (never queues);
 //  - context is rebuilt from PERSISTED artifacts only (frames on disk + the
 //    stage-1 analysis). A signal that cannot be reconstructed (motion
@@ -28,8 +28,16 @@
 //    closed: the row is untouched and the dive is counted as dropped.
 import { selectRereadFrames, withTimeout, type FrameRereadCandidate } from "./live-frame-reread.js";
 
-/** Default per-stream dive budget: one 300 s window may spend at most this many. */
-export const LIVE_CONFIRM_MAX_DIVES_PER_300S = 8;
+/** Default per-stream dive budget: one 300 s window may spend at most this many.
+ *
+ *  Cap-derived, not detector-derived (ADAAAA-8506). The CEO-locked ceiling is
+ *  $2.75 per stream-hour and a dive bills the same `decideFee` as a Stage-1 read,
+ *  so the whole lane shares 2.75 / 0.0033 = 833 calls/hour = 69.4 calls per
+ *  300 s. At the ratified Stage-1 cell (66 charged decides / 300 s, ADAAAA-8427,
+ *  wired by ADAAAA-8431) that leaves 3 dives. The previous 8 was sized for the
+ *  detector's false-positive rate against an older 61-decide cell and put the
+ *  armed lane 6.6 % over the cap; do not raise it without a re-priced ceiling. */
+export const LIVE_CONFIRM_MAX_DIVES_PER_300S = 3;
 /** The budget's sliding window (seconds). */
 export const LIVE_CONFIRM_BUDGET_WINDOW_S = 300;
 /** A dive that has not answered within this bound is DROPPED (fail closed). */

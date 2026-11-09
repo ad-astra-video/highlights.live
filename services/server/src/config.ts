@@ -3,6 +3,7 @@ import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
 import { resolveExportTokenSecret } from "./export-token";
 import { LIVE_OBSERVE_LAG_BUDGET_S, resolveDecideImageBudget } from "./observe-loop";
+import { LIVE_CONFIRM_MAX_DIVES_PER_300S } from "./live-confirm-async";
 
 export interface ServerConfig {
   port: number;
@@ -395,8 +396,10 @@ export interface ServerConfig {
    * the inline awaited dive (the pre-8205 posture); `LIVE_DECIDE_CONFIRM` stays
    * the master opt-in, so an off master gate is still a strict no-op. */
   liveConfirmAsync: boolean;
-  /** ADAAAA-8205: dives allowed per 300 s of stream (`LIVE_CONFIRM_MAX_DIVES_PER_300S`,
-   * default 8 — the parent envelope's <= $0.318/h/stream dive term). */
+  /** ADAAAA-8205: dives allowed per 300 s of stream (`LIVE_CONFIRM_MAX_DIVES_PER_300S`).
+   * Defaults to {@link LIVE_CONFIRM_MAX_DIVES_PER_300S} (3), the cap-derived cell:
+   * 66 Stage-1 decides + 3 dives = 69 calls/300 s = $2.7324/h/stream, inside the
+   * CEO-locked $2.75 ceiling (ADAAAA-8506 / ADAAAA-8512). */
   liveConfirmMaxDivesPer300S: number;
   /** ADAAAA-7781: ask the decide service for the COMPACT verdict contract on the
    * LIVE pass (short prose fields, no evidenceAttested list, 400-token cap).
@@ -1095,8 +1098,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // pay the dive); `LIVE_CONFIRM_ASYNC=0` restores the inline awaited dive and
     // is a strict no-op when the master gate is off.
     liveConfirmAsync: env.LIVE_CONFIRM_ASYNC !== "0",
-    // ADAAAA-8205: the parent envelope's per-stream dive budget.
-    liveConfirmMaxDivesPer300S: positiveNumberOrUndefined(env.LIVE_CONFIRM_MAX_DIVES_PER_300S) ?? 8,
+    // ADAAAA-8205 / ADAAAA-8506: the cap-derived per-stream dive budget. The
+    // default is the same constant the dive's own fallback uses, so an armed
+    // lane that omits the env var cannot silently run the old 8-dive (over-cap)
+    // cell.
+    liveConfirmMaxDivesPer300S: positiveNumberOrUndefined(env.LIVE_CONFIRM_MAX_DIVES_PER_300S) ?? LIVE_CONFIRM_MAX_DIVES_PER_300S,
     // ADAAAA-7781: the COMPACT live verdict contract (decode-bound throughput —
     // see AnalyzerConfig.liveDecideCompact). Opt-in: unset keeps the full
     // contract byte-identical for both rails.
