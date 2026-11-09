@@ -195,6 +195,21 @@ class MeteredProjectionTest(unittest.TestCase):
         self.assertIn("costUsd", leg)
         self.assertIsNotNone(leg["meteredWallRatio"])
 
+    def test_default_abort_matches_the_cap_record(self):
+        # ADAAAA-8515: a $0.65 cap aborts at $0.60 projected, not 5 % off ($0.6175).
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "clean",
+                "--authorized-duration-s", "1",
+                "--cap-usd", "0.65",
+                "--quiet-window-min", "0.05",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertAlmostEqual(evidence["authorized"]["abortAtUsd"], 0.60, places=4)
+
     def test_missing_projection_rate_refuses_the_leg(self):
         # A1: neither a live meter nor a session-time projection = not authorized.
         code, evidence = run_harness(

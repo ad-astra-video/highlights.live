@@ -1053,7 +1053,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         abort_at_usd=(
             args.abort_at_usd
             if args.abort_at_usd is not None
-            else args.cap_usd - min(0.05, args.cap_usd * 0.05)
+            # ADAAAA-8516 A1 / the ADAAAA-8515 cap record: a $0.65 cap aborts at
+            # $0.60 projected. The margin is a flat $0.05 (half the cap on small
+            # caps), NOT 5 % — 5 % of $0.65 is $0.0325, which set the abort at
+            # $0.6175 and left less headroom than the ruling authorized.
+            else args.cap_usd - min(0.05, args.cap_usd * 0.5)
         ),
         poll_s=args.poll_s,
         settle_timeout_s=args.settle_timeout_s,
