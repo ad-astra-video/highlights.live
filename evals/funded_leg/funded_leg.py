@@ -51,7 +51,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 #: Decide pool containers whose session markers count against the gate.
 #: On the box the pool is proxied by `decide-pool-8183` (x99) to the workers on
@@ -62,6 +62,13 @@ DEFAULT_POOL_CONTAINERS = ("decide-gpu0", "decide-gpu1", "decide-gpu2")
 #: subset of this pattern (older builds prefixed ids with `cyc-`), so counting
 #: every `session=` line proves the `session=cyc-` clause as well.
 DEFAULT_CYC_PATTERN = "session="
+
+#: ADAAAA-8516 (A1) metered-time projection rate. From the ADAAAA-8515 cap
+#: record: the 8483 leg spent $0.6197 over 544.5 s of metered perceive session
+#: = $0.0011381/s. A leg whose metered clock runs ahead of its wall clock (the
+#: 1.815x inflation on 8483) is stopped at `--abort-at-usd` by projection before
+#: the wall stop can overshoot the dollar cap.
+DEFAULT_METERED_USD_PER_S = 0.0011381
 
 #: Emits `<container>:<count>` per container, or `<container>:-1` when the
 #: container is absent. `-1` is a failed probe, never a silent zero.
@@ -556,6 +563,7 @@ class Config:
     quiet_window_s: float
     hard_stop_slack_s: float
     abort_at_usd: float
+    metered_usd_per_s: float
     poll_s: float
     settle_timeout_s: float
     job_base: str
@@ -654,6 +662,7 @@ class LegResult:
     settled_status: Optional[str]
     cost_usd: float
     perceive_session_s: float
+    metered_projection_s: float
     duration_s: float
     stop_calls: int
     driver_rc: Optional[int]
@@ -710,6 +719,14 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         raise SetupFailed(f"job create HTTP {created.status}: {created.raw[:300]}")
     log(f"job {job_id} created {_iso(started)}")
 
+    # ADAAAA-8516 (A1): the meter the server settles on is `Date.now() - t0`
+    # where `t0` is stamped at the top of runLiveJob, i.e. at/just after this
+    # create — NOT at driver start. A wall-clock stop alone therefore cannot
+    # bound metered time: 8483 metered 544.5 s inside a 300 s window (1.815x,
+    # mostly reserve/startup/drain). This clock is the projection of that meter:
+    # elapsed since create x the cap's measured rate, aborted at `abort_at_usd`.
+    t_create = time.monotonic()
+
     session_id: Optional[str] = None
     session = runner.http(
         "POST",
@@ -751,7 +768,12 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
     stop_calls = 0
     stop_lock = threading.Lock()
     stop_reason = "ended"
-    state: Dict[str, Any] = {"cost": 0.0, "perceive_session_s": 0.0, "status": "running"}
+    state: Dict[str, Any] = {
+        "cost": 0.0,
+        "perceive_session_s": 0.0,
+        "metered_projection_s": 0.0,
+        "status": "running",
+    }
 
     def poll_state() -> str:
         res = runner.http("GET", f"{cfg.job_base}/jobs/{job_id}", headers=headers)
@@ -761,6 +783,8 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         state["perceive_session_s"] = float(
             _job_field(res.body, "perceiveSessionS", 0.0) or 0.0
         )
+        # A1 metered-time projection: same clock the settle bills (create -> now).
+        state["metered_projection_s"] = time.monotonic() - t_create
         return status
 
     def issue_stop(reason: str, allow_retry: bool = True) -> bool:
@@ -824,6 +848,16 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
                     f"(cost={state['cost']:.4f}) — stopping")
                 issue_stop("cost_cap")
                 break
+            projected = state["metered_projection_s"] * cfg.metered_usd_per_s
+            state["projected_cost"] = projected
+            if projected >= cfg.abort_at_usd:
+                log(
+                    f"metered-time projection ${projected:.4f} >= abort "
+                    f"${cfg.abort_at_usd:.4f} ({state['metered_projection_s']:.1f} s "
+                    f"metered x ${cfg.metered_usd_per_s:.7f}/s) — stopping"
+                )
+                issue_stop("metered_projection_cap")
+                break
             time.sleep(cfg.poll_s)
     finally:
         # Any exit path stops the leg: exception, keyboard, or normal end.
@@ -854,6 +888,7 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         settled_status=state["status"],
         cost_usd=float(state["cost"]),
         perceive_session_s=float(state["perceive_session_s"]),
+        metered_projection_s=float(state["metered_projection_s"]),
         duration_s=max(0.0, stop_time - t0),
         stop_calls=stop_calls,
         driver_rc=driver_rc,
@@ -936,6 +971,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "unconfirmed (must be <= 10; default 10)")
     p.add_argument("--abort-at-usd", type=float, default=None,
                    help="stop early at this metered cost (default: cap - min(0.05, 5%%))")
+    p.add_argument("--metered-usd-per-s", type=float, default=DEFAULT_METERED_USD_PER_S,
+                   help=("A1 metered-time projection rate in USD/s (default: the "
+                         "ADAAAA-8515 cap record's measured $0.0011381/s). The "
+                         "projection aborts at --abort-at-usd, so a leg on a "
+                         "slower/over-metering clock stops before the wall stop."))
     p.add_argument("--poll-s", type=float, default=1.0)
     p.add_argument("--settle-timeout-s", type=float, default=60.0,
                    help="how long to wait for the job to reach a terminal status")
@@ -990,6 +1030,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.authorized_duration_s <= 0 or args.cap_usd <= 0:
         print("refusing: duration and cap must be positive", file=sys.stderr)
         return 5
+    if args.metered_usd_per_s <= 0:
+        # A1: with no projection rate there is neither a live meter nor a
+        # session-time projection to bound metered spend, so the leg is not
+        # authorized to run on a wall-clock stop alone.
+        print("refusing: --metered-usd-per-s must be positive (A1 needs a metered bound)",
+              file=sys.stderr)
+        return 5
 
     lines: List[str] = []
 
@@ -1010,6 +1057,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ),
         poll_s=args.poll_s,
         settle_timeout_s=args.settle_timeout_s,
+        metered_usd_per_s=args.metered_usd_per_s,
         job_base=args.job_base,
         media_base=args.media_base,
         job_source=args.job_source,
@@ -1054,6 +1102,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "durationS": cfg.authorized_duration_s,
             "capUsd": cfg.cap_usd,
             "abortAtUsd": round(cfg.abort_at_usd, 6),
+            "meteredUsdPerS": cfg.metered_usd_per_s,
             "hardStopSlackS": cfg.hard_stop_slack_s,
             "quietWindowS": cfg.quiet_window_s,
         },
@@ -1159,6 +1208,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "durationS": round(result.duration_s, 3),
         "costUsd": round(result.cost_usd, 6),
         "perceiveSessionS": result.perceive_session_s,
+        # A1: the metered clock and its projection, beside the settled cost.
+        "meteredProjectionS": round(result.metered_projection_s, 3),
+        "meteredUsdPerS": cfg.metered_usd_per_s,
+        "meteredProjectedUsd": round(result.metered_projection_s * cfg.metered_usd_per_s, 6),
+        "meteredWallRatio": (
+            round(result.perceive_session_s / result.duration_s, 3)
+            if result.duration_s > 0
+            else None
+        ),
         "driverRc": result.driver_rc,
         "driverOutputTail": result.driver_output_tail,
     }

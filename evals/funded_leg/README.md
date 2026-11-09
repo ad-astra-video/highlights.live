@@ -17,7 +17,7 @@ cap.
 | quiet-window preflight | samples the gate for the whole window before any metered call: 0 nonterminal jobs, media `capacity.activeSessions 0`, all lease counters 0, 0 pool `session=` markers (the workers log `session=<jobId>`; `session=cyc-` is a subset). Any bad sample, unreadable probe, or missing pool container refuses the leg. | `3` |
 | hard wall-clock stop | stop fires at `--authorized-duration-s`, driven only by the monotonic clock. Media progress / `liveEdge` is never a stop input. | — |
 | stop confirmation | if the job is not terminal within `--hard-stop-slack-s` (<= 10 s) the run exits non-zero; it never reports an unconfirmed stop as a valid leg. | `4` |
-| metered-cost ceiling | stops early at `--abort-at-usd` (default `cap - min($0.05, 5%)`; a $0.65 cap aborts at $0.60, per ADAAAA-8487). | — |
+| metered-cost ceiling | stops early at `--abort-at-usd` (default `cap - min($0.05, 5%)`; a $0.65 cap aborts at $0.60, per ADAAAA-8487). Two independent sources: the job's live `costUsd` when the API exposes it, **and** the metered-time projection (elapsed since job create x `--metered-usd-per-s`, default the ADAAAA-8515 cap record's `$0.0011381/s`). The live path only writes `costUsd` at settlement, so the projection is what actually bounds metered time on a funded live leg — ADAAAA-8516 A1. `--metered-usd-per-s 0` refuses the leg (exit `5`). | — |
 | authorized-vs-actual | evidence JSON `shape` block + a ready-to-paste table and `AUTHORIZED-VS-ACTUAL:` line. Overshoot is a field, not a discovery. | `0` within / `2` over |
 | setup failure | job/session/driver failure stops whatever was created. | `5` |
 
@@ -76,8 +76,21 @@ python3 evals/funded_leg/funded_leg.py \
 If no route to the pool host exists, the preflight refuses (exit 3) rather than
 assuming it is idle — that refusal is the guard working, not a harness bug.
 
-The stop fires at 300 s (tolerance <= 10 s). That is stricter than the 320 s
-ceiling in the ADAAAA-8516 card, which remains an upper bound, not a target.
+The stop fires at the authorized duration (tolerance <= 10 s). For the
+ADAAAA-8516 leg that is `--authorized-duration-s 480`, i.e. a stop at 480 s with
+`--hard-stop-slack-s 10`: stricter than the card's 500 s ceiling, which remains
+an upper bound, not a target.
+
+### A1: the metered-time projection (ADAAAA-8516)
+
+The server stamps its spend clock (`t0`) at the top of `runLiveJob`, before the
+perceive reserve, and bills `perceiveSessionS = settle - t0`. A wall-clock stop
+therefore cannot bound metered time: ADAAAA-8483 metered **544.5 s inside a
+300 s window (1.815x)**. The harness projects that same clock from job create
+and stops at `--abort-at-usd`, so a leg that pays startup/teardown inflation
+stops before the dollar cap. Evidence carries `meteredProjectionS`,
+`meteredUsdPerS`, `meteredProjectedUsd`, `perceiveSessionS`, wall seconds and
+`meteredWallRatio` side by side.
 
 `--token` / `HL_LEG_TOKEN` may be supplied instead of `--user-id`; otherwise the
 harness mints a 4 h JWT inside `highlights-server` (needs `jsonwebtoken`, which
