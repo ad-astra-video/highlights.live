@@ -271,6 +271,9 @@ const CONFIRM_LANE_TONE: Record<ConfirmationLane, string> = {
   measured: "border-green/50 text-green",
   dive: "border-pink/50 text-pink",
   dive_disagreed: "border-yellow/50 text-yellow",
+  // ADAAAA-8542: a HELD row is confirmed-but-unmeasured — orange, not the
+  // green of a measured lane and not the yellow of a refutation.
+  dive_held: "border-orange/50 text-orange",
   unconfirmed: "border-mut/40 text-mut",
 };
 
@@ -278,6 +281,7 @@ const CONFIRM_LANE_BADGE: Record<ConfirmationLane, string> = {
   measured: "measured",
   dive: "deep dive",
   dive_disagreed: "not corroborated",
+  dive_held: "held — unmeasured",
   unconfirmed: "no lane",
 };
 
@@ -1501,7 +1505,9 @@ export function HighlightCard({
             className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
               badge.confirmed ? "border-green/50 bg-green/10 text-green" : "border-yellow/50 bg-yellow/10 text-yellow"
             }`}
-            data-detail-confirmed-badge={badge.confirmed ? "confirmed" : "unconfirmed"}
+            data-detail-confirmed-badge={
+              badge.confirmed ? "confirmed" : badge.lane === "dive_held" ? "held" : "unconfirmed"
+            }
             data-detail-confirm-lane={admin ? (badge.lane ?? "absent") : undefined}
             title={admin ? h.confirmation?.label : undefined}
           >
