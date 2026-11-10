@@ -264,8 +264,18 @@ class RealRunner:
     def _run(self, command: str, prefix: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
         cmd = f"{prefix} {shlex.quote(command)}" if prefix else command
         self.commands.append(cmd)
+        # ADAAAA-8534: `repo_root` is a BOX path, so it is only a valid local
+        # cwd for a local run. With a remote prefix the command is executed on
+        # the far side (where the path exists), and setting the local cwd to the
+        # box path made every probe fail before it reached the remote shell —
+        # build identity then read `unreadable` on a leg that was fine.
         proc = subprocess.run(
-            cmd, shell=True, cwd=self.shell_cwd, text=True, capture_output=True, timeout=timeout
+            cmd,
+            shell=True,
+            cwd=None if prefix else self.shell_cwd,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
         )
         # Remote shells append their own exit footer to stdout; it must not be
         # parsed as probe output (it glues onto the last line).

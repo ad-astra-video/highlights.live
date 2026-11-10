@@ -830,5 +830,32 @@ class Leg8516ReplayTest(unittest.TestCase):
         self.assertNotEqual(block["verdict"], "verified")
 
 
+class RemoteRunnerCwdTest(unittest.TestCase):
+    """A remote-prefixed run must not need the box's repo path locally.
+
+    ADAAAA-8534: with `--box-cmd` set, v1.3.0 still used `repo_root` as the local
+    subprocess cwd. `repo_root` is a box path, so every probe died before it
+    reached the remote shell and the funded leg read `unreadable` at build
+    identity — a refusal that named the harness, not the artifact.
+    """
+
+    def test_a_missing_local_repo_root_does_not_break_a_remote_probe(self):
+        runner = funded_leg.RealRunner(
+            box_cmd="echo", shell_cwd="/nonexistent/box/only/path"
+        )
+        proc = runner.shell(
+            "git -C /home/brad/highlights.live rev-parse HEAD", timeout=10
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertIn("rev-parse HEAD", proc.stdout)
+
+    def test_a_local_run_still_uses_the_repo_cwd(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = funded_leg.RealRunner(box_cmd="", shell_cwd=tmp)
+            proc = runner.shell("pwd", timeout=10)
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout.strip(), os.path.realpath(tmp))
+
+
 if __name__ == "__main__":
     unittest.main()
