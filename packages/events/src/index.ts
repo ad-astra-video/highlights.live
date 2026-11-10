@@ -1868,8 +1868,19 @@ export const HighlightRecordSchema = z.object({
       /** ADAAAA-8205: the async Stage-2 dive read this moment and did NOT
        * confirm it. The row keeps `status: "provisional"` (the badge the CEO
        * sees is never removed) and the card says the deep dive did not confirm.
-       * Additive optional — absent on rows the dive promoted or never reached. */
+       * Additive optional — absent on rows the dive promoted or never reached.
+       * ADAAAA-8542: `refuted` is now ONLY a real refutation; a confirmation
+       * HELD for a missing measurement carries `held` instead, so the two do
+       * not render the same badge. */
       refuted: z.boolean().optional(),
+      /** ADAAAA-8542: the dive CONFIRMED the goal but the row's own window
+       * measured no score transition, so the moment is held (not refuted) until
+       * a later score read resolves it. A held row and a refuted row are
+       * different states with different badges. */
+      held: z.boolean().optional(),
+      /** ADAAAA-8542: machine-readable reason the row is held
+       * (`score_lane_read_no_transition`). Absent on every other row. */
+      holdReason: z.string().optional(),
     })
     .optional(),
   /** ADAAAA-8205: the LIVE async confirm lane's pending dive, persisted with the
@@ -2095,7 +2106,7 @@ export type HighlightAlternative = z.infer<typeof HighlightAlternativeSchema>;
  * attestation flags and the dive verdict) is deliberately NOT on a card surface
  * — mirrors what `stripWindowInspection()` gates on the decide notes. */
 export const HighlightConfirmationSchema = z.object({
-  lane: z.enum(["measured", "dive", "dive_disagreed", "unconfirmed"]),
+  lane: z.enum(["measured", "dive", "dive_disagreed", "dive_held", "unconfirmed"]),
   /** The row-body sentence for the lane, exactly as the decide note cites it. */
   label: z.string(),
 });
@@ -2422,7 +2433,7 @@ export type JobTrace = z.infer<typeof JobTraceSchema>;
  * the default payload exactly like `analysis` / `confirm`.
  */
 export const WindowConfirmationSchema = z.object({
-  lane: z.enum(["measured", "dive", "dive_disagreed", "unconfirmed"]),
+  lane: z.enum(["measured", "dive", "dive_disagreed", "dive_held", "unconfirmed"]),
   label: z.string(),
   measurement: z.enum(["goal_line", "ball_in_net", "score", "ball_outcome", "dive", "none"]),
   /** The measured detail the label cites, exactly as stored (e.g. "0-0 → 0-1 at 04:47"). */

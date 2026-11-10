@@ -52,6 +52,23 @@ describe("confirmationBadge — CONFIRMED only on a lane that actually confirmed
     });
   }
 
+  // ADAAAA-8542 (AC4): a dive that CONFIRMED the goal over a window whose score
+  // lane produced no samples is HELD, not confirmed and not refuted. It used to
+  // render CONFIRMED next to the stored `refuted` marker.
+  it("lane=dive_held reads HELD, never CONFIRMED and never UNCONFIRMED", () => {
+    const badge = confirmationBadge(hl({ confirmation: confirmation("dive_held") }));
+    expect(badge).toEqual({ lane: "dive_held", confirmed: false, text: "HELD" });
+  });
+
+  it("HELD, CONFIRMED and UNCONFIRMED are three distinct badge texts", () => {
+    const texts = new Set(
+      (["measured", "dive", "dive_held", "dive_disagreed"] as const).map(
+        (lane) => confirmationBadge(hl({ confirmation: confirmation(lane) })).text
+      )
+    );
+    expect(texts).toEqual(new Set(["CONFIRMED", "HELD", "UNCONFIRMED"]));
+  });
+
   it("an ABSENT lane reads UNCONFIRMED and never invents a lane", () => {
     const badge = confirmationBadge(hl());
     expect(badge.lane).toBeNull();
