@@ -356,3 +356,88 @@ describe("gradeLiveLeg duration (ADAAAA-8529 item 3)", () => {
     expect(g.durationSource).toBe("harness_evidence");
   });
 });
+
+// ADAAAA-8487 AC-B, as amended by CEO ruling A on ADAAAA-8528 (`cap-record` rev
+// `ed4cfb59`): the leg reports p50 against BOTH bars — 3,000 ms legacy and
+// 4,000 ms in force — and the AC-B verdict uses the bar in force. These cases
+// pin the delta read so a leg that passes only because of the amendment says so
+// instead of looking like it cleared the original bar.
+describe("AC-B dual p50 bars (ADAAAA-8528 ruling A)", () => {
+  const flatRows = (ms: number, n = 9) =>
+    Array.from({ length: n }, (_, i) => ({
+      triggerTs: 100 + i * 40,
+      deliveredLatencyMs: ms,
+      fireLagMs: 0,
+      decideE2eMs: 0,
+      acceptWaitMs: 0,
+      acceptMs: 0,
+      persistAckMs: ms,
+    }));
+
+  const gradeAt = (ms: number) =>
+    gradeLiveLeg({
+      mode: "funded",
+      rows: flatRows(ms),
+      durationS: 480,
+      decideP50Ms: 2_196,
+      accepted: 9,
+      deliveredGoalRows: 0,
+    });
+
+  it("states both bars on every graded leg and keeps the legacy bar unmoved", () => {
+    expect(LIVE_LEG_BARS.p50Ms).toBe(3_000);
+    expect(LIVE_LEG_BARS.p50MsInForce).toBe(4_000);
+
+    const g = gradeAt(2_800);
+    expect(g.acB.p50Bars).toEqual({
+      inForceMs: 4_000,
+      legacyMs: 3_000,
+      inForcePass: true,
+      legacyPass: true,
+      delta: "both",
+    });
+    expect(g.acB.status).toBe("PASS");
+  });
+
+  it("a p50 between the bars PASSes on the bar in force and reports the legacy FAIL", () => {
+    // 3,343 ms is the standing funded measurement from the pre-change leg.
+    const g = gradeAt(3_343);
+
+    expect(g.p50Ms).toBe(3_343);
+    expect(g.acB.status).toBe("PASS");
+    expect(g.acB.p50Bars).toMatchObject({ inForcePass: true, legacyPass: false, delta: "legacy_only" });
+    expect(g.verdict).toBe("PASS");
+    // Both numbers are on the reason line, so the result comment cannot quote
+    // one bar and quietly drop the other.
+    const reason = g.acB.reasons.join(" ");
+    expect(reason).toContain("4000 ms (in force)");
+    expect(reason).toContain("3000 ms (legacy)");
+    expect(reason).toContain("legacy read: FAIL");
+  });
+
+  it("a p50 over the amended bar FAILs, not UNMEASURED, and names the bar in force", () => {
+    const g = gradeAt(4_400);
+
+    expect(g.acB.status).toBe("FAIL");
+    expect(g.acB.p50Bars).toMatchObject({ inForcePass: false, legacyPass: false, delta: "neither" });
+    expect(g.verdict).toBe("FAIL");
+    const reason = g.acB.reasons.join(" ");
+    expect(reason).toContain("over_bar");
+    expect(reason).toContain("4400 ms vs 4000 ms (in force)");
+  });
+
+  it("a shape-blocked leg reports the bars but still grades UNMEASURED", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: flatRows(2_000, 7),
+      durationS: 320,
+      decideP50Ms: 2_196,
+      accepted: 7,
+      deliveredGoalRows: 0,
+    });
+
+    expect(g.acB.status).toBe("UNMEASURED");
+    expect(g.acB.p50Bars.inForcePass).toBe(true);
+    expect(g.acB.p50Bars.delta).toBe("both");
+  });
+});
