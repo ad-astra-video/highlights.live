@@ -446,6 +446,12 @@ export interface JobDetailHighlight {
   // URL and never marks anything. Absent on servers that predate it (fall back
   // to `clipUri`).
   exportUri?: string;
+  /** ADAAAA-8530: which lane confirmed this row's window, derived read-side by
+   * the server from the row's own decide window (`measured | dive |
+   * dive_disagreed | unconfirmed`) with the same sentence the decide note cites.
+   * Absent when nothing could be derived — the card then reads UNCONFIRMED,
+   * never a guessed lane. Drives the ONE badge the card carries. */
+  confirmation?: HighlightConfirmation;
   // ADAAAA-8139 (interim step): a demoted LIVE goal window whose ASR / frames /
   // crowd reaction carried a goal cue but whose scoreboard change had not landed
   // when the window closed. The row stays a non-postable celebration and the
@@ -1491,22 +1497,79 @@ export function goalConfirmedLabel(
 }
 
 /**
- * ADAAAA-8178: the ONE badge a notable-lane card carries. The notable lane is
- * where the precision gate parks non-postable plays, so the card has to say WHICH
- * kind of play it is without inventing a second GOAL: a demoted goal window keeps
- * the customer-safe "GOAL (unconfirmed)" string (ADAAAA-8139), and everything
- * else is labelled from its own outcome, so a near miss is never read as a big
- * play. Precedence is deliberate and total: provisional goal wins over outcome.
+ * ADAAAA-8530 (D1 = option A, confirmation state): the confirmation state a
+ * SERVED highlight row carries. `deriveConfirmation()` on the server attaches
+ * `confirmation = { lane, label }` — lane + label only, the inspector half of
+ * `WindowConfirmation` never leaves the decide note — to every row of
+ * `highlights[]` and `notableHighlights[]`. The webapp only RENDERS it, so a card
+ * can never invent a lane the pipeline did not derive.
  */
-export type NotableBadgeKind = "goal_unconfirmed" | "big_play" | "near_miss";
+export type HighlightConfirmation = Pick<WindowConfirmation, "lane" | "label">;
 
-export function notableBadge(
+/**
+ * ADAAAA-8530: THE badge on every Highlights card — confirmation state, not play
+ * taxonomy. CONFIRMED only when a pipeline lane actually confirmed the window
+ * (`measured` or `dive`); UNCONFIRMED for `dive_disagreed`, `unconfirmed`, or a
+ * row whose lane could not be derived (absent). Fail-closed by construction: a
+ * row with no corroboration can never read CONFIRMED.
+ */
+export function confirmationBadge(
+  h: Pick<JobDetailHighlight, "confirmation">
+): { lane: ConfirmationLane | null; confirmed: boolean; text: "CONFIRMED" | "UNCONFIRMED" } {
+  const lane = h.confirmation?.lane ?? null;
+  const confirmed = lane === "measured" || lane === "dive";
+  return { lane, confirmed, text: confirmed ? "CONFIRMED" : "UNCONFIRMED" };
+}
+
+/**
+ * ADAAAA-8530: play type (big play / near miss / goal-shaped) as PLAIN DETAIL
+ * TEXT. It moved off the badge — the badge is confirmation state only — and it
+ * is never an assertion that a goal was scored: a demoted row reads
+ * "goal-shaped play", not "GOAL". Lower-case words only, so no outcome code
+ * (`big_play`, ADAAAA-7737's markup guard) reaches a customer session.
+ */
+export function playTypeText(
   h: Pick<JobDetailHighlight, "provisionalGoal" | "outcome">
-): { kind: NotableBadgeKind; text: string } | null {
-  if (h.provisionalGoal) return { kind: "goal_unconfirmed", text: "GOAL (unconfirmed)" };
-  if (h.outcome === "big_play") return { kind: "big_play", text: "BIG PLAY" };
-  if (h.outcome === "near_miss") return { kind: "near_miss", text: "NEAR MISS" };
+): string | null {
+  if (h.provisionalGoal || h.outcome === "big_play") {
+    return h.provisionalGoal ? "goal-shaped play" : "big play";
+  }
+  if (h.outcome === "near_miss") return "near miss";
   return null;
+}
+
+/** ADAAAA-8530: one row of the single Highlights list. */
+export interface HighlightMomentEntry {
+  highlight: JobDetailHighlight;
+  /** True for a notable moment (never postable, no verdict slot/checkbox). */
+  notable: boolean;
+  /** True for a notable row with neither `clipUri` nor `clipError`: a text row
+   *  INSIDE the list, never a card with an empty player. */
+  textRow: boolean;
+}
+
+/**
+ * ADAAAA-8530: the ONE Highlights list. Postable moments and notable moments are
+ * the same list, ordered by moment start (ties broken by id so the order is
+ * deterministic). A notable row that carries footage (or a named clip failure)
+ * is a card; a row with neither stays a text row in the same list. Pure: no
+ * count is derived here and nothing is filtered out of the caller's lists.
+ */
+export function highlightMomentEntries(
+  postable: JobDetailHighlight[],
+  notable: JobDetailHighlight[]
+): HighlightMomentEntry[] {
+  const entries: HighlightMomentEntry[] = [
+    ...postable.map((highlight) => ({ highlight, notable: false, textRow: false })),
+    ...notable.map((highlight) => ({
+      highlight,
+      notable: true,
+      textRow: !(highlight.clipUri || highlight.clipError),
+    })),
+  ];
+  return entries.sort(
+    (a, b) => a.highlight.start - b.highlight.start || a.highlight.id.localeCompare(b.highlight.id)
+  );
 }
 
 /**

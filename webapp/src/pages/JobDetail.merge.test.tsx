@@ -1,8 +1,8 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { HighlightCard, SecondaryHighlightLane } from "./JobDetail";
-import type { JobDetailHighlight } from "../lib/jobDetail";
+import { HighlightCard, HighlightMomentGrid, SecondaryHighlightLane } from "./JobDetail";
+import { highlightMomentEntries, type JobDetailHighlight } from "../lib/jobDetail";
 
 /** react-dom/server separates adjacent text nodes with `<!-- -->` markers;
  * strip them so assertions read the text a user actually sees. */
@@ -83,14 +83,12 @@ describe("dedupe/precision lanes are rendered (ADAAAA-7621)", () => {
     expect(html).toContain("score 71");
   });
 
-  it("lists notable non-scoring clips in their own lane, as the real card with a badge", () => {
+  it("lists notable non-scoring clips inside the Highlights grid, as the real card with the confirmation badge", () => {
+    // ADAAAA-8530 supersedes ADAAAA-8178's separate notable lane: the moment is a
+    // row of the ONE Highlights grid, with ONE badge that states confirmation.
     const html = text(renderToString(
-      React.createElement(SecondaryHighlightLane, {
-        lane: "notable",
-        title: "Notable — not a goal",
-        note: "…",
-        tone: "yellow",
-        highlights: [
+      React.createElement(HighlightMomentGrid, {
+        entries: highlightMomentEntries([], [
           hl({
             id: "nm1",
             eventType: "GOAL",
@@ -100,21 +98,20 @@ describe("dedupe/precision lanes are rendered (ADAAAA-7621)", () => {
             score: 60,
             reason: "ball does not enter the net",
           }),
-        ],
+        ]),
+        captionOf: () => "",
       })
     ));
-    expect(html).toContain('data-detail-lane="notable"');
-    // ADAAAA-8178: this supersedes ADAAAA-7621 for the NOTABLE lane only — the
-    // notable row with footage now renders the SAME `HighlightCard` the postable
-    // feed uses, tagged `data-detail-notable-card` and carrying ONE notable badge
-    // (here NEAR MISS, because outcome=near_miss). The earlier ban on
-    // `data-detail-highlight` inside this lane is what the ticket lifts; the
-    // merged-lane ban above still holds and is asserted in its own test.
+    expect(html).toContain("data-detail-highlight-grid");
+    expect(html).not.toContain('data-detail-lane="notable"');
     expect(html).toContain("data-detail-highlight");
     expect(html).toContain("data-detail-notable-card");
-    expect(html).toContain("data-detail-notable-badge");
-    expect(html).toContain('data-notable-kind="near_miss"');
-    expect(html).toContain("NEAR MISS");
+    expect(html).toContain("data-detail-confirmed-badge");
+    // No derived lane on this fixture row -> UNCONFIRMED, and the taxonomy moved
+    // off the badge (AC2).
+    expect(html).toContain(">UNCONFIRMED<");
+    expect(html).toContain(">near miss<");
+    expect(html).not.toContain("data-detail-notable-badge");
     // The operator card still explains the row (score / event type / reason live
     // in its collapsed Pipeline detail), so the lane loses no diagnostic value.
     expect(html).toContain("data-detail-pipeline");

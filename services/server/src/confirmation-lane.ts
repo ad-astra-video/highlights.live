@@ -20,7 +20,7 @@
  * persisted or mutated, so a row written before the captures existed derives
  * `unconfirmed` ("lane not recorded") instead of inventing a lane.
  */
-import type { ConfirmRecord, HighlightTrigger, WindowAnalysis } from "@highlights/events";
+import type { ConfirmRecord, HighlightConfirmation, HighlightRecord, HighlightTrigger, WindowAnalysis } from "@highlights/events";
 
 /** Which lane confirmed the window. `unconfirmed` = accepted with no stored
  *  measurement AND no dive (never a claim that the clip is wrong). */
@@ -266,4 +266,43 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
     flags: stage1,
     flagsSource: stage1 ? "stage1_verdict" : undefined,
   };
+}
+
+/**
+ * ADAAAA-8530: the confirmation projection a SERVED highlight / notable row
+ * carries to the card. Lane + label only — the inspector half (`flags`, `dive`)
+ * never leaves the decide note, exactly as `stripWindowInspection()` gates it.
+ */
+export function servedConfirmation(derived: WindowConfirmation | undefined): HighlightConfirmation | undefined {
+  return derived ? { lane: derived.lane, label: derived.label } : undefined;
+}
+
+/**
+ * ADAAAA-8530: derive the confirmation of a stored HIGHLIGHT row from its own
+ * window.
+ *
+ * A highlight row stores `candidateId` (ADAAAA-6798), so the row's window IS a
+ * decide window: when the candidate is still on the job, the derivation runs on
+ * that stored candidate — literally the same input the decide note is derived
+ * from (`job-detail.ts`, `confirmation: deriveConfirmation(c)`), so a card can
+ * never disagree with the note above it for one window.
+ *
+ * A legacy row written before that link (no `candidateId`, or a job whose
+ * candidate rows were trimmed) is derived from what the row itself stores —
+ * `status` + `trigger`, both real recorded evidence. It never synthesizes an
+ * analysis or a confirm record, so it can only reach `measured` (a stored
+ * accept-gate signal) or `unconfirmed`; anything it cannot derive stays absent
+ * and the card renders UNCONFIRMED rather than claiming a lane.
+ */
+export function confirmationForHighlightRow(
+  row: Pick<HighlightRecord, "status" | "trigger">,
+  candidate?: ConfirmationInput
+): HighlightConfirmation | undefined {
+  if (candidate) return servedConfirmation(deriveConfirmation(candidate));
+  // Highlight row status is pending|accepted|rejected; `pending` is not an
+  // accepted row, so it maps onto the non-accepted lane and only a stored
+  // measurement can give it a lane.
+  const status: ConfirmationInput["status"] =
+    row.status === "accepted" ? "accepted" : row.status === "rejected" ? "rejected" : "suppressed";
+  return servedConfirmation(deriveConfirmation({ status, trigger: row.trigger }));
 }
