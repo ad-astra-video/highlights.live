@@ -367,12 +367,19 @@ Two behaviours differ from the static path and are handled by the sidecar:
   are released exactly as the static probe used to release them, and healthy
   peers are untouched. There is no shared/router health probe any more.
 - **`runner_id` is the route.** The perceive client calls
-  `/apps/highlights-perceive/session`, and the decide client still calls a
-  single fixed `/apps/highlights-decide/app/...` until the S2 client change
-  lands (ADAAAA-8559). The decide registrations use
-  `highlights-decide-5090-1..3` / `-x99` / `-x99-b`, so that fixed id is a known
-  remaining single-id call site, not a registration: a client that keeps calling
-  it cannot see the five runners.
+  `/apps/highlights-perceive/session`; the decide client now calls
+  `/apps/{runner_id}/app/...` for the runner its pool selection picked
+  (ADAAAA-8559). Selection prefers `tier=5090` over `tier=x99-fallback`, then
+  least local in-flight, then the least-recently picked runner, and a 503 /
+  `404 runner not found` hops to the next runner that call has not tried yet
+  (bounded by the unchanged attempt budget). The retired aggregate
+  `highlights-decide` id survives only as the pre-probe fallback: while the
+  discovery pool is empty (dark discovery / a single unnamed registration) the
+  client behaves exactly as before. Each decide logs
+  `[decide-runner] runner=... tier=... maxInFlight=...` and the job record
+  carries `observeMetrics.decideRunners` (per-runner attempts / served / 503 /
+  404 / peak concurrency), so spread and failover are graded from the record
+  instead of nginx `up=` logs.
 
 Restart order and the 5-line proof are in
 [Per-container decide registrations](#per-container-decide-registrations-adaaaa-8553-s1)

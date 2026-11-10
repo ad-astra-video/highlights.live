@@ -3,7 +3,7 @@
 // clip on each highlight, and stop the session in `finally`.
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
-import type { DecideAdmissionMetrics, DecideCapacitySnapshot } from "@highlights/livepeer-session";
+import type { DecideAdmissionMetrics, DecideCapacitySnapshot, DecideRunnerAttribution } from "@highlights/livepeer-session";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-timings";
@@ -3847,6 +3847,12 @@ export interface LiveObserveMetricsSnapshot {
      *  start); absent on rows written before the field existed. */
     at?: string;
   };
+  /** ADAAAA-8559: per-runner serving attribution, mirrored from the decide gate
+   *  so AC4 (all three 5090 ids serving, none above its capacity, zero 503) and
+   *  AC5 (x99 served when the 5090s are gone) are gradeable from the stored
+   *  record instead of nginx/router logs. Additive optional: absent on
+   *  pre-change rows and when no decide ran since the job started. */
+  decideRunners?: DecideRunnerAttribution[];
 }
 
 /**
@@ -3908,6 +3914,10 @@ export function withDecideAdmissionMetrics(
           decide503: admission.decide503,
           decidePauses: admission.decidePauses,
           capacityProbeErrors: admission.capacityProbeErrors,
+          // ADAAAA-8559: only fold a measured attribution list; an empty one
+          // means "no decide since beginDecideJob", which reads as not recorded
+          // rather than as a runner that served 0.
+          ...(admission.runnerAttribution?.length ? { decideRunners: admission.runnerAttribution } : {}),
         }
       : {}),
     ...(capacity ? { decideCapacity: decideCapacityOnRecord(capacity, latched?.at ?? new Date().toISOString()) } : {}),

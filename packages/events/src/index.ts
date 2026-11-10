@@ -877,6 +877,25 @@ export const ObserveMetricsSnapshotSchema = z.object({
   capacityProbeErrors: z.number().int().min(0).optional(),
   /** {advertised, funded, effective} decide ceiling at snapshot time. */
   decideCapacity: DecideCapacitySnapshotSchema.optional(),
+  // ADAAAA-8559: per-runner decide serving attribution (attempts/served/503/404
+  // and the local concurrency watermark per runner id), so AC4/AC5 are gradeable
+  // from the record instead of router logs. Declared HERE because a zod object
+  // STRIPS undeclared keys (the `perceiveSource` / `decideStages` trap): without
+  // this block the attribution would be computed and silently dropped on persist.
+  // Additive optional: absent on records written before this field existed.
+  decideRunners: z
+    .array(
+      z.object({
+        runner_id: z.string(),
+        tier: z.string(),
+        attempts: z.number().int().min(0),
+        served: z.number().int().min(0),
+        s503: z.number().int().min(0),
+        s404: z.number().int().min(0),
+        maxInFlight: z.number().int().min(0),
+      }),
+    )
+    .optional(),
 });
 export type ObserveMetricsSnapshot = z.infer<typeof ObserveMetricsSnapshotSchema>;
 
