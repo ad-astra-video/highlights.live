@@ -6064,6 +6064,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         },
         highlights: postableHighlights,
         notableHighlights,
+        // ADAAAA-8542 (AC3): every persisted row is either reachable from this
+        // payload (`served`) or named with its reason (`unrepresented`) — a
+        // delivered row can never be silently absent, and a grader does not have
+        // to reconstruct the notable grouping to know that.
+        rowAccounting: postable.rowAccounting,
         // ADAAAA-8321: how many replay windows this job attached as alternatives
         // (never their own highlights). Additive top-level field.
         replaysAttached: attachedReplays.attached,
@@ -6207,6 +6212,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         job: { ...job, ...countsFromPostable(postable) },
         highlights: postableHighlights,
         notableHighlights,
+        // ADAAAA-8542 (AC3): the delta carries the same one-pass accounting as
+        // the composite read, so an appended refresh cannot hide a row either.
+        rowAccounting: postable.rowAccounting,
         duplicateHighlights: postable.duplicates,
         maxTraces: maxTracesForSource(job.source),
         summaryLadder,

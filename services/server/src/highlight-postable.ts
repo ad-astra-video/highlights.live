@@ -105,6 +105,117 @@ export interface PostableHighlights {
   /** Counts for the operator summary: how many persisted rows came in and how
    * many were dropped by each rule (rejected / not scoring / contradicting). */
   counts: { total: number; rejected: number; notScoring: number; contradicting: number; postable: number; merged: number };
+  /** ADAAAA-8542 (AC3): where EVERY persisted row lands on the page, so a
+   * delivered row can never be silently absent. See {@link RowAccounting}. */
+  rowAccounting: RowAccounting;
+}
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8542 (AC3): row accounting — a delivered row must never be silently
+// absent from the page
+// ---------------------------------------------------------------------------
+//
+// The gate (ADAAAA-8508) found row `eccc4e25` "in neither highlights nor
+// notableHighlights" on job 50b7aed6. A notable moment is ONE card whose other
+// windows ride `siblingClips[]` (ADAAAA-8443), so "in notableHighlights" is a
+// membership test over owners AND their options — a grader that only reads the
+// top-level ids will call a served row lost (the ADAAAA-8447 counting lesson).
+//
+// Rather than leave that to each reader, the projection now states it: every
+// persisted row is either reachable from the served payload (`served`, with the
+// surface that serves it) or named with the reason it has no page representation
+// (`unrepresented`). "Not stated" is no longer a possible state — which is what
+// makes the re-cert's "no delivered row missing from the page" gradable without
+// reconstructing the grouping.
+
+/** Why a persisted row is reachable from the page — or why it is not. */
+export type RowRepresentation =
+  /** Owner of a postable moment (`highlights[]`). */
+  | "card"
+  /** Owner of a notable moment (`notableHighlights[]`). */
+  | "notable_card"
+  /** A notable moment's other window (`notableHighlights[].siblingClips[]`). */
+  | "sibling_clip"
+  /** A replay delivered under its owner's `alternatives[]` (ADAAAA-8321). */
+  | "replay_alternative"
+  /** Merged into another moment's footage (`duplicateHighlights[]`): deduped by
+   *  design, so it has no card of its own — disclosed, never a silent gap. */
+  | "merged_duplicate"
+  /** Same notable moment, but beyond the rail cap (`MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT`). */
+  | "notable_option_over_rail_cap"
+  /** Rule 1: a human rejected it. */
+  | "rejected"
+  /** Rule 2: accepted, but its outcome is not a near_miss / big_play card. */
+  | "not_scoring"
+  /** Rule 3: the record's own verdict contradicts the accept. */
+  | "contradicting"
+  /** A replay whose owner row is not present in the list (fail-closed). */
+  | "replay_owner_missing";
+
+export interface RowAccounting {
+  /** Every persisted row served as a card (or as a served replay), and how. */
+  served: { id: string; representation: RowRepresentation }[];
+  /** Every persisted row with NO page representation, with the reason. */
+  unrepresented: { id: string; reason: RowRepresentation }[];
+}
+
+/** Why a row that is in no bucket has no page representation. */
+function unrepresentedReason(row: HighlightRecord): RowRepresentation {
+  if (row.status === "rejected") return "rejected";
+  if (row.outcome !== "scoring_play") {
+    // A near_miss / big_play that reached no moment was capped off the rail; any
+    // other outcome was never a card in the first place.
+    return row.outcome === "near_miss" || row.outcome === "big_play"
+      ? "notable_option_over_rail_cap"
+      : "not_scoring";
+  }
+  return "contradicting";
+}
+
+/**
+ * ADAAAA-8542 (AC3): account for every persisted row against the served
+ * projection. Pure: the inputs are not read beyond their ids.
+ *
+ * Reachable means "the detail payload leads to this row AS A CARD": a postable
+ * moment's own clip, a notable moment's own clip, a notable moment's
+ * `siblingClips[]` option, or a replay alternative whose owner is served. A row
+ * merged into another moment's footage (and every gate drop) is DELIVERED but
+ * has no card of its own, so it is disclosed in `unrepresented` with its reason.
+ */
+export function accountHighlightRows(
+  list: HighlightRecord[],
+  out: Pick<PostableHighlights, "highlights" | "duplicates" | "notableMoments">
+): RowAccounting {
+  const reachable = new Map<string, RowRepresentation>();
+  for (const h of out.highlights) if (!reachable.has(h.id)) reachable.set(h.id, "card");
+  for (const m of out.notableMoments.moments) {
+    if (!reachable.has(m.owner.id)) reachable.set(m.owner.id, "notable_card");
+    for (const option of m.options) if (!reachable.has(option.id)) reachable.set(option.id, "sibling_clip");
+  }
+
+  const accounting: RowAccounting = { served: [], unrepresented: [] };
+  for (const row of list) {
+    if (row.replayOf) {
+      // A replay is served as its owner's alternative. An owner that is not
+      // present is a real gap, not a card — named rather than assumed served.
+      if (reachable.has(row.replayOf)) accounting.served.push({ id: row.id, representation: "replay_alternative" });
+      else accounting.unrepresented.push({ id: row.id, reason: "replay_owner_missing" });
+      continue;
+    }
+    const representation = reachable.get(row.id);
+    if (representation) {
+      accounting.served.push({ id: row.id, representation });
+      continue;
+    }
+    // A row merged into another moment's footage is DELIVERED but has no card of
+    // its own (that is the dedupe); it is disclosed with its reason, not served.
+    const merged = out.duplicates.some((d) => d.id === row.id) || out.highlights.some((m) => (m.mergedIds ?? []).includes(row.id));
+    accounting.unrepresented.push({ id: row.id, reason: merged ? "merged_duplicate" : unrepresentedReason(row) });
+  }
+  const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  accounting.served.sort(byId);
+  accounting.unrepresented.sort(byId);
+  return accounting;
 }
 
 /** Rule 1-3: may this single persisted record be posted? */
@@ -202,7 +313,10 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
   // presentation over the SAME rows — counts above are already final and never
   // read this projection.
   const notableMoments = clusterNotableWindows(notableRows);
-  return { highlights: collapsed.moments, notable: notableRows, notableMoments, duplicates, counts };
+  // ADAAAA-8542 (AC3): account every persisted row against exactly this served
+  // projection — one pass, so the accounting can never disagree with the page.
+  const rowAccounting = accountHighlightRows(list, { highlights: collapsed.moments, duplicates, notableMoments });
+  return { highlights: collapsed.moments, notable: notableRows, notableMoments, duplicates, counts, rowAccounting };
 }
 
 /**
