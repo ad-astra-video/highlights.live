@@ -20,6 +20,14 @@ import { JobTileMetrics } from "../components/JobMetrics";
 import { BrowserCapture } from "../components/BrowserCapture";
 import { MediaNodeStrip } from "../components/MediaNodeStrip";
 import { ResumeTrail } from "../components/ResumeTrail";
+import { DECIDE_CADENCE_DEFAULT, DECIDE_RATE_FLOOR_PER_300S, type DecideCadenceSec } from "@highlights/events";
+import {
+  buildDecideKnobSubmission,
+  decideKnobCadenceOptions,
+  decideKnobEstimateLabel,
+  decideKnobRequestBody,
+  isDecideKnobLiveSource,
+} from "../lib/decideKnob";
 
 const SOURCES = [
   { id: "file", label: "Upload / file", icon: Upload },
@@ -105,6 +113,21 @@ export function Highlights() {
   const navigate = useNavigate();
 
   const isLive = source !== "file";
+
+  // ADAAAA-8544 item 7: the per-stream decide knob. Cadence defaults to 5 s —
+  // the CEO's economy ruling (spec rev 3 §7) — and the cap defaults to blank,
+  // i.e. `rateCapPer300s: null` (uncapped). Both resolve ONCE at start and are
+  // frozen on the job record; the page only holds the pre-start state.
+  const [cadenceSec, setCadenceSec] = useState<DecideCadenceSec>(DECIDE_CADENCE_DEFAULT);
+  const [rateCapInput, setRateCapInput] = useState("");
+  const knobApplies = isDecideKnobLiveSource(source);
+  const knobSubmission = knobApplies
+    ? buildDecideKnobSubmission({ source, cadenceSec, rateCapInput })
+    : null;
+  const knobError = knobSubmission && "error" in knobSubmission ? knobSubmission.error : null;
+  const knobEstimate = knobApplies
+    ? decideKnobEstimateLabel({ source, cadenceSec, rateCapInput })
+    : "";
 
   async function refreshHighlights() {
     const r = await api<{ highlights: Highlight[] }>("/highlights");
@@ -223,6 +246,14 @@ export function Highlights() {
       return;
     }
     try {
+      // ADAAAA-8544: refuse a knob the server would 422 BEFORE POSTing, so the
+      // user sees the coverage floor in the control instead of a job attempt.
+      // (The route validates again — this is the client half, not the gate.)
+      if (knobSubmission && "error" in knobSubmission) {
+        setError(knobSubmission.error);
+        setBusy(false);
+        return;
+      }
       const r = await api<any>("/jobs", {
         body: {
           source,
@@ -230,6 +261,10 @@ export function Highlights() {
           gameHint,
           lookFor,
           preferLabels: lookFor.split(",").map((s) => s.trim()).filter(Boolean),
+          // ADAAAA-8544: the resolved knob for a LIVE job — `{cadenceSec,
+          // rateCapPer300s}` and nothing else. A VOD upload sends the exact body
+          // it always has (the knob has no meaning offline).
+          ...(knobSubmission ? decideKnobRequestBody({ source, submission: knobSubmission }) : {}),
         },
       });
       if (isLive) {
@@ -415,9 +450,67 @@ export function Highlights() {
         <label className="mb-2 mt-5 block text-xs uppercase tracking-wide text-mut">What to look for</label>
         <input className="input-neon" value={lookFor} onChange={(e) => setLookFor(e.target.value)} />
 
+        {/* ADAAAA-8544 item 7 — the per-stream decide cost knob. It shows for
+            every LIVE source (a VOD upload pays no decide, so it gets no knob).
+            The estimate is printed as a POINT beside its MEASURED band because
+            the browser rail varies ~16 % stream to stream (spec §2); the 5 s
+            option carries its latency trade in its own LABEL, never a tooltip
+            (spec §1/§9). Nothing here is a styling-only token: chips/inputs and
+            muted text are the same tokens the rest of the form uses. */}
+        {knobApplies && knobSubmission && (
+          <div className="mt-5" data-decide-knob>
+            <label className="mb-2 block text-xs uppercase tracking-wide text-mut">Live cadence</label>
+            <div className="flex flex-wrap gap-2">
+              {decideKnobCadenceOptions().map((option) => (
+                <button
+                  key={option.cadenceSec}
+                  type="button"
+                  data-active={Number(cadenceSec) === Number(option.cadenceSec)}
+                  data-decide-cadence={option.cadenceSec}
+                  onClick={() => setCadenceSec(option.cadenceSec)}
+                  className="chip"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <label
+              className="mb-2 mt-4 block text-xs uppercase tracking-wide text-mut"
+              htmlFor="decide-rate-cap"
+            >
+              Spend cap — charged decides per 5 min of stream
+            </label>
+            <input
+              id="decide-rate-cap"
+              data-decide-rate-cap
+              className="input-neon"
+              inputMode="numeric"
+              value={rateCapInput}
+              onChange={(e) => setRateCapInput(e.target.value)}
+              placeholder={`Uncapped — leave blank (minimum ${DECIDE_RATE_FLOOR_PER_300S})`}
+            />
+            <div className="mt-2 text-sm text-mut" data-decide-estimate>
+              {knobEstimate}
+            </div>
+            {knobError && (
+              <div className="mt-2 text-sm text-red" data-decide-error role="alert">
+                {knobError}
+              </div>
+            )}
+          </div>
+        )}
+
         {source === "screenshare" ? (
           <>
-            <BrowserCapture gameHint={gameHint} />
+            <BrowserCapture
+              gameHint={gameHint}
+              knobInvalid={!!knobError}
+              decideKnob={
+                knobSubmission && !("error" in knobSubmission)
+                  ? { cadenceSec: knobSubmission.cadenceSec, rateCapPer300s: knobSubmission.rateCapPer300s }
+                  : undefined
+              }
+            />
             {/* A browser-capture job holds the same capacity-1 media node, so it
                 gets the same capacity/health + spend strip as the RTMP console
                 (ADAAAA-7655 gap 3: this path used to have no readout at all).
@@ -430,7 +523,11 @@ export function Highlights() {
             <button
               className="btn-neon mt-6"
               onClick={run}
-              disabled={busy || (source === "file" && !useUrl && !!file && isOverLimit(file.size, vodMax))}
+              disabled={
+                busy ||
+                !!knobError ||
+                (source === "file" && !useUrl && !!file && isOverLimit(file.size, vodMax))
+              }
             >
               {busy ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Zap className="mr-2 inline h-4 w-4" />}
               {busy

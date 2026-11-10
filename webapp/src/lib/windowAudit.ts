@@ -6,6 +6,7 @@
 // able to tell "content arrived late" from "the decide pool had no slot" from
 // "the funded rate cap dropped it" without a shell. The live chip keeps its
 // ADAAAA-7808 supply semantics and is NOT fed from this payload.
+import type { DecideKnobView } from "./api";
 
 export type WindowAuditCauseName = "stale" | "backpressure" | "admission" | "throttle" | "capacityDrop";
 
@@ -49,6 +50,16 @@ export interface WindowAuditPayload {
   skippedWindows: number | null;
   accountedWindows: number | null;
   decideCapacity: WindowAuditCapacity | null;
+  /** ADAAAA-8544: the per-job decide knob ECHOED from the stored record (never
+   *  recomputed by the audit). Null/absent on a row written before the knob
+   *  existed — "not recorded", never "the user asked for uncapped". */
+  decideKnob?: DecideKnobView | null;
+  /** ADAAAA-8544: decide opportunities this job MEASURED (kept + throttled).
+   *  Null when the record carries no counter — not "measured 0". */
+  decideOpportunities?: number | null;
+  /** ADAAAA-8544: that count on the estimate's 300 s content clock, derived from
+   *  the run's own `meanCadenceMs` — the measured density beside the prediction. */
+  decideOpportunitiesPer300s?: number | null;
 }
 
 /**
