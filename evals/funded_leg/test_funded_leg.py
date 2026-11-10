@@ -504,6 +504,108 @@ class BuildIdentityTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(evidence["build"]["verdict"], "skipped")
         self.assertIn("dry-run", evidence["build"]["line"])
+        self.assertEqual(evidence["decideConfig"]["verdict"], "skipped")
+        self.assertIn("dry-run", evidence["decideConfig"]["line"])
+
+
+class DecideConfigTest(unittest.TestCase):
+    """ADAAAA-8529 item 2 (ruling on ADAAAA-8528): record the decide config.
+
+    The build sha names the tree; it does not name the decide pool, the model the
+    workers serve, or the live window keep-ratio, because those live in the
+    server's environment. `decideE2e` is the dominant p50 stage, so a leg graded
+    across ADAAAA-8525's window change without them is a grade of an unknown
+    artifact.
+    """
+
+    VALUES = {
+        "DECIDE_URL": "http://decide-router:8081",
+        "GEMMA_MODEL": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4",
+        "LIVE_DECIDE_KEEP_RATIO": "0.35",
+        "LIVE_OBSERVE_MAX_FRAMES": "8",
+    }
+
+    def runner(self, values=None, rc=0):
+        values = self.VALUES if values is None else values
+        stdout = "".join(f"{k}={v}\n" for k, v in values.items())
+        return FakeShellRunner({"printenv": (rc, stdout)}, default=(rc, stdout))
+
+    def probe(self, values=None, rc=0):
+        return funded_leg.probe_decide_config(self.runner(values, rc), make_config())
+
+    def test_records_pool_model_and_window_keep_ratio(self):
+        block = funded_leg.decide_config_block(self.probe(), make_config())
+        self.assertEqual(block["verdict"], "recorded")
+        self.assertEqual(block["values"]["DECIDE_URL"], "http://decide-router:8081")
+        self.assertEqual(
+            block["values"]["GEMMA_MODEL"], "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4"
+        )
+        self.assertEqual(block["values"]["LIVE_DECIDE_KEEP_RATIO"], "0.35")
+        self.assertIn("pool http://decide-router:8081", block["line"])
+        self.assertIn("model cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", block["line"])
+        self.assertIn("window keep-ratio 0.35 (LIVE_DECIDE_KEEP_RATIO)", block["line"])
+
+    def test_an_unset_key_is_recorded_as_the_code_default_not_a_hole(self):
+        # LIVE_DECIDE_KEEP_RATIO unset is a real posture: config.ts leaves it
+        # undefined and observe-loop applies its own default.
+        values = dict(self.VALUES)
+        values["LIVE_DECIDE_KEEP_RATIO"] = ""
+        block = funded_leg.decide_config_block(self.probe(values), make_config())
+        self.assertEqual(block["verdict"], "recorded")
+        self.assertIsNone(block["values"]["LIVE_DECIDE_KEEP_RATIO"])
+        self.assertIn("unset (LIVE_DECIDE_KEEP_RATIO", block["line"])
+        self.assertIn("code default in force", block["line"])
+
+    def test_a_failed_probe_is_unreadable_and_refuses_the_leg(self):
+        block = funded_leg.decide_config_block(self.probe(rc=1), make_config())
+        self.assertEqual(block["verdict"], "unreadable")
+        self.assertIn("DECIDE-CONFIG: unreadable", block["line"])
+        self.assertIn("failed: rc=1", block["line"])
+
+    def test_a_key_the_probe_did_not_answer_is_unreadable(self):
+        values = {k: v for k, v in self.VALUES.items() if k != "GEMMA_MODEL"}
+        block = funded_leg.decide_config_block(self.probe(values), make_config())
+        self.assertEqual(block["verdict"], "unreadable")
+        self.assertEqual(block["missing"], ["GEMMA_MODEL"])
+
+    def test_the_probe_reads_one_sh_loop_not_n_printenv_calls(self):
+        # `printenv KEY` exits 1 on an unset key, which would make a real default
+        # look like a probe failure; the loop always exits 0.
+        runner = self.runner()
+        funded_leg.probe_decide_config(runner, make_config())
+        self.assertEqual(len(runner.commands), 1)
+        self.assertIn("for k in", runner.commands[0])
+        self.assertIn("DECIDE_URL", runner.commands[0])
+        self.assertIn("docker exec highlights-server", runner.commands[0])
+
+    def test_every_key_defaults_are_the_ones_the_ruling_names(self):
+        self.assertIn("DECIDE_URL", funded_leg.DEFAULT_DECIDE_CONFIG_KEYS)
+        self.assertIn("GEMMA_MODEL", funded_leg.DEFAULT_DECIDE_CONFIG_KEYS)
+        self.assertIn("LIVE_DECIDE_KEEP_RATIO", funded_leg.DEFAULT_DECIDE_CONFIG_KEYS)
+
+    def test_an_unrecorded_decide_config_refuses_the_leg(self):
+        # The gate is one decision for both halves of the artifact: a verified
+        # build with an unreadable decide config still refuses (exit 6).
+        verified = {"verdict": "verified", "line": "BUILD-IDENTITY: verified"}
+        unreadable = funded_leg.decide_config_block(self.probe(rc=1), make_config())
+        refusal = funded_leg.artifact_refusal(verified, unreadable)
+        self.assertIsNotNone(refusal)
+        assert refusal is not None
+        self.assertEqual(refusal["exitCode"], 6)
+        self.assertEqual(refusal["outcome"], "decide_config_unreadable")
+        self.assertIn("pool/model/keep-ratio", refusal["message"])
+
+        recorded = funded_leg.decide_config_block(self.probe(), make_config())
+        self.assertIsNone(funded_leg.artifact_refusal(verified, recorded))
+
+    def test_a_mismatched_build_is_named_as_the_refusal_reason(self):
+        mismatched = {"verdict": "mismatch", "line": "BUILD-IDENTITY: mismatch"}
+        recorded = {"verdict": "recorded", "line": "DECIDE-CONFIG: recorded"}
+        refusal = funded_leg.artifact_refusal(mismatched, recorded)
+        self.assertIsNotNone(refusal)
+        assert refusal is not None
+        self.assertEqual(refusal["outcome"], "build_unverified")
+        self.assertEqual(refusal["exitCode"], 6)
 
 
 class PreflightAllQuietTest(unittest.TestCase):
@@ -682,6 +784,9 @@ class Leg8516ReplayTest(unittest.TestCase):
         self.assertIn("from clock", shape["line"])
         self.assertIn("$0.5769", shape["line"])
         self.assertIn("| mid-leg metered clock | - | 506.9 s |", shape["table"])
+        # The grading rule is ON the line, not only in the block: the funded leg
+        # printed "cost headroom $0.6500" while metering $0.55-0.58 (item 1).
+        self.assertIn("graded max(costUsd $0.0000, projection $0.5769)", shape["line"])
         # The graded figure is the projection, not the live zero.
         self.assertGreater(shape["gradedCostUsd"], 0.0)
 

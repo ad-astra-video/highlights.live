@@ -35,7 +35,11 @@ artifact under test cannot be named):
   * `build` — the build sha plus the served-vs-git md5 of the four files the
     delivery tail runs through. A mismatch or an unreadable probe refuses the
     leg before any metered call: a leg graded on an unrecorded build is a grade
-    of an unknown artifact.
+    of an unknown artifact. Beside it, `decideConfig` records the decide config
+    in force (pool, model, window keep-ratio, frame budget) read from the server
+    container's environment — those values are not in the tree, so the sha alone
+    cannot name the artifact (ADAAAA-8525 changes live decide window sending and
+    `decideE2e` is the dominant p50 stage).
   * `preflight.allQuiet` — the quiet verdict the harness itself reached, so a
     derived field downstream cannot contradict a quiet window.
   * `clips` — the clip count plus, when it is 0, the stage fields that carry
@@ -75,7 +79,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 #: ADAAAA-8529 item 2: the four files a live leg is served from. A leg graded on
 #: an unrecorded build is a grade of an unknown artifact, so the harness records
@@ -86,6 +90,19 @@ DEFAULT_BUILD_FILES = (
     "services/server/src/live.ts",
     "services/server/src/observe-loop.ts",
     "packages/events/src/index.ts",
+)
+
+#: ADAAAA-8529 item 2, extended by the ruling on ADAAAA-8528: a build sha alone
+#: does not name the artifact a leg was graded on, because the decide config is
+#: not in the tree — it is in the server's environment. `decideE2e` is the
+#: dominant stage in the p50 bar, and ADAAAA-8525 changes live decide window
+#: sending, so a leg graded across that change without these values recorded is
+#: a grade of an unknown artifact, exactly like an unrecorded md5.
+DEFAULT_DECIDE_CONFIG_KEYS = (
+    "DECIDE_URL",              # the pool the decide calls go through
+    "GEMMA_MODEL",             # the model the decide workers serve
+    "LIVE_DECIDE_KEEP_RATIO",  # the live window keep-ratio
+    "LIVE_OBSERVE_MAX_FRAMES", # the frame budget the window is sent at
 )
 
 #: Decide pool containers whose session markers count against the gate.
@@ -628,6 +645,8 @@ class Config:
     build_container: str = "highlights-server"
     build_prefix: str = "/app"
     build_files: Sequence[str] = DEFAULT_BUILD_FILES
+    decide_config_container: str = "highlights-server"
+    decide_config_keys: Sequence[str] = DEFAULT_DECIDE_CONFIG_KEYS
     clips_container: str = "highlights-server"
     clips_dir: str = "/data/clips"
 
@@ -1136,6 +1155,12 @@ def compare_shape(
         )
         if projected > cap_usd + 1e-9:
             metered_bits += " (OVER cap)"
+        # Name the grading rule on the line itself (ADAAAA-8529 item 1): a reader
+        # must be able to see that the graded figure is `max(costUsd,
+        # projection)` and not the record's mid-leg zero.
+        metered_bits += (
+            f", graded max(costUsd ${actual_cost_usd:.4f}, projection ${projected:.4f})"
+        )
     line = (
         f"AUTHORIZED-VS-ACTUAL: authorized duration <= {authorized_duration_s:.1f} s / "
         f"cap ${cap_usd:.4f} -> actual {actual_duration_s:.1f} s / "
@@ -1309,6 +1334,117 @@ def verify_build(runner: Any, cfg: Config) -> Dict[str, Any]:
         "verdict": verdict,
         "line": line,
     }
+
+
+def probe_decide_config(runner: Any, cfg: Config) -> Dict[str, Any]:
+    """Read the decide config in force from the server container's environment.
+
+    One `sh -c` loop rather than N `printenv` calls: `printenv KEY` exits 1 when
+    the key is unset, which would make an intentionally-unset keep-ratio look
+    like a probe failure. Here an unset key prints `KEY=` and the block records
+    it as null — "the code default was in force" is a value, not a hole.
+    """
+    keys = list(cfg.decide_config_keys)
+    inner = (
+        "for k in " + " ".join(shlex.quote(k) for k in keys) + "; do "
+        'printf "%s=%s\\n" "$k" "$(printenv "$k")"; done'
+    )
+    command = (
+        f"docker exec {shlex.quote(cfg.decide_config_container)} sh -c {shlex.quote(inner)}"
+    )
+    try:
+        proc = runner.shell(command, timeout=120)
+    except Exception as exc:
+        return {"status": f"failed: {exc}", "values": {}, "command": command}
+    if proc.returncode != 0:
+        return {
+            "status": f"failed: rc={proc.returncode} {(proc.stderr or '').strip()[:200]}",
+            "values": {},
+            "command": command,
+        }
+    values: Dict[str, Optional[str]] = {}
+    for line in (proc.stdout or "").splitlines():
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        key = key.strip()
+        if key in keys:
+            values[key] = value.strip() or None
+    return {"status": "ok", "values": values, "command": command}
+
+
+def decide_config_block(probe: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
+    """The decide config the leg ran under, or `unreadable` (which refuses it).
+
+    There is nothing to compare against in git — the point is that the values are
+    ON the evidence, so a later reader can tell whether ADAAAA-8525's window
+    change was in force. A key the probe could not answer is not a skip: it is
+    an unnameable artifact, so the verdict drops to `unreadable` and the leg is
+    refused with the build-identity refusal (exit 6).
+    """
+    keys = list(cfg.decide_config_keys)
+    values = probe.get("values") or {}
+    missing = [k for k in keys if k not in values]
+    verdict = "recorded" if probe.get("status") == "ok" and not missing else "unreadable"
+
+    def show(key: str) -> str:
+        value = values.get(key)
+        return f"{value} ({key})" if value is not None else f"unset ({key} — code default in force)"
+
+    line = (
+        f"DECIDE-CONFIG: pool {show('DECIDE_URL')} | model {show('GEMMA_MODEL')} | "
+        f"window keep-ratio {show('LIVE_DECIDE_KEEP_RATIO')} | "
+        f"frame budget {show('LIVE_OBSERVE_MAX_FRAMES')}"
+    )
+    if verdict != "recorded":
+        parts: List[str] = []
+        if probe.get("status") != "ok":
+            parts.append(str(probe.get("status")))
+        if missing:
+            parts.append(f"unreadable keys: {', '.join(missing)}")
+        line = f"DECIDE-CONFIG: unreadable; {'; '.join(parts)} — {verdict}"
+    return {
+        "container": cfg.decide_config_container,
+        "keys": keys,
+        "values": values,
+        "missing": missing,
+        "status": probe.get("status"),
+        "verdict": verdict,
+        "line": line,
+        "command": probe.get("command"),
+    }
+
+
+def artifact_refusal(
+    build_block: Dict[str, Any], decide_block: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """The refusal record when the leg cannot name the artifact it would grade.
+
+    `None` means both probes answered: the build is `verified` and the decide
+    config is `recorded`. Anything else is exit 6 — nothing metered, and the
+    refusal itself is evidence, because it names which half was unknown.
+    """
+    if build_block.get("verdict") != "verified":
+        return {
+            "outcome": "build_unverified",
+            "exitCode": 6,
+            "message": (
+                "build identity unverified: the served files do not match the "
+                "build sha, so a grade of this leg would grade an unknown "
+                "artifact — refused before any metered call"
+            ),
+        }
+    if decide_block.get("verdict") != "recorded":
+        return {
+            "outcome": "decide_config_unreadable",
+            "exitCode": 6,
+            "message": (
+                "decide config in force could not be read (pool/model/keep-ratio): "
+                "a leg graded without it grades an unknown artifact — refused "
+                "before any metered call"
+            ),
+        }
+    return None
 
 
 def probe_clips(runner: Any, cfg: Config, job_id: str) -> Dict[str, Any]:
@@ -1515,6 +1651,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--mint-token-container", default="highlights-server")
     p.add_argument("--postgres-container", default="highlights-postgres")
     p.add_argument("--repo-root", default=".")
+    p.add_argument("--decide-config-key", action="append", default=None,
+                   help="server env key recorded as the decide config in force "
+                        "(repeatable; default DECIDE_URL/GEMMA_MODEL/"
+                        "LIVE_DECIDE_KEEP_RATIO/LIVE_OBSERVE_MAX_FRAMES)")
+    p.add_argument("--decide-config-container", default="highlights-server")
     p.add_argument("--evidence-out", default=None,
                    help="write the evidence JSON here (also printed to stdout)")
     p.add_argument("--dry-run", action="store_true",
@@ -1588,6 +1729,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         build_container=args.build_container,
         build_prefix=args.build_prefix,
         build_files=tuple(args.build_file or DEFAULT_BUILD_FILES),
+        decide_config_container=args.decide_config_container,
+        decide_config_keys=tuple(args.decide_config_key or DEFAULT_DECIDE_CONFIG_KEYS),
         clips_container=args.clips_container,
         clips_dir=args.clips_dir,
     )
@@ -1668,10 +1811,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print("\n" + evidence["clips"]["note"])
         return code
 
-    # ---- build identity (item 2) -----------------------------------------
-    # Runs BEFORE the quiet window: a leg whose served build cannot be named is
-    # refused in seconds instead of after a 10 minute gate.
-    if args.dry_run:
+    # ---- artifact identity (item 2) --------------------------------------
+    # Runs BEFORE the quiet window: a leg whose served build or decide config
+    # cannot be named is refused in seconds instead of after a 10 minute gate.
+    if args.dry_run or args.no_build_check:
         evidence["build"] = {
             "sha": None,
             "container": cfg.build_container,
@@ -1680,40 +1823,57 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "matched": 0,
             "mismatched": [],
             "verdict": "skipped",
-            "line": "BUILD-IDENTITY: skipped (dry-run stub; no served files to hash)",
+            "line": (
+                "BUILD-IDENTITY: skipped (dry-run stub; no served files to hash)"
+                if args.dry_run
+                else "BUILD-IDENTITY: skipped (--no-build-check) — this leg is NOT evidence"
+            ),
         }
-    elif args.no_build_check:
-        evidence["build"] = {
-            "sha": None,
-            "container": cfg.build_container,
-            "prefix": cfg.build_prefix,
-            "files": [],
-            "matched": 0,
-            "mismatched": [],
+        evidence["decideConfig"] = {
+            "container": cfg.decide_config_container,
+            "keys": list(cfg.decide_config_keys),
+            "values": {},
+            "missing": [],
+            "status": "skipped",
             "verdict": "skipped",
-            "line": "BUILD-IDENTITY: skipped (--no-build-check) — this leg is NOT evidence",
+            "line": (
+                "DECIDE-CONFIG: skipped (dry-run stub) — this leg is NOT evidence"
+                if args.dry_run
+                else "DECIDE-CONFIG: skipped (--no-build-check) — this leg is NOT evidence"
+            ),
         }
-        log(evidence["build"]["line"])
+        if not args.dry_run:
+            log(evidence["build"]["line"])
+            log(evidence["decideConfig"]["line"])
     else:
         build = verify_build(runner, cfg)
         evidence["build"] = build
         log(build["line"])
-        if build["verdict"] != "verified":
+        if build["verdict"] == "verified":
+            decide_cfg = decide_config_block(probe_decide_config(runner, cfg), cfg)
+            evidence["decideConfig"] = decide_cfg
+            log(decide_cfg["line"])
+        else:
+            # Short-circuit: do not spend a probe on a leg already refused.
+            decide_cfg = {
+                "container": cfg.decide_config_container,
+                "keys": list(cfg.decide_config_keys),
+                "values": {},
+                "missing": [],
+                "status": "not probed",
+                "verdict": "not probed",
+                "line": "DECIDE-CONFIG: not probed (build identity already refused)",
+            }
+            evidence["decideConfig"] = decide_cfg
+        refusal = artifact_refusal(build, decide_cfg)
+        if refusal is not None:
             evidence["meteredCalls"] = {
                 "jobCreates": 0,
                 "sessionCreates": 0,
                 "driverStarts": 0,
             }
-            evidence["result"] = {
-                "outcome": "build_unverified",
-                "exitCode": 6,
-                "message": (
-                    "build identity unverified: the served files do not match the "
-                    "build sha, so a grade of this leg would grade an unknown "
-                    "artifact — refused before any metered call"
-                ),
-            }
-            log(f"REFUSED: build identity {build['verdict']}")
+            evidence["result"] = refusal
+            log(f"REFUSED: {refusal['outcome']} — nothing metered")
             return finish(6)
 
     # ---- preflight -------------------------------------------------------
