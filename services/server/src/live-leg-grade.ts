@@ -56,8 +56,14 @@ export interface LiveLegRowLike {
 /** The bars this ticket is graded against. One place, so the grader, the leg
  * evidence and the result comment quote the same numbers. */
 export const LIVE_LEG_BARS = {
-  /** AC-B: deliveredLatency p50 <= 3.0 s. */
+  /** AC-B legacy bar: deliveredLatency p50 <= 3.0 s. Kept as the left column of
+   * the delta table — the pre-amendment number, not the bar in force. */
   p50Ms: 3_000,
+  /** AC-B bar IN FORCE: deliveredLatency p50 <= 4.0 s, amended by CEO ruling A
+   * on ADAAAA-8528 (`cap-record` rev `ed4cfb59`, 2026-11-10T00:47Z). Grading
+   * uses this one for the AC-B verdict; the legacy 3.0 s bar is reported beside
+   * it so the amendment's delta stays auditable instead of silently dropped. */
+  p50MsInForce: 4_000,
   /** AC-B: deliveredLatency p95 <= 5.0 s. */
   p95Ms: 5_000,
   /** AC-B is only gradeable at n >= 9 delivered rows. */
@@ -114,6 +120,19 @@ export interface AcGrade {
   reasons: string[];
 }
 
+/** The two p50 bars a prospective leg reports against (ADAAAA-8487 AC-B). */
+export interface P50BarRead {
+  /** The bar the AC-B verdict is graded against: the amended one in force. */
+  inForceMs: number;
+  /** The pre-amendment bar, kept as the delta table's left column. */
+  legacyMs: number;
+  inForcePass: boolean;
+  legacyPass: boolean;
+  /** `both` = clears 3.0 s and 4.0 s; `legacy_only` = the amendment is what
+   * makes it pass (the exact case the amendment exists for); `neither`. */
+  delta: "both" | "legacy_only" | "neither";
+}
+
 export interface LiveLegGrade {
   mode: LiveLegMode;
   verdict: LegVerdict;
@@ -133,7 +152,7 @@ export interface LiveLegGrade {
   /** Metered seconds / wall seconds: 8483 read 1.815x because of container
    * startup/teardown. Absent when either input is missing. */
   meteredToWallRatio?: number;
-  acB: AcGrade & { p50Ms: number; p95Ms: number };
+  acB: AcGrade & { p50Ms: number; p95Ms: number; p50Bars: P50BarRead };
   acC?: AcGrade & {
     accepted: number;
     candidates?: number;
@@ -239,15 +258,41 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     shapeBlocked = true;
   }
 
-  const acB: LiveLegGrade["acB"] = { status: "UNMEASURED", reasons: [...shapeReasons], p50Ms, p95Ms };
+  // ADAAAA-8487 AC-B: report p50 against BOTH bars (3.0 s legacy / 4.0 s in
+  // force, the latter amended by CEO ruling A on ADAAAA-8528). The verdict uses
+  // the bar in force; the legacy read rides along so the amendment's delta is
+  // visible on every leg instead of being re-derived by hand afterwards.
+  const p50Bars: P50BarRead = {
+    inForceMs: LIVE_LEG_BARS.p50MsInForce,
+    legacyMs: LIVE_LEG_BARS.p50Ms,
+    inForcePass: p50Ms <= LIVE_LEG_BARS.p50MsInForce,
+    legacyPass: p50Ms <= LIVE_LEG_BARS.p50Ms,
+    delta:
+      p50Ms <= LIVE_LEG_BARS.p50MsInForce && p50Ms <= LIVE_LEG_BARS.p50Ms
+        ? "both"
+        : p50Ms <= LIVE_LEG_BARS.p50MsInForce
+          ? "legacy_only"
+          : "neither",
+  };
+  const p50BarLabel = `p50 ${p50Ms} ms vs ${LIVE_LEG_BARS.p50MsInForce} ms (in force) / ${LIVE_LEG_BARS.p50Ms} ms (legacy)`;
+
+  const acB: LiveLegGrade["acB"] = {
+    status: "UNMEASURED",
+    reasons: [...shapeReasons],
+    p50Ms,
+    p95Ms,
+    p50Bars,
+  };
   if (!shapeBlocked) {
     const over: string[] = [];
-    if (p50Ms > LIVE_LEG_BARS.p50Ms) over.push(`p50 ${p50Ms} ms > ${LIVE_LEG_BARS.p50Ms} ms`);
+    if (!p50Bars.inForcePass) over.push(`${p50BarLabel} = over`);
     if (p95Ms > LIVE_LEG_BARS.p95Ms) over.push(`p95 ${p95Ms} ms > ${LIVE_LEG_BARS.p95Ms} ms`);
     acB.status = over.length ? "FAIL" : "PASS";
     acB.reasons = over.length
       ? ["over_bar: " + over.join(" ; ")]
-      : [`within_bar: p50 ${p50Ms} ms <= ${LIVE_LEG_BARS.p50Ms} ms and p95 ${p95Ms} ms <= ${LIVE_LEG_BARS.p95Ms} ms on n=${n}`];
+      : [
+          `within_bar: ${p50BarLabel} = within (legacy read: ${p50Bars.delta === "both" ? "PASS" : "FAIL"}) and p95 ${p95Ms} ms <= ${LIVE_LEG_BARS.p95Ms} ms on n=${n}`,
+        ];
     // A PASS on n rows does not prove the delivery bar decide-independent: the
     // missing decide p50 stays visible on the graded verdict instead of being
     // absorbed by the PASS.

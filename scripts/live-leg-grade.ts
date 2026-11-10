@@ -238,6 +238,13 @@ function main(): void {
           : "");
   lines.push(`  duration   ${dur}  (floor ${grade.floorS} s)`);
   lines.push(`  delivered  n=${grade.n}  p50=${grade.p50Ms} ms  p95=${grade.p95Ms} ms  max=${grade.maxMs} ms`);
+  // ADAAAA-8487 AC-B: both bars on the same line, so the amendment's delta is
+  // readable without a second grade pass.
+  const bars = grade.acB.p50Bars;
+  lines.push(
+    `  p50 bars   ${bars.inForceMs} ms in force -> ${bars.inForcePass ? "PASS" : "FAIL"}` +
+      `  |  ${bars.legacyMs} ms legacy -> ${bars.legacyPass ? "PASS" : "FAIL"}  (delta: ${bars.delta})`
+  );
   lines.push(`  AC-B       ${grade.acB.status}  ${grade.acB.reasons.join(" ; ")}`);
   if (grade.acC) {
     lines.push(`  AC-C       ${grade.acC.status}  ${grade.acC.reasons.join(" ; ")}`);
