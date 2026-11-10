@@ -83,7 +83,11 @@ export interface ConfirmationInput {
 const LANE_LABELS = {
   dive: "Confirmed by deep dive (Stage-2)",
   diveDisagreed: "dive did not corroborate",
-  diveHeld: "Deep dive confirmed the goal — held: this window's score lane read nothing",
+  // ADAAAA-8550: a held row can also be one the lane DID read with no
+  // transition (`scoreReads=2, postSamples=0` on live row 4da1c317), so "read
+  // nothing" contradicted the row's own stored measurement. The sentence names
+  // the missing TRANSITION, which is true for both held cases.
+  diveHeld: "Deep dive confirmed the goal — held: this window measured no score transition",
   noMeasurementNoDive: "Accepted without corroboration — no measurement and no dive",
   legacy: "Accepted — confirmation lane not recorded (legacy row)",
 } as const;
