@@ -4,6 +4,7 @@
 //
 //   pnpm exec tsx scripts/live-leg-grade.ts --job leg.json --mode funded
 //   pnpm exec tsx scripts/live-leg-grade.ts --job leg.json --mode natural --decide-p50-ms 2200 --json
+//   pnpm exec tsx scripts/live-leg-grade.ts --job leg.json --mode funded --duration-s 480   # pre-fix record with no timestamps
 //
 // Why a CLI and not hand SQL: this ticket's AC-B was mis-shaped twice by hand
 // (a 320 s stop truncates the 9-row reference at 7 rows; a < 600 s natural leg
@@ -18,6 +19,9 @@ interface CliArgs {
   job?: string;
   mode: LiveLegMode;
   decideP50Ms?: number;
+  /** ADAAAA-8487/8529 item 3: the harness's own metered wall clock. Used when
+   * the stored record carries no `startedAt`/`endedAt` pair (pre-fix legs). */
+  durationS?: number;
   accepted?: number;
   candidates?: number;
   deliveredGoalRows?: number;
@@ -35,6 +39,7 @@ function parseArgs(argv: string[]): CliArgs {
       if (m !== "natural" && m !== "funded") throw new Error(`--mode must be natural|funded, got ${m}`);
       args.mode = m;
     } else if (a === "--decide-p50-ms") args.decideP50Ms = Number(next());
+    else if (a === "--duration-s") args.durationS = Number(next());
     else if (a === "--accepted") args.accepted = Number(next());
     else if (a === "--candidates") args.candidates = Number(next());
     else if (a === "--delivered-goal") args.deliveredGoalRows = Number(next());
@@ -52,6 +57,8 @@ interface StoredHighlightLike {
 interface StoredJobLike {
   id?: string;
   startedAt?: string;
+  /** ADAAAA-8487: end of accrual, stamped by every live terminal path now. */
+  endedAt?: string;
   finishedAt?: string;
   perceiveSessionS?: number;
   candidatesTriggered?: number;
@@ -90,7 +97,9 @@ function main(): void {
   const grade = gradeLiveLeg({
     mode: args.mode,
     rows,
+    durationS: args.durationS,
     startedAt: job.startedAt,
+    endedAt: job.endedAt,
     finishedAt: job.finishedAt,
     perceiveSessionS: job.perceiveSessionS,
     decideP50Ms: args.decideP50Ms,
