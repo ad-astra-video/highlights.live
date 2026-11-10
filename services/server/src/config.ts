@@ -739,6 +739,34 @@ export interface ServerConfig {
 }
 
 /**
+ * ADAAAA-8609: keep the decide-side ASR wait budget STRICTLY under the side
+ * lane's own per-call timeout.
+ *
+ * The side lane (`AsrPrefetcher`, `asr-prefetch.ts`) aborts its POST at
+ * `LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS`, so a decide wait that reaches that
+ * same deadline can only ever resolve to "no transcript" — after paying the
+ * full budget — and the decide then re-transcribes the SAME clip inline
+ * (`observeDecideOnly`, `analyzer.ts`). Leg `0cade089` set both knobs to
+ * 6 000 ms, and its slow row paid 6 002 ms of dead wait + 2 826 ms of inline
+ * ASR on top of a normal 2 561 ms decode: 11 460 ms `decideE2eMs`, the only row
+ * over the AC-B p95 bar (ADAAAA-8487 / ADAAAA-8606).
+ *
+ * 0 stays 0 (the documented inert default: await the whole prefetch). A
+ * positive wait is capped 250 ms below the lane deadline so the prefetch's own
+ * result can still win the race.
+ *
+ * Pure and exported so the clamp is unit-tested without driving a live pass.
+ */
+export function clampDecideAsrWaitMs(waitMs: number, laneTimeoutMs: number): number {
+  const wait = Number.isFinite(waitMs) ? Math.max(0, Math.floor(waitMs)) : 0;
+  if (wait <= 0) return 0;
+  const laneTimeout =
+    Number.isFinite(laneTimeoutMs) && laneTimeoutMs > 0 ? Math.floor(laneTimeoutMs) : 6_000;
+  const ceiling = Math.max(1, laneTimeout - 250);
+  return Math.min(wait, ceiling);
+}
+
+/**
  * ADAAAA-7808: a positive finite env number, or `undefined` meaning "unset".
  *
  * docker-compose maps the optional live knobs as `${X:-}`, so a var that is
@@ -1093,10 +1121,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // byte-identical; a leg that needs more headroom is an env change.
     liveDecideAsrPrefetchConcurrency:
       positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY) ?? 2,
-    // ADAAAA-8351: the decide-side WAIT budget, split from the transcription
+    // ADAAAA-8609: the decide-side WAIT budget, split from the transcription
     // timeout above. Default 0 = inert (today's behaviour: await the whole
     // prefetch), so the knob cannot move a cell by accident.
-    liveDecideAsrWaitMs: positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_WAIT_MS) ?? 0,
+    //
+    // ADAAAA-8609: a wait budget at or beyond the lane's own per-call timeout is
+    // ALWAYS a loss. `AsrPrefetcher.transcribe()` aborts the POST at
+    // `asrPrefetchTimeoutMs`, so a wait that reaches that deadline can never
+    // receive a transcript: it pays the whole budget and then re-transcribes the
+    // same clip inline. Measured on leg `0cade089` (job `0cade089-038a-42c9-…`,
+    // row `076de635`): both knobs sat at 6 000 ms and the row paid 6 002 ms of
+    // dead wait plus 2 826 ms of inline ASR against a 2 561 ms decode — the only
+    // row over the AC-B p95 bar. Keep the wait strictly under the lane deadline.
+    liveDecideAsrWaitMs: clampDecideAsrWaitMs(
+      positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_WAIT_MS) ?? 0,
+      positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_PREFETCH_TIMEOUT_MS) ?? 6000
+    ),
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",

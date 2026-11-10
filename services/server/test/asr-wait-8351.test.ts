@@ -244,14 +244,19 @@ describe("LIVE_DECIDE_ASR_WAIT_MS config + compose (ADAAAA-8351)", () => {
     // move a cell by accident.
     expect(loadConfig({ ...base, LIVE_DECIDE_ASR_WAIT_MS: "0" }).liveDecideAsrWaitMs).toBe(0);
 
-    const cfg = loadConfig({ ...base, LIVE_DECIDE_ASR_WAIT_MS: "6000", LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY: "4" });
-    expect(cfg.liveDecideAsrWaitMs).toBe(6_000);
+    // ADAAAA-8609: a wait at/after the side lane's own timeout (`LIVE_DECIDE_ASR_
+    // PREFETCH_TIMEOUT_MS`, 6 000 by default) can never receive a transcript, so
+    // it is clamped just under that deadline (see config-asr-wait-8609.test.ts).
+    // An explicit SHORT wait still carries through untouched — that is the
+    // behaviour this test pins.
+    const cfg = loadConfig({ ...base, LIVE_DECIDE_ASR_WAIT_MS: "1500", LIVE_DECIDE_ASR_PREFETCH_CONCURRENCY: "4" });
+    expect(cfg.liveDecideAsrWaitMs).toBe(1_500);
     const analyzer = buildLiveAnalyzerConfig({
       cfg,
       job: { id: "job-8351-cfg", gameHint: "soccer" },
       clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
     });
-    expect(analyzer.decideAsrWaitMs).toBe(6_000);
+    expect(analyzer.decideAsrWaitMs).toBe(1_500);
     // The transcription timeout keeps its own knob: unset => the code default
     // (6 000); the leg sets 20 000 so a slow call completes and caches.
     expect(analyzer.decideAsrPrefetchTimeoutMs).toBe(6_000);
