@@ -1,0 +1,23 @@
+{
+  "$comment": "ADAAAA-8571 shape-2 fixture spec. 12 windows (9 required + 3 margin) of 34 s each = 408 s, inside the 410 s authorized window and under the 430 s hard stop. Windows are ordered round-robin over the four physical score transitions of the score-legible reel (ADAAAA-8154: goals at 117 / 149 / 340 / 399 s), so a twin of the same transition sits 4 windows (136 s) away - beyond both the 30 s goal_burst_same_transition burst window and the 120 s GOAL_SAME_TRANSITION_HORIZON_S same-transition horizon.",
+  "source_reel": "/data/clips/kids-soccer.mp4",
+  "transitions_s": [117, 149, 340, 399],
+  "window_s": 34,
+  "min_splice_margin_s": 3,
+  "pre_read_offset_s": 4,
+  "post_read_offset_s": 6,
+  "windows": [
+    {"id": "w01-t1-a", "transition": 117, "pre_s": 17, "post_s": 17},
+    {"id": "w02-t2-a", "transition": 149, "pre_s": 17, "post_s": 17},
+    {"id": "w03-t3-a", "transition": 340, "pre_s": 17, "post_s": 17},
+    {"id": "w04-t4-a", "transition": 399, "pre_s": 17, "post_s": 17},
+    {"id": "w05-t1-b", "transition": 117, "pre_s": 19, "post_s": 15},
+    {"id": "w06-t2-b", "transition": 149, "pre_s": 19, "post_s": 15},
+    {"id": "w07-t3-b", "transition": 340, "pre_s": 19, "post_s": 15},
+    {"id": "w08-t4-b", "transition": 399, "pre_s": 19, "post_s": 15},
+    {"id": "w09-t1-c", "transition": 117, "pre_s": 15, "post_s": 19},
+    {"id": "w10-t2-c", "transition": 149, "pre_s": 15, "post_s": 19},
+    {"id": "w11-t3-c", "transition": 340, "pre_s": 15, "post_s": 19},
+    {"id": "w12-t4-c", "transition": 399, "pre_s": 15, "post_s": 19}
+  ]
+}
