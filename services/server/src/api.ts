@@ -89,6 +89,8 @@ import { buildPostableHighlights, countsFromPostable, postableCountFields, quota
 import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./celebration-alternatives";
 import { attachReplayWindows, partitionAttachedReplays, replayAlternativeFrom } from "./replay-alternatives";
 import { clipChoiceFor, servedClipUri } from "./clip-choice";
+// ADAAAA-8530: the read-side confirmation lane a served highlight card states.
+import { confirmationForHighlightRow } from "./confirmation-lane";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
@@ -5908,6 +5910,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // nothing is billed twice). They are derived from the marked stored rows, so
     // a read never has to re-run the detector.
     const jobHighlights = store.highlightsForJob(job.id);
+    // ADAAAA-8530: EVERY served clip row states which lane confirmed its window,
+    // derived read-side by the SAME `deriveConfirmation()` the decide note uses —
+    // through the row's own `candidateId`, so a card and the note above it can
+    // never disagree about one window. Nothing is stored, nothing is re-decided,
+    // and a row whose lane cannot be derived carries no `confirmation` at all
+    // (the card then reads UNCONFIRMED rather than inventing a lane).
+    const candidatesById = new Map(store.candidatesForJob(job.id).map((c) => [c.id, c]));
+    const confirmationFor = (h: HighlightRecord) =>
+      confirmationForHighlightRow(h, h.candidateId ? candidatesById.get(h.candidateId) : undefined);
     const attachedReplays = partitionAttachedReplays(jobHighlights);
     for (const [ownerId, replays] of attachedReplays.byOwner) {
       const owner = jobHighlights.find((h) => h.id === ownerId);
@@ -5961,11 +5972,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // clip everywhere (card, download/export, post); with no pick this is the
       // record's own clip and nothing changes.
       const served = { ...h, clipUri: servedClipUri(h) };
+      // ADAAAA-8530: the card's confirmation state (lane + label), derived from
+      // this row's own window. Absent when nothing could be derived.
+      const confirmation = confirmationFor(h);
       return {
         ...served,
         postTitle: copyTargetFor(h),
         caption: announcerDetailFor(h),
         exportUri: exportUriForHighlight(served, user.id),
+        ...(confirmation ? { confirmation } : {}),
         ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
       };
     });
@@ -5976,6 +5991,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // notable clip downloads and marks exactly like a postable one.
     const notableHighlights = postable.notableMoments.moments.map((m) => {
       const served = { ...m.owner, clipUri: servedClipUri(m.owner) };
+      // ADAAAA-8530: a notable moment now lives INSIDE the Highlights grid, so
+      // its card states the same confirmation lane a postable card does —
+      // derived from the moment's own window, absent when nothing derived.
+      const confirmation = confirmationFor(m.owner);
       // ADAAAA-8422 (N1): the cluster's other windows are the moment's clip
       // options. Each is its OWN stored row, served from its own already-cut
       // `clipUri` (no re-encode, no decide), with a per-caller export URL minted
@@ -6000,6 +6019,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-8328: and the same never-empty announcer detail.
         caption: announcerDetailFor(m.owner),
         exportUri: exportUriForHighlight(served, user.id),
+        // ADAAAA-8530: a notable moment now lives INSIDE the Highlights grid, so
+        // its card states the same confirmation lane a postable card does —
+        // derived from the moment's own window, absent when nothing derived.
+        ...(confirmation ? { confirmation } : {}),
         // One card per moment: how many windows the moment holds, and the sibling
         // windows offered on its clip rail (absent on a lone window).
         siblingCount: m.memberCount,

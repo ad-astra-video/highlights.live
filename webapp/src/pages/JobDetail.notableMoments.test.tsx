@@ -1,9 +1,9 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { HighlightCard, SecondaryHighlightLane } from "./JobDetail";
+import { HighlightCard, HighlightMomentGrid } from "./JobDetail";
 import { clipRailOptionLabel, clipRailSlides } from "../lib/clipRail";
-import type { JobDetailHighlight } from "../lib/jobDetail";
+import { highlightMomentEntries, type JobDetailHighlight } from "../lib/jobDetail";
 
 // ADAAAA-8422 (N1) + ADAAAA-8443 (N1b) — the notable moment card: ONE card per
 // MOMENT (anchor-gap cluster), the cluster's other windows on the card's clip rail.
@@ -121,15 +121,14 @@ function card(row: JobDetailHighlight, admin = true): string {
   );
 }
 
-function lane(highlights: JobDetailHighlight[], admin = true): string {
+/** ADAAAA-8530: notable moments are rows of the ONE Highlights grid, so these
+ *  moment-level assertions mount the grid rather than the removed notable lane. */
+function grid(highlights: JobDetailHighlight[], admin = true): string {
   return text(
     renderToString(
-      React.createElement(SecondaryHighlightLane, {
-        lane: "notable",
-        title: "Notable — not a goal",
-        note: "Non-scoring plays (near miss / big play). They stay off the postable goal list.",
-        tone: "yellow",
-        highlights,
+      React.createElement(HighlightMomentGrid, {
+        entries: highlightMomentEntries([], highlights),
+        captionOf: () => "",
         admin,
       })
     )
@@ -208,10 +207,12 @@ describe("N1-AC1/AC2, N1b-AC1 — the rail carries the moment's sibling clips", 
     expect(html).not.toMatch(/data-detail-clip-rail="true"[^>]*aria-label/);
   });
 
-  it("the lane renders ONE card per moment: 2 measured moments, rails of 2 and 3", () => {
-    const html = lane([firstMoment(), moment()]);
+  it("the grid renders ONE card per moment: 2 measured moments, rails of 2 and 3", () => {
+    const html = grid([firstMoment(), moment()]);
     expect(count(html, 'data-detail-notable-card="true"')).toBe(2);
-    expect(count(html, "data-detail-notable-card-grid")).toBe(1);
+    expect(count(html, "data-detail-highlight-grid")).toBe(1);
+    // AC1: the separate notable lane is gone.
+    expect(count(html, 'data-detail-lane="notable"')).toBe(0);
     // N1b-AC1 rendered membership: card 1 owns 02e9bf4e with 5f8d9d07 as its one
     // option; card 2 owns b7fb1898 with 128ab571 and 69118d51 as its options.
     expect(count(html, 'data-clip-count="2"')).toBe(1);
@@ -240,11 +241,15 @@ describe("N1-AC4 — honesty: a notable moment is never labelled a highlight", (
     expect(html).toContain("Same moment · T+698s – T+713s");
   });
 
-  it("keeps the lane line and never asserts a score", () => {
-    const html = lane([moment()]);
-    expect(html).toContain("Notable — not a goal");
-    expect(html).toContain("Non-scoring plays");
-    for (const claim of ["scored", "Goal!", "GOAL", "Highlight"]) {
+  it("no longer renders the 'Notable — not a goal' lane, and never asserts a score", () => {
+    // AC4 of ADAAAA-8530 explicitly SUPERSEDES N1-AC4's "the Notable — not a goal
+    // title survives": the title is gone because the moments are rows of the
+    // Highlights grid now. The honesty rule itself still holds.
+    const html = grid([moment()]);
+    expect(html).not.toContain("Notable — not a goal");
+    expect(html).not.toContain("Non-scoring plays");
+    expect(count(html, "data-detail-highlight-grid")).toBe(1);
+    for (const claim of ["scored", "Goal!", "GOAL", "Highlight)"]) {
       expect(html).not.toContain(claim);
     }
   });

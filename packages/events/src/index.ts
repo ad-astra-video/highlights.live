@@ -2088,11 +2088,28 @@ export const HighlightAlternativeSchema = z.object({
 });
 export type HighlightAlternative = z.infer<typeof HighlightAlternativeSchema>;
 
+/** ADAAAA-8530: the confirmation STATE a served highlight card states, derived
+ * read-side by `deriveConfirmation()` from the row's own decide window.
+ *
+ * Lane + label only: the inspector half of `WindowConfirmationSchema` (the raw
+ * attestation flags and the dive verdict) is deliberately NOT on a card surface
+ * — mirrors what `stripWindowInspection()` gates on the decide notes. */
+export const HighlightConfirmationSchema = z.object({
+  lane: z.enum(["measured", "dive", "dive_disagreed", "unconfirmed"]),
+  /** The row-body sentence for the lane, exactly as the decide note cites it. */
+  label: z.string(),
+});
+export type HighlightConfirmation = z.infer<typeof HighlightConfirmationSchema>;
+
 /** A top-level highlight as it is DELIVERED on the job-detail payload: the
  * stored record plus the celebration alternatives tied to it (ADAAAA-7984). The
  * grouped array is the surface contract — an alternative is never its own card. */
 export const HighlightWithAlternativesSchema = HighlightRecordSchema.extend({
   alternatives: z.array(HighlightAlternativeSchema).optional(),
+  /** ADAAAA-8530: which lane confirmed this row's window (read-side derivation
+   *  from the moment's own decide window, never stored, never invented). Absent
+   *  when nothing could be derived — the card then reads UNCONFIRMED. */
+  confirmation: HighlightConfirmationSchema.optional(),
 });
 export type HighlightWithAlternatives = z.infer<typeof HighlightWithAlternativesSchema>;
 
@@ -2130,6 +2147,10 @@ export const NotableMomentSchema = HighlightRecordSchema.extend({
   /** Rows in the notable MOMENT (anchor-gap cluster; 1 = a lone window). Lets a
    * grader tell a moment whose rail is capped apart from one that lost footage. */
   siblingCount: z.number().int().min(1).optional(),
+  /** ADAAAA-8530: the moment's own confirmation lane (the same derivation the
+   *  postable rows and the decide note use). Absent when nothing could be
+   *  derived — the card then reads UNCONFIRMED, never a guessed lane. */
+  confirmation: HighlightConfirmationSchema.optional(),
 });
 export type NotableMoment = z.infer<typeof NotableMomentSchema>;
 
