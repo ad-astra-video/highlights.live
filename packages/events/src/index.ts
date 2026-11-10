@@ -2,6 +2,11 @@
 // Freeze these before wiring UI or models. Generated as JSON Schema for the
 // Python runners + frontend. Any new required field is a version bump.
 import { z } from "zod";
+// ADAAAA-8544: the decide-knob stamp schema is declared in its own module (the
+// pure `est-v2` estimate and the control copy live beside it) and referenced from
+// `ObserveMetricsSnapshotSchema` and `JobSchema` below. Imported (not only
+// re-exported) because `export *` does not put the name in this module scope.
+import { DecideKnobStampSchema } from "./decide-knob";
 
 // Track capacity (INC-6 / ADAAAA-4330): the charter target is 3 live / 8 VOD
 // objects. Today's code capped at 2. The schema ceiling is the VOD target (8);
@@ -617,6 +622,18 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // ADAAAA-7799: decide opportunities the rate cap DROPPED (LIVE_DECIDE_KEEP_RATIO
   // keeps only a fraction of them). Additive optional: absent when the cap is off.
   throttleSkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-8544: the RESOLVED per-job decide knob, stamped ONCE at job start and
+  // never rewritten mid-stream. Declared here (not merely on the server type)
+  // because a zod object STRIPS undeclared keys: the stamp would be computed and
+  // silently dropped on persist. Additive optional — absent on every row written
+  // before the knob existed (those ran the deploy-time `LIVE_DECIDE_KEEP_RATIO`
+  // posture, which the window audit reports as `resolvedSource: "env"`).
+  decideKnob: DecideKnobStampSchema.optional(),
+  // ADAAAA-8544: decide opportunities this JOB measured (kept + throttled), so a
+  // grader contrasts the stamped predicted `opportunitiesPer300s` against the
+  // stream that actually ran — the audit trail for the 5 s extrapolation (spec
+  // §9). Additive optional.
+  decideOpportunities: z.number().int().min(0).optional(),
   // ADAAAA-7808: stale FRAMES the lag budget dropped (`droppedFrames` on the
   // `[live-lag] summary` line) and the SUPPLY skip total (stale + backpressure +
   // admission). `supplySkippedWindows` never includes `throttleSkippedWindows`:
@@ -1444,6 +1461,14 @@ export const JobSchema = z.object({
   // `vodSampleFpsDefault` config for this job; still bounded by runner
   // capability and `vodSampleMaxFps` in resolveSampleFps.
   sampleFps: z.number().positive().optional(),
+  // ADAAAA-8544: the per-stream decide cost knob, resolved ONCE at job start and
+  // FROZEN — never rewritten mid-stream (a mid-stream change would alter the
+  // latency/spend profile of a stream already being measured; the user restarts
+  // instead). Written by `POST /jobs` before any decide can run, and mirrored
+  // into `observeMetrics.decideKnob` by `store.patchJob` so the completed record
+  // and the admin window audit carry it. Additive optional: absent on every row
+  // written before the knob existed.
+  decideKnob: DecideKnobStampSchema.optional(),
   // Stage-A audio-gate metric snapshot (INC-2 / ADAAAA-4325); absent on VOD /
   // non-audio jobs and on older records.
   stageAMetrics: StageAMetricsSnapshotSchema.optional(),
@@ -2756,3 +2781,8 @@ export * from "./caption-grounding";
 // fallback. Shared by the server write seam/projection and the webapp card so
 // one title function serves both.
 export * from "./post-title";
+// ADAAAA-8544: the per-stream decide cost knob — the ONE pure `est-v2` estimate,
+// the 63-decide coverage floor, the resolve-at-start stamp and the control copy.
+// Shared by the server route/observer, the window audit and the webapp start
+// control so the number the board prints is the number QA asserts.
+export * from "./decide-knob";

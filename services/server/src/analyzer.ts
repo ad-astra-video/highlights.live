@@ -5,6 +5,9 @@ import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { DecideAdmissionMetrics, DecideCapacitySnapshot, DecideRunnerAttribution } from "@highlights/livepeer-session";
 import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
+// ADAAAA-8544: the resolved per-job decide knob's stamp type — carried on the
+// observe snapshot so a rewritten snapshot keeps the frozen knob.
+import type { DecideKnobStamp } from "@highlights/events";
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-timings";
 import {
@@ -3414,6 +3417,15 @@ export interface AnalyzerConfig {
    *  a rail offering 73 opportunities as on one offering 104. `undefined`/1 =
    *  off. Wired from `LIVE_DECIDE_KEEP_RATIO` on both live rails. */
   liveDecideKeepRatio?: number;
+  /** ADAAAA-8544: the per-job decide RATE cap — charged decides per 300 s of
+   *  CONTENT clock, resolved ONCE at job start from the user's `POST /jobs` input
+   *  and frozen on the record as `observeMetrics.decideKnob`. `null`/undefined =
+   *  uncapped (the shipped economy default). When set it REPLACES
+   *  `liveDecideKeepRatio` above: the user's stated posture wins, and the
+   *  deploy-time fraction only applies to a job started before the knob existed.
+   *  Wired to the observer's rate gate and NOTHING else — the window span, the
+   *  audio-noise trigger and the VOD fields are untouched (AC2). */
+  liveDecideRateCapPer300s?: number | null;
   /**
    * ADAAAA-7774: content fps the LIVE observe pass CONSUMES frames at (the
    * ingest-to-analysis stride). Live ingest runs at ~5 fps while the decide
@@ -3747,6 +3759,16 @@ export interface LiveObserveMetricsSnapshot {
    *  cadence windows, so the throttle gap is auditable instead of inferred from
    *  a coverage number. Absent when the cap is off (unset env). */
   throttleSkippedWindows?: number;
+  /** ADAAAA-8544: decide opportunities the pass SAW (kept + dropped). Written on
+   *  every rail, capped or uncapped, so the job record states the density its
+   *  stream actually offered and the window audit can contrast it with the
+   *  stamped predicted `decideKnob.opportunitiesPer300s` (spec §9). */
+  decideOpportunities?: number;
+  /** ADAAAA-8544: the resolved per-job decide knob, frozen at job start. Carried
+   *  on the snapshot type as well as on the record so a pass that rewrites the
+   *  snapshot (media rail, stop-path settlement) cannot drop the stamp — an
+   *  undeclared field is stripped by `JobSchema.parse`. */
+  decideKnob?: DecideKnobStamp;
   /** ADAAAA-7808: stale FRAMES the lag budget dropped (the count the
    *  `[live-lag] summary` line prints as `droppedFrames`). Persisted so a ship
    *  row can quote it from the job record instead of grepping the container log. */
@@ -4115,6 +4137,10 @@ export function buildLiveObserveMetrics(
     backpressureSkippedWindows: obs.backpressureSkipCount(),
     // ADAAAA-7799 (lever C): dropped decide opportunities from the rate cap.
     throttleSkippedWindows: obs.throttleSkipCount(),
+    // ADAAAA-8544: the decide opportunities this pass SAW (kept + throttled) — the
+    // job's own measured density, which the window audit contrasts with the
+    // stamped prediction. Additive optional on the record; written on every rail.
+    decideOpportunities: obs.decideOpportunityCount(),
     // ADAAAA-7808: the two numbers a ship row has to quote per stream. The
     // supply total is the rail's own shortfall (stale + backpressure +
     // admission) and NEVER includes the throttle: on the shipped rail the
@@ -10060,6 +10086,12 @@ export async function analyzeJob(
           // decide rate (fraction of decide opportunities kept). Undefined
           // leaves the pass unbounded.
           decideKeepRatio: cfg.liveDecideKeepRatio,
+          // ADAAAA-8544: the PER-JOB rate cap (charged decides / 300 s of content
+          // clock) resolved at job start. It replaces the fraction above when set;
+          // the fraction stays as the fallback for a job with no knob stamp. This
+          // line and the record write are the whole knob — the span, the
+          // audio-noise trigger and the VOD fields above are untouched (AC2).
+          decideRateCapPer300s: cfg.liveDecideRateCapPer300s ?? null,
           // ADAAAA-8108 (AC-E3): the enrichment arm on the file-sim/RTMP rail too,
           // so the OFF arm is measurable on BOTH live rails rather than only the
           // media rail the cell is currently graded on. Unset is the shipped `on`.

@@ -220,7 +220,28 @@ export class Store {
   async patchJob(id: string, patch: Partial<Omit<Job, "id">>): Promise<Job> {
     const j = this.jobs.get(id);
     if (!j) throw new Error(`no job ${id}`);
-    const next = JobSchema.parse({ ...j, ...patch });
+    // ADAAAA-8544: the decide knob is FROZEN at job start. Two guarantees,
+    // enforced here so no writer can drift:
+    //
+    // 1. a patch can never REPLACE a stamp the record already carries (a
+    //    mid-stream change would alter the latency/spend profile of a stream
+    //    already being measured — the user restarts instead);
+    // 2. a patch that publishes a fresh observe snapshot carries the frozen stamp
+    //    INTO it, so `observeMetrics.decideKnob` survives every later write
+    //    (settlement, stop path, media-rail share) instead of being stripped.
+    const frozenKnob = j.decideKnob;
+    let effective = patch;
+    if (frozenKnob) {
+      if (patch.decideKnob && JSON.stringify(patch.decideKnob) !== JSON.stringify(frozenKnob)) {
+        effective = { ...effective, decideKnob: frozenKnob };
+      }
+      if (effective.observeMetrics && !effective.observeMetrics.decideKnob) {
+        effective = { ...effective, observeMetrics: { ...effective.observeMetrics, decideKnob: frozenKnob } };
+      }
+    } else if (patch.decideKnob && patch.observeMetrics && !patch.observeMetrics.decideKnob) {
+      effective = { ...effective, observeMetrics: { ...patch.observeMetrics, decideKnob: patch.decideKnob } };
+    }
+    const next = JobSchema.parse({ ...j, ...effective });
     this.jobs.set(id, next);
     if (this.db) await this.db.saveJob(next);
     await this.settleMediaSession(next);

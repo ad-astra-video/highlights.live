@@ -66,10 +66,14 @@ import {
   DatasetSchema,
   DetectionTrainingSampleSchema,
   JobDetailSchema,
+  decideRailForSource,
+  resolveDecideKnob,
+  validateDecideKnobInput,
   postTitleTeamSubject,
   projectAnnouncerCaption,
   projectPostTitle,
   type Dataset,
+  type DecideKnobStamp,
   type DetectionTrainingSample,
   type HighlightRecord,
   type Job,
@@ -2101,6 +2105,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // cap — never a longer window. Before this the rail's grid sat at the
     // default 2 fps regardless of the resolved rate.
     const railFps = store.getJob(job.id)?.sampleFps ?? cfg.liveSampleBaseFps;
+    // ADAAAA-8544: the decide knob frozen on this job's record at start. The
+    // browser/screen share is the rail the user actually bought, so it must run
+    // the posture it priced (`cadenceSec` + `rateCapPer300s`); a record without a
+    // stamp keeps the deploy-time cadence and fraction.
+    const decideKnob = store.getJob(job.id)?.decideKnob;
     const rail = new MediaRailObserver(
       {
         jobId: job.id,
@@ -2136,6 +2145,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // one rail while the shipped rail kept the default). Undefined keeps both
         // today's values, so merging changes nothing on a running box.
         cadenceS: cfg.liveObserveCadenceS,
+        // ADAAAA-8544: the per-job knob on THIS rail — the cadence the user chose
+        // (5 s economy default) and the rate cap they set (null = uncapped). Both
+        // come from the record stamped at start; a pre-knob record keeps the env
+        // cadence and the deploy-time fraction.
+        ...(decideKnob
+          ? { cadenceS: decideKnob.cadenceSec, decideRateCapPer300s: decideKnob.rateCapPer300s }
+          : {}),
         windowS: cfg.liveObserveWindowS,
         // ADAAAA-8108 (AC-E3): the enrichment ON/OFF arm for this rail, wired from
         // `LIVE_DECIDE_ENRICH` (unset = the shipped `on`, byte-identical).
@@ -2702,6 +2718,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         cfg,
         job,
         clipWindow: cw,
+        // ADAAAA-8544: the knob frozen on the record at job start, read from the
+        // STORE (not from `cfg`) so this run honours the posture the user bought.
+        decideKnob: store.getJob(job.id)?.decideKnob,
         // ADAAAA-8437: size the per-stream in-flight depth from the DISCOVERED
         // decide admission (the routed 5090 set advertises 6), not the static
         // funded number.
@@ -5301,11 +5320,36 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   });
 
   // --- pipeline (auth + billing gated) ---
-  app.post<{ Body: { source?: string; videoPath?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number } }>(
+  app.post<{
+    Body: {
+      source?: string;
+      videoPath?: string;
+      gameHint?: string;
+      preferLabels?: string[];
+      sampleFps?: number;
+      /** ADAAAA-8544: the per-stream decide cost knob. `3 | 5`; default 5 (CEO
+       *  ruling: economy, 5 s uncapped). */
+      cadenceSec?: number;
+      /** ADAAAA-8544: charged decides per 300 s of CONTENT clock, `63..N`, or
+       *  `null` = uncapped (the shipped default). Below 63 is a 422. */
+      rateCapPer300s?: number | null;
+    };
+  }>(
     "/jobs",
     { preHandler: authReq },
     async (req, reply) => {
       const user = (req as any).user;
+      // ADAAAA-8544: validate the decide knob BEFORE any gate that spends quota or
+      // schedules compute. A user who asked for 62 decides / 5 min gets the
+      // coverage-floor 422 (ADAAAA-8427) and no job row, no decide slot and no
+      // quota consumption.
+      const knobInput = validateDecideKnobInput({
+        cadenceSec: req.body?.cadenceSec,
+        rateCapPer300s: req.body?.rateCapPer300s,
+      });
+      if (!knobInput.ok) {
+        return reply.code(422).send({ error: knobInput.message, code: knobInput.code });
+      }
       const sub = await db.getSubscription(user.id);
       // Budget hard-stop: reject at submission time as soon as the month's clip
       // quota is exhausted. This runs BEFORE any job is created or any compute
@@ -5350,6 +5394,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         preferLabels: req.body.preferLabels ?? [],
         sampleFps: req.body.sampleFps,
       });
+      // ADAAAA-8544: resolve the knob ONCE, here, and freeze it on the row before
+      // any decide can run. `resolvedSource` distinguishes the user's choice
+      // ("user") from the shipped default ("default") and from the deploy-time env
+      // posture ("env" — a job that predates the knob), so a support question
+      // ("why is this $2.00 when I asked for a cap?") is answered by the record.
+      // The RAIL comes from the source: quoting the analyzer's 104-decides rate on
+      // a browser stream is 33 % pessimistic (spec §3).
+      const decideKnob = resolveDecideKnob({
+        cadenceSec: knobInput.cadenceSec,
+        rateCapPer300s: knobInput.rateCapPer300s,
+        rail: decideRailForSource(req.body.source ?? "file"),
+        envRateCapPer300s: null,
+        envDecideKeepRatio: cfg.liveDecideKeepRatio,
+      });
+      await store.patchJob(job.id, { decideKnob });
       // File/URL VOD jobs stay `queued` and are claimed by the durable worker
       // (ADAAAA-6873 non-blocking submit); live / browser-capture flip to active.
       if (req.body.source === "browser" || live) await store.patchJob(job.id, { status: "active" });
@@ -7905,6 +7964,13 @@ export interface LiveAnalyzerConfigDeps {
   onConfirmDivePending?: AnalyzerConfig["onConfirmDivePending"];
   /** ADAAAA-8408 (W2): the live match-context writer's per-window hook. */
   onObserveWindowEvidence?: AnalyzerConfig["onObserveWindowEvidence"];
+  /** ADAAAA-8544: the decide knob resolved ONCE at job start and frozen on the job
+   *  record (`decideKnob`, mirrored into `observeMetrics.decideKnob`). Its
+   *  `cadenceSec` and `rateCapPer300s` are the only two values it feeds; every
+   *  other live field is unchanged from `cfg` (AC2). Absent for a job started
+   *  before the knob existed, which keeps the deploy-time cadence and the
+   *  `LIVE_DECIDE_KEEP_RATIO` fallback. */
+  decideKnob?: DecideKnobStamp;
   /** ADAAAA-8437: live read of the DISCOVERED decide admission width, so the
    * per-stream in-flight depth follows the capacity the fleet advertises. Unset
    * (tests / older wiring) falls back to `cfg.liveDecideAdmission`. */
@@ -7968,6 +8034,7 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     liveFrameReread,
     onConfirmDivePending,
     onObserveWindowEvidence,
+    decideKnob,
     decideEffectiveAdmission,
     deferLiveClipCut,
   } = deps;
@@ -8043,7 +8110,10 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     liveObserveInFlight: cfg.liveObserveInFlight,
     // ADAAAA-7799 (lever C addendum): the LIVE-only decide hop (5 s = the CEO
     // 5 s-hop row). Undefined keeps the shared 3 s cadence.
-    liveObserveCadenceS: cfg.liveObserveCadenceS,
+    // ADAAAA-8544: the PER-JOB knob wins over the deploy-time cadence. The knob is
+    // resolved once at job start and frozen; a job started before the knob existed
+    // has no stamp and keeps the env value.
+    liveObserveCadenceS: decideKnob?.cadenceSec ?? cfg.liveObserveCadenceS,
     // ADAAAA-8065 (rev 7): the LIVE window span. Forwarded verbatim (undefined =
     // today's 10 s), so both live rails and the payload stamp read ONE value.
     liveObserveWindowS: cfg.liveObserveWindowS,
@@ -8057,6 +8127,12 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-7799 (lever C): the decide-rate cap (fraction of decide
     // opportunities kept). Forwarded verbatim; undefined leaves it unbounded.
     liveDecideKeepRatio: cfg.liveDecideKeepRatio,
+    // ADAAAA-8544: the PER-JOB rate cap (charged decides / 300 s of content clock)
+    // resolved at job start. It replaces the fraction above when set; the fraction
+    // stays as the fallback for a job with no knob stamp. This is the only field
+    // the knob adds to the analyzer config — the span, the audio-noise trigger
+    // options and the VOD fields are byte-identical (AC2).
+    liveDecideRateCapPer300s: decideKnob?.rateCapPer300s ?? null,
     // ADAAAA-8108 (AC-E3): the live enrichment arm (the per-window
     // `perceiveTimeline` text block). Forwarded verbatim so both live rails and
     // the decide-request builder read ONE value; `on` is the shipped posture.
