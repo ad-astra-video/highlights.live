@@ -828,17 +828,6 @@ services:
       # timeout above. Default 0 = inert (await the whole prefetch).
       - LIVE_DECIDE_ASR_WAIT_MS=${LIVE_DECIDE_ASR_WAIT_MS:-0}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
-      # ADAAAA-8518 (AC1/AC2): the live Stage-2 dive takes no rate cap. The CEO
-      # ruling on ADAAAA-8512 (22:14Z / 22:15Z) removed both the 8-dive budget and
-      # the 1-in-flight serialization: if the accept carried evidence the dive
-      # runs, and the only admission bound is the MEASURED decide capacity.
-      # The compose default is therefore the INERT value `0` (= unlimited, never
-      # "no dives"), so a `.env` restore or a bare rebuild cannot re-impose a
-      # brake. A POSITIVE value is an operator emergency brake only; cost is
-      # OBSERVED per stream (`observeMetrics.diveAdmission`), not enforced here.
-      # This line still has to exist: compose only forwards env it declares
-      # (measured ADAAAA-8506: `printenv` had no LIVE_CONFIRM_MAX_DIVES_PER_300S).
-      - LIVE_CONFIRM_MAX_DIVES_PER_300S=${LIVE_CONFIRM_MAX_DIVES_PER_300S:-0}
       # ADAAAA-7781: COMPACT verdict contract on the live decide rail. The live
       # pass is decode-bound (measured: p50 9.4 s for a ~1340-char verdict; the
       # box's gemma pair decodes ~150 output tok/s), so decisions/s = tok/s /
