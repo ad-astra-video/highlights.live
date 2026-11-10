@@ -83,13 +83,17 @@ export const LIVE_LEG_BARS = {
 export interface LiveLegInput {
   mode: LiveLegMode;
   rows: LiveLegRowLike[];
-  /** Wall duration of the leg in seconds. Derived from `startedAt`/`finishedAt`
-   * when those are supplied instead. */
+  /** Wall duration of the leg in seconds. Derived from `startedAt`/`endedAt`
+   * (or `finishedAt`) when those are supplied instead; an explicit duration (the
+   * harness's metered wall clock) wins over both. */
   durationS?: number;
   /** Provenance of `durationS` when the caller supplied it (the funded harness
    * writes `leg.durationS` from its own clock). Defaults to `input`. */
   durationSource?: DurationSource;
   startedAt?: string;
+  /** ADAAAA-8487: end of accrual — the field the live settlements stamp. Read
+   * before `finishedAt` because it excludes the clip-finalization tail. */
+  endedAt?: string;
   finishedAt?: string;
   /** Metered perceive-session seconds (8483 metered 544.5 s inside a 300 s
    * authorized window: the 1.815x inflation the funded cap must evidence). */
@@ -153,9 +157,13 @@ function resolveDuration(input: LiveLegInput): { durationS: number | null; sourc
   if (Number.isFinite(input.durationS) && (input.durationS as number) >= 0) {
     return { durationS: input.durationS as number, source: input.durationSource ?? "input" };
   }
-  if (input.startedAt && input.finishedAt) {
+  // ADAAAA-8487: the live terminal paths stamp `endedAt` (end of accrual) and
+  // `finishedAt` (end of finalization). Prefer `endedAt` so the duration is the
+  // time the leg actually accrued, not the clip-finalization tail after it.
+  const ended = input.endedAt ?? input.finishedAt;
+  if (input.startedAt && ended) {
     const start = Date.parse(input.startedAt);
-    const end = Date.parse(input.finishedAt);
+    const end = Date.parse(ended);
     if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
       return { durationS: (end - start) / 1000, source: "timestamps" };
     }
@@ -217,7 +225,7 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
   }
   if (durationS === null) {
     shapeReasons.push(
-      "duration_unknown: no duration, start/finish timestamps, or harness leg evidence supplied"
+      "duration_unknown: no duration, no startedAt/endedAt pair, no --duration-s, and no harness leg evidence supplied"
     );
     shapeBlocked = true;
   } else if (durationS < floorS) {
