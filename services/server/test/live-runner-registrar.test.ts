@@ -11,7 +11,9 @@
 // sends to `POST /runners/heartbeat`.
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
@@ -532,6 +534,71 @@ print(json.dumps({"registeredOk": ok, "initial": initial,
       "highlights-decide-x99-b",
     ]);
     expect(result.afterKill.map((r: any[]) => r[1])).toEqual([4, 2, 2]);
+  });
+});
+
+describe("5090 run script resolves the orchestrator secret like compose (S0)", () => {
+  // ADAAAA-8557: the 5090 box .env has NO ORCHESTRATOR_SECRET and the running
+  // orchestrator uses the compose default. An operator must not have to paste a
+  // value compose already knows, and the value must never be printed. The
+  // resolution order is env -> .env -> compose default, exactly like compose.
+  const script = repoFile("docker/registrar-5090.sh");
+  const dir = mkdtempSync(join(tmpdir(), "registrar-5090-"));
+  const emptyEnv = join(dir, "empty.env");
+  const dotEnv = join(dir, "box.env");
+  const noDefaultCompose = join(dir, "no-default.yml");
+  writeFileSync(emptyEnv, "");
+  writeFileSync(dotEnv, 'ORCHESTRATOR_SECRET="s3cret-from-envfile"\r\n');
+  writeFileSync(noDefaultCompose, "services: {}\n");
+
+  const run = (env: Record<string, string>) => {
+    const clean: NodeJS.ProcessEnv = { ...process.env };
+    delete clean.ORCH_SECRET;
+    delete clean.ORCHESTRATOR_SECRET;
+    try {
+      return {
+        status: 0,
+        out: execFileSync("sh", [script, "--secret-source"], {
+          encoding: "utf8",
+          env: { ...clean, ...env },
+        }).trim(),
+      };
+    } catch (err: any) {
+      return {
+        status: err.status as number,
+        out: `${err.stdout ?? ""}${err.stderr ?? ""}`.trim(),
+      };
+    }
+  };
+
+  it("prefers the environment over the file, in compose's variable order", () => {
+    expect(run({ ORCH_SECRET: "from-env" })).toEqual({ status: 0, out: "env:ORCH_SECRET" });
+    expect(run({ ORCHESTRATOR_SECRET: "from-orch-env" })).toEqual({
+      status: 0,
+      out: "env:ORCHESTRATOR_SECRET",
+    });
+  });
+
+  it("falls back to the box .env, then to the compose default", () => {
+    expect(run({ ENV_FILE: dotEnv, COMPOSE_FILE: noDefaultCompose }).out).toMatch(
+      /^env-file:.*box\.env:ORCHESTRATOR_SECRET$/,
+    );
+    expect(run({ ENV_FILE: emptyEnv, COMPOSE_FILE: repoFile("docker/docker-compose.yml") }).out).toMatch(
+      /^compose:.*docker-compose\.yml:default$/,
+    );
+    // No hardcoded secret in the script: the default is read out of compose.
+    expect(readFileSync(script, "utf8")).not.toContain("highlights-secret");
+  });
+
+  it("says so and fails loudly when no secret is resolvable", () => {
+    const r = run({ ENV_FILE: emptyEnv, COMPOSE_FILE: noDefaultCompose });
+    expect(r.status).toBe(1);
+    expect(r.out).toBe("none");
+  });
+
+  it("never prints the resolved value", () => {
+    const r = run({ ENV_FILE: dotEnv, COMPOSE_FILE: noDefaultCompose });
+    expect(r.out).not.toContain("s3cret-from-envfile");
   });
 });
 

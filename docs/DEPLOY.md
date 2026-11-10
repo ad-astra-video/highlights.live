@@ -272,8 +272,13 @@ Where the registrars run:
   `highlights-registrar-decide-5090-1..3` as `docker run --network host`
   containers on ai-server-5090x3-1, with `ORCH_URL=https://192.168.1.6:8935`
   and runner urls `http://192.168.1.151:809{1,2,3}` — the addresses S0
-  (ADAAAA-8557) proved reachable. The orchestrator secret is inherited by name
-  (`-e ORCH_SECRET`) and is never printed.
+  (ADAAAA-8557) proved reachable. The orchestrator secret is resolved the same
+  way compose resolves it: `ORCH_SECRET` in the environment, then
+  `ORCHESTRATOR_SECRET`, then the box `.env`, then the compose default
+  `${ORCHESTRATOR_SECRET:-...}` (the 5090 `.env` has no secret, so the last hop
+  is what authenticates). The script prints only the SOURCE
+  (`./docker/registrar-5090.sh --secret-source`) and hands the value to each
+  container by name (`-e ORCH_SECRET`); it never prints the value.
 
 The three-hop latency still applies, but every hop is now per registration:
 
