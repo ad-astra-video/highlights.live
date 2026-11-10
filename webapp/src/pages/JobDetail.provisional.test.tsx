@@ -1,8 +1,8 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { HighlightCard, SecondaryHighlightLane } from "./JobDetail";
-import type { JobDetailHighlight } from "../lib/jobDetail";
+import { HighlightCard, HighlightMomentGrid, SecondaryHighlightLane } from "./JobDetail";
+import { highlightMomentEntries, type JobDetailHighlight } from "../lib/jobDetail";
 
 // ADAAAA-8139 (interim step): the CEO asked for a provisional GOAL surface —
 // "if there is some celebration in the frames it can be surfaced as a
@@ -55,11 +55,17 @@ describe("AC — the provisional marker is a label on a celebration, never a GOA
           admin,
         })
       );
+      // ADAAAA-8530 (D1 = A) SUPERSEDES the "GOAL (unconfirmed)" badge copy: the
+      // card's one badge is the confirmation state, and the play taxonomy is
+      // plain detail text. The marker itself survives as that detail text.
       expect(count(html, "data-detail-provisional-goal")).toBe(1);
-      expect(count(html, "GOAL (unconfirmed)")).toBe(1);
+      expect(count(html, "data-detail-play-type")).toBe(1);
+      expect(count(html, "goal-shaped play")).toBe(1);
+      expect(count(html, 'data-detail-confirmed-badge="unconfirmed"')).toBe(1);
+      expect(count(html, ">UNCONFIRMED<")).toBe(1);
+      expect(count(html, "GOAL (unconfirmed)")).toBe(0);
       // The row's own taxonomy is untouched: it is still a big play, and the
       // card never prints a bare GOAL for it.
-      expect(count(html, "GOAL (unconfirmed)")).toBe(1);
       expect(count(html, ">GOAL<")).toBe(0);
     });
   }
@@ -99,55 +105,45 @@ describe("AC — the provisional marker is a label on a celebration, never a GOA
   });
 });
 
-describe("AC — the notable lane (where a demoted goal lives) carries the marker", () => {
-  it("renders the marker on the playable notable row", () => {
-    const html = renderToString(
-      React.createElement(SecondaryHighlightLane, {
-        title: "Notable",
-        note: "kept out of the postable list",
-        lane: "notable",
-        highlights: [hl({ provisionalGoal: provisional() })],
-        admin: true,
+describe("AC — a notable moment in the ONE Highlights list carries the marker", () => {
+  // ADAAAA-8530: the separate notable lane is gone; notable moments are rows of
+  // the Highlights grid (`HighlightMomentGrid`), so the demoted-goal marker is
+  // read off a card in that grid.
+  function grid(rows: JobDetailHighlight[], admin: boolean): string {
+    return renderToString(
+      React.createElement(HighlightMomentGrid, {
+        entries: highlightMomentEntries([], rows),
+        captionOf: () => "",
+        admin,
       })
     );
-    // ADAAAA-8178: the notable lane now renders the real card, where the
-    // provisional string is carried by the single notable badge
-    // (`data-detail-notable-badge`, kind goal_unconfirmed) instead of the
-    // separate `data-detail-provisional-goal` chip — exactly one badge, no
-    // duplicate string in the lane.
+  }
+
+  it("renders the marker as plain detail text on the playable notable card", () => {
+    const html = grid([hl({ provisionalGoal: provisional() })], true);
     expect(count(html, 'data-detail-notable-card="true"')).toBe(1);
-    expect(count(html, "data-detail-notable-badge")).toBe(1);
-    expect(count(html, 'data-notable-kind="goal_unconfirmed"')).toBe(1);
-    expect(count(html, "data-detail-provisional-goal")).toBe(0);
-    expect(count(html, "GOAL (unconfirmed)")).toBe(1);
+    expect(count(html, "data-detail-highlight-grid")).toBe(1);
+    // ONE badge, and it is the confirmation state (no lane derived here).
+    expect(count(html, "data-detail-confirmed-badge")).toBe(1);
+    expect(count(html, 'data-detail-confirmed-badge="unconfirmed"')).toBe(1);
+    expect(count(html, "data-detail-play-type")).toBe(1);
+    expect(count(html, "goal-shaped play")).toBe(1);
     expect(count(html, NOTE)).toBe(1);
+    // The superseded badge strings are gone everywhere.
+    expect(count(html, "GOAL (unconfirmed)")).toBe(0);
+    expect(count(html, "data-detail-notable-badge")).toBe(0);
   });
 
   it("the customer notable row shows the label but no cue text", () => {
-    const html = renderToString(
-      React.createElement(SecondaryHighlightLane, {
-        title: "Notable",
-        note: "kept out of the postable list",
-        lane: "notable",
-        highlights: [hl({ provisionalGoal: provisional() })],
-        admin: false,
-      })
-    );
-    expect(count(html, "GOAL (unconfirmed)")).toBe(1);
+    const html = grid([hl({ provisionalGoal: provisional() })], false);
+    expect(count(html, ">UNCONFIRMED<")).toBe(1);
+    expect(count(html, "goal-shaped play")).toBe(1);
     expect(count(html, NOTE)).toBe(0);
     expect(count(html, "asr_goal_call")).toBe(0);
   });
 
   it("a notable row without the marker stays a plain big play", () => {
-    const html = renderToString(
-      React.createElement(SecondaryHighlightLane, {
-        title: "Notable",
-        note: "kept out of the postable list",
-        lane: "notable",
-        highlights: [hl({})],
-        admin: true,
-      })
-    );
+    const html = grid([hl({})], true);
     expect(count(html, "data-detail-provisional-goal")).toBe(0);
   });
 });
@@ -177,14 +173,15 @@ describe("AC6 — a merged duplicate never prints the unconfirmed marker", () =>
 });
 
 // ADAAAA-8205: the async Stage-2 dive ran AFTER the row published and did not
-// confirm it. The provisional badge must survive (AC-A7) and the card must SAY
-// the deep dive did not confirm — otherwise a refuted moment reads as a goal.
-describe("AC-A7 — a refuted dive keeps the badge and says so", () => {
+// confirm it. The card must SAY the deep dive did not confirm (AC-A7) and, under
+// ADAAAA-8530, the confirmation badge must read UNCONFIRMED — the superseded
+// "GOAL (unconfirmed)" badge copy is replaced by the confirmation state.
+describe("AC-A7 — a refuted dive keeps its badge surface and says so", () => {
   const refuted = (): NonNullable<JobDetailHighlight["provisionalGoal"]> =>
     ({ ...provisional(), refuted: true }) as unknown as NonNullable<JobDetailHighlight["provisionalGoal"]>;
 
   for (const admin of [true, false]) {
-    it(`HighlightCard (admin=${admin}) keeps GOAL (unconfirmed) and adds the refuted line`, () => {
+    it(`HighlightCard (admin=${admin}) reads UNCONFIRMED and adds the refuted line`, () => {
       const html = renderToString(
         React.createElement(HighlightCard, {
           highlight: hl({ provisionalGoal: refuted() }),
@@ -192,8 +189,11 @@ describe("AC-A7 — a refuted dive keeps the badge and says so", () => {
           admin,
         })
       );
-      // The badge the CEO is watching is NOT removed.
-      expect(count(html, "GOAL (unconfirmed)")).toBe(1);
+      // The badge the CEO is watching is NOT removed — it is the confirmation
+      // state now, and a refuted dive can never read CONFIRMED.
+      expect(count(html, "data-detail-confirmed-badge")).toBe(1);
+      expect(count(html, 'data-detail-confirmed-badge="unconfirmed"')).toBe(1);
+      expect(count(html, ">CONFIRMED<")).toBe(0);
       expect(count(html, "data-detail-provisional-refuted")).toBe(1);
       expect(count(html, "Deep dive did not confirm this goal.")).toBe(1);
       // Still never a postable GOAL label.

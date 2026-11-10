@@ -6,8 +6,10 @@ import {
   CustomerAnalysisSection,
   CustomerAnalysisWindow,
   HighlightCard,
+  HighlightMomentGrid,
   SecondaryHighlightLane,
 } from "./JobDetail";
+import { highlightMomentEntries } from "../lib/jobDetail";
 import type { DecideNote, FrameSection, JobDetailFrame, JobDetailHighlight } from "../lib/jobDetail";
 
 // ADAAAA-7737 / AC-A + AC-B: the customer job-detail page (/app/jobs/:id with
@@ -172,11 +174,14 @@ describe("customer job detail carries no pipeline internals (ADAAAA-7737 AC-A/AC
         null,
         React.createElement(HighlightCard, { highlight: hl(), onDecision: () => {}, admin: false }),
         React.createElement(HighlightCard, { highlight: hl({ status: "rejected" }), onDecision: () => {}, admin: false }),
-        React.createElement(SecondaryHighlightLane, {
-          lane: "notable",
-          title: "Notable — not a goal",
-          note: "Non-scoring plays (near miss / big play). They stay off the postable goal list.",
-          highlights: [hl({ eventType: "NEAR_MISS", outcome: "near_miss", score: 45 })],
+        // ADAAAA-8530: notable moments are rows of the ONE Highlights grid (the
+        // separate notable lane is gone), so the customer surface under test is
+        // the grid card.
+        React.createElement(HighlightMomentGrid, {
+          entries: highlightMomentEntries([], [
+            hl({ eventType: "NEAR_MISS", outcome: "near_miss", score: 45 }),
+          ]),
+          captionOf: () => "",
           admin: false,
         })
       )
