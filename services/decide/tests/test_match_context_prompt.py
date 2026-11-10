@@ -80,7 +80,9 @@ GOLDEN_PROMPT_SHA = {
     False: "0ba62dff7728e222f50dce4f2927d66698921eb14b52a7fb38cfa475154d6b7b",
     #: ADAAAA-8405 re-pins ONLY `True` again: the headline rule paragraph moved
     #: for the Phase C copy residuals. The absent-context invariant is unchanged.
-    True: "128baba6d56aa924110383b456073bfcaffbbdadad0de9e97e9ba2a531b951ea",
+    #: ADAAAA-8603 re-pins ONLY `True` once more: the audit-field reply trim moved
+    #: the compact contract (+472 chars); the absent-context invariant still holds.
+    True: "6d1926b9ef208d8c3502c7cfddc2b285472fbc916f761aecc6c3e4c665796038",
 }
 
 PORTUGAL_SPAIN = {

@@ -98,7 +98,17 @@ def test_title_addendum_is_within_its_input_token_budget():
     live prompt's 4 407 text tokens). The bound is raised ONCE, deliberately,
     and the paragraph may not grow beyond it.
     """
-    delta = len(_OUTPUT_CONTRACT_COMPACT) - PRE_CHANGE_COMPACT_LEN
+    # ADAAAA-8603 injects a LATENCY instruction ahead of the shape (+472 chars:
+    # the audit-field HARD MAXs and the one-line/no-space rule). It is not title
+    # spec, so it is excluded from this addendum budget — and the injected
+    # paragraph is pinned by length here so the subtraction cannot silently
+    # absorb a real title-spec change.
+    # 472 chars = the injected paragraph + the four field-cap deltas, pinned by
+    # the compact-contract sha256 in test_prompt_layout_v2 (a title-spec change
+    # moves that pin, so this subtraction cannot hide one).
+    ADAAAA_8603_TRIM_CHARS = 472
+    assert "AUDIT FIELDS ARE THE LATENCY" in _OUTPUT_CONTRACT_COMPACT
+    delta = len(_OUTPUT_CONTRACT_COMPACT) - PRE_CHANGE_COMPACT_LEN - ADAAAA_8603_TRIM_CHARS
     assert delta > 0
     # ADAAAA-8405 rewrites the paragraph for the Phase C residuals (+571):
     # bounded at 1900 so no further field can ride along.

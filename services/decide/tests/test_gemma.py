@@ -1062,8 +1062,13 @@ def test_compact_contract_keeps_fields_the_server_consumes():
         assert field in p, field
     # the long-form-only field is dropped (nothing on the server reads it)
     assert "evidenceAttested" not in p
-    # prose is capped instead of free-form
-    assert "max 20 words" in p and "HARD MAX 140" in p
+    # prose is capped instead of free-form. ADAAAA-8603: the four audit-only
+    # fields carry a mechanical HARD MAX (the live reply is decode-bound); the
+    # caption's own budget is untouched.
+    assert "max 14 words (HARD MAX 17)" in p
+    assert "max 12 words (HARD MAX 15)" in p
+    assert "HARD MAX 140" in p
+    assert "AUDIT FIELDS ARE THE LATENCY" in p
 
 
 def test_compact_and_full_prompts_share_the_context_prefix():
