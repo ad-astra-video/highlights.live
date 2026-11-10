@@ -56,7 +56,7 @@ import { PerceiveCadence, type PerceiveCadenceOptions } from "./perceive-cadence
 // ADAAAA-8005 (gate 3): the per-row trigger -> delivered metric collector. One
 // per run, shared by the observer (fire/settle/accept clocks) and the server's
 // persist path (delivered clock).
-import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot } from "./live-delivery";
+import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot, type LiveAsrStage } from "./live-delivery";
 import { describeInterruption } from "./job-failure";
 // ADAAAA-7988: live goal recall from a celebration/reaction window (the goal
 // instant falls between 1 fps media-node samples). Live rail only.
@@ -93,7 +93,7 @@ import type { TriggerFamilyLatency } from "./observe-loop";
 // ADAAAA-8081: the live ASR side lane (fire-time prefetch) + the observer's
 // non-enumerable payload key that carries its promise to the decide builder.
 import { AsrPrefetcher, type AsrPrefetchResult } from "./asr-prefetch";
-import { ASR_PREFETCH } from "./observe-loop";
+import { ASR_PREFETCH, ASR_STAGE } from "./observe-loop";
 import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
 
@@ -3053,10 +3053,26 @@ export interface AnalyzerConfig {
    * prefetch, today's behaviour). On a miss the decide proceeds with its own
    * inline ASR and the prefetch keeps running so its result still caches. */
   decideAsrWaitMs?: number;
+  /** ADAAAA-8611: headroom-aware WAIT guard (ms), `LIVE_DECIDE_ASR_HEADROOM_MS`,
+   *  default 0 = INERT (today's behaviour exactly: the wait is the budget).
+   *
+   *  When set, it is the delivered-latency bar this rail is graded against
+   *  (AC-B p95 = 5 000 ms, `LIVE_LEG_BARS.p95Ms`), and the effective wait becomes
+   *  `min(waitMs, headroomMs)` where `headroomMs = headroom - (elapsed since the
+   *  window fired)`. The point: the deployed 6 000 ms budget is LARGER than the
+   *  5 000 ms bar, so any wait-miss row breaches the bar by construction
+   *  (leg `0cade089` row @385 s: 6 000 ms wait + ~5 458 ms decide = 11 460 ms).
+   *  The clamp only trims a row that is already heading past the bar; a row with
+   *  room keeps the full budget. It cannot bound the decide stage itself (that is
+   *  ADAAAA-8603) — only the pre-decide wait. */
+  decideAsrHeadroomMs?: number;
   /** ADAAAA-8351: per-run wait-miss counter (one object per live run, created by
    *  `buildLiveAnalyzerConfig`) so the persisted observe snapshot can carry
-   *  `asrWaitMisses` without a module-level global. */
-  decideAsrWaitStats?: { misses: number };
+   *  `asrWaitMisses` without a module-level global.
+   *  ADAAAA-8611 adds `trims`: decides whose wait was CLAMPED to the bar
+   *  headroom (a deliberate skip, not a slow prefetch) — separate from `misses`
+   *  so a headroom leg's numbers stay comparable to a pre-8611 leg's. */
+  decideAsrWaitStats?: { misses: number; trims?: number };
   /** ADAAAA-8081: ASR base URL (`ASR_URL`) for the side lane. Unset => the lane
    *  cannot run and the decide service transcribes inline as before. */
   asrUrl?: string;
@@ -3836,6 +3852,12 @@ export interface LiveObserveMetricsSnapshot {
   asrWaitMisses?: number;
   asrWaitBudgetMs?: number;
   asrLaneWidth?: number;
+  /** ADAAAA-8611: the headroom-clamp posture (`LIVE_DECIDE_ASR_HEADROOM_MS`),
+   *  written only when the clamp is configured. `asrWaitTrims` counts decides
+   *  whose wait the clamp cut short — distinct from `asrWaitMisses` (a slow
+   *  prefetch) so the two causes are separable on a finished leg. */
+  asrWaitHeadroomMs?: number;
+  asrWaitTrims?: number;
   /** ADAAAA-7774: the LIVE perceive stride — the ingest-to-analysis frame rate
    *  the pass consumed at, plus the counts that prove the stride ran:
    *  `perceiveCalls < framesAnalyzed` in a cool region (the cadence skipped
@@ -4124,8 +4146,11 @@ export function buildLiveObserveMetrics(
   decideStages?: DecideStagesSnapshot,
   /** ADAAAA-8351: the effective ASR wait posture of this run. Absent (or a zero
    *  budget) leaves the row byte-identical to today — the three fields below are
-   *  written only when `LIVE_DECIDE_ASR_WAIT_MS` was actually configured. */
-  asr?: { waitMs: number; misses: number; laneWidth: number },
+   *  written only when `LIVE_DECIDE_ASR_WAIT_MS` was actually configured.
+   *  ADAAAA-8611 adds the optional headroom clamp posture (`headroomMs` +
+   *  `trims`), written only when `LIVE_DECIDE_ASR_HEADROOM_MS` is configured, so
+   *  an unconfigured rail's row stays byte-identical. */
+  asr?: { waitMs: number; misses: number; laneWidth: number; headroomMs?: number; trims?: number },
   /** ADAAAA-8564 (Fix A): the run's row accounting. Absent (VOD / a rail with no
    *  accept instrumentation) leaves the record byte-identical to today, so no
    *  reader can mistake an unmeasured 0 for "no rows". */
@@ -4226,6 +4251,15 @@ export function buildLiveObserveMetrics(
     // ADAAAA-8351: the effective ASR wait posture (see the parameter doc above).
     ...(asr && asr.waitMs > 0
       ? { asrWaitMisses: Math.max(0, Math.floor(asr.misses)), asrWaitBudgetMs: asr.waitMs, asrLaneWidth: asr.laneWidth }
+      : {}),
+    // ADAAAA-8611: the headroom-clamp posture. Written ONLY when
+    // `LIVE_DECIDE_ASR_HEADROOM_MS` is configured (the clamp is inert at 0), so
+    // an unconfigured rail's record keeps its pre-8611 key set exactly.
+    ...(asr && asr.waitMs > 0 && (asr.headroomMs ?? 0) > 0
+      ? {
+          asrWaitHeadroomMs: Math.max(0, Math.floor(asr.headroomMs as number)),
+          asrWaitTrims: Math.max(0, Math.floor(asr.trims ?? 0)),
+        }
       : {}),
   };
 }
@@ -8479,6 +8513,46 @@ const WAIT_BUDGET_MISSED = Symbol("asrWaitBudgetMissed");
  * TicketParams expired (a recoverable non-event: nothing accepted, nothing
  * billed beyond the skipped call).
  */
+/**
+ * ADAAAA-8611: the EFFECTIVE ASR wait for one window, i.e. the headroom-aware
+ * clamp. Pure, so the two properties the ticket depends on are unit-tested
+ * without driving a decide:
+ *
+ *   - `headroomMs <= 0` (the shipped default, `LIVE_DECIDE_ASR_HEADROOM_MS`
+ *     unset) returns `budgetMs` UNCHANGED — the inert path, byte-identical to
+ *     today's `Promise.race` with the configured budget;
+ *   - otherwise the wait is `min(budgetMs, headroomMs - elapsedSinceFire)`,
+ *     floored at 0. `headroomMs` is the bar the row is graded against (AC-B
+ *     p95 = 5 000 ms), so a row that already spent its bar before the decide
+ *     starts waits no further and goes inline immediately — it cannot wait
+ *     itself past the bar. `firedAtMs` absent/invalid = elapsed 0 (the wait
+ *     starts at fire, the staged path's shape).
+ *
+ * The prefetch is never aborted by this: a 0 ms wait simply stops WAITING.
+ */
+export function effectiveAsrWaitMs(
+  budgetMs: number,
+  headroomMs: number,
+  firedAtMs: number | undefined,
+  nowMs: number
+): number {
+  const budget = Math.max(0, Math.floor(budgetMs));
+  const headroom = Math.max(0, Math.floor(headroomMs));
+  if (headroom <= 0) return budget; // inert default: today's wait, untouched
+  const fired = Number.isFinite(firedAtMs as number) ? (firedAtMs as number) : nowMs;
+  const elapsed = Math.max(0, nowMs - fired);
+  return Math.max(0, Math.min(budget, headroom - elapsed));
+}
+
+/**
+ * ADAAAA-8351 / ADAAAA-8611: wait for this window's side-lane transcription.
+ *
+ * Returns the settled prefetch when it lands inside the effective wait, else
+ * `null` and the caller proceeds with inline ASR. The prefetch keeps running and
+ * still caches (never aborted). The lane (`prefetched` / `miss` / `waitmiss` /
+ * `inline`) and the wait cost are recorded on the payload's `ASR_STAGE` holder
+ * so the delivered-latency row can attribute the tail.
+ */
 export async function observeDecideOnly(
   client: PipelineClient,
   run: LiveRunShared,
@@ -8502,20 +8576,49 @@ export async function observeDecideOnly(
   // paying for a second transcription.
   const prefetch = payload[ASR_PREFETCH];
   const waitBudgetMs = Math.max(0, Math.floor(cfg.decideAsrWaitMs ?? 0));
+  const headroomBarMs = Math.max(0, Math.floor(cfg.decideAsrHeadroomMs ?? 0));
+  // ADAAAA-8611: the ASR lane holder the observer attached at fire time. Filled
+  // in below for EVERY window (including the no-prefetch one), so the delivered
+  // row can attribute its tail instead of a `docker logs` dig.
+  const stageHolder = payload[ASR_STAGE];
+  // Wall instant this window fired: the wait's elapsed clock for the headroom
+  // clamp. Absent (VOD, a hand-built payload) => elapsed 0, i.e. the wait starts
+  // at fire — the staged path's shape.
+  const firedAtMs = payload.firedAtMs;
   let prefetched: AsrPrefetchResult | null = null;
   let waitMissed = false;
+  let waitMs = 0;
+  let trimmed = false;
   if (prefetch) {
-    if (waitBudgetMs > 0) {
+    const effectiveWaitMs = effectiveAsrWaitMs(waitBudgetMs, headroomBarMs, firedAtMs, Date.now());
+    // A clamp to 0 is the deliberate skip: nothing to wait for, go inline now.
+    trimmed = headroomBarMs > 0 && effectiveWaitMs < waitBudgetMs;
+    if (effectiveWaitMs <= 0 && trimmed) {
+      waitMissed = true;
+      if (cfg.decideAsrWaitStats) cfg.decideAsrWaitStats.trims = (cfg.decideAsrWaitStats.trims ?? 0) + 1;
       const settled = prefetch.catch(() => null);
+      // The prefetch stays in flight (never aborted): a no-op handler keeps its
+      // eventual rejection off the unhandled-rejection path.
+      settled.then(() => {}, () => {});
+    } else if (effectiveWaitMs > 0) {
+      const settled = prefetch.catch(() => null);
+      const waitStartedMs = Date.now();
       let timer: ReturnType<typeof setTimeout> | undefined;
       const budget = new Promise<typeof WAIT_BUDGET_MISSED>((resolve) => {
-        timer = setTimeout(() => resolve(WAIT_BUDGET_MISSED), waitBudgetMs);
+        timer = setTimeout(() => resolve(WAIT_BUDGET_MISSED), effectiveWaitMs);
       });
       try {
         const raced = await Promise.race([settled, budget]);
         if (raced === WAIT_BUDGET_MISSED) {
           waitMissed = true;
-          if (cfg.decideAsrWaitStats) cfg.decideAsrWaitStats.misses++;
+          // A clamped wait that ran out is reported as a TRIM, not a slow-call
+          // miss: a headroom leg's `asrWaitMisses` must stay comparable to the
+          // pre-8611 legs it is measured against.
+          if (trimmed && cfg.decideAsrWaitStats) {
+            cfg.decideAsrWaitStats.trims = (cfg.decideAsrWaitStats.trims ?? 0) + 1;
+          } else if (cfg.decideAsrWaitStats) {
+            cfg.decideAsrWaitStats.misses++;
+          }
           // The prefetch stays in flight: attach a no-op handler so its eventual
           // rejection can never surface as an unhandled rejection.
           settled.then(() => {}, () => {});
@@ -8524,17 +8627,29 @@ export async function observeDecideOnly(
         }
       } finally {
         if (timer) clearTimeout(timer);
+        waitMs = Date.now() - waitStartedMs;
       }
     } else {
       prefetched = await prefetch.catch(() => null);
     }
   }
-  if (cfg.liveObserveLoop && cfg.jobId) {
-    const lane = cfg.decideAsrPrefetch !== false && prefetched
-      ? `lane=${prefetched.ran ? "prefetched" : "miss"} prefetchMs=${Math.round(prefetched.latencyS * 1000)}` +
-        ` chars=${prefetched.transcript.length}`
+  const asrStage: LiveAsrStage = {
+    lane: cfg.decideAsrPrefetch !== false && prefetched
+      ? prefetched.ran
+        ? "prefetched"
+        : "miss"
       : waitMissed
-        ? `lane=waitmiss waitMs=${waitBudgetMs}`
+        ? "waitmiss"
+        : "inline",
+    waitMs,
+    prefetchMs: prefetched ? Math.round(prefetched.latencyS * 1000) : 0,
+  };
+  if (stageHolder) stageHolder.stage = asrStage;
+  if (cfg.liveObserveLoop && cfg.jobId) {
+    const lane = asrStage.lane === "prefetched" || asrStage.lane === "miss"
+      ? `lane=${asrStage.lane} prefetchMs=${asrStage.prefetchMs} chars=${prefetched!.transcript.length}`
+      : asrStage.lane === "waitmiss"
+        ? `lane=waitmiss waitMs=${waitMs}${trimmed ? ` trimmed=1 budget=${waitBudgetMs} headroom=${headroomBarMs}` : ""}`
         : "lane=inline";
     console.error(`[live-asr:${cfg.jobId}] decide @${payload.centerTs.toFixed(2)}s ${lane}`);
   }
@@ -10533,10 +10648,17 @@ export async function analyzeJob(
             decideStageRecorder.summary(cfg.jobId),
             // ADAAAA-8351: the effective ASR wait posture + the run's wait-miss
             // counter, read at the same instant as the decide counters.
+            // ADAAAA-8611: plus the headroom clamp (absent unless the env is set).
             {
               waitMs: Math.max(0, Math.floor(cfg.decideAsrWaitMs ?? 0)),
               misses: cfg.decideAsrWaitStats?.misses ?? 0,
               laneWidth: Math.max(1, Math.floor(cfg.decideAsrPrefetchConcurrency ?? 2)),
+              ...(cfg.decideAsrHeadroomMs && cfg.decideAsrHeadroomMs > 0
+                ? {
+                    headroomMs: Math.max(0, Math.floor(cfg.decideAsrHeadroomMs)),
+                    trims: cfg.decideAsrWaitStats?.trims ?? 0,
+                  }
+                : {}),
             },
             // ADAAAA-8564 (Fix A): the row accounting, read at the same instant so
             // `accepted` and the rows it should have counted reconcile on the row.

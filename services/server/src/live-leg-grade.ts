@@ -51,6 +51,13 @@ export interface LiveLegRowLike {
   localizeOffsetMs?: number;
   /** ADAAAA-8495 additive optional: the row id (the metric's dedupe key). */
   highlightId?: string;
+  /** ADAAAA-8611 additive optional: which ASR road the row's decide took and what
+   *  the wait cost (`prefetched` | `miss` | `waitmiss` | `inline`). Attribution
+   *  INSIDE `decideE2eMs` — never a term of the stage sum. Absent on rows written
+   *  before this field existed, which is why it is optional here. */
+  asrLane?: "prefetched" | "miss" | "waitmiss" | "inline";
+  asrWaitMs?: number;
+  asrPrefetchMs?: number;
 }
 
 /** The bars this ticket is graded against. One place, so the grader, the leg

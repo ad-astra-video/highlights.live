@@ -697,6 +697,15 @@ export const ObserveMetricsSnapshotSchema = z.object({
   asrWaitMisses: z.number().int().min(0).optional(),
   asrWaitBudgetMs: z.number().int().min(0).optional(),
   asrLaneWidth: z.number().int().min(0).optional(),
+  // ADAAAA-8611: the headroom-clamp posture of the ASR wait. `asrWaitHeadroomMs`
+  // is the delivered-latency bar the wait was clamped to (`LIVE_DECIDE_ASR_HEADROOM_MS`,
+  // 5 000 = AC-B p95) and `asrWaitTrims` counts the decides whose wait the clamp
+  // CUT SHORT — a deliberate skip, kept separate from `asrWaitMisses` (a slow
+  // prefetch) so a headroom leg stays comparable to a pre-8611 leg. Both are
+  // additive optional and written only when the headroom env is set; declared
+  // here for the same 8219 reason (an undeclared counter is stripped).
+  asrWaitHeadroomMs: z.number().int().min(0).optional(),
+  asrWaitTrims: z.number().int().min(0).optional(),
   // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
   // ingest delivers ~5 fps while the decide window only carries ~2 fps of
   // content, so the pass now CONSUMES frames at the analysis fps and runs the
@@ -878,6 +887,22 @@ export const ObserveMetricsSnapshotSchema = z.object({
              *  highlight and a re-attested row cannot double-count. Absent on
              *  rows written before this field existed. */
             highlightId: z.string().optional(),
+            /** ADAAAA-8611 (additive): which ASR road this row's decide took.
+             *  `prefetched` = the side lane's transcript rode the decide,
+             *  `miss` = the prefetch settled without transcribing (inline ASR),
+             *  `waitmiss` = the decide stopped waiting (budget / headroom clamp),
+             *  `inline` = no prefetch existed. Declared HERE because a zod object
+             *  strips undeclared keys: without it `JobSchema.parse` would drop
+             *  the attribution the ticket exists to persist (the 8219/8495
+             *  lesson). Absent on rows written before this field existed. */
+            asrLane: z.enum(["prefetched", "miss", "waitmiss", "inline"]).optional(),
+            /** ADAAAA-8611 (additive): wall ms this row's decide spent WAITING
+             *  for the side lane before the decide call started. Attribution
+             *  INSIDE `decideE2eMs` — never added to the stage sum. */
+            asrWaitMs: z.number().min(0).optional(),
+            /** ADAAAA-8611 (additive): the side lane's own transcription cost
+             *  for this row's window (0 when nothing landed). */
+            asrPrefetchMs: z.number().min(0).optional(),
           })
         )
         .max(200),

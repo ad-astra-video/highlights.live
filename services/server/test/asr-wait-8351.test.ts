@@ -256,7 +256,9 @@ describe("LIVE_DECIDE_ASR_WAIT_MS config + compose (ADAAAA-8351)", () => {
     // (6 000); the leg sets 20 000 so a slow call completes and caches.
     expect(analyzer.decideAsrPrefetchTimeoutMs).toBe(6_000);
     expect(analyzer.decideAsrPrefetchConcurrency).toBe(4);
-    expect(analyzer.decideAsrWaitStats).toEqual({ misses: 0 });
+    // ADAAAA-8611: the counter object also carries `trims` (wait clamped to the
+    // bar headroom, inert at the default 0).
+    expect(analyzer.decideAsrWaitStats).toEqual({ misses: 0, trims: 0 });
     // A per-run counter object, not a module global: two jobs never share misses.
     const second = buildLiveAnalyzerConfig({
       cfg,
