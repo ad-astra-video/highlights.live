@@ -936,7 +936,11 @@ export class MediaRailObserver {
         },
         // ADAAAA-8344: the adapter's per-job decide-stage summary, read at share
         // end like the decide counters. Absent when no decide was instrumented.
-        decideStageRecorder.summary(this.jobId)
+        decideStageRecorder.summary(this.jobId),
+        // ADAAAA-8564 (Fix A): the same row accounting the analyzer pass publishes,
+        // so a browser/RTMP share's `accepted` also reconciles with its rows.
+        undefined,
+        this.run.rowAccounting(this.live.deliveredLatencyStats()?.samples ?? 0)
       ),
       undefined,
       this.decideCapacityLatch?.()

@@ -542,7 +542,41 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // Decide invocations that fired on the cadence.
   decideCalls: z.number().int().min(0),
   // Decisions that became an accepted highlight.
+  //
+  // ADAAAA-8564 (Fix A): this is the LEGACY window counter — it is the accept
+  // verdict of a decided window (`observe-loop.ts`, `this.accepts++`), not a row
+  // count, so it over-counts a burst-SUPPRESSED window (the branch returns the
+  // pre-suppression GOAL verdict) and under-counts a demoted celebration that
+  // DID ship. Read `rowAccounting` below for the row-level truth; the two are
+  // reconciled by `accepted === acceptedWindows + suppressedWindows`.
   accepted: z.number().int().min(0),
+  // ADAAAA-8564 (Fix A): the row-accounting block, so `accepted 11 -> delivered
+  // 7` can never again read as four lost clients. Measured on live job
+  // `54c03cfc`: accepted 11, acceptedWindows 3, suppressedWindows 8,
+  // demotedCelebrations 4, persistedRows 7, servedCards 7.
+  //
+  // Declared here (not only on the server type) because a zod object STRIPS
+  // undeclared keys: without this block the counters are computed and then
+  // dropped when the job record is persisted (the `decideStages` lesson,
+  // ADAAAA-8344). Additive OPTIONAL: absent on every pre-change record and on a
+  // run whose accept path was not instrumented.
+  rowAccounting: z
+    .object({
+      /** Decided windows whose accept verdict was TRUE (row is a highlight). */
+      acceptedWindows: z.number().int().min(0),
+      /** Highlight rows this run persisted (`highlights.length`). */
+      persistedRows: z.number().int().min(0),
+      /** Rows whose persist ACK completed — what a viewer actually got. */
+      servedCards: z.number().int().min(0),
+      /** Windows a dedupe guard dropped before persist (burst / celebration /
+       *  in-place promotion): a dropped WINDOW, never a dropped moment. */
+      suppressedWindows: z.number().int().min(0),
+      /** Rows the goal gate delivered as a celebration (ADAAAA-7996 demotion +
+       *  ADAAAA-7865 repeat-goal downgrade). They ship; the legacy counter
+       *  refuses them, which is half of the accepted-vs-delivered gap. */
+      demotedCelebrations: z.number().int().min(0),
+    })
+    .optional(),
   // Max frames in a single decide payload (<= the 30-frame cap).
   maxFrames: z.number().int().min(0),
   // Mean / max decide gemma end-to-end latency (ms).
