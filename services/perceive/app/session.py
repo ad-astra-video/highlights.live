@@ -143,6 +143,18 @@ class SessionState:
     # attribute, and so `None` (gate off / LLM failure) degrades to the
     # ADAAAA-7081 fixed-ROI path. Optional: absent -> fixed-ROI behaviour.
     scoreboard_vision: Optional[ScoreboardVerdict] = None
+    # ADAAAA-8548 (browser-rail score READ SUPPLY): which region source the
+    # session's cached scoreboard ROI came from (`explicit` / `discovery` /
+    # `selector` / `default_top_band` / `default_top_band_miss` /
+    # `bottom_prior_repair` / `abandoned_bottom_prior` / `re-resolve`), how many
+    # consecutive frames the crop printed text with no digit at all, how many
+    # bounded re-resolve cycles it has used, and how many whole-frame score
+    # reads it has spent. All four are counters/attribution only — no extra OCR.
+    scoreboard_roi: Optional[object] = None
+    scoreboard_roi_source: str = ""
+    scoreboard_roi_digitless: int = 0
+    scoreboard_roi_reresolves: int = 0
+    score_fallback_reads: int = 0
     # LLM TrackingPlan (ADAAAA-6463, child of ADAAAA-6441): the closed detection
     # roster + zones + anchor + maxTracks the decide brain emitted for this
     # session. Plan-first: when present, detect/seeding vocabulary, zone set and

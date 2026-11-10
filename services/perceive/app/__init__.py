@@ -196,6 +196,32 @@ _OCR_LINES_PER_FRAME_CAP = 4
 # here (measured: 640x72 on a 640x360 frame, the same band the 11 labelled anchor
 # frames read both clubs from).
 _SCOREBOARD_BOTTOM_CENTRE_PRIOR = (0.0, 0.80, 1.0, 1.0)
+# ADAAAA-8548: how long a cached scoreboard ROI may keep printing text with no
+# digit at all before the session stops trusting it. Measured on browser job
+# `50b7aed6`: 2324 frames, every crop read the SAME hashtag graphic
+# (`#BarçaAlavés` and its OCR variants, 3529/4648 records) — a graphic, never the
+# score surface — and the region was reused for the whole 1113 s session, so
+# `scoreReads` stayed 0. Five consecutive digit-less frames is enough to tell a
+# graphic from a scoreboard (a real scorebug prints a digit on essentially every
+# frame it is on), and cheap: the check reads the lines the crop already spent.
+_SCOREBOARD_ROI_DIGITLESS_FRAMES = 5
+# Bounded re-resolution: at most this many re-resolve cycles per session. Each
+# cycle only clears the cached region (the next frame's normal resolution path —
+# locator/discovery with its existing backoff — picks the replacement), so the
+# worst case is a few discovery passes, not a per-frame bill. The LAST cycle
+# adopts the documented bottom-centre prior and stops: a session that cannot read
+# its discovered/first-guess region must end somewhere sane, never on the graphic
+# that printed no digit for the whole job.
+_SCOREBOARD_ROI_RERESOLVE_MAX = 3
+# ADAAAA-8548: the whole-frame score fallback is a bounded RATE, like the
+# ADAAAA-7909 team-text allowance. It fires instead of the crop when the crop
+# parsed no score, so a healthy session never pays it (its crop parses the score
+# on the first try); a session whose crop is misdirected pays one extra read per
+# `_SCORE_FALLBACK_FRAMES_PER_READ` frames up to a hard session ceiling, instead
+# of a second OCR inference on EVERY frame for the whole stream.
+_SCORE_FALLBACK_FRAMES_PER_READ = 2
+_SCORE_FALLBACK_HEADROOM = 24
+_SCORE_FALLBACK_MAX_READS = 200
 
 
 def _match_context_enabled() -> bool:
@@ -227,6 +253,169 @@ def _same_roi(a, b, tol: float = 1e-6) -> bool:
         )
     except Exception:  # noqa: BLE001 - an odd region object is never fatal
         return False
+
+
+def _score_fallback_allowance(state) -> int:
+    """Whole-frame score-fallback reads this session may spend (ADAAAA-8548).
+
+    Same shape as the ADAAAA-7909 team-text allowance: a RATE against the frames
+    the session already analysed plus an absolute session ceiling. A session
+    whose crop parses the score never touches it (no extra read per frame); a
+    session whose crop is misdirected gets one whole-frame read per
+    ``_SCORE_FALLBACK_FRAMES_PER_READ`` frames instead of one on every frame of a
+    20-minute stream.
+    """
+    analyzed = int(getattr(state, "frames_processed", 0) or 0)
+    return min(
+        _SCORE_FALLBACK_MAX_READS,
+        _SCORE_FALLBACK_HEADROOM + analyzed // _SCORE_FALLBACK_FRAMES_PER_READ,
+    )
+
+
+def _roi_box_label(roi) -> str:
+    """``(x0,y0,x1,y1)`` for a log line; ``?`` for anything unreadable."""
+    try:
+        return "(%.3f,%.3f,%.3f,%.3f)" % (
+            float(roi.x0),
+            float(roi.y0),
+            float(roi.x1),
+            float(roi.y1),
+        )
+    except Exception:  # noqa: BLE001 - logging only
+        return "?"
+
+
+def _note_scoreboard_roi_source(state, source: str, roi, seq=None) -> None:
+    """Record the region SOURCE the crop came from and log it once per session.
+
+    ADAAAA-8548 instrumentation: the browser-rail job read one graphic for the
+    whole session and no line said which of the four sources chose that box
+    (explicit calibration, discovery, the temporal selector, the vision-LLM box,
+    or the built-in top-band prior), so the defect could not be attributed. One
+    INFO line per source change costs nothing (no OCR, no GPU) and names both the
+    source and the box, so the next census reads the provenance straight off the
+    log. ``source`` changes are the interesting event: the first resolution and
+    every re-resolution after a digit-less region was abandoned.
+    """
+    prev = getattr(state, "scoreboard_roi_source", None)
+    state.scoreboard_roi_source = source
+    if prev == source:
+        return
+    log.info(
+        "scoreboard ROI source session=%s seq=%s source=%s box=%s",
+        getattr(state, "session_id", "?"),
+        seq,
+        source,
+        _roi_box_label(roi),
+    )
+
+
+def _set_scoreboard_roi(state, roi, source: str, seq=None) -> None:
+    """Cache ``roi`` as the session region AND record where it came from."""
+    state.scoreboard_roi = roi
+    state.scoreboard_visible = True
+    _note_scoreboard_roi_source(state, source, roi, seq)
+
+
+def _lines_have_digit(lines) -> bool:
+    """True when any OCR line of this read carries a digit (ADAAAA-8548).
+
+    A digit is the weakest possible scoreboard signal — it is NOT a score
+    (``parse_ocr_score`` still owns that) — but a region that never prints one
+    cannot be the score surface, which is exactly the measured hashtag bug.
+    """
+    try:
+        return any(any(ch.isdigit() for ch in str(line)) for line in (lines or []))
+    except Exception:  # noqa: BLE001 - evidence only
+        return False
+
+
+def _abandon_digitless_scoreboard_roi(state, seq, roi, lines, source: str) -> str:
+    """Count a digit-less crop and re-resolve / abandon the session region.
+
+    ADAAAA-8548: a discovered or selected ROI that prints no digit for
+    ``_SCOREBOARD_ROI_DIGITLESS_FRAMES`` consecutive frames is evidence the
+    region is a graphic, not a scoreboard. Measured on browser job `50b7aed6`:
+    every crop read was the same hashtag graphic for 1113 s and the region stayed
+    cached, so the session never got a second look. Bounded by
+    ``_SCOREBOARD_ROI_RERESOLVE_MAX``: each intermediate cycle clears the cached
+    region so the normal resolution path (locator/discovery with its existing
+    backoff, or the selector's priors) picks a replacement; the LAST cycle adopts
+    the documented bottom-centre prior so the session settles somewhere sane.
+
+    An operator-pinned ``PERCEIVE_SCOREBOARD_ROI`` is never invalidated (the
+    operator has told us where the scoreboard is), and a crop that read NOTHING
+    is absent evidence, not evidence the region is wrong, so it does not count.
+
+    Never adds an OCR read — it only interprets lines the caller already spent.
+    Returns a short status for tests/logging: ``"pinned"``, ``"blank"``,
+    ``"digit"``, ``"counting"``, ``"re-resolve"``, ``"abandoned"`` or
+    ``"exhausted"``.
+    """
+    if source in ("explicit", "vision"):
+        # An operator-pinned box is the operator's call, and the vision-LLM box
+        # is re-localized every frame anyway — neither is a stale cache.
+        state.scoreboard_roi_digitless = 0
+        return "pinned"
+    if not lines:
+        return "blank"
+    if _lines_have_digit(lines):
+        state.scoreboard_roi_digitless = 0
+        return "digit"
+    misses = int(getattr(state, "scoreboard_roi_digitless", 0) or 0) + 1
+    state.scoreboard_roi_digitless = misses
+    if misses < _SCOREBOARD_ROI_DIGITLESS_FRAMES:
+        return "counting"
+    cycles = int(getattr(state, "scoreboard_roi_reresolves", 0) or 0)
+    if cycles >= _SCOREBOARD_ROI_RERESOLVE_MAX:
+        # Already re-resolved as often as allowed (the last cycle pinned the
+        # bottom-centre prior): stop counting so a bad-but-final region cannot
+        # churn the session region every few frames.
+        state.scoreboard_roi_digitless = 0
+        return "exhausted"
+    state.scoreboard_roi_digitless = 0
+    state.scoreboard_roi_reresolves = cycles + 1
+    if state.scoreboard_roi_reresolves >= _SCOREBOARD_ROI_RERESOLVE_MAX:
+        _set_scoreboard_roi(state, ScoreboardRoi(*_SCOREBOARD_BOTTOM_CENTRE_PRIOR), "abandoned_bottom_prior", seq)
+        log.info(
+            "scoreboard ROI abandoned session=%s seq=%s from_source=%s from_box=%s digitless_frames=%d "
+            "action=bottom_centre_prior box=%s",
+            getattr(state, "session_id", "?"),
+            seq,
+            source,
+            _roi_box_label(roi),
+            misses,
+            _roi_box_label(state.scoreboard_roi),
+        )
+        return "abandoned"
+    state.scoreboard_roi = None
+    state.scoreboard_roi_source = "re-resolve"
+    log.info(
+        "scoreboard ROI re-resolve session=%s seq=%s from_source=%s from_box=%s digitless_frames=%d attempt=%d/%d",
+        getattr(state, "session_id", "?"),
+        seq,
+        source,
+        _roi_box_label(roi),
+        misses,
+        state.scoreboard_roi_reresolves,
+        _SCOREBOARD_ROI_RERESOLVE_MAX,
+    )
+    return "re-resolve"
+
+
+def _note_score_fallback_exhausted(state, seq) -> None:
+    """One INFO line per session when the whole-frame score allowance runs out."""
+    if getattr(state, "score_fallback_exhausted_logged", False):
+        return
+    state.score_fallback_exhausted_logged = True
+    log.info(
+        "scorebug whole-frame score fallback exhausted session=%s seq=%s reads=%d allowance=%d "
+        "(crop parsed no score; bounded per session, ADAAAA-8548)",
+        getattr(state, "session_id", "?"),
+        seq,
+        int(getattr(state, "score_fallback_reads", 0) or 0),
+        _score_fallback_allowance(state),
+    )
 
 
 def _union_ocr_lines(primary, extra, cap: int = _OCR_LINES_PER_FRAME_CAP) -> list[str]:
@@ -615,7 +804,7 @@ def _scoreboard_selector(state, sport: str):
     return selector
 
 
-def _scoreboard_roi(state, detector=None) -> "ScoreboardRoi | None":
+def _scoreboard_roi(state, detector=None, seq=None) -> "ScoreboardRoi | None":
     """The session's active scoreboard region-of-interest (ADAAAA-7081/7086).
 
     Resolution order (first match wins, in priority order):
@@ -647,8 +836,7 @@ def _scoreboard_roi(state, detector=None) -> "ScoreboardRoi | None":
     # pinned the scoreboard region). Invalid/unset -> None below.
     explicit = explicit_scoreboard_roi()
     if explicit is not None:
-        state.scoreboard_roi = explicit
-        state.scoreboard_visible = True
+        _set_scoreboard_roi(state, explicit, "explicit", seq)
         return explicit
 
     # 2. Auto-detect the scoreboard region from the frame content.
@@ -666,8 +854,7 @@ def _scoreboard_roi(state, detector=None) -> "ScoreboardRoi | None":
             except Exception:  # noqa: BLE001 - never crash the candidate path
                 located = None
             if located is not None:
-                state.scoreboard_roi = located
-                state.scoreboard_visible = True
+                _set_scoreboard_roi(state, located, "discovery", seq)
                 return located
         # A region-capable detector ran but found no visible scoreboard. Count
         # the miss so the next region pass waits out the backoff; a scoreboard
@@ -688,13 +875,16 @@ def _scoreboard_roi(state, detector=None) -> "ScoreboardRoi | None":
         # cached as `state.scoreboard_roi` so a later discovery attempt can still
         # upgrade to a better box when one is found.
         state.scoreboard_visible = True
-        return ScoreboardRoi.from_env()
+        prior = ScoreboardRoi.from_env()
+        # ADAAAA-8548: attribute the crop even on the uncached fallback, so the
+        # log never leaves "which box read this frame" unanswered.
+        _note_scoreboard_roi_source(state, "default_top_band_miss", prior, seq)
+        return prior
 
     # No region-capable detector (stub path): fall back to the documented
     # default top-band prior rather than dropping all score evidence.
     default = ScoreboardRoi.from_env()
-    state.scoreboard_roi = default
-    state.scoreboard_visible = True
+    _set_scoreboard_roi(state, default, "default_top_band", seq)
     return default
 
 
@@ -938,8 +1128,24 @@ def _scoreboard_ocr_fields(
     # Crop region: prefer the vision-LLM box (when it ran and localized a
     # usable scoreboard), else the ADAAAA-7086-aware `_scoreboard_roi`.
     roi = _vision_box_roi(state) if verdict is not None else None
+    _vision_roi = roi
+    # ADAAAA-8548: attribute a per-frame vision box too (it is never cached, so
+    # it is logged once per session and does not overwrite the session source).
+    if roi is not None and not getattr(state, "scoreboard_vision_source_logged", False):
+        state.scoreboard_vision_source_logged = True
+        log.info(
+            "scoreboard ROI source session=%s seq=%s source=vision box=%s",
+            state.session_id, seq, _roi_box_label(roi),
+        )
     if roi is None:
-        roi = _scoreboard_roi(state, detector)
+        roi = _scoreboard_roi(state, detector, seq)
+    # ADAAAA-8548: the source that produced THIS frame's crop, so the digit-less
+    # region check can name it and leave an operator-pinned / vision box alone.
+    _roi_source = (
+        "vision"
+        if _vision_roi is not None
+        else (getattr(state, "scoreboard_roi_source", "") or "unknown")
+    )
     # Visibility gate: the LLM says no scoreboard (7084) or the region
     # discovery found none (7086) -> skip the `<OCR>` pass entirely so
     # out-of-ROI / non-scoreboard text is never even read.
@@ -953,6 +1159,7 @@ def _scoreboard_ocr_fields(
     # clears the stability gates; the chosen region is then cached as the
     # session's ROI so later frames pay a single crop read as before.
     selector = _scoreboard_selector(state, _ocr_sport) if verdict is None else None
+    _probe_frame = False
     if visible and selector is not None and not selector.resolved:
         regions = selector.candidates_for_frame()
         if regions:
@@ -968,8 +1175,8 @@ def _scoreboard_ocr_fields(
             chosen = selector.select()
             if chosen is not None:
                 roi = chosen
-                state.scoreboard_roi = chosen
-                state.scoreboard_visible = True
+                _set_scoreboard_roi(state, chosen, "selector", seq)
+                _roi_source = "selector"
                 ocr_lines = selector.lines_for(selector.resolved_name or "")
                 log.info(
                     "scoreboard ROI selected session=%s seq=%s region=%s status=%s",
@@ -979,6 +1186,9 @@ def _scoreboard_ocr_fields(
                 # Still probing: this frame votes with everything the
                 # candidates printed (bounded), and saves the extra read the
                 # single-ROI path would otherwise do on the same frame.
+                # ADAAAA-8548: the lines are a UNION of several regions, so they
+                # cannot be read as "the cached region printed no digit".
+                _probe_frame = True
                 merged: list[str] = []
                 for lines in observed.values():
                     merged.extend(lines or [])
@@ -995,11 +1205,19 @@ def _scoreboard_ocr_fields(
             and verdict is not None
             and verdict.visible
             and verdict.score_text
-            and fallback_score_eligible(verdict.box, _scoreboard_roi(state, detector))
+            and fallback_score_eligible(verdict.box, _scoreboard_roi(state, detector, seq))
         ):
             ocr_lines = [verdict.score_text]
     out["ocr"] = ocr_lines
     score = parse_ocr_score(ocr_lines, roi=roi)
+    # ADAAAA-8548: a region that prints NO DIGIT for N consecutive frames is a
+    # graphic, not a scoreboard — re-resolve it (bounded) or abandon it instead of
+    # caching it for the session. Measured on browser job `50b7aed6`: 4648 `<OCR>`
+    # records, every per-frame crop read the same hashtag graphic
+    # (`#BarçaAlavés`), the region stayed cached for all 1113 s, and `scoreReads`
+    # stayed 0. Costs no read — it only interprets lines this frame already spent.
+    if not _probe_frame:
+        _abandon_digitless_scoreboard_roi(state, seq, roi, ocr_lines, _roi_source)
     # ADAAAA-7190: the auto-discovered region-of-interest crop can miss a
     # numeric scorebug that sits just outside the tight region (observed live
     # on an El-Clasico-style score overlay where the ROI crop OCR read only
@@ -1081,8 +1299,7 @@ def _scoreboard_ocr_fields(
                     # it is the region that actually carries the graphic.
                     if verdict is None:
                         roi = bottom
-                        state.scoreboard_roi = bottom
-                        state.scoreboard_visible = True
+                        _set_scoreboard_roi(state, bottom, "bottom_prior_repair", seq)
                     log.info(
                         "scorebug bottom-centre ROI repair session=%s seq=%s lines=%d adopted=%s",
                         state.session_id, seq, len(bottom_lines), verdict is None,
@@ -1091,15 +1308,37 @@ def _scoreboard_ocr_fields(
         # The repaired region still names only one side; the whole-frame read
         # is the last bounded attempt at the other (same session counter).
         _need_team_text = True
-    if visible and (score is None or _need_team_text):
+    # ADAAAA-8548: a crop that parsed NO score must be able to fall back to the
+    # whole-frame read WHATEVER the name channel says. The `{"home","away"}`
+    # sentinel above means "nothing to repair" for the TEAM-text channel only;
+    # reading it as "the crop is trustworthy" is what let the browser rail read a
+    # hashtag graphic for a whole session with `scoreReads=0`. The read is charged
+    # to its OWN bounded allowance (a rate, so a long stream still gets reads while
+    # a healthy session pays none — its crop parses the score first try) and it is
+    # disclosed: an INFO line when it recovers a score, one when the budget runs out.
+    _score_budget = int(getattr(state, "score_fallback_reads", 0) or 0) < _score_fallback_allowance(state)
+    _need_score_fallback = score is None and _score_budget
+    if score is None and not _score_budget:
+        _note_score_fallback_exhausted(state, seq)
+    if visible and (_need_score_fallback or _need_team_text):
         try:
             full_ocr = detector.ocr(rgb) or []
             alt = parse_ocr_score(full_ocr)  # whole-frame, no ROI filter
         except Exception as e:  # noqa: BLE001
             log.warning("scoreboard whole-frame OCR fallback skipped frame %s: %s", seq, e)
         else:
+            if _need_score_fallback:
+                # Charged as soon as it runs, success or not, so a source whose
+                # whole frame never prints a score cannot pay it forever.
+                state.score_fallback_reads = int(getattr(state, "score_fallback_reads", 0) or 0) + 1
             if alt is not None:
                 score = alt
+                if _need_score_fallback:
+                    log.info(
+                        "scorebug whole-frame score fallback session=%s seq=%s score=%d-%d lines=%d reads=%d",
+                        state.session_id, seq, alt[0], alt[1], len(full_ocr),
+                        state.score_fallback_reads,
+                    )
             if alt is not None or (
                 _need_team_text and scorebug_lines_have_team_text(full_ocr, _ocr_sport)
             ):
@@ -1116,6 +1355,15 @@ def _scoreboard_ocr_fields(
                         "scorebug team-text whole-frame fallback session=%s seq=%s lines=%d",
                         state.session_id, seq, len(full_ocr),
                     )
+            elif _need_team_text:
+                # ADAAAA-8548: charge a team-text read that ran and found nothing.
+                # Charging only on success made this path unbounded: a source whose
+                # whole frame never prints a club name (browser job `50b7aed6`, a
+                # hashtag graphic on every frame) paid one extra whole-frame OCR
+                # inference on EVERY frame of the session, because the counter that
+                # bounds it never moved. Same rule as the bottom-centre repair: the
+                # retry is charged as soon as it runs.
+                state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
     state.scoreboard_tracker.record(timestamp, score)
     # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
     # the OCR pass just read (CPU only, no GPU). These are the Stage-3
