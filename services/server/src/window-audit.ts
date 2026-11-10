@@ -14,6 +14,7 @@
 // only surfaces the causes. Purely derived from stored counters — zero decide
 // calls, zero GPU, no write.
 import type { LiveObserveMetricsSnapshot } from "./analyzer";
+import type { DecideKnobStamp } from "@highlights/events";
 
 /** One cause row: the record's own field name and the count it carries. */
 export interface WindowAuditCause {
@@ -82,6 +83,20 @@ export interface WindowAuditPayload {
   /** `{advertised, funded, effective}` latched by the decide admission gate;
    *  null when the record predates the field or the client has no gate. */
   decideCapacity: WindowAuditCapacity | null;
+  /** ADAAAA-8544: the per-job decide knob, ECHOED from the stored record. This
+   *  module is a pure stored-record projection, so it must NEVER recompute the
+   *  stamp: a second derivation could disagree with what the job actually ran,
+   *  and it would let an `env` posture read as a user's uncapped choice. Null on
+   *  a row written before the knob existed ("not recorded", never "uncapped"). */
+  decideKnob: DecideKnobStamp | null;
+  /** ADAAAA-8544: decide opportunities this job MEASURED (kept + throttled), the
+   *  number a grader contrasts with `decideKnob.opportunitiesPer300s`. Null when
+   *  the record carries no counter (not "measured 0"). */
+  decideOpportunities: number | null;
+  /** ADAAAA-8544: that count on the estimate's own 300 s content clock
+   *  (`300000 / meanCadenceMs`), i.e. the stream's real density beside the
+   *  prediction. Null when the record has no measured cadence. */
+  decideOpportunitiesPer300s: number | null;
 }
 
 type AuditJob = {
@@ -89,6 +104,11 @@ type AuditJob = {
   status?: string | null;
   source?: string | null;
   observeMetrics?: LiveObserveMetricsSnapshot | null;
+  /** ADAAAA-8544: the frozen knob stamped at start. Fallback for a record whose
+   *  observe snapshot was never written (in-flight row, or a stop that settled
+   *  before the first decide): the stamp answers "what posture did this job run"
+   *  either way. */
+  decideKnob?: DecideKnobStamp | null;
 };
 
 /** Non-negative integer from a stored counter; null when the field is absent. */
@@ -161,5 +181,18 @@ export function windowAuditForJob(job: AuditJob): WindowAuditPayload {
     skippedWindows,
     accountedWindows,
     decideCapacity,
+    // ADAAAA-8544: echoed, never recomputed (see the field doc).
+    decideKnob: (obs?.decideKnob as DecideKnobStamp | undefined) ?? job.decideKnob ?? null,
+    decideOpportunities: counter(obs?.decideOpportunities),
+    decideOpportunitiesPer300s: measuredOpportunitiesPer300s(obs),
   };
+}
+
+/** Measured density in decides / 300 s of CONTENT clock, derived from the run's
+ *  own mean cadence (`observeMetrics.meanCadenceMs`). Null when the record has no
+ *  measured cadence — the measured number a grade contrasts with the prediction. */
+function measuredOpportunitiesPer300s(obs: LiveObserveMetricsSnapshot | null | undefined): number | null {
+  const mean = Number(obs?.meanCadenceMs);
+  if (!Number.isFinite(mean) || mean <= 0) return null;
+  return Number((300000 / mean).toFixed(1));
 }
