@@ -1764,6 +1764,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // stream's depth to `floor(admission / activeJobs)`.
         bj.rail.release();
       }
+      // ADAAAA-8487: this rail is a LIVE job, so its terminal record has to carry
+      // the end-of-accrual stamp the other terminal paths write (ADAAAA-8061).
+      // `finishBrowserJob` used to persist only `{status:"done"}`, which left a
+      // delivered browser share with `startedAt` and no `endedAt`/`finishedAt` —
+      // the offline leg grader then read `duration_unknown` and AC-B's shape
+      // floor had to be supplied by hand from the harness's wall clock. Capture
+      // it here, at the moment accrual stops (perceive session released), so the
+      // stamp does not include the clip-cut tail below.
+      const accrualEndedAt = new Date().toISOString();
       if (bj.sessionId) await adapter.stopPerceive(bj.sessionId).catch(() => {});
       // Media-path session: tell the media server to stop paying + release the
       // perceive slot (also idempotently triggered by the browser WS closing),
@@ -1835,6 +1844,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // the job lands `failed` with a machine-readable failureReason and an
       // actionable message, instead of a bare `failed` with 0 frames (the 22:16Z
       // report). A client/control close keeps finalizing as `done`.
+      // ADAAAA-8487: both terminal outcomes now stamp `endedAt` (end of accrual,
+      // captured above) and `finishedAt` (end of finalization), matching the RTMP
+      // / VOD / cancelled settlements (ADAAAA-8061) so a stored live leg is
+      // gradeable offline without the harness supplying its own wall clock.
+      const finalFinishedAt = new Date().toISOString();
       await store.patchJob(
         jobId,
         outcome.status === "failed"
@@ -1842,9 +1856,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               status: "failed",
               failureReason: outcome.failureReason,
               error: outcome.error,
-              finishedAt: new Date().toISOString(),
+              endedAt: accrualEndedAt,
+              finishedAt: finalFinishedAt,
             }
-          : { status: "done" }
+          : { status: "done", endedAt: accrualEndedAt, finishedAt: finalFinishedAt }
       );
       // Activity log (durable) + live-console event, so the console shows the
       // attribution within the SSE tick rather than on the next poll.
