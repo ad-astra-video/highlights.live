@@ -861,6 +861,11 @@ services:
       # ADAAAA-8351: decide-side WAIT budget, split from the transcription
       # timeout above. Default 0 = inert (await the whole prefetch).
       - LIVE_DECIDE_ASR_WAIT_MS=${LIVE_DECIDE_ASR_WAIT_MS:-0}
+      # ADAAAA-8611: headroom-aware wait guard. Default 0 = INERT (the wait is
+      # the budget above). Set to the delivered-latency bar (5000 = AC-B p95) and
+      # the effective wait becomes min(budget, bar - elapsed since fire), so a
+      # wait-miss row cannot spend the whole bar before its decide starts.
+      - LIVE_DECIDE_ASR_HEADROOM_MS=${LIVE_DECIDE_ASR_HEADROOM_MS:-0}
       - LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}
       # ADAAAA-7781: COMPACT verdict contract on the live decide rail. The live
       # pass is decode-bound (measured: p50 9.4 s for a ~1340-char verdict; the

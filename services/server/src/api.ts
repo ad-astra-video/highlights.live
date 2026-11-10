@@ -8076,7 +8076,11 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // timeout. 0/unset = inert; a per-run counter object carries `asrWaitMisses`
     // into the persisted observe snapshot (see `buildLiveObserveMetrics`).
     decideAsrWaitMs: cfg.liveDecideAsrWaitMs,
-    decideAsrWaitStats: { misses: 0 },
+    decideAsrWaitStats: { misses: 0, trims: 0 },
+    // ADAAAA-8611: the headroom-aware wait guard, inert at the shipped default
+    // (0). Set, the wait is clamped to the remaining delivered-latency-bar
+    // headroom so a wait-miss row cannot spend the whole bar before its decide.
+    decideAsrHeadroomMs: cfg.liveDecideAsrHeadroomMs,
     // ADAAAA-7781: the COMPACT verdict contract on the live rail only. The live
     // pass is decode-bound, so the per-call output-token count IS its throughput
     // ceiling; VOD keeps the full long-form contract.

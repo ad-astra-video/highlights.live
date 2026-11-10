@@ -28,7 +28,7 @@ import type { StageAOutcomeLedger } from "./stage-a-metrics";
 // ADAAAA-8005 (gate 3): the trigger -> delivered metric. The observer owns the
 // fire / settle / accept clocks; the server's persist path owns the delivered
 // (write-through ack) clock and reports it back through the same tracker.
-import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot } from "./live-delivery";
+import { LiveDeliveryTracker, type LiveDeliveredLatencySnapshot, type LiveAsrStage } from "./live-delivery";
 // ADAAAA-7844: provenance type for the measured scoreboard delta carried on a
 // window bias hint (defined next to the confirm/attestation types in analyzer).
 import type { ScoreboardDeltaEvidence } from "./analyzer";
@@ -42,6 +42,20 @@ import { jpegDimensionsFromBase64 } from "./image-dims";
 
 /** ADAAAA-8081: non-enumerable payload key carrying this window's prefetch. */
 export const ASR_PREFETCH = Symbol("asrPrefetch");
+
+/** ADAAAA-8611: non-enumerable payload key carrying this window's ASR lane
+ *  stage as a mutable holder. `observeDecideOnly` fills it in when the decide
+ *  knows which road the window took (`prefetched` / `miss` / `waitmiss` /
+ *  `inline`), and the observer reads it back when it registers the window's
+ *  delivered-latency clocks. A holder (not a value) because the lane is decided
+ *  inside the decide call, i.e. after the payload was built; the payload itself
+ *  stays JSON-clean for the decide request. */
+export const ASR_STAGE = Symbol("asrStage");
+
+/** The mutable holder `[ASR_STAGE]` points at. */
+export interface AsrStageHolder {
+  stage?: LiveAsrStage;
+}
 
 /** ADAAAA-7723: nearest-rank percentile over an already-sorted sample list.
  *  Shared by the observer's per-family latency stats and the media rail's
@@ -588,6 +602,10 @@ interface PendingObserveDecide {
   dueTrigger?: AudioTriggerRecord | null;
   /** Frames the decide payload carried (per-call size report). */
   frameCount: number;
+  /** ADAAAA-8611: the ASR lane holder the decide fills in (see `ASR_STAGE`).
+   *  Read at accept time so the delivered row carries the lane the window
+   *  actually took. Absent on a caller that never attached one. */
+  asrStage?: AsrStageHolder;
   /** Wall clock the decide was issued (E2E is measured from here to settle). */
   startedMs: number;
   /** ADAAAA-8005 (gate 3): wall clock the window FIRED (the cadence decision).
@@ -1255,6 +1273,9 @@ export class LiveObserver {
       settledAtMs,
       acceptStartMs,
       acceptDoneMs: null,
+      // ADAAAA-8611: the decide has settled by now, so the lane is known —
+      // register it with the window instead of a second mutation.
+      ...(entry.asrStage?.stage ? { asr: entry.asrStage.stage } : {}),
     });
     const accepted = await entry.staged.accept();
     const acceptDoneMs = Date.now();
@@ -1684,6 +1705,19 @@ export class LiveObserver {
     // transcription runs in the side lane WHILE the previous window's decide is
     // still in flight — instead of serially inside this window's decide call.
     // Non-enumerable symbol key: the payload itself stays JSON-clean.
+    //
+    // ADAAAA-8611: the window is also committed to a DELIVERED-LATENCY row, so
+    // attach the ASR lane holder here: `observeDecideOnly` writes which road the
+    // window took into it, and the accept chain reads it back when it registers
+    // the row's clocks. Attached even when the lane is off (no prefetch), so a
+    // row always reports a lane (`inline`) instead of an absent field.
+    const asrStage: AsrStageHolder = {};
+    Object.defineProperty(payload, ASR_STAGE, { value: asrStage, enumerable: false });
+    // ADAAAA-8611: the wall instant the window fired, i.e. when its delivered
+    // clock started. The headroom clamp measures the pre-decide elapsed time
+    // from it; without it a decide cannot know how much of the bar it already
+    // spent before it began waiting.
+    payload.firedAtMs = Date.now();
     if (this.prefetchAsr) {
       try {
         const p = this.prefetchAsr(payload);
@@ -1713,6 +1747,8 @@ export class LiveObserver {
         anchored,
         dueTrigger: anchored ? dueTrigger : null,
         frameCount: payload.frames.length,
+        // ADAAAA-8611: the ASR lane the decide fills in, read back at accept.
+        asrStage,
       });
       return;
     }
@@ -1730,6 +1766,11 @@ export class LiveObserver {
       });
       const accepted = await this.onDecide(payload);
       const acceptDoneMs = Date.now();
+      // ADAAAA-8611: the serial path registers its window BEFORE the combined
+      // decide+accept call (it must: the ack fires inside it), so the lane is
+      // only known here — stamp it before the accept-done clock finalises the
+      // row, or the row would claim `inline` for a window that waited.
+      this.delivery?.noteAsrStage(nowTs, (payload[ASR_STAGE] as AsrStageHolder | undefined)?.stage);
       this.delivery?.noteAcceptDone(nowTs, acceptDoneMs);
       // ADAAAA-7694/7707: the verdict is written into the counters, the
       // Stage-A/B ledgers and the latency samples by `recordOutcome`, which the
@@ -2124,6 +2165,17 @@ export interface ObserveDecidePayload {
    *  enumerable on it (a JSON round-trip of the payload would serialise `{}`).
    *  Absent => the decide pass transcribes inline exactly as before. */
   [ASR_PREFETCH]?: Promise<AsrPrefetchResult | null> | null;
+  /** ADAAAA-8611: the ASR lane stage holder for THIS window (filled in by
+   *  `observeDecideOnly`, read by the observer at accept time). A symbol key for
+   *  the same reason as `ASR_PREFETCH`: the decide request serialises the
+   *  payload, and a mutable bookkeeping object must never ride it as JSON. */
+  [ASR_STAGE]?: AsrStageHolder;
+  /** ADAAAA-8611: wall epoch ms this window FIRED. `observeDecideOnly` measures
+   *  the pre-decide elapsed time from it for the headroom clamp
+   *  (`LIVE_DECIDE_ASR_HEADROOM_MS`), i.e. "how much of the delivered-latency
+   *  bar has this window already spent". Absent (VOD, a hand-built payload) =>
+   *  elapsed 0, which is the inert shape. */
+  firedAtMs?: number;
 }
 
 /**
