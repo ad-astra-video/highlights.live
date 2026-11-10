@@ -1561,18 +1561,33 @@ _OUTPUT_CONTRACT_COMPACT = (
     "Now answer with ONLY one JSON object, no markdown, no preamble, no "
     "leading/trailing prose, exactly of this shape (keep every free-text field "
     "to the stated word cap — shorter is better, do NOT restate the criteria):\n"
+    # ADAAAA-8603: the live rail is decode-bound (187 completion tokens at
+    # ~112 tok/s = ~1.67 s of a 2.2 s call), so the reply's PROSE is the
+    # latency. The four audit-only fields are capped to a mechanical HARD MAX
+    # and told that decoding costs wall time; postTitle / runningSummary keep
+    # their own rules untouched, and the outcome/criteria keys are unchanged so
+    # the /confirm Stage-2 read and the guard see the same wire. Measured on the
+    # 12-window replay (gemma-gpu0, c=1): completion 189 -> 145 tokens, p50
+    # 2224 -> 1826 ms, decision parity with the untrimmed contract on all 20
+    # windows.
+    "AUDIT FIELDS ARE THE LATENCY: reason, reasoning, independentlyObserved and "
+    "contradictedBy are decoded on the live rail, so count the words of each and "
+    "stay under its HARD MAX (a field over the HARD MAX is WRONG: delete words "
+    "until it fits). Write the JSON on ONE line with NO space after ':' or ',', "
+    "and never add a key the shape does not name. postTitle and runningSummary "
+    "keep their own rules exactly as stated below.\n"
     "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
     "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
-    "\"reason\": \"<max 20 words: the deciding evidence AND its timestamp "
+    "\"reason\": \"<max 14 words (HARD MAX 17): the deciding evidence AND its timestamp "
     "(timeline t=…, or the ASR/window clock)>\", "
-    "\"reasoning\": \"<ONE sentence, max 25 words: what you observed FIRST, then "
+    "\"reasoning\": \"<ONE sentence, max 12 words (HARD MAX 15): what you observed FIRST, then "
     "how that tests the hypothesis>\", "
     "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
-    "\"independentlyObserved\": \"<max 15 words: what the dossier's evidence "
+    "\"independentlyObserved\": \"<max 7 words (HARD MAX 9): what the dossier's evidence "
     "shows, stated before the hypothesis>\", "
     "\"criteria\": {\"ballCrossedLineBetweenPosts\": true|false|null, "
     "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
-    "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<max 12 words, or "
+    "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<max 6 words (HARD MAX 8), or "
     "null when the hypothesis is not contradicted>\"}, "
     # ADAAAA-7935: the fast rail emits ONE play-by-play line per window with an
     # optional colour beat, not one unbounded announcer sentence. The budgets are
