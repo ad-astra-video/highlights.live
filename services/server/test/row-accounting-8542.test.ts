@@ -110,6 +110,20 @@ describe("buildPostableHighlights — row accounting (AC3)", () => {
     ]);
   });
 
+  it("discloses a deduped row instead of claiming it is served as a card", () => {
+    // Two overlapping scoring rows collapse to ONE moment; the loser is still
+    // delivered (its clip exists) but has no card of its own — disclosed.
+    const list = [
+      row("hl-a", jobId, 10, { outcome: "scoring_play", eventType: "GOAL", score: 100, reason: "The ball enters the net." }),
+      row("hl-b", jobId, 14, { outcome: "scoring_play", eventType: "GOAL", score: 80, reason: "The ball enters the net." }),
+    ];
+    const out = buildPostableHighlights(list);
+    expect(out.rowAccounting.served).toEqual([{ id: "hl-a", representation: "card" }]);
+    expect(out.rowAccounting.unrepresented).toEqual([{ id: "hl-b", reason: "merged_duplicate" }]);
+    // ...and the duplicate lane still carries it (nothing lost, nothing doubled).
+    expect(out.duplicates.map((d) => d.id)).toEqual(["hl-b"]);
+  });
+
   it("accounts a replay as its owner's alternative, and a missing owner as a gap", () => {
     const list = [
       row("hl-owner", jobId, 100, { outcome: "scoring_play", eventType: "GOAL", reason: "The ball enters the net." }),
