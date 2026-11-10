@@ -66,6 +66,12 @@ export const INTERNAL_JOB_KEYS = [
   "observeMetrics",
   "vodObserveMetrics",
   "confirmMetrics",
+  // ADAAAA-8544: the frozen decide-knob stamp carries the per-job PREDICTED
+  // spend (`predictedUsdPerHour` + its band) — the same spend class as `costUsd`
+  // above — so a customer payload omits it. The customer states their posture at
+  // start (cadence + cap) and that control is theirs; the stamped dollar figure
+  // on the record stays an operator/audit read (the window audit echoes it).
+  "decideKnob",
   // ADAAAA-7907 (VOD resume Inc 4): the per-job cost meter. `vodMeter` carries
   // `costUsd`, `decideCalls` and the $/video-hour price row — the same spend
   // diagnostics the keys above hide — and it landed (ADAAAA-7821) after this

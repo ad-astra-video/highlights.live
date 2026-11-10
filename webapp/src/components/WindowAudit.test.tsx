@@ -75,3 +75,43 @@ describe("capacityPair", () => {
     expect(capacityPair(null)).toBeNull();
   });
 });
+
+// ADAAAA-8544 (AC1): the window audit echoes the knob the job RAN — it never
+// re-derives it. A row written before the knob existed says "not recorded"
+// rather than implying the user chose uncapped, and an unmeasured density reads
+// `n/a` rather than a fabricated `0`.
+describe("the decide knob echo (ADAAAA-8544)", () => {
+  it("prints the stored posture and the measured density", () => {
+    const html = render({
+      ...AUDIT,
+      decideKnob: {
+        cadenceSec: 5,
+        rateCapPer300s: null,
+        resolvedSource: "default",
+        opportunitiesPer300s: 50.3,
+        usdPerDecide: 0.0033324,
+        predictedUsdPerHour: 2.01143664,
+        predictedBandUsdPerHour: [1.862146, 2.162905],
+        estimateVersion: "est-v2",
+      },
+      decideOpportunities: 287,
+      decideOpportunitiesPer300s: 84.4,
+    });
+    expect(html).toContain("data-window-audit-decide-knob");
+    expect(html).toContain("Decide posture");
+    expect(html).toContain("5 s cadence");
+    expect(html).toContain("approx $2.01/h");
+    expect(html).toContain("measured band $1.86/h-$2.16/h");
+    expect(html).toContain("est-v2");
+    expect(html).toContain("84.4 / 300 s");
+    expect(html).toContain("data-window-audit-decide-opportunities");
+  });
+
+  it("says not recorded (never 'uncapped') on a pre-knob row", () => {
+    const html = render({ ...AUDIT });
+    expect(html).toContain("not recorded (pre-knob row)");
+    expect(html).not.toContain("uncapped");
+    // No counter on the record -> `n/a`, not 0.
+    expect(html).toContain("n/a");
+  });
+});

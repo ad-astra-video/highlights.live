@@ -380,3 +380,30 @@ describe("match-context evidence projection (ADAAAA-7889 AC2)", () => {
     expect(visible).not.toHaveProperty("matchContextEvidence");
   });
 });
+
+// ADAAAA-8544: the frozen decide-knob stamp is a per-job SPEND prediction
+// (`predictedUsdPerHour` + band), the same class as `costUsd`, so it never
+// reaches a customer payload; the operator read (job header, window audit) keeps
+// it. This pins the new key rather than relying on the shared key loop, whose
+// fixture predates the field.
+describe("the decide knob is an internal readout (ADAAAA-8544)", () => {
+  it("drops decideKnob for role=user and keeps it for admin", () => {
+    const job = {
+      id: "job-8544",
+      status: "done",
+      costUsd: 1.04,
+      decideKnob: {
+        cadenceSec: 5,
+        rateCapPer300s: null,
+        resolvedSource: "default",
+        opportunitiesPer300s: 50.3,
+        usdPerDecide: 0.0033324,
+        predictedUsdPerHour: 2.01143664,
+        predictedBandUsdPerHour: [1.862146, 2.162905],
+        estimateVersion: "est-v2",
+      },
+    };
+    expect(jobForRole(job, "user")).not.toHaveProperty("decideKnob");
+    expect(jobForRole(job, "admin").decideKnob).toEqual(job.decideKnob);
+  });
+});

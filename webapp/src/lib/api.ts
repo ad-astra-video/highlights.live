@@ -1,6 +1,12 @@
 // Thin fetch client. Base is relative -> same origin (dev: vite proxies to :3000).
 import { chunkRanges, VOD_SINGLE_SHOT_MAX } from "./vodUpload";
 import type { ResumeView } from "./resume";
+import type { DecideKnobStamp } from "@highlights/events";
+
+/** ADAAAA-8544: the frozen per-job decide knob as the server stamps it. Mirrors
+ *  `DecideKnobStamp` in `@highlights/events` (imported, not retyped, so the
+ *  client cannot drift from the record contract). */
+export type DecideKnobView = DecideKnobStamp;
 
 const TOKEN_KEY = "hl_token";
 
@@ -478,6 +484,12 @@ export interface Job {
   // ADAAAA-7664: a LIVE job records its decide invocations in the observe
   // snapshot rather than the job-level `decideCalls`; the tile falls back to it.
   observeMetrics?: { decideCalls?: number };
+  // ADAAAA-8544: the per-stream decide knob frozen on the record at start
+  // (`cadenceSec`, `rateCapPer300s`, the `est-v2` prediction and its band, and
+  // which rule resolved it). Additive optional: absent on every row written
+  // before the knob existed. The monitor readout states it verbatim — it is the
+  // posture this job actually runs, never a re-estimate.
+  decideKnob?: DecideKnobView;
   perceiveSessionS?: number;
   costUsd?: number;
   scheduledAt?: string;

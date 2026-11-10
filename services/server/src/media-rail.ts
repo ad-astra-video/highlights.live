@@ -148,6 +148,13 @@ export interface MediaRailObserverOptions {
    *  SERVED clock, so this knob binds the RATE, not a share of this rail's
    *  opportunity count. */
   decideKeepRatio?: number;
+  /** ADAAAA-8544: the per-job decide RATE cap — charged decides per 300 s of
+   *  CONTENT clock (`POST /jobs` input, frozen on the record as
+   *  `observeMetrics.decideKnob`). `null`/undefined = uncapped (the shipped
+   *  economy default). When set it REPLACES {@link decideKeepRatio}, which stays
+   *  only as the fallback for a job started before the knob existed. Wired to the
+   *  observer's rate gate and nothing else. */
+  decideRateCapPer300s?: number | null;
   /** ADAAAA-8431: the SERVED clock the decide-rate budget accrues on (epoch ms).
    *  Defaults to `Date.now`; tests inject a simulated clock. */
   wallClock?: () => number;
@@ -473,6 +480,10 @@ export class MediaRailObserver {
       signalGate: opts.signalGate ?? false,
       signalGateOpts: opts.signalGateOpts,
       decideKeepRatio: opts.decideKeepRatio,
+      // ADAAAA-8544: the per-job rate cap on the media rail too, so a browser /
+      // screen share honours the knob the user set at start rather than only the
+      // deploy-time fraction. Null = uncapped (the shipped economy default).
+      decideRateCapPer300s: opts.decideRateCapPer300s ?? null,
       ...(opts.wallClock ? { wallClock: opts.wallClock } : {}),
       // ADAAAA-8108 (AC-E3): the enrichment arm, so the OFF arm is reachable on
       // the media rail the 7 s / 5 s cell is graded on. Undefined = shipped `on`.

@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { auditRenderable, capacityPair, type WindowAuditPayload } from "../lib/windowAudit";
+import { decideKnobReadout } from "../lib/decideKnob";
 
 /** Presentational block — SSR-testable, no fetch, no hooks. */
 export function WindowAuditPanel({ audit }: { audit: WindowAuditPayload }) {
@@ -87,6 +88,32 @@ export function WindowAuditPanel({ audit }: { audit: WindowAuditPayload }) {
           ) : null}
         </div>
       )}
+      {/* ADAAAA-8544 (AC1): the knob this job RAN, echoed off the stored record,
+          plus the density the stream actually offered. A row written before the
+          knob existed renders "not recorded" — never an implied uncapped choice,
+          and never a fabricated 0 for an unmeasured stream. */}
+      <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-mut" data-window-audit-decide-knob>
+        <span className="uppercase tracking-wide">Decide posture</span>
+        {audit.decideKnob ? (
+          <span className="font-mono text-neon">{decideKnobReadout(audit.decideKnob)}</span>
+        ) : (
+          <span className="text-mut">not recorded (pre-knob row)</span>
+        )}
+        <span>
+          measured opportunities{" "}
+          <span className="font-mono text-ink" data-window-audit-decide-opportunities>
+            {audit.decideOpportunities ?? "n/a"}
+          </span>
+        </span>
+        <span>
+          measured density{" "}
+          <span className="font-mono text-ink" data-window-audit-decide-density>
+            {audit.decideOpportunitiesPer300s != null
+              ? `${audit.decideOpportunitiesPer300s} / 300 s`
+              : "n/a"}
+          </span>
+        </span>
+      </div>
     </section>
   );
 }
