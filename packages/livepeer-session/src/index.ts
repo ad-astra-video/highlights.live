@@ -11,6 +11,14 @@
 
 export const ROUTES = {
   perceive: "highlights-perceive",
+  // ADAAAA-8553 S1: decide now registers FIVE per-container ids, but this
+  // constant is still the ONE fixed id the client posts to. Remaining single-id
+  // call sites (the S2 fix, ADAAAA-8559, owns them):
+  //   packages/livepeer-session/src/index.ts:1231  POST /apps/highlights-decide/app/<path>
+  //   services/server/src/livepeer-adapter.ts:546, 898, 963, 1023  `app: ROUTES.decide` payment descriptors
+  //   services/server/src/livepeer-adapter.ts:974  /apps/highlights-decide/app/confirm doc
+  // `isDecideRunnerApp` (index.ts:516) still matches discovery by the shared
+  // `highlights-live/decide` leaf and must NOT be switched to runner ids.
   decide: "highlights-decide",
   train: "highlights-train",
 } as const;
@@ -1228,6 +1236,9 @@ export class LivepeerClient {
         const tRequest = Date.now();
         let res: Awaited<ReturnType<Transport["request"]>>;
         try {
+          // ADAAAA-8553 S1: still a FIXED decide id, so the four new 5090/x99
+          // registrations are invisible here until S2 (ADAAAA-8559) selects a
+          // discovered runner per attempt.
           res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
             headers,
             body: bodyText,
