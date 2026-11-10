@@ -1,0 +1,496 @@
+{
+  "_note": "ADAAAA-8516 leg 7d99d651 evidence, trimmed for the ADAAAA-8529 $0 replay: the preflight window, the delivered rows, the leg block the harness wrote, and the record timestamps the bundle found absent.",
+  "authorized": {
+    "abortAtUsd": 0.6175,
+    "capUsd": 0.65,
+    "durationS": 480.0,
+    "hardStopSlackS": 10.0,
+    "meteredUsdPerS": 0.0011381,
+    "quietWindowS": 600.0
+  },
+  "clips": {
+    "note": "no clip files matched the job or its highlight ids; the media rail captured no screen-share recording on this leg",
+    "produced": 0,
+    "reason": [
+      "No screen-share recording was captured, so this highlight's clip could not be produced."
+    ]
+  },
+  "deliveredRows": [
+    {
+      "acceptMs": 10,
+      "acceptWaitMs": 0,
+      "decideE2eMs": 3774,
+      "deliveredLatencyMs": 4228,
+      "fireLagMs": 444,
+      "highlightId": "8de2ba20-6a59-41ba-943b-737aa23365e5",
+      "localizeOffsetMs": 0,
+      "persistAckMs": 0,
+      "triggerTs": 104.59700012207031
+    },
+    {
+      "acceptMs": 6,
+      "acceptWaitMs": 1,
+      "decideE2eMs": 2749,
+      "deliveredLatencyMs": 3644,
+      "fireLagMs": 888,
+      "highlightId": "f96ab111-659a-4602-a90f-4efcd23a1b3d",
+      "localizeOffsetMs": 0,
+      "persistAckMs": 0,
+      "triggerTs": 157.12900018692017
+    },
+    {
+      "acceptMs": 2,
+      "acceptWaitMs": 0,
+      "decideE2eMs": 3027,
+      "deliveredLatencyMs": 3764,
+      "fireLagMs": 735,
+      "highlightId": "7cfe2b68-384e-4d39-a54f-850702c080b8",
+      "localizeOffsetMs": 0,
+      "persistAckMs": 0,
+      "triggerTs": 283.93099999427795
+    },
+    {
+      "acceptMs": 4,
+      "acceptWaitMs": 0,
+      "decideE2eMs": 2182,
+      "deliveredLatencyMs": 2724,
+      "fireLagMs": 538,
+      "highlightId": "b6ac0136-0909-4456-92fd-3530d7194e9f",
+      "localizeOffsetMs": 0,
+      "persistAckMs": 0,
+      "triggerTs": 404.76200008392334
+    },
+    {
+      "acceptMs": 5,
+      "acceptWaitMs": 0,
+      "decideE2eMs": 2268,
+      "deliveredLatencyMs": 3041,
+      "fireLagMs": 768,
+      "highlightId": "dfaaca29-9379-4605-a6f7-1845fac72393",
+      "localizeOffsetMs": 0,
+      "persistAckMs": 0,
+      "triggerTs": 463.6640000343323
+    },
+    {
+      "acceptMs": 3,
+      "acceptWaitMs": 0,
+      "decideE2eMs": 2235,
+      "deliveredLatencyMs": 2592,
+      "fireLagMs": 354,
+      "highlightId": "c49c3e6e-23a1-4c84-a49e-54593657f83e",
+      "localizeOffsetMs": 0,
+      "persistAckMs": 0,
+      "triggerTs": 477.1300001144409
+    }
+  ],
+  "harness": {
+    "dryRun": false,
+    "issue": "ADAAAA-8489",
+    "name": "funded_leg",
+    "stubScenario": null,
+    "version": "1.1.0"
+  },
+  "jobId": "7d99d651-9353-4cde-8312-90e4d8141224",
+  "leg": {
+    "costSource": null,
+    "costUsd": 0.0,
+    "durationS": 480.0,
+    "meteredProjectedUsd": 0.57688,
+    "meteredProjectionS": 506.88,
+    "meteredUsdPerS": 0.0011381,
+    "perceiveSessionS": 0.0,
+    "settledStatus": "done",
+    "startedAt": "2026-11-09T22:28:03Z",
+    "stopReason": "authorized_duration"
+  },
+  "preflight": {
+    "quietWindowS": 600.0,
+    "samples": [
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:17:54Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:18:26Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:18:59Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:19:31Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:20:04Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:20:37Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:21:10Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:21:42Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:22:15Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:22:48Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:23:20Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:23:53Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:24:25Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:24:58Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:25:31Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:26:03Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:26:36Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:27:09Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      },
+      {
+        "activeSessions": 0,
+        "at": "2026-11-09T22:27:41Z",
+        "cycByContainer": {
+          "decide-gpu0": 0,
+          "decide-gpu1": 0,
+          "decide-gpu2": 0
+        },
+        "leases": {
+          "active": 0,
+          "awaitingClient": 0,
+          "grace": 0,
+          "paying": 0,
+          "total": 0
+        },
+        "nonterminalJobs": 0,
+        "problems": [],
+        "serverHealth": "ok"
+      }
+    ],
+    "verdict": "open"
+  },
+  "recordTimestamps": {
+    "createdAt": "2026-11-09T22:28:08.141Z",
+    "endedAt": null,
+    "finishedAt": null,
+    "note": "the live `done` record carries none of startedAt/endedAt/finishedAt, so the grader cannot read its duration floor from the record",
+    "startedAt": null
+  },
+  "settled": {
+    "costUsd": 0.3577,
+    "meteredProjectionSAtStop": 506.88,
+    "perceiveSessionS": 484
+  },
+  "shape": {
+    "actualCostUsd": 0.0,
+    "actualDurationS": 480.0,
+    "authorizedCapUsd": 0.65,
+    "authorizedDurationS": 480.0,
+    "costOvershootUsd": 0.0,
+    "durationOvershootS": 0.0,
+    "line": "AUTHORIZED-VS-ACTUAL: authorized duration <= 480.0 s / cap $0.6500 -> actual 480.0 s / $0.0000 (duration over by 0.00 s, cost headroom $0.6500) \u2014 WITHIN",
+    "table": "| shape | authorized | actual | delta |\n|---|---:|---:|---:|\n| duration | <= 480.0 s | 480.0 s | +0.0 s |\n| metered cost | <= $0.6500 | $0.0000 | $-0.6500 |",
+    "verdict": "WITHIN"
+  }
+}
