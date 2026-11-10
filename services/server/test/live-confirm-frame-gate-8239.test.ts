@@ -144,7 +144,14 @@ describe("confirmDiveAdoption — the AV6 falsifier case is NOT promoted", () =>
     expect(a.patch.outcome).toBeUndefined();
     expect(a.patch.eventType).toBeUndefined();
     // The badge the CEO sees is kept, and says WHY it is still provisional.
-    expect(a.patch.provisionalGoal).toMatchObject({ status: "provisional", refuted: true });
+    // ADAAAA-8542 (AC4): a HELD confirmation is not a REFUTED one — the dive
+    // said `confirmed_goal`, so the marker says `held` and not `refuted`.
+    expect(a.patch.provisionalGoal).toMatchObject({
+      status: "provisional",
+      refuted: false,
+      held: true,
+      holdReason: "score_lane_read_no_transition",
+    });
     expect((a.patch.provisionalGoal as any).note).toMatch(/no score transition/i);
     expect((a.patch.provisionalGoal as any).note).toMatch(/postSamples=0/);
     expect(a.reason).toMatch(/no measured score transition/i);
@@ -267,7 +274,10 @@ describe("Store — the held row keeps its clip and never becomes postable (AV10
     expect(moved.eventType).toBe("BIG_PLAY");
     expect(moved.clipUri).toBe("/clips/h-8239.mp4");
     expect(moved.provisionalGoal?.status).toBe("provisional");
-    expect(moved.provisionalGoal?.refuted).toBe(true);
+    // ADAAAA-8542 (AC4): the dive said `confirmed_goal`, so this is a HOLD, not
+    // a refutation — the marker must not claim the dive went against the call.
+    expect(moved.provisionalGoal?.held).toBe(true);
+    expect(moved.provisionalGoal?.refuted).toBe(false);
     expect(moved.confirmAttestation?.corroborationSource).toBe("frame_attestation");
     expect(moved.pendingConfirmDive).toBeUndefined();
     expect(store.highlightsForJob(job.id).length).toBe(before);
