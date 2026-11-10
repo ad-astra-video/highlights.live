@@ -1502,7 +1502,7 @@ export function HighlightCard({
               badge.confirmed ? "border-green/50 bg-green/10 text-green" : "border-yellow/50 bg-yellow/10 text-yellow"
             }`}
             data-detail-confirmed-badge={badge.confirmed ? "confirmed" : "unconfirmed"}
-            data-confirm-lane={admin ? (badge.lane ?? "absent") : undefined}
+            data-detail-confirm-lane={admin ? (badge.lane ?? "absent") : undefined}
             title={admin ? h.confirmation?.label : undefined}
           >
             {badge.text}
