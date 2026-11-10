@@ -31,6 +31,7 @@ import { buildLiveAnalyzerConfig } from "../src/api";
 import { loadConfig } from "../src/config";
 import {
   ConfirmDiveBudget,
+  ConfirmDiveDispatcher,
   confirmDiveAdoption,
   droppedDiveResult,
   runDueConfirmDives,
@@ -236,20 +237,25 @@ describe("ADAAAA-8506 AC4 — a dropped dive is terminal, never an unread provis
     };
   }
 
-  it("calls the verdict writer for a busy-pool drop (no row left waiting)", async () => {
+  it("calls the verdict writer for a stream-end pool_busy stamp (no row left waiting)", async () => {
     const state = runState();
     const adopted: Array<{ reason?: string; wrote: boolean }> = [];
+    const dispatcher = new ConfirmDiveDispatcher(() => 1);
+    expect(dispatcher.tryAdmit()).toBe(true); // the only slot is held
     const out = await runDueConfirmDives({
       run: state as any,
       io: {} as any,
+      nowMs: 1_000,
       nowTs: 30 + 20,
       jobId: "job-8506",
-      busy: () => "inflight=3",
+      dispatcher,
+      drain: true,
       adopt: async (_e, result) => {
         adopted.push({ reason: result.droppedReason, wrote: !result.ok });
         return "unchanged" as const;
       },
     });
+    dispatcher.release();
     expect(out.dropped).toBe(1);
     expect(adopted).toEqual([{ reason: "pool_busy", wrote: true }]);
     expect(state.pending).toHaveLength(0);
@@ -258,12 +264,15 @@ describe("ADAAAA-8506 AC4 — a dropped dive is terminal, never an unread provis
   it("calls the verdict writer for a budget drop and for a failed dive", async () => {
     const budgetState = runState();
     const budgetAdopted: Array<string | undefined> = [];
+    // ADAAAA-8518 (AC1): `0` now means UNLIMITED, so the brake is exercised with
+    // an EXPLICIT POSITIVE cap whose single token is already spent in the window.
+    expect(budgetState.confirmBudget.allow(30 + 20, 1)).toBe(true);
     const budgetOut = await runDueConfirmDives({
       run: budgetState as any,
       io: {} as any,
       nowTs: 30 + 20,
       jobId: "job-8506",
-      maxDivesPer300s: 0,
+      maxDivesPer300s: 1,
       // ADAAAA-8513 (AC5): at stream end a budget refusal is terminal and the
       // descriptor is stamped — AC1 keeps it pending only while the stream can
       // still retry it.

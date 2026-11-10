@@ -3,6 +3,7 @@ import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
 import { resolveExportTokenSecret } from "./export-token";
 import { LIVE_OBSERVE_LAG_BUDGET_S, resolveDecideImageBudget } from "./observe-loop";
+import { normalizeConfirmDiveCap } from "./live-confirm-async";
 
 export interface ServerConfig {
   port: number;
@@ -391,9 +392,17 @@ export interface ServerConfig {
    * the inline awaited dive (the pre-8205 posture); `LIVE_DECIDE_CONFIRM` stays
    * the master opt-in, so an off master gate is still a strict no-op. */
   liveConfirmAsync: boolean;
-  /** ADAAAA-8205: dives allowed per 300 s of stream (`LIVE_CONFIRM_MAX_DIVES_PER_300S`,
-   * default 8 — the parent envelope's <= $0.318/h/stream dive term). */
-  liveConfirmMaxDivesPer300S: number;
+  /** ADAAAA-8518 (AC1): the OPTIONAL emergency brake. `null` (the default) is
+   *  UNLIMITED — the product does not cap dives; if the accept carried evidence,
+   *  the dive runs. `LIVE_CONFIRM_MAX_DIVES_PER_300S` may still be set to a
+   *  POSITIVE value as an operator brake (a non-positive value is read as
+   *  unlimited, never as "no dives"). Cost is observed per stream
+   *  (`observeMetrics.diveAdmission`), not enforced here. */
+  liveConfirmMaxDivesPer300S: number | null;
+  /** ADAAAA-8518 (AC3): how long a due dive may wait for a free decide slot
+   *  before it is stamped `pool_busy`. Time, not a dive count — before the bound
+   *  the dive stays PENDING and replans. */
+  liveConfirmQueueWaitMs: number;
   /** ADAAAA-7781: ask the decide service for the COMPACT verdict contract on the
    * LIVE pass (short prose fields, no evidenceAttested list, 400-token cap).
    * Live decide throughput is decode-bound at ~150 output tok/s for the box's
@@ -1079,8 +1088,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // pay the dive); `LIVE_CONFIRM_ASYNC=0` restores the inline awaited dive and
     // is a strict no-op when the master gate is off.
     liveConfirmAsync: env.LIVE_CONFIRM_ASYNC !== "0",
-    // ADAAAA-8205: the parent envelope's per-stream dive budget.
-    liveConfirmMaxDivesPer300S: positiveNumberOrUndefined(env.LIVE_CONFIRM_MAX_DIVES_PER_300S) ?? 8,
+    // ADAAAA-8518 (AC1): the dive cap is an OPTIONAL operator brake. `null` is
+    // UNLIMITED (the shipped default) — an absent value must never resolve to a
+    // number that caps, and `0`/negative is read as unlimited, never "no dives".
+    liveConfirmMaxDivesPer300S: normalizeConfirmDiveCap(env.LIVE_CONFIRM_MAX_DIVES_PER_300S),
+    // ADAAAA-8518 (AC3): the explicit queue bound for a dive with no free decide
+    // slot. Default 120 s: long enough for a normal decide, short enough that a
+    // dead lane settles (`pool_busy`) instead of parking a descriptor forever.
+    liveConfirmQueueWaitMs: positiveNumberOrUndefined(env.LIVE_CONFIRM_QUEUE_WAIT_MS) ?? 120_000,
     // ADAAAA-7781: the COMPACT live verdict contract (decode-bound throughput —
     // see AnalyzerConfig.liveDecideCompact). Opt-in: unset keeps the full
     // contract byte-identical for both rails.

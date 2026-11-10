@@ -282,8 +282,8 @@ describe("live exactly-once recall guard (ADAAAA-7663)", () => {
   });
 });
 
-describe("ADAAAA-8205 config posture — the async lane is on by default, bounded", () => {
-  it("arms the lane from LIVE_CONFIRM_ASYNC (default on) and carries the 8/300 s budget", () => {
+describe("ADAAAA-8205/8518 config posture — the async lane is on by default, UNCAPPED", () => {
+  it("arms the lane from LIVE_CONFIRM_ASYNC (default on) with no dive cap", () => {
     const cfg = loadConfig({ LIVE_OBSERVE_LOOP: "1", DECIDE_CONFIRM_ENABLED: "1" });
     const armed = buildLiveAnalyzerConfig({
       cfg,
@@ -291,7 +291,8 @@ describe("ADAAAA-8205 config posture — the async lane is on by default, bounde
       clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
     });
     expect(armed.liveConfirmAsync).toBe(true);
-    expect(armed.liveConfirmMaxDivesPer300S).toBe(8);
+    // ADAAAA-8518 (AC1): absent => UNLIMITED, never a number that caps.
+    expect(armed.liveConfirmMaxDivesPer300S).toBeNull();
     expect(armed.confirmEnabled).toBe(true);
     expect(loadConfig({ LIVE_CONFIRM_ASYNC: "0" }).liveConfirmAsync).toBe(false);
     expect(loadConfig({ LIVE_CONFIRM_MAX_DIVES_PER_300S: "3" }).liveConfirmMaxDivesPer300S).toBe(3);

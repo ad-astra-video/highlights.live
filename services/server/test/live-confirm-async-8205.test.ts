@@ -15,7 +15,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ConfirmDiveBudget,
-  LIVE_CONFIRM_MAX_DIVES_PER_300S,
+  ConfirmDiveDispatcher,
   buildPersistedConfirmContext,
   confirmDiveAdoption,
   confirmDiveKey,
@@ -75,44 +75,32 @@ describe("planDueConfirmDives — post-window, one per distinct goal", () => {
   });
 });
 
-describe("ConfirmDiveBudget — <= 8 dives per 300 s per stream", () => {
-  it("allows the default eight goal-slice dives and refuses the ninth, counting the refusal", () => {
+describe("ConfirmDiveBudget — the OPTIONAL operator brake (unlimited by default)", () => {
+  it("ADAAAA-8518 (AC1): refuses nothing at the shipped default (no cap configured)", () => {
     const b = new ConfirmDiveBudget();
-    for (let i = 0; i < LIVE_CONFIRM_MAX_DIVES_PER_300S; i++) {
-      // ADAAAA-8513 (AC3): a provisional-goal row spends the reserved slice
-      // (`min(3, cap)`) and may use the whole cap.
-      expect(b.allow(100 + i, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(true);
-    }
-    expect(b.allow(110, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(false);
+    for (let i = 0; i < 40; i++) expect(b.allow(100 + i, null)).toBe(true);
+    expect(b.allow(100, undefined)).toBe(true);
+    expect(b.refusalsCount()).toBe(0);
+    // `0` never means "no dives": it reads as unlimited, like an absent value.
+    expect(b.allow(101, 0)).toBe(true);
+    expect(b.refusalsCount()).toBe(0);
+    expect(b.count(140)).toBe(42);
+  });
+
+  it("an explicit positive value brakes; the window slides", () => {
+    const b = new ConfirmDiveBudget();
+    for (let i = 0; i < 3; i++) expect(b.allow(100 + i, 3)).toBe(true);
+    expect(b.allow(110, 3)).toBe(false);
     expect(b.refusalsCount()).toBe(1);
-    expect(b.count(110)).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
+    expect(b.count(110)).toBe(3);
+    // Slides: 301 s later the window has released its tokens.
+    expect(b.allow(401.5, 3)).toBe(true);
   });
 
-  it("ADAAAA-8513 (AC3): the reserved slice is never spent on a general dive", () => {
+  it("counts the configured brake, not a hard-coded one", () => {
     const b = new ConfirmDiveBudget();
-    // cap 8 -> 3 reserved, 5 general. Five general dives fit, the sixth does not
-    // even though the window still has 3 tokens (they belong to the goal slice).
-    for (let i = 0; i < 5; i++) expect(b.allow(100 + i, 8, false)).toBe(true);
-    expect(b.allow(106, 8, false)).toBe(false);
-    // ...but a provisional-goal dive can still spend those 3 tokens.
-    expect(b.allow(107, 8, true)).toBe(true);
-    expect(b.allow(108, 8, true)).toBe(true);
-    expect(b.allow(109, 8, true)).toBe(true);
-    expect(b.allow(110, 8, true)).toBe(false);
-    expect(b.snapshot(110, 8)).toMatchObject({ cap: 8, reserved: 3, spentReserved: 3, spentGeneral: 5, retries: 0 });
-  });
-
-  it("slides: a dive 300 s later is allowed again", () => {
-    const b = new ConfirmDiveBudget();
-    for (let i = 0; i < LIVE_CONFIRM_MAX_DIVES_PER_300S; i++) b.allow(0 + i, LIVE_CONFIRM_MAX_DIVES_PER_300S, true);
-    expect(b.allow(299, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(false);
-    expect(b.allow(300.5, LIVE_CONFIRM_MAX_DIVES_PER_300S, true)).toBe(true);
-  });
-
-  it("counts the configured max, not a hard-coded one", () => {
-    const b = new ConfirmDiveBudget();
-    expect(b.allow(10, 1, true)).toBe(true);
-    expect(b.allow(11, 1, true)).toBe(false);
+    expect(b.allow(10, 1)).toBe(true);
+    expect(b.allow(11, 1)).toBe(false);
   });
 });
 
@@ -348,18 +336,47 @@ describe("runDueConfirmDives — budget, busy pool, adoption", () => {
     gameHint: "soccer",
   };
 
-  it("drops when the decide pool is busy and never makes the confirm call", async () => {
+  it("ADAAAA-8518: a full decide pool QUEUES the dive while the stream is live (no call, no drop)", async () => {
     const confirm = vi.fn(async () => ({ goalConfirmed: "confirmed_goal" as const, corroborated: true }));
     const state = runState([entry()]);
+    const dispatcher = new ConfirmDiveDispatcher(() => 1);
+    expect(dispatcher.tryAdmit()).toBe(true); // another stream holds the only slot
     const out = await runDueConfirmDives({
       run: state as any,
       io: { ...io, confirm },
+      nowMs: 1_000,
       nowTs: 200,
       jobId: "job-8205",
-      busy: () => "inflight=2",
+      dispatcher,
       adopt: () => "promoted",
       log: () => {},
     });
+    dispatcher.release();
+    expect(out.dives).toBe(0);
+    expect(out.queued).toBe(1);
+    expect(out.dropped).toBe(0);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(state.entries).toHaveLength(1);
+    expect(state.dropped).toHaveLength(0);
+  });
+
+  it("ADAAAA-8518: at stream end a still-queued dive is stamped pool_busy (no call)", async () => {
+    const confirm = vi.fn(async () => ({ goalConfirmed: "confirmed_goal" as const, corroborated: true }));
+    const state = runState([entry()]);
+    const dispatcher = new ConfirmDiveDispatcher(() => 1);
+    expect(dispatcher.tryAdmit()).toBe(true);
+    const out = await runDueConfirmDives({
+      run: state as any,
+      io: { ...io, confirm },
+      nowMs: 1_000,
+      nowTs: 200,
+      jobId: "job-8205",
+      dispatcher,
+      drain: true,
+      adopt: () => "promoted",
+      log: () => {},
+    });
+    dispatcher.release();
     expect(out.dropped).toBe(1);
     expect(confirm).not.toHaveBeenCalled();
     expect(state.dropped[0]).toMatch(/pool_busy/);
