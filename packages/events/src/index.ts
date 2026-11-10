@@ -2671,6 +2671,20 @@ export type LiveCapture = z.infer<typeof LiveCaptureSchema>;
 /** Composite payload of GET /jobs/:id/detail (ADAAAA-6851 Inc 3). */
 export const JobDetailSchema = z.object({
   job: JobSchema,
+  /** ADAAAA-8542 (AC3): where every persisted highlight row lands on THIS
+   *  payload. `served` lists the rows the page leads to (a postable card, a
+   *  notable card, a notable sibling clip, the duplicate lane, or a replay
+   *  alternative); `unrepresented` names every row with no page representation
+   *  and why. Additive optional so a payload served before this field existed
+   *  still parses. A grader checks delivered row ids against `served` — not
+   *  against the top-level arrays alone, which is the counting mistake that
+   *  made row eccc4e25 look lost on job 50b7aed6. */
+  rowAccounting: z
+    .object({
+      served: z.array(z.object({ id: z.string(), representation: z.string() })),
+      unrepresented: z.array(z.object({ id: z.string(), reason: z.string() })),
+    })
+    .optional(),
   /** ADAAAA-7621: the POSTABLE list — precision-gated (rejected / non-scoring /
    * self-contradicting records excluded) and deduped, so no two windows overlap.
    * The full audit trail of every decide evaluation stays in `sections`.
