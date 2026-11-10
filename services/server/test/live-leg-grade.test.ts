@@ -213,3 +213,116 @@ describe("gradeLiveLeg shape gates (ADAAAA-8487)", () => {
     expect(withOffset.stageSumMismatchRows).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8529 item 3: the duration of a live leg.
+//
+// A live `done` record carries NO startedAt/endedAt/finishedAt (bundle
+// `recordTimestamps` of job 7d99d651: all three null) while the harness stopped
+// the leg at exactly 480 s. Grade the record alone and every funded live leg
+// reads `duration_unknown` against the 480 s floor.
+//
+// These six rows are that leg's stored `deliveredLatency.rows`; `persistAckMs 0`
+// on 6/6 is the ADAAAA-8495 deferred-cut fix, and `localizeOffsetMs 0` means the
+// stage sum reconstructs the total.
+// ---------------------------------------------------------------------------
+const LEG_8516_ROWS = [
+  { triggerTs: 104.597, deliveredLatencyMs: 4_228, fireLagMs: 444, decideE2eMs: 3_774, acceptWaitMs: 0, acceptMs: 10, persistAckMs: 0, localizeOffsetMs: 0 },
+  { triggerTs: 157.129, deliveredLatencyMs: 3_644, fireLagMs: 888, decideE2eMs: 2_749, acceptWaitMs: 1, acceptMs: 6, persistAckMs: 0, localizeOffsetMs: 0 },
+  { triggerTs: 283.931, deliveredLatencyMs: 3_764, fireLagMs: 735, decideE2eMs: 3_027, acceptWaitMs: 0, acceptMs: 2, persistAckMs: 0, localizeOffsetMs: 0 },
+  { triggerTs: 404.762, deliveredLatencyMs: 2_724, fireLagMs: 538, decideE2eMs: 2_182, acceptWaitMs: 0, acceptMs: 4, persistAckMs: 0, localizeOffsetMs: 0 },
+  { triggerTs: 463.664, deliveredLatencyMs: 3_041, fireLagMs: 768, decideE2eMs: 2_268, acceptWaitMs: 0, acceptMs: 5, persistAckMs: 0, localizeOffsetMs: 0 },
+  { triggerTs: 477.13, deliveredLatencyMs: 2_592, fireLagMs: 354, decideE2eMs: 2_235, acceptWaitMs: 0, acceptMs: 3, persistAckMs: 0, localizeOffsetMs: 0 },
+];
+
+describe("gradeLiveLeg duration (ADAAAA-8529 item 3)", () => {
+  it("a live record with no timestamps reads duration_unknown, not a FAIL", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: LEG_8516_ROWS,
+      // The record carries none of these:
+      startedAt: undefined,
+      finishedAt: undefined,
+      decideP50Ms: 2_696,
+      accepted: 6,
+      deliveredGoalRows: 4,
+    });
+
+    expect(g.durationS).toBeNull();
+    expect(g.durationSource).toBe("unknown");
+    expect(g.acB.reasons.some((r) => r.startsWith("duration_unknown"))).toBe(true);
+    expect(g.verdict).toBe("UNMEASURED");
+  });
+
+  it("the harness leg window supplies the duration the record cannot", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: LEG_8516_ROWS,
+      durationS: 480,
+      durationSource: "harness_evidence",
+      decideP50Ms: 2_696,
+      accepted: 6,
+      deliveredGoalRows: 4,
+    });
+
+    expect(g.durationS).toBe(480);
+    expect(g.durationSource).toBe("harness_evidence");
+    // The duration gate no longer blocks: 480 s is exactly the funded floor.
+    expect(g.acB.reasons.some((r) => r.startsWith("duration_unknown"))).toBe(false);
+    expect(g.acB.reasons.some((r) => r.startsWith("duration_below_floor"))).toBe(false);
+    // The leg is still UNMEASURED — on n=6, which is the honest reason.
+    expect(g.acB.reasons.some((r) => r.startsWith("n_below_9"))).toBe(true);
+    expect(g.verdict).toBe("UNMEASURED");
+  });
+
+  it("an explicit --duration-s is published as source input", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: QUIET_ROWS,
+      durationS: 480,
+      durationSource: "input",
+      decideP50Ms: 2_196,
+      accepted: 9,
+      deliveredGoalRows: 0,
+    });
+
+    expect(g.durationSource).toBe("input");
+    expect(g.durationS).toBe(480);
+    expect(g.verdict).toBe("PASS");
+  });
+
+  it("record timestamps are still used, and say so", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: QUIET_ROWS,
+      startedAt: "2026-11-09T12:54:53.957Z",
+      finishedAt: "2026-11-09T13:03:59.284Z",
+      decideP50Ms: 2_196,
+      accepted: 9,
+      deliveredGoalRows: 0,
+    });
+
+    expect(g.durationSource).toBe("timestamps");
+    expect(g.durationS).toBeCloseTo(545.327, 2);
+  });
+
+  it("a supplied duration outranks a stale record timestamp pair", () => {
+    // The harness window is authoritative when both exist: the record's
+    // create-to-settle span is not the authorized window (the 8516 leg metered
+    // 484 s inside a 480 s window).
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: QUIET_ROWS,
+      durationS: 480,
+      durationSource: "harness_evidence",
+      startedAt: "2026-11-09T22:28:03Z",
+      finishedAt: "2026-11-09T22:36:11Z",
+      decideP50Ms: 2_196,
+      accepted: 9,
+      deliveredGoalRows: 0,
+    });
+
+    expect(g.durationS).toBe(480);
+    expect(g.durationSource).toBe("harness_evidence");
+  });
+});

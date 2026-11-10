@@ -16,9 +16,32 @@ replaces the hand-held stop and the hand-held gate check with two hard rules:
      within `hard_stop_slack_s` (<= 10 s) the process exits non-zero instead of
      leaving a live job behind. A metered-cost ceiling aborts even earlier.
 
+     ADAAAA-8529 (item 1): the metered ceiling is graded on
+     `max(record costUsd, projection)` where the projection is the METER'S OWN
+     CLOCK — elapsed since job create x `metered_rate_usd_per_s` — not just the
+     record's `perceiveSessionS`. On the live rail `costUsd` AND
+     `perceiveSessionS` are only written at settlement, so a guard that reads
+     the record has nothing to abort on for the whole leg it exists for (leg
+     `7d99d651`: shape read `actualCostUsd 0.0` while the leg metered
+     $0.55-0.58). The clock projection is readable from the first second.
+
 Every run writes an evidence JSON whose `shape` block carries the
 authorized-vs-actual duration and cost side by side, so an overshoot is a field
 in the evidence rather than something a reader has to discover.
+
+ADAAAA-8529 evidence items (the leg is refused, not silently graded, when the
+artifact under test cannot be named):
+
+  * `build` — the build sha plus the served-vs-git md5 of the four files the
+    delivery tail runs through. A mismatch or an unreadable probe refuses the
+    leg before any metered call: a leg graded on an unrecorded build is a grade
+    of an unknown artifact.
+  * `preflight.allQuiet` — the quiet verdict the harness itself reached, so a
+    derived field downstream cannot contradict a quiet window.
+  * `clips` — the clip count plus, when it is 0, the stage fields that carry
+    the persist->export tail instead (item 2 met by stage fields, stated).
+  * `leg.startedAt`/`leg.finishedAt`/`leg.durationS` — the duration the grader
+    can read even though a live `done` record carries no timestamps.
 
 Dry-run (`--dry-run`) runs the whole loop against an in-process stub API: no
 GPU, no box, no metered call. That is how the hard stop and the gate refusal
@@ -30,6 +53,7 @@ Exit codes:
   3  gate closed at preflight — refused, nothing metered
   4  stop unconfirmed — live job may remain; do not report the leg as valid
   5  leg setup/start failed (job create, session create, or driver launch)
+  6  build identity unverified — refused, nothing metered
 """
 
 from __future__ import annotations
@@ -51,7 +75,18 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-VERSION = "1.0.0"
+VERSION = "1.2.0"
+
+#: ADAAAA-8529 item 2: the four files a live leg is served from. A leg graded on
+#: an unrecorded build is a grade of an unknown artifact, so the harness records
+#: the served md5 of each and refuses when any one differs from
+#: `git show <build>:<path>`.
+DEFAULT_BUILD_FILES = (
+    "services/server/src/live-delivery.ts",
+    "services/server/src/live.ts",
+    "services/server/src/observe-loop.ts",
+    "packages/events/src/index.ts",
+)
 
 #: Decide pool containers whose session markers count against the gate.
 #: On the box the pool is proxied by `decide-pool-8183` (x99) to the workers on
@@ -102,6 +137,14 @@ class SetupFailed(RuntimeError):
     def __init__(self, message: str, job_id: Optional[str] = None) -> None:
         super().__init__(message)
         self.job_id = job_id
+
+
+class BuildUnverified(RuntimeError):
+    """The served build could not be matched to a git commit. Nothing metered."""
+
+    def __init__(self, block: Dict[str, Any]) -> None:
+        super().__init__(block.get("line") or "build identity unverified")
+        self.block = block
 
 
 @dataclass
@@ -579,8 +622,14 @@ class Config:
     email: Optional[str]
     mint_token_container: str
     metered_rate_usd_per_s: float
-    cost_source_grace_s: float
     gpu_hours: Optional[float]
+    repo_root: str = "."
+    build_sha: str = ""
+    build_container: str = "highlights-server"
+    build_prefix: str = "/app"
+    build_files: Sequence[str] = DEFAULT_BUILD_FILES
+    clips_container: str = "highlights-server"
+    clips_dir: str = "/data/clips"
 
 
 def sample_gate(runner: Any, cfg: Config, quiet_since: datetime) -> GateSample:
@@ -648,6 +697,37 @@ def preflight(runner: Any, cfg: Config, log) -> List[GateSample]:
     return samples
 
 
+def preflight_block(
+    samples: Sequence[GateSample],
+    quiet_window_s: float,
+    verdict: str,
+    reason: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The preflight evidence block, including the harness's OWN quiet verdict.
+
+    ADAAAA-8529 item 4: `verdict: open` already means "quiet window proved".
+    The 8516 bundle re-derived the window outside this script and published
+    `allQuiet: false` beside 19 all-quiet samples and `verdict: open`, which
+    reads to a reviewer as a gate violation. `allQuiet` is now emitted here, from
+    the same predicate that decides the verdict, so the two cannot disagree.
+    """
+    quiet = [s for s in samples if not s.problems()]
+    block: Dict[str, Any] = {
+        "verdict": verdict,
+        "allQuiet": verdict == "open" and bool(samples) and len(quiet) == len(samples),
+        "quietWindowS": quiet_window_s,
+        "sampleCount": len(samples),
+        "quietSamples": len(quiet),
+        "notQuietSamples": len(samples) - len(quiet),
+        "windowFrom": samples[0].at if samples else None,
+        "windowTo": samples[-1].at if samples else None,
+        "samples": [s.as_dict() for s in samples],
+    }
+    if reason is not None:
+        block["reason"] = reason
+    return block
+
+
 # --------------------------------------------------------------------------
 # Leg
 # --------------------------------------------------------------------------
@@ -658,6 +738,8 @@ class LegResult:
     job_id: str
     session_id: Optional[str]
     started_at: str
+    created_at: str
+    finished_at: str
     started_monotonic: float
     stop_reason: str
     stop_issued_monotonic: Optional[float]
@@ -671,6 +753,17 @@ class LegResult:
     cost_source: str = "none"
     projected_cost_usd: float = 0.0
     driver_output_tail: str = ""
+    # ADAAAA-8529 item 1: the METER'S clock at the stop instant (elapsed since job
+    # create), and which source the projection was taken from.
+    metered_projection_s: float = 0.0
+    projected_from: str = "none"
+    # ADAAAA-8529 item 1: what the record itself disclosed mid-leg. `dark` is the
+    # live rail's normal state (costUsd/perceiveSessionS land only at settlement),
+    # and it must stay visible instead of reading as a zero cost.
+    record_cost_source: str = "dark"
+    # ADAAAA-8529 item 5: the leg's delivered rows, for the stage-field fallback
+    # when nothing recorded a screen share.
+    delivered_rows: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def _job_field(body: Any, key: str, default: Any = None) -> Any:
@@ -723,6 +816,14 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         raise SetupFailed(f"job create HTTP {created.status}: {created.raw[:300]}")
     log(f"job {job_id} created {_iso(started)}")
 
+    # ADAAAA-8529 item 1: the server bills the perceive meter from the top of
+    # runLiveJob — i.e. from this create, not from driver start — so the meter's
+    # own clock is `now - t_create`. On the live rail the job record does NOT
+    # disclose costUsd or perceiveSessionS until settlement (leg `7d99d651` read
+    # both as 0 for all 480 s), so this clock is the only guard available
+    # mid-leg, and it is available from the first second.
+    t_create = time.monotonic()
+
     session_id: Optional[str] = None
     session = runner.http(
         "POST",
@@ -757,6 +858,7 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
             raise SetupFailed(f"driver launch rc={driver_rc}: {driver_tail}")
 
     t0 = time.monotonic()
+    window_started = _now()
     deadline = t0 + cfg.authorized_duration_s
     done_event = threading.Event()
     stop_issued: Optional[float] = None
@@ -769,8 +871,12 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         "perceive_session_s": 0.0,
         "status": "running",
         "cost_source": "none",
+        "record_cost_source": "dark",
         "projected": 0.0,
+        "projected_from": "none",
+        "metered_projection_s": 0.0,
         "live_readable": False,
+        "record": {},
     }
 
     def poll_state() -> str:
@@ -780,20 +886,35 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         has_cost_field = isinstance(raw, dict) and "costUsd" in raw
         has_session_field = isinstance(raw, dict) and "perceiveSessionS" in raw
         state["status"] = status
+        if isinstance(raw, dict):
+            state["record"] = raw
         state["cost"] = float(_job_field(res.body, "costUsd", 0.0) or 0.0)
         state["perceive_session_s"] = float(
             _job_field(res.body, "perceiveSessionS", 0.0) or 0.0
         )
-        state["projected"] = round(
-            state["perceive_session_s"] * cfg.metered_rate_usd_per_s, 6
-        )
+        # ADAAAA-8529 item 1: the clock projection. The record's own metered
+        # figure wins once it exists (it is the billed quantity); until then the
+        # meter's clock IS the readable metered time.
+        state["metered_projection_s"] = max(0.0, time.monotonic() - t_create)
+        record_s = state["perceive_session_s"] if has_session_field else 0.0
+        if record_s > state["metered_projection_s"]:
+            projection_s, projected_from = record_s, "record_perceiveSessionS"
+        else:
+            projection_s, projected_from = state["metered_projection_s"], "clock"
+        state["projected_from"] = projected_from
+        state["projected"] = round(projection_s * cfg.metered_rate_usd_per_s, 6)
         if state["cost"] > 0:
             state["cost_source"] = "live_cost"
+            state["record_cost_source"] = "live"
             state["live_readable"] = True
-        elif state["perceive_session_s"] > 0 and has_session_field:
-            # Metered seconds are readable, so the projection is a valid guard
-            # even while the billed figure is still 0.
+        elif record_s > 0:
+            # Metered seconds are readable from the record, so it is the source.
             state["cost_source"] = "projected_cost"
+            state["record_cost_source"] = "live"
+        else:
+            # The live rail: the record is dark, and the projection is the guard.
+            state["cost_source"] = "projected_cost"
+            state["record_cost_source"] = "dark"
         if has_cost_field:
             state["live_readable"] = True
         return status
@@ -854,10 +975,13 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
                 # thread having run, and never on a stop moment.
                 issue_stop("authorized_duration")
                 break
-            # CEO A1: a wall-clock stop alone cannot hold the cap when metered
-            # seconds inflate (8483: 544.5 s metered inside a 300 s window).
-            # Abort on whichever source is higher: the billed figure or the
-            # metered-second projection at the authorized $/s.
+            # CEO A1 / ADAAAA-8529 item 1: a wall-clock stop alone cannot hold
+            # the cap when metered seconds inflate (8483: 544.5 s metered inside a
+            # 300 s window). Abort on whichever source is higher: the billed
+            # figure the record discloses, or the metered projection — and the
+            # projection is the METER'S CLOCK, which is readable from job create
+            # even though the record discloses neither costUsd nor
+            # perceiveSessionS until settlement.
             effective = max(state["cost"], state["projected"])
             if effective >= cfg.abort_at_usd:
                 source = (
@@ -868,22 +992,13 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
                 log(
                     f"metered ceiling {cfg.abort_at_usd:.4f} reached on {source} "
                     f"(live=${state['cost']:.4f}, projected="
-                    f"${state['projected']:.4f} at {cfg.metered_rate_usd_per_s:.7f}/s, "
-                    f"metered={state['perceive_session_s']:.1f} s) — stopping"
+                    f"${state['projected']:.4f} from {state['projected_from']} "
+                    f"{state['metered_projection_s']:.1f} s metered at "
+                    f"{cfg.metered_rate_usd_per_s:.7f}/s, record "
+                    f"{state['record_cost_source']}) — stopping"
                 )
                 issue_stop(source)
                 break
-            if (
-                state["cost_source"] == "none"
-                and now - t0 >= cfg.cost_source_grace_s
-            ):
-                issue_stop("no_cost_source")
-                raise SetupFailed(
-                    "no readable cost source: neither costUsd nor perceiveSessionS "
-                    f"moved in {cfg.cost_source_grace_s:.0f} s — a leg without a "
-                    "metered guard is not authorized to run",
-                    job_id=job_id,
-                )
             time.sleep(cfg.poll_s)
     finally:
         # Any exit path stops the leg: exception, keyboard, or normal end.
@@ -903,10 +1018,22 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         issue_stop(stop_reason, allow_retry=True)
         status = poll_state()
     stop_time = stop_issued or time.monotonic()
+    duration_s = max(0.0, stop_time - t0)
+    rows = (
+        ((state["record"].get("observeMetrics") or {}).get("deliveredLatency") or {}).get(
+            "rows"
+        )
+        or []
+    )
     return LegResult(
         job_id=job_id,
         session_id=session_id,
-        started_at=_iso(started),
+        # ADAAAA-8529 item 3: `startedAt`/`finishedAt` are the LEG WINDOW (t0 ->
+        # stop), so `finishedAt - startedAt` reproduces `durationS` exactly; the
+        # job-create instant is carried separately as `created_at`.
+        started_at=_iso(window_started),
+        created_at=_iso(started),
+        finished_at=_iso(window_started + timedelta(seconds=duration_s)),
         started_monotonic=t0,
         stop_reason=stop_reason,
         stop_issued_monotonic=stop_issued,
@@ -914,12 +1041,16 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         settled_status=state["status"],
         cost_usd=float(state["cost"]),
         perceive_session_s=float(state["perceive_session_s"]),
-        duration_s=max(0.0, stop_time - t0),
+        duration_s=duration_s,
         stop_calls=stop_calls,
         driver_rc=driver_rc,
         cost_source=state["cost_source"],
         projected_cost_usd=float(state["projected"]),
         driver_output_tail=driver_tail,
+        metered_projection_s=float(state["metered_projection_s"]),
+        projected_from=state["projected_from"],
+        record_cost_source=state["record_cost_source"],
+        delivered_rows=list(rows),
     )
 
 
@@ -939,12 +1070,20 @@ def compare_shape(
     metered_rate_usd_per_s: Optional[float] = None,
     gpu_hours: Optional[float] = None,
     abort_source: Optional[str] = None,
+    metered_projection_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Grade the leg against its authorization.
 
     The duration bar carries the harness's documented tolerance (<= 10 s, AC1);
     a stop that fires a fraction of a second past the mark is inside the shape.
     The cost bar has no tolerance: any metered overshoot is OVER.
+
+    ADAAAA-8529 item 1: the metered projection is `max(the record's
+    perceiveSessionS, the METER'S CLOCK at the stop)` x the authorized rate.
+    Master's grading rule is kept exactly — `max(costUsd, projection)` — but the
+    projection is no longer blind on a live leg, where the record discloses
+    neither figure until settlement. The block names which source it used, so a
+    reviewer never has to guess what a cost headroom was measured from.
     """
     over_duration = max(0.0, actual_duration_s - authorized_duration_s)
     ratio = (
@@ -952,14 +1091,24 @@ def compare_shape(
         if (metered_session_s is not None and actual_duration_s > 0)
         else None
     )
-    projected = (
-        (metered_session_s * metered_rate_usd_per_s)
-        if (metered_session_s is not None and metered_rate_usd_per_s is not None)
-        else None
-    )
+    record_s = metered_session_s if metered_session_s is not None else 0.0
+    clock_s = metered_projection_s if metered_projection_s is not None else 0.0
+    projected: Optional[float] = None
+    projected_from = "none"
+    if (metered_session_s is not None or metered_projection_s is not None) and (
+        metered_rate_usd_per_s is not None
+    ):
+        # The record's metered figure is the billed quantity and wins when it is
+        # the larger of the two; otherwise the meter's clock is the best reading.
+        if clock_s > record_s:
+            projected = clock_s * metered_rate_usd_per_s
+            projected_from = "clock"
+        else:
+            projected = record_s * metered_rate_usd_per_s
+            projected_from = "record_perceiveSessionS"
     # Grade on the same figure the guard aborts on. When costUsd is not readable
-    # and the projection is the cost source, grading $0.00 as "actual" would
-    # report an over-cap leg as WITHIN — the exact after-the-fact blind spot
+    # and the projection is the cost source, grading the live $0.00 as "actual"
+    # would report an over-cap leg as WITHIN — the exact after-the-fact blind spot
     # this evidence block exists to close (8515 A1 item 4).
     graded_cost = (
         max(actual_cost_usd, projected)
@@ -976,10 +1125,17 @@ def compare_shape(
             f", metered perceiveSessionS {metered_session_s:.1f} s"
             + (f" ({ratio:.3f}x wall)" if ratio is not None else "")
         )
-        if projected is not None:
-            metered_bits += f", projected ${projected:.4f}"
-            if projected > cap_usd + 1e-9:
-                metered_bits += " (OVER cap)"
+    if projected is not None:
+        metered_bits += (
+            f", projected ${projected:.4f} from {projected_from}"
+            + (
+                f" ({clock_s:.1f} s metered at ${metered_rate_usd_per_s:.7f}/s)"
+                if projected_from == "clock"
+                else ""
+            )
+        )
+        if projected > cap_usd + 1e-9:
+            metered_bits += " (OVER cap)"
     line = (
         f"AUTHORIZED-VS-ACTUAL: authorized duration <= {authorized_duration_s:.1f} s / "
         f"cap ${cap_usd:.4f} -> actual {actual_duration_s:.1f} s / "
@@ -1007,9 +1163,14 @@ def compare_shape(
             f"\n| perceiveSessionS | - | {metered_session_s:.1f} s | "
             + (f"{ratio:.3f}x wall |" if ratio is not None else "n/a |")
         )
+    if metered_projection_s is not None:
+        table += (
+            f"\n| mid-leg metered clock | - | {metered_projection_s:.1f} s | - |"
+        )
     if projected is not None:
         table += (
-            f"\n| projected cost @ ${metered_rate_usd_per_s:.7f}/s | <= ${cap_usd:.4f} | "
+            f"\n| projected cost @ ${metered_rate_usd_per_s:.7f}/s ({projected_from}) | "
+            f"<= ${cap_usd:.4f} | "
             f"${projected:.4f} | {'+' if projected > cap_usd else ''}"
             f"${projected - cap_usd:.4f} |"
         )
@@ -1030,7 +1191,11 @@ def compare_shape(
         ),
         "meteredWallRatio": round(ratio, 4) if ratio is not None else None,
         "meteredRateUsdPerS": metered_rate_usd_per_s,
+        "meteredProjectionSAtStop": (
+            round(metered_projection_s, 3) if metered_projection_s is not None else None
+        ),
         "projectedCostUsd": round(projected, 6) if projected is not None else None,
+        "projectedFrom": projected_from,
         "projectedOverCap": bool(projected is not None and projected > cap_usd + 1e-9),
         "gpuHours": gpu_hours,
         "abortSource": abort_source,
@@ -1038,6 +1203,225 @@ def compare_shape(
         "line": line,
         "table": table,
     }
+
+
+# --------------------------------------------------------------------------
+# Evidence probes: build identity (item 2) and clips (item 5)
+# --------------------------------------------------------------------------
+
+_MD5_RE = re.compile(r"\b([0-9a-f]{32})\b")
+
+
+def _md5_from_stdout(stdout: str) -> Optional[str]:
+    """First 32-hex token on stdout (md5sum prints `<md5>  <path>`)."""
+    for line in (stdout or "").splitlines():
+        match = _MD5_RE.search(line)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _shell_md5(runner: Any, command: str) -> Optional[str]:
+    """Run one command and return its md5, or None when the probe cannot answer.
+
+    A probe failure is never a silent pass: None propagates to
+    `verify_build`, which refuses the leg.
+    """
+    try:
+        proc = runner.shell(command, timeout=120)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    return _md5_from_stdout(proc.stdout or "")
+
+
+def resolve_build_sha(runner: Any, cfg: Config) -> Optional[str]:
+    if cfg.build_sha.strip():
+        return cfg.build_sha.strip()
+    try:
+        proc = runner.shell(f"git -C {shlex.quote(cfg.repo_root)} rev-parse HEAD", timeout=60)
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    first = (proc.stdout or "").strip().split()
+    if first and re.fullmatch(r"[0-9a-f]{7,40}", first[0]):
+        return first[0]
+    return None
+
+
+def verify_build(runner: Any, cfg: Config) -> Dict[str, Any]:
+    """Prove the served files are the build the evidence names.
+
+    ADAAAA-8529 item 2: the 8516 leg was graded on an artifact nobody recorded —
+    no attachment carried the build sha or a served-vs-git md5 pair, so the grade
+    described an unknown build. Each pair is
+    `md5(container:<prefix>/<path>)` vs `md5(git show <sha>:<path>)`;
+    `verdict: verified` only when every pair matches, and the leg is refused
+    (exit 6) on `mismatch` or `unreadable`.
+    """
+    sha = resolve_build_sha(runner, cfg)
+    files: List[Dict[str, Any]] = []
+    for path in cfg.build_files:
+        served_path = f"{cfg.build_prefix.rstrip('/')}/{path}"
+        served_cmd = (
+            f"docker exec {shlex.quote(cfg.build_container)} md5sum {shlex.quote(served_path)}"
+        )
+        git_cmd = (
+            f"git -C {shlex.quote(cfg.repo_root)} show "
+            f"{shlex.quote(f'{sha}:{path}' if sha else f'HEAD:{path}')} | md5sum"
+        )
+        served_md5 = _shell_md5(runner, served_cmd)
+        git_md5 = _shell_md5(runner, git_cmd)
+        files.append(
+            {
+                "path": path,
+                "servedPath": served_path,
+                "servedMd5": served_md5,
+                "gitMd5": git_md5,
+                "match": bool(served_md5 and git_md5 and served_md5 == git_md5),
+            }
+        )
+    matched = sum(1 for f in files if f["match"])
+    if sha is None:
+        verdict = "unreadable"
+    elif matched == len(files) and files:
+        verdict = "verified"
+    elif any(f["servedMd5"] is None or f["gitMd5"] is None for f in files):
+        verdict = "unreadable"
+    else:
+        verdict = "mismatch"
+    mismatched = [f["path"] for f in files if not f["match"]]
+    line = (
+        f"BUILD-IDENTITY: {sha or 'sha unresolved'} — {matched}/{len(files)} served "
+        f"files in {cfg.build_container}:{cfg.build_prefix} match git show"
+        + (f"; differing: {', '.join(mismatched)}" if mismatched else "")
+        + f" — {verdict}"
+    )
+    return {
+        "sha": sha,
+        "container": cfg.build_container,
+        "prefix": cfg.build_prefix,
+        "files": files,
+        "matched": matched,
+        "mismatched": mismatched,
+        "verdict": verdict,
+        "line": line,
+    }
+
+
+def probe_clips(runner: Any, cfg: Config, job_id: str) -> Dict[str, Any]:
+    """Count the leg's clip files inside the server container. Never fatal."""
+    inner = (
+        f"for f in {cfg.clips_dir}/{job_id}-*.mp4; do "
+        '[ -e "$f" ] || continue; '
+        'printf "%s\\t%s\\n" "$f" "$(stat -c %s "$f" 2>/dev/null || echo 0)"; done'
+    )
+    command = f"docker exec {shlex.quote(cfg.clips_container)} sh -c {shlex.quote(inner)}"
+    try:
+        proc = runner.shell(command, timeout=120)
+    except Exception as exc:
+        return {"status": f"failed: {exc}", "files": [], "command": command}
+    if proc.returncode != 0:
+        return {
+            "status": f"failed: rc={proc.returncode} {(proc.stderr or '').strip()[:200]}",
+            "files": [],
+            "command": command,
+        }
+    files: List[Dict[str, Any]] = []
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line or "\t" not in line:
+            continue
+        path, _, size = line.partition("\t")
+        try:
+            bytes_ = int(size.strip())
+        except ValueError:
+            bytes_ = None
+        files.append({"path": path.strip(), "bytes": bytes_})
+    return {"status": "ok", "files": files, "command": command}
+
+
+def _median(values: Sequence[float]) -> Optional[int]:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return int(round(ordered[mid]))
+    return int(round((ordered[mid - 1] + ordered[mid]) / 2))
+
+
+def stage_fields(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """The persist->export tail as the delivered rows carry it (item 5)."""
+    persist: List[float] = []
+    delivered: List[float] = []
+    for row in rows:
+        ack = row.get("persistAckMs")
+        if isinstance(ack, (int, float)):
+            persist.append(float(ack))
+        total = row.get("deliveredLatencyMs")
+        if isinstance(total, (int, float)):
+            delivered.append(float(total))
+    return {
+        "rows": len(rows),
+        "rowsWithPersistAck": len(persist),
+        "rowsWithZeroPersistAck": sum(1 for v in persist if v == 0),
+        "persistAckMsMedian": _median(persist),
+        "persistAckMsMax": max(persist) if persist else None,
+        "deliveredLatencyP50Ms": _median(delivered),
+        "deliveredLatencyMaxMs": max(delivered) if delivered else None,
+    }
+
+
+def clips_block(
+    probe: Dict[str, Any], rows: Sequence[Dict[str, Any]], cfg: Config, job_id: str
+) -> Dict[str, Any]:
+    """The `clips` evidence block, and how item 2 is actually met.
+
+    ADAAAA-8529 item 5: `clips.produced: 0` on the 8516 leg left evidence item 2
+    (the persist->export tail) with no clip to read it from, and nothing said so.
+    A file-sim / driven leg records no screen share, so the tail is measured from
+    the delivered rows instead — and this block states that, per leg, instead of
+    leaving a reviewer to notice an empty list.
+    """
+    files = list(probe.get("files") or [])
+    produced = len(files)
+    stage = stage_fields(rows)
+    item2_source = "clip_files" if produced > 0 else "stage_fields"
+    block: Dict[str, Any] = {
+        "produced": produced,
+        "container": cfg.clips_container,
+        "dir": cfg.clips_dir,
+        "jobGlob": f"{job_id}-*.mp4",
+        "probe": probe.get("status"),
+        "files": files,
+        "item2Source": item2_source,
+        # Item 2 is met either way: by the clip files' btime/mtime when a
+        # recording exists, by the stage fields when none does. It is never empty.
+        "item2Met": produced > 0 or stage["rowsWithPersistAck"] > 0,
+        "stageFields": stage,
+    }
+    if produced == 0:
+        block["reason"] = (
+            f"no clip files matched {job_id}-*.mp4 in {cfg.clips_container}:{cfg.clips_dir}"
+        )
+        if stage["rows"] == 0:
+            block["note"] = (
+                "item 2 (persist->export tail) is UNMEASURED on this leg: no clips and no "
+                "delivered rows carrying persistAckMs"
+            )
+        else:
+            block["note"] = (
+                "item 2 (persist->export tail) is met by the stage fields only: "
+                f"{stage['rows']} delivered rows, {stage['rowsWithPersistAck']} carrying "
+                f"persistAckMs ({stage['rowsWithZeroPersistAck']} at 0 ms), "
+                f"persistAckMs max {stage['persistAckMsMax']} ms, deliveredLatency "
+                f"p50 {stage['deliveredLatencyP50Ms']} ms / max "
+                f"{stage['deliveredLatencyMaxMs']} ms"
+            )
+    return block
 
 
 # --------------------------------------------------------------------------
@@ -1076,9 +1460,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--metered-rate-usd-per-s", type=float, default=0.0011381,
                    help="authorized $/perceive-second for the cost projection "
                         "(default 0.0011381, the 8515 rate)")
-    p.add_argument("--cost-source-grace-s", type=float, default=15.0,
-                   help="how long a leg may run before neither costUsd nor "
-                        "perceiveSessionS is readable; then it is refused (default 15)")
+    p.add_argument("--cost-source-grace-s", type=float, default=None,
+                   help="deprecated (ADAAAA-8529): the metered clock is always a "
+                        "cost source, so a leg is never refused for a dark record")
+    p.add_argument("--build-sha", default="",
+                   help="build sha the served files must match (default: git -C "
+                        "<repo-root> rev-parse HEAD)")
+    p.add_argument("--build-container", default="highlights-server",
+                   help="container the leg's files are served from (default highlights-server)")
+    p.add_argument("--build-prefix", default="/app",
+                   help="path inside the container that maps to the repo root (default /app)")
+    p.add_argument("--build-file", action="append", default=None,
+                   help="repo-relative file to verify served-vs-git (repeatable; "
+                        "default: live-delivery.ts, live.ts, observe-loop.ts, "
+                        "packages/events/src/index.ts)")
+    p.add_argument("--no-build-check", action="store_true",
+                   help="skip the build-identity probe (a leg run this way is NOT "
+                        "evidence — the grade cannot name its artifact)")
+    p.add_argument("--clips-container", default="highlights-server",
+                   help="container the leg's clip files live in (default highlights-server)")
+    p.add_argument("--clips-dir", default="/data/clips",
+                   help="clip directory inside that container (default /data/clips)")
     p.add_argument("--gpu-hours", type=float, default=None,
                    help="actual GPU-hours for the evidence block (operator-measured)")
     p.add_argument("--poll-s", type=float, default=1.0)
@@ -1180,9 +1582,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         email=args.email,
         mint_token_container=args.mint_token_container,
         metered_rate_usd_per_s=args.metered_rate_usd_per_s,
-        cost_source_grace_s=args.cost_source_grace_s,
         gpu_hours=args.gpu_hours,
+        repo_root=args.repo_root,
+        build_sha=args.build_sha,
+        build_container=args.build_container,
+        build_prefix=args.build_prefix,
+        build_files=tuple(args.build_file or DEFAULT_BUILD_FILES),
+        clips_container=args.clips_container,
+        clips_dir=args.clips_dir,
     )
+    if args.cost_source_grace_s is not None:
+        log(
+            "note: --cost-source-grace-s is a no-op since ADAAAA-8529 — the metered "
+            "clock is always a cost source, so a dark record no longer refuses the leg"
+        )
 
     stub: Optional[StubApi] = None
     if args.dry_run:
@@ -1228,6 +1641,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             ),
             "hardStopSlackS": cfg.hard_stop_slack_s,
             "quietWindowS": cfg.quiet_window_s,
+            "guard": (
+                "max(costUsd, metered x meteredRateUsdPerS) where metered = "
+                "max(record perceiveSessionS, seconds since job create)"
+            ),
         },
         "probeCommands": [],
     }
@@ -1247,24 +1664,68 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if "shape" in evidence:
             print("\n" + evidence["shape"]["line"])
             print(evidence["shape"]["table"])
+        if "clips" in evidence and evidence["clips"].get("note"):
+            print("\n" + evidence["clips"]["note"])
         return code
+
+    # ---- build identity (item 2) -----------------------------------------
+    # Runs BEFORE the quiet window: a leg whose served build cannot be named is
+    # refused in seconds instead of after a 10 minute gate.
+    if args.dry_run:
+        evidence["build"] = {
+            "sha": None,
+            "container": cfg.build_container,
+            "prefix": cfg.build_prefix,
+            "files": [],
+            "matched": 0,
+            "mismatched": [],
+            "verdict": "skipped",
+            "line": "BUILD-IDENTITY: skipped (dry-run stub; no served files to hash)",
+        }
+    elif args.no_build_check:
+        evidence["build"] = {
+            "sha": None,
+            "container": cfg.build_container,
+            "prefix": cfg.build_prefix,
+            "files": [],
+            "matched": 0,
+            "mismatched": [],
+            "verdict": "skipped",
+            "line": "BUILD-IDENTITY: skipped (--no-build-check) — this leg is NOT evidence",
+        }
+        log(evidence["build"]["line"])
+    else:
+        build = verify_build(runner, cfg)
+        evidence["build"] = build
+        log(build["line"])
+        if build["verdict"] != "verified":
+            evidence["meteredCalls"] = {
+                "jobCreates": 0,
+                "sessionCreates": 0,
+                "driverStarts": 0,
+            }
+            evidence["result"] = {
+                "outcome": "build_unverified",
+                "exitCode": 6,
+                "message": (
+                    "build identity unverified: the served files do not match the "
+                    "build sha, so a grade of this leg would grade an unknown "
+                    "artifact — refused before any metered call"
+                ),
+            }
+            log(f"REFUSED: build identity {build['verdict']}")
+            return finish(6)
 
     # ---- preflight -------------------------------------------------------
     try:
         samples = preflight(runner, cfg, log)
-        evidence["preflight"] = {
-            "verdict": "open",
-            "quietWindowS": cfg.quiet_window_s,
-            "samples": [s.as_dict() for s in samples],
-        }
+        evidence["preflight"] = preflight_block(samples, cfg.quiet_window_s, "open")
         evidence["gateAtStart"] = samples[-1].as_dict()
     except GateClosed as exc:
-        evidence["preflight"] = {
-            "verdict": "closed",
-            "quietWindowS": cfg.quiet_window_s,
-            "reason": exc.reason,
-            "sample": exc.sample.as_dict(),
-        }
+        evidence["preflight"] = preflight_block(
+            [exc.sample], cfg.quiet_window_s, "closed", exc.reason
+        )
+        evidence["preflight"]["sample"] = exc.sample.as_dict()
         evidence["meteredCalls"] = {
             "jobCreates": 0,
             "sessionCreates": 0,
@@ -1324,12 +1785,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         metered_rate_usd_per_s=cfg.metered_rate_usd_per_s,
         gpu_hours=cfg.gpu_hours,
         abort_source=result.stop_reason,
+        metered_projection_s=result.metered_projection_s,
     )
     within_slack = shape["durationOvershootS"] <= cfg.hard_stop_slack_s
+    clips_probe = (
+        {"status": "skipped (dry-run)", "files": []}
+        if args.dry_run
+        else probe_clips(runner, cfg, result.job_id)
+    )
+    evidence["clips"] = clips_block(clips_probe, result.delivered_rows, cfg, result.job_id)
     evidence["leg"] = {
         "jobId": result.job_id,
         "sessionId": result.session_id,
         "startedAt": result.started_at,
+        "finishedAt": result.finished_at,
+        "jobCreatedAt": result.created_at,
+        "durationSource": "harness_clock",
         "stopReason": result.stop_reason,
         "stopCalls": result.stop_calls,
         "stopConfirmed": result.stop_confirmed,
@@ -1338,6 +1809,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "costUsd": round(result.cost_usd, 6),
         "perceiveSessionS": result.perceive_session_s,
         "costSource": result.cost_source,
+        # ADAAAA-8529 item 1: the record was dark mid-leg, so the guard ran on the
+        # meter's clock; the projection at the stop instant is evidence, not a
+        # post-hoc reconstruction.
+        "recordCostSource": result.record_cost_source,
+        "meteredProjectionS": round(result.metered_projection_s, 3),
+        "projectedFrom": result.projected_from,
         "projectedCostUsd": round(result.projected_cost_usd, 6),
         "meteredRateUsdPerS": cfg.metered_rate_usd_per_s,
         "gpuHours": cfg.gpu_hours,

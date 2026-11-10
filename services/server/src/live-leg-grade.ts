@@ -26,6 +26,13 @@ import { percentile } from "./live-delivery";
 
 export type LiveLegMode = "natural" | "funded";
 
+/** Where the graded duration came from. ADAAAA-8529 item 3: a live `done`
+ * record carries no startedAt/endedAt/finishedAt, so a leg graded on the record
+ * alone read `duration_unknown` against the 480 s floor even when the harness
+ * stopped it at exactly 480 s. The source is published beside the number so a
+ * reader never confuses a record clock with the harness's own leg window. */
+export type DurationSource = "input" | "timestamps" | "harness_evidence" | "unknown";
+
 /** PASS / FAIL are about the acceptance bars. UNMEASURED means the leg cannot
  * answer the bar (empty, decide-bound, too short, too few rows) — it is never a
  * FAIL, and it is never a PASS. */
@@ -79,6 +86,9 @@ export interface LiveLegInput {
   /** Wall duration of the leg in seconds. Derived from `startedAt`/`finishedAt`
    * when those are supplied instead. */
   durationS?: number;
+  /** Provenance of `durationS` when the caller supplied it (the funded harness
+   * writes `leg.durationS` from its own clock). Defaults to `input`. */
+  durationSource?: DurationSource;
   startedAt?: string;
   finishedAt?: string;
   /** Metered perceive-session seconds (8483 metered 544.5 s inside a 300 s
@@ -111,6 +121,9 @@ export interface LiveLegGrade {
   /** Wall duration (s) when known; null when neither durationS nor timestamps
    * were supplied. */
   durationS: number | null;
+  /** Where `durationS` came from (ADAAAA-8529 item 3). `harness_evidence` means
+   * the job record carried no clock and the leg's own harness window was used. */
+  durationSource: DurationSource;
   floorS: number;
   perceiveSessionS?: number;
   /** Metered seconds / wall seconds: 8483 read 1.815x because of container
@@ -136,18 +149,18 @@ function roundMs(n: number): number {
   return Math.round(n);
 }
 
-function resolveDurationS(input: LiveLegInput): number | null {
+function resolveDuration(input: LiveLegInput): { durationS: number | null; source: DurationSource } {
   if (Number.isFinite(input.durationS) && (input.durationS as number) >= 0) {
-    return input.durationS as number;
+    return { durationS: input.durationS as number, source: input.durationSource ?? "input" };
   }
   if (input.startedAt && input.finishedAt) {
     const start = Date.parse(input.startedAt);
     const end = Date.parse(input.finishedAt);
     if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
-      return (end - start) / 1000;
+      return { durationS: (end - start) / 1000, source: "timestamps" };
     }
   }
-  return null;
+  return { durationS: null, source: "unknown" };
 }
 
 function stageSum(row: LiveLegRowLike): number {
@@ -177,7 +190,9 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
   const p95Ms = totals.length ? roundMs(percentile(totals, 95)) : 0;
   const maxMs = totals.length ? totals[totals.length - 1] : 0;
 
-  const durationS = resolveDurationS(input);
+  const resolved = resolveDuration(input);
+  const durationS = resolved.durationS;
+  const durationSource = resolved.source;
   const floorS = input.mode === "natural" ? LIVE_LEG_BARS.naturalFloorS : LIVE_LEG_BARS.fundedFloorS;
   const meteredToWallRatio =
     Number.isFinite(input.perceiveSessionS) && durationS !== null && durationS > 0
@@ -201,7 +216,9 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     shapeBlocked = true;
   }
   if (durationS === null) {
-    shapeReasons.push("duration_unknown: no duration or start/finish timestamps supplied");
+    shapeReasons.push(
+      "duration_unknown: no duration, start/finish timestamps, or harness leg evidence supplied"
+    );
     shapeBlocked = true;
   } else if (durationS < floorS) {
     shapeReasons.push(
@@ -301,6 +318,7 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     p95Ms,
     maxMs,
     durationS,
+    durationSource,
     floorS,
     perceiveSessionS: input.perceiveSessionS,
     meteredToWallRatio,

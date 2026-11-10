@@ -5,9 +5,11 @@ Run: python3 -m unittest discover -s evals/funded_leg -v
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -256,22 +258,49 @@ class HardStopTest(unittest.TestCase):
         self.assertEqual(code, 5)
         self.assertIsNone(evidence)
 
-    def test_a_leg_with_no_cost_source_is_refused(self):
+    def test_a_dark_record_is_guarded_by_the_metered_clock(self):
+        # ADAAAA-8529 item 1: on the live rail the record discloses neither
+        # costUsd nor perceiveSessionS until settlement (leg 7d99d651 read 0.0/0.0
+        # for all 480 s). Master's guard read only the record, so it had nothing
+        # to abort on; the meter's clock is readable from job create.
         code, evidence = run_harness(
             [
                 "--stub-scenario", "no-cost-source",
                 "--authorized-duration-s", "60",
                 "--cap-usd", "0.65",
+                "--abort-at-usd", "0.002",
                 "--quiet-window-min", "0.08",
-                "--cost-source-grace-s", "1",
                 "--poll-s", "0.2",
                 "--settle-timeout-s", "2",
             ]
         )
+        self.assertEqual(code, 0)
+        leg = evidence["leg"]
+        self.assertEqual(leg["stopReason"], "projected_cost")
+        self.assertEqual(leg["costSource"], "projected_cost")
+        self.assertEqual(leg["recordCostSource"], "dark")
+        self.assertGreater(leg["meteredProjectionS"], 0.0)
+        # 0.002 / 0.0011381 = 1.76 s of metered time, so the stop is early.
+        self.assertLess(leg["durationS"], 10.0)
+        shape = evidence["shape"]
+        self.assertEqual(shape["projectedFrom"], "clock")
+        self.assertGreater(shape["gradedCostUsd"], 0.0)
+        self.assertIn("from clock", shape["line"])
+        self.assertIn("| mid-leg metered clock |", shape["table"])
+
+    def test_a_leg_with_no_metered_rate_is_refused(self):
+        # With no rate there is no projection, and a wall-clock stop alone cannot
+        # hold a metered cap (8483 metered 544.5 s inside a 300 s window).
+        code, evidence = run_harness(
+            [
+                "--authorized-duration-s", "60",
+                "--cap-usd", "0.65",
+                "--metered-rate-usd-per-s", "0",
+                "--quiet-window-min", "0.08",
+            ]
+        )
         self.assertEqual(code, 5)
-        self.assertEqual(evidence["result"]["outcome"], "setup_failed")
-        self.assertIn("no readable cost source", evidence["result"]["message"])
-        self.assertEqual(evidence["stub"]["job"]["status"], "cancelled")
+        self.assertIsNone(evidence)
 
     def test_slack_above_ten_seconds_is_refused(self):
         code, evidence = run_harness(
@@ -340,6 +369,360 @@ class CycProbeTest(unittest.TestCase):
         # superset proves the clause; the marker today is session=<jobId>.
         self.assertIn("session=", funded_leg.DEFAULT_CYC_PATTERN)
         self.assertIn("session=cyc-", "session=cyc-1234-abcd")
+
+
+def make_config(**overrides):
+    """A Config with every required field set; tests override only what they use."""
+    kwargs: Any = dict(
+        authorized_duration_s=480.0,
+        cap_usd=0.65,
+        quiet_window_s=600.0,
+        hard_stop_slack_s=10.0,
+        abort_at_usd=0.60,
+        poll_s=1.0,
+        settle_timeout_s=60.0,
+        job_base="http://127.0.0.1:3000",
+        media_base="http://127.0.0.1:4070",
+        job_source="browser",
+        game_hint="soccer",
+        sample_fps=3.0,
+        video_path=None,
+        pool_containers=funded_leg.DEFAULT_POOL_CONTAINERS,
+        driver_cmd=None,
+        token="t",
+        user_id=None,
+        email=None,
+        mint_token_container="highlights-server",
+        metered_rate_usd_per_s=0.0011381,
+        gpu_hours=None,
+        repo_root=".",
+    )
+    kwargs.update(overrides)
+    return funded_leg.Config(**kwargs)
+
+
+class FakeShellRunner:
+    """Answers `shell()` from a needle -> (rc, stdout) table. No box, no shell."""
+
+    def __init__(self, rules, default=(1, "")):
+        self.rules = rules
+        self.default = default
+        self.commands = []
+
+    def shell(self, command, timeout=120.0):
+        self.commands.append(command)
+        for needle, (rc, stdout) in self.rules.items():
+            if needle in command:
+                return subprocess.CompletedProcess(
+                    args=command, returncode=rc, stdout=stdout, stderr=""
+                )
+        rc, stdout = self.default
+        return subprocess.CompletedProcess(args=command, returncode=rc, stdout=stdout, stderr="")
+
+
+class BuildIdentityTest(unittest.TestCase):
+    """ADAAAA-8529 item 2: the leg is refused on an unnamed build."""
+
+    SHA = "b20e6b9c0ffee1234567890abcdef1234567890"
+
+    def runner(self, served_md5="a" * 32, git_md5="a" * 32):
+        rules = {}
+        for path in funded_leg.DEFAULT_BUILD_FILES:
+            rules[f"md5sum /app/{path}"] = (0, f"{served_md5}  /app/{path}\n")
+            rules[f"show {self.SHA}:{path}"] = (0, f"{git_md5}  -\n")
+        return FakeShellRunner(rules)
+
+    def test_verified_when_every_pair_matches(self):
+        block = funded_leg.verify_build(
+            self.runner(), make_config(build_sha=self.SHA)
+        )
+        self.assertEqual(block["verdict"], "verified")
+        self.assertEqual(block["matched"], len(funded_leg.DEFAULT_BUILD_FILES))
+        self.assertEqual(block["sha"], self.SHA)
+        self.assertEqual(block["mismatched"], [])
+        for entry in block["files"]:
+            self.assertEqual(entry["servedMd5"], entry["gitMd5"])
+            self.assertTrue(entry["match"])
+        self.assertIn("BUILD-IDENTITY", block["line"])
+        self.assertIn("verified", block["line"])
+
+    def test_mismatch_names_the_differing_file(self):
+        block = funded_leg.verify_build(
+            self.runner(served_md5="b" * 32, git_md5="a" * 32),
+            make_config(build_sha=self.SHA),
+        )
+        self.assertEqual(block["verdict"], "mismatch")
+        self.assertEqual(block["matched"], 0)
+        self.assertEqual(len(block["mismatched"]), len(funded_leg.DEFAULT_BUILD_FILES))
+        self.assertIn("differing:", block["line"])
+
+    def test_one_differing_file_is_enough_to_refuse(self):
+        rules = {}
+        for path in funded_leg.DEFAULT_BUILD_FILES:
+            served = "b" * 32 if path.endswith("index.ts") else "a" * 32
+            rules[f"md5sum /app/{path}"] = (0, f"{served}  /app/{path}\n")
+            rules[f"show {self.SHA}:{path}"] = (0, f"{'a' * 32}  -\n")
+        block = funded_leg.verify_build(
+            FakeShellRunner(rules), make_config(build_sha=self.SHA)
+        )
+        self.assertEqual(block["verdict"], "mismatch")
+        self.assertEqual(block["mismatched"], ["packages/events/src/index.ts"])
+
+    def test_unreadable_probe_is_not_verified(self):
+        block = funded_leg.verify_build(
+            FakeShellRunner({}, default=(1, "")), make_config(build_sha=self.SHA)
+        )
+        self.assertEqual(block["verdict"], "unreadable")
+        self.assertNotEqual(block["verdict"], "verified")
+
+    def test_unresolved_sha_is_unreadable(self):
+        block = funded_leg.verify_build(
+            FakeShellRunner({}, default=(1, "")), make_config(build_sha="")
+        )
+        self.assertIsNone(block["sha"])
+        self.assertEqual(block["verdict"], "unreadable")
+
+    def test_sha_is_read_from_the_checkout_when_not_given(self):
+        rules = {"rev-parse HEAD": (0, f"{self.SHA}\n")}
+        for path in funded_leg.DEFAULT_BUILD_FILES:
+            rules[f"md5sum /app/{path}"] = (0, f"{'a' * 32}  /app/{path}\n")
+            rules[f"show {self.SHA}:{path}"] = (0, f"{'a' * 32}  -\n")
+        block = funded_leg.verify_build(FakeShellRunner(rules), make_config())
+        self.assertEqual(block["sha"], self.SHA)
+        self.assertEqual(block["verdict"], "verified")
+
+    def test_dry_run_evidence_marks_the_build_probe_skipped(self):
+        code, evidence = run_harness(
+            [
+                "--authorized-duration-s", "1",
+                "--cap-usd", "0.65",
+                "--quiet-window-min", "0.08",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "2",
+            ]
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(evidence["build"]["verdict"], "skipped")
+        self.assertIn("dry-run", evidence["build"]["line"])
+
+
+class PreflightAllQuietTest(unittest.TestCase):
+    """ADAAAA-8529 item 4: the harness's own quiet verdict is the evidence."""
+
+    def test_open_window_is_all_quiet(self):
+        code, evidence = run_harness(
+            [
+                "--authorized-duration-s", "1",
+                "--cap-usd", "0.65",
+                "--quiet-window-min", "0.08",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "2",
+            ]
+        )
+        self.assertEqual(code, 0)
+        pre = evidence["preflight"]
+        self.assertEqual(pre["verdict"], "open")
+        self.assertTrue(pre["allQuiet"])
+        self.assertEqual(pre["quietSamples"], pre["sampleCount"])
+        self.assertEqual(pre["notQuietSamples"], 0)
+
+    def test_closed_window_is_not_all_quiet(self):
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "busy",
+                "--authorized-duration-s", "60",
+                "--cap-usd", "0.65",
+                "--quiet-window-min", "0.2",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "1",
+            ]
+        )
+        self.assertEqual(code, 3)
+        pre = evidence["preflight"]
+        self.assertEqual(pre["verdict"], "closed")
+        self.assertFalse(pre["allQuiet"])
+        self.assertEqual(pre["notQuietSamples"], 1)
+        self.assertIn("nonterminal jobs = 1", pre["reason"])
+
+
+
+class ClipsEvidenceTest(unittest.TestCase):
+    """ADAAAA-8529 item 5: at 0 clips, item 2 is met by the stage fields, stated."""
+
+    ROWS = [
+        {"triggerTs": 104.6, "deliveredLatencyMs": 4228, "fireLagMs": 444,
+         "decideE2eMs": 3774, "acceptWaitMs": 0, "acceptMs": 10, "persistAckMs": 0},
+        {"triggerTs": 200.0, "deliveredLatencyMs": 4112, "fireLagMs": 300,
+         "decideE2eMs": 3810, "acceptWaitMs": 0, "acceptMs": 2, "persistAckMs": 0},
+    ]
+
+    def test_zero_clips_names_the_stage_fields(self):
+        block = funded_leg.clips_block(
+            {"status": "ok", "files": []}, self.ROWS, make_config(), "job-1"
+        )
+        self.assertEqual(block["produced"], 0)
+        self.assertEqual(block["item2Source"], "stage_fields")
+        self.assertTrue(block["item2Met"])
+        self.assertEqual(block["stageFields"]["rows"], 2)
+        self.assertEqual(block["stageFields"]["rowsWithZeroPersistAck"], 2)
+        self.assertIn("job-1-*.mp4", block["reason"])
+        self.assertIn("met by the stage fields only", block["note"])
+        self.assertIn("persistAckMs", block["note"])
+
+    def test_clip_files_are_the_item_2_source_when_present(self):
+        block = funded_leg.clips_block(
+            {"status": "ok", "files": [{"path": "/data/clips/job-1-1046.mp4", "bytes": 512}]},
+            self.ROWS,
+            make_config(),
+            "job-1",
+        )
+        self.assertEqual(block["produced"], 1)
+        self.assertEqual(block["item2Source"], "clip_files")
+        self.assertTrue(block["item2Met"])
+        self.assertNotIn("note", block)
+
+    def test_no_rows_and_no_clips_is_unmeasured_not_pass(self):
+        block = funded_leg.clips_block({"status": "ok", "files": []}, [], make_config(), "job-1")
+        self.assertEqual(block["item2Source"], "stage_fields")
+        self.assertFalse(block["item2Met"])
+        self.assertIn("UNMEASURED", block["note"])
+
+    def test_failed_probe_is_reported_not_treated_as_zero(self):
+        block = funded_leg.clips_block(
+            {"status": "failed: rc=1 no such container", "files": []},
+            self.ROWS,
+            make_config(),
+            "job-1",
+        )
+        self.assertEqual(block["probe"], "failed: rc=1 no such container")
+        self.assertEqual(block["produced"], 0)
+
+
+class Leg8516ReplayTest(unittest.TestCase):
+    """$0 replay of the ADAAAA-8516 leg evidence that opened this ticket.
+
+    Every assertion is a field of the attached leg, not a new measurement:
+    fixtures/leg8516-evidence.json is the trimmed harness-evidence + bundle of
+    job 7d99d651.
+    """
+
+    FIXTURE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "fixtures", "leg8516-evidence.json"
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        with open(cls.FIXTURE, "r", encoding="utf-8") as fh:
+            cls.leg = json.load(fh)
+
+    def test_item_4_the_window_is_all_quiet_although_the_bundle_said_false(self):
+        samples = [
+            funded_leg.GateSample(
+                at=s["at"],
+                nonterminal_jobs=s.get("nonterminalJobs"),
+                active_sessions=s.get("activeSessions"),
+                leases=s.get("leases") or {},
+                cyc_by_container=s.get("cycByContainer") or {},
+                server_health=s.get("serverHealth"),
+                errors=[],
+            )
+            for s in self.leg["preflight"]["samples"]
+        ]
+        block = funded_leg.preflight_block(
+            samples, self.leg["preflight"]["quietWindowS"], "open"
+        )
+        # The bundle derived `allQuiet: false` for this window (item 4).
+        self.assertEqual(len(samples), 19)
+        self.assertEqual(block["verdict"], "open")
+        self.assertTrue(block["allQuiet"])
+        self.assertEqual(block["quietSamples"], 19)
+        self.assertEqual(block["windowFrom"], "2026-11-09T22:17:54Z")
+        self.assertEqual(block["windowTo"], "2026-11-09T22:27:41Z")
+
+    def test_item_5_the_leg_produced_no_clips_and_says_so(self):
+        self.assertEqual(self.leg["clips"]["produced"], 0)
+        block = funded_leg.clips_block(
+            {"status": "ok", "files": []},
+            self.leg["deliveredRows"],
+            make_config(),
+            self.leg["jobId"],
+        )
+        self.assertEqual(block["produced"], 0)
+        self.assertEqual(block["item2Source"], "stage_fields")
+        self.assertTrue(block["item2Met"])
+        # 6/6 delivered rows carry persistAckMs, all of them 0: the 8495 fix.
+        self.assertEqual(block["stageFields"]["rows"], 6)
+        self.assertEqual(block["stageFields"]["rowsWithZeroPersistAck"], 6)
+        self.assertEqual(block["stageFields"]["persistAckMsMax"], 0)
+        self.assertEqual(block["stageFields"]["deliveredLatencyMaxMs"], 4228)
+
+    def test_item_1_the_shape_now_carries_the_projection_it_was_graded_on(self):
+        # What the leg published: `actualCostUsd 0.0`, "cost headroom $0.6500",
+        # on a leg that metered $0.55-0.58 — the projection existed in `leg`
+        # (506.88 s) but never reached the shape.
+        self.assertIn("actual 480.0 s / $0.0000", self.leg["shape"]["line"])
+        self.assertIn("headroom $0.6500", self.leg["shape"]["line"])
+        self.assertAlmostEqual(self.leg["leg"]["meteredProjectionS"], 506.88, places=2)
+        self.assertAlmostEqual(self.leg["settled"]["costUsd"], 0.3577, places=4)
+
+        shape = funded_leg.compare_shape(
+            480.0,
+            0.65,
+            480.0,
+            self.leg["leg"]["costUsd"],
+            metered_session_s=self.leg["settled"]["perceiveSessionS"],
+            metered_rate_usd_per_s=self.leg["leg"]["meteredUsdPerS"],
+            metered_projection_s=self.leg["leg"]["meteredProjectionS"],
+            abort_source=self.leg["leg"]["stopReason"],
+        )
+        self.assertEqual(shape["projectedFrom"], "clock")
+        self.assertAlmostEqual(shape["projectedCostUsd"], 0.5769, places=4)
+        self.assertAlmostEqual(shape["gradedCostUsd"], 0.5769, places=4)
+        self.assertEqual(shape["verdict"], "WITHIN")
+        self.assertIn("from clock", shape["line"])
+        self.assertIn("$0.5769", shape["line"])
+        self.assertIn("| mid-leg metered clock | - | 506.9 s |", shape["table"])
+        # The graded figure is the projection, not the live zero.
+        self.assertGreater(shape["gradedCostUsd"], 0.0)
+
+    def test_item_1_the_projection_would_stop_a_leg_that_crosses_the_abort_point(self):
+        # The 8516 leg stopped at 480 s with the projection at $0.5769, under the
+        # $0.60 guard point. At the same rate the guard crosses $0.60 at 527 s of
+        # metered time, so a leg authorized past that stops before the wall clock.
+        rate = self.leg["leg"]["meteredUsdPerS"]
+        shape = funded_leg.compare_shape(
+            600.0,
+            0.65,
+            600.0,
+            0.0,
+            metered_projection_s=600.0,
+            metered_rate_usd_per_s=rate,
+            abort_source="projected_cost",
+        )
+        self.assertGreater(shape["gradedCostUsd"], 0.65)
+        self.assertEqual(shape["verdict"], "OVER")
+        self.assertTrue(shape["projectedOverCap"])
+        self.assertAlmostEqual(0.60 / rate, 527.2, places=1)
+
+    def test_item_3_the_record_carries_no_timestamps_so_the_harness_leg_block_must(self):
+        timestamps = self.leg["recordTimestamps"]
+        self.assertIsNone(timestamps["startedAt"])
+        self.assertIsNone(timestamps["endedAt"])
+        self.assertIsNone(timestamps["finishedAt"])
+        # What the grader reads instead: the harness's own leg window.
+        self.assertEqual(self.leg["leg"]["durationS"], 480.0)
+        self.assertEqual(self.leg["leg"]["startedAt"], "2026-11-09T22:28:03Z")
+        self.assertEqual(self.leg["harness"]["version"], "1.1.0")
+
+    def test_item_2_the_leg_evidence_names_no_build(self):
+        # Neither attachment carries a build sha or a served-vs-git md5 pair, which
+        # is why the harness now refuses a leg it cannot identify.
+        self.assertNotIn("build", self.leg)
+        block = funded_leg.verify_build(
+            FakeShellRunner({"rev-parse HEAD": (1, "")}), make_config()
+        )
+        self.assertEqual(block["verdict"], "unreadable")
+        self.assertNotEqual(block["verdict"], "verified")
 
 
 if __name__ == "__main__":
