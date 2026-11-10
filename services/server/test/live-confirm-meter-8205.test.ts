@@ -15,6 +15,7 @@
 // `confirmDropped` but must NOT be billed as a confirm call.
 import { describe, expect, it } from "vitest";
 import {
+  ConfirmDiveDispatcher,
   planDueConfirmDives,
   runDueConfirmDives,
   type ConfirmDiveIo,
@@ -84,31 +85,37 @@ function observer(): LiveObserver {
 }
 
 describe("ADAAAA-8205 meter — pump -> observeMetrics -> stored row (AC-A4/A6)", () => {
-  it("a busy drop + a pre-flight drop + one real dive land on the row as 1 call / 1 dive / 2 dropped", async () => {
+  it("a pre-flight drop + one real dive land on the row as 1 call / 1 dive / 2 dropped", async () => {
     const run = new LiveRunShared({ audioRetainS: 400 });
     // Three distinct goals, each due (window hi + 20 s lookahead long past).
     run.notePendingConfirmDive(entry({ highlightId: "hl-busy", goalEventTs: 40, window: { lo: 30, hi: 40 } }));
     run.notePendingConfirmDive(entry({ highlightId: "hl-no-frames", goalEventTs: 100, window: { lo: 90, hi: 100 } }));
     run.notePendingConfirmDive(entry({ highlightId: "hl-promoted", goalEventTs: 160, window: { lo: 150, hi: 160 } }));
-    // The busy check is consulted once per due dive; refuse the FIRST only, so
-    // exactly one dive is dropped for a saturated pool and the rest proceed.
-    let busyCalls = 0;
-    const out = await runDueConfirmDives({
-      run,
-      io: io(),
-      nowTs: 400,
-      jobId: "job-meter",
-      // ADAAAA-8513: the shipped cap is a cost cell (3); this meter fixture
-      // composes 8 so its general descriptors admit their dives.
-      maxDivesPer300s: 8,
-      busy: () => (busyCalls++ === 0 ? "running=8 above idle" : null),
-      adopt: async () => "promoted" as const,
-      log: () => {},
-    });
+    // ADAAAA-8518: capacity 1 makes the pump QUEUE the rest (they stay PENDING
+    // and replan next tick), so three ticks drain the lane one dive each. Two of
+    // the goals have no persisted frames, so they drop pre-flight without a call.
+    const dispatcher = new ConfirmDiveDispatcher(() => 1);
+    const pumpOnce = () =>
+      runDueConfirmDives({
+        run,
+        io: io(),
+        nowMs: 1_000,
+        nowTs: 400,
+        jobId: "job-meter",
+        dispatcher,
+        adopt: async () => "promoted" as const,
+        log: () => {},
+      });
+    const out = await pumpOnce();
+    expect(out).toMatchObject({ dives: 1, queued: 2, dropped: 1 });
+    expect(run.pendingConfirmDives()).toHaveLength(2);
+    // No live-stream drop: the other two wait for the next tick.
+    expect(run.confirmDroppedByReason().pool_busy).toBe(0);
+    await pumpOnce();
+    await pumpOnce();
+    expect(run.pendingConfirmDives()).toHaveLength(0);
 
-    // Pump-level accounting.
-    expect(out).toMatchObject({ dives: 2, dropped: 2, promoted: 1, refuted: 0 });
-    // The pre-flight drop never billed a call; the promoted dive did.
+    // The pre-flight drops never billed a call; the promoted dive did.
     expect(run.confirmDiveCalls()).toBe(1);
     expect(run.confirmDiveCount()).toBe(1);
     expect(run.confirmDiveDropped()).toBe(2);

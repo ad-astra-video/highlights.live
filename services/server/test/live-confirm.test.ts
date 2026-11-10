@@ -16,7 +16,7 @@ import { describe, it, expect } from "vitest";
 import { analyzeJob, confirmReconcile, LiveRunShared, type PipelineClient } from "../src/analyzer";
 import { buildLiveAnalyzerConfig } from "../src/api";
 import { loadConfig } from "../src/config";
-import { LIVE_CONFIRM_MAX_DIVES_PER_300S } from "../src/live-confirm-async";
+import { normalizeConfirmDiveCap } from "../src/live-confirm-async";
 
 // LIVE_OBSERVE_WINDOW_S: the rolling window is 10 s of PAST content, so a goal is
 // only visible while it sits inside that window and repeat reads span <= 10 s.
@@ -283,8 +283,8 @@ describe("live exactly-once recall guard (ADAAAA-7663)", () => {
   });
 });
 
-describe("ADAAAA-8205 config posture — the async lane is on by default, bounded", () => {
-  it("arms the lane from LIVE_CONFIRM_ASYNC (default on) and carries the cap-derived 3/300 s budget", () => {
+describe("ADAAAA-8205/8518 config posture — the async lane is on by default, UNCAPPED", () => {
+  it("arms the lane from LIVE_CONFIRM_ASYNC (default on) with no dive cap", () => {
     const cfg = loadConfig({ LIVE_OBSERVE_LOOP: "1", DECIDE_CONFIRM_ENABLED: "1" });
     const armed = buildLiveAnalyzerConfig({
       cfg,
@@ -292,8 +292,8 @@ describe("ADAAAA-8205 config posture — the async lane is on by default, bounde
       clipWindow: { clipBeforeS: 4, clipAfterS: 4, clipWindowMinSec: 12 },
     });
     expect(armed.liveConfirmAsync).toBe(true);
-    expect(armed.liveConfirmMaxDivesPer300S).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
-    expect(armed.liveConfirmMaxDivesPer300S).toBe(3);
+    // ADAAAA-8518 (AC1): absent => UNLIMITED, never a number that caps.
+    expect(armed.liveConfirmMaxDivesPer300S).toBeNull();
     expect(armed.confirmEnabled).toBe(true);
     expect(loadConfig({ LIVE_CONFIRM_ASYNC: "0" }).liveConfirmAsync).toBe(false);
     expect(loadConfig({ LIVE_CONFIRM_MAX_DIVES_PER_300S: "3" }).liveConfirmMaxDivesPer300S).toBe(3);
@@ -307,26 +307,21 @@ describe("ADAAAA-8205 config posture — the async lane is on by default, bounde
     expect(off.confirmEnabled).toBe(false);
   });
 
-  // ADAAAA-8506 / ADAAAA-8512: the dive budget is priced against the same
-  // decideFee the Stage-1 lane bills, so the shipped default is a COST cell, not
-  // a detector knob. Pin it to the CEO-locked ceiling so a later "the detector
-  // false-positives more than this" edit cannot silently re-open the over-cap
-  // posture that the old 8-dive default carried at the ratified 66-decide rate.
-  it("keeps the shipped dive budget inside the CEO-locked $2.75/h/stream cap", () => {
+  // ADAAAA-8518 (AC1), superseding the ADAAAA-8506 cost cell: dives are NOT
+  // divided out of the CEO-locked ceiling any more. The knob is an operator
+  // emergency brake whose shipped default is UNLIMITED, so no dive count is
+  // pinned here — the cost control is the published per-stream
+  // `diveAdmission.diveCostUsd` read, and the admission bound is measured
+  // decide capacity. What this pins is that a bare `loadConfig({})` cannot
+  // resolve to a number that silently caps, and that a positive value still does.
+  it("ships an inert dive brake (unlimited by default) with the cost observed, not capped", () => {
+    expect(loadConfig({ LIVE_OBSERVE_LOOP: "1" }).liveConfirmMaxDivesPer300S).toBeNull();
+    expect(normalizeConfirmDiveCap(undefined)).toBeNull();
+    expect(normalizeConfirmDiveCap("0")).toBeNull();
+    expect(loadConfig({ LIVE_OBSERVE_LOOP: "1", LIVE_CONFIRM_MAX_DIVES_PER_300S: "3" }).liveConfirmMaxDivesPer300S).toBe(3);
     // Ratified natural-stream Stage-1 rate: 63-69 charged decides / 300 s,
-    // target 66 (ADAAAA-8427, wired by ADAAAA-8431).
-    const DECIDES_PER_300S = 66;
-    const DECIDE_FEE_USD = 0.0033;
-    const CAP_USD_PER_STREAM_HOUR = 2.75;
-    const WINDOWS_PER_HOUR = 3600 / 300;
-    const callsPerHour = (DECIDES_PER_300S + LIVE_CONFIRM_MAX_DIVES_PER_300S) * WINDOWS_PER_HOUR;
-    expect(callsPerHour * DECIDE_FEE_USD).toBeLessThanOrEqual(CAP_USD_PER_STREAM_HOUR);
-    // The config default must be the same cell as the dive's own fallback: two
-    // defaults drifting apart would let `loadConfig({})` re-open the old budget
-    // while the lane's fallback stays tightened (or the reverse).
-    expect(loadConfig({ LIVE_OBSERVE_LOOP: "1" }).liveConfirmMaxDivesPer300S).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
-    // 2.75 / 0.0033 / 12 = 69.4 calls per 300 s; minus the Stage-1 cell = 3.
-    const divesLeft = Math.floor(CAP_USD_PER_STREAM_HOUR / DECIDE_FEE_USD / WINDOWS_PER_HOUR) - DECIDES_PER_300S;
-    expect(LIVE_CONFIRM_MAX_DIVES_PER_300S).toBeLessThanOrEqual(divesLeft);
+    // target 66 (ADAAAA-8427, wired by ADAAAA-8431) — still inside the ceiling.
+    const stage1HourlyUsd = 66 * (3600 / 300) * 0.0033;
+    expect(stage1HourlyUsd).toBeLessThanOrEqual(2.75);
   });
 });
