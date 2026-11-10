@@ -80,10 +80,10 @@ import type { AudioTriggerRecord, TriggerSchedulerStats } from "./audio-trigger"
 import {
   CONFIRM_DROP_REASONS,
   ConfirmDiveBudget,
-  LIVE_CONFIRM_MAX_DIVES_PER_300S,
+  LIVE_CONFIRM_PENDING_RING,
   confirmDiveKey,
   rowMeasuredScoreTransition,
-  type ConfirmDiveBudgetSnapshot,
+  type ConfirmDiveAdmissionSnapshot,
   type PendingConfirmDive,
 } from "./live-confirm-async";
 import type { TriggerFamilyLatency } from "./observe-loop";
@@ -3496,8 +3496,11 @@ export interface AnalyzerConfig {
    * failed dive cannot rewrite the row. Unset / false keeps the inline dive
    * (VOD and the legacy posture, byte-identical). */
   liveConfirmAsync?: boolean;
-  /** ADAAAA-8205: per-stream dives allowed in any 300 s content window. */
-  liveConfirmMaxDivesPer300S?: number;
+  /** ADAAAA-8518 (AC1): the OPTIONAL emergency brake — dives allowed in any
+   *  300 s content window. `null`/absent = UNLIMITED (the shipped default: the
+   *  accept's evidence decides whether the dive runs, not a rate limit). A
+   *  positive value caps; `0`/negative never means "no dives". */
+  liveConfirmMaxDivesPer300S?: number | null;
   /** ADAAAA-8205: receives the pending-dive descriptor when async is armed. The
    * caller runs it off the accept path (fire-and-forget) and writes the verdict
    * back on the SAME row. Best-effort: a throwing hook never fails the accept. */
@@ -3800,11 +3803,15 @@ export interface LiveObserveMetricsSnapshot {
    *  two extra causes (`frame_unreadable`, `descriptor_overflow`) are present
    *  when observed. Additive optional: absent on pre-change rows. */
   confirmDroppedByReason?: Record<string, number>;
-  /** ADAAAA-8513 (AC3): the dive ADMISSION block — the cap, the reserved goal
-   *  slice, what was actually spent from each side, and how many budget refusals
-   *  stayed pending for a retry. Additive optional: absent on pre-change rows
-   *  and when the confirm lane never ran (same convention as `decideCapacity`). */
-  diveBudget?: ConfirmDiveBudgetSnapshot;
+  /** ADAAAA-8518 (AC5): the dive ADMISSION block — capacity-only admission
+   *  counters plus the observed dive cost. Additive optional: absent on
+   *  pre-change rows and when the confirm lane never ran (same convention as
+   *  `decideCapacity`). */
+  diveAdmission?: ConfirmDiveAdmissionSnapshot;
+  /** ADAAAA-8518 (AC5): `costUsd` normalised to one hour of stream, so the
+   *  accepted "observe cost, do not cap" tradeoff is readable per stream.
+   *  Additive optional: absent on pre-change rows and a zero-length stream. */
+  costPerStreamHour?: number;
   /** ADAAAA-8254: decide admission counters, mirrored from the gate so a stored
    *  live row answers the capacity/queue question without container logs. */
   decideQueued?: number;
@@ -4032,8 +4039,8 @@ export function buildLiveObserveMetrics(
     dropped: number;
     /** ADAAAA-8513 (AC4): drops keyed by cause. */
     byReason?: Record<string, number>;
-    /** ADAAAA-8513 (AC3): the admission block at snapshot time. */
-    budget?: ConfirmDiveBudgetSnapshot;
+    /** ADAAAA-8518 (AC5): the capacity-only admission block at snapshot time. */
+    admission?: ConfirmDiveAdmissionSnapshot;
   },
   /** ADAAAA-8344: the adapter's per-job decide-stage summary. Absent (VOD / a
    * rail that made no instrumented decide) leaves the record byte-identical. */
@@ -4126,8 +4133,8 @@ export function buildLiveObserveMetrics(
           confirmDropped: confirm.dropped,
           // ADAAAA-8513 (AC4): the per-cause breakdown rides the same block.
           ...(confirm.byReason ? { confirmDroppedByReason: { ...confirm.byReason } } : {}),
-          // ADAAAA-8513 (AC3): cap / reserved / spent / retries.
-          ...(confirm.budget ? { diveBudget: { ...confirm.budget } } : {}),
+          // ADAAAA-8518 (AC5): capacity-only admission + observed dive cost.
+          ...(confirm.admission ? { diveAdmission: { ...confirm.admission } } : {}),
         }
       : {}),
     // ADAAAA-8351: the effective ASR wait posture (see the parameter doc above).
@@ -4672,24 +4679,21 @@ export class LiveRunShared {
     lastNotedTs: number;
   } = { story: "", priorAsr: "", score: null, lastScoreTs: null, scored: false, lastNotedTs: -Infinity };
 
-  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number; jobId?: string; liveConfirmMaxDivesPer300S?: number } = {}) {
+  constructor(opts: { decideWindowN?: number; goalBurstWindowS?: number; audioRetainS?: number; jobId?: string; liveConfirmMaxDivesPer300S?: number | null; decideFeeUsd?: number } = {}) {
     this.windowN = opts.decideWindowN ?? DECIDE_FRAME_WINDOW;
     this.goalBurstWindowS = opts.goalBurstWindowS ?? DEFAULT_GOAL_BURST_SUPPRESS_S;
     this.audioRetainS = opts.audioRetainS ?? AUDIO_CLIP_KEEP_S;
     this.delivery = new LiveDeliveryTracker(opts.jobId ?? "");
-    // ADAAAA-8513 (AC3): the cap the PUMP admits against and the cap the
-    // published `diveBudget` reports must be the same number. The pump reads
-    // `cfg.liveConfirmMaxDivesPer300S`; before this the snapshot fell back to
-    // the compile-time default, so an operator-composed cap (e.g. 4) admitted 4
-    // while the stored row claimed `cap: 8`. ADAAAA-8513 verification defect.
-    this.confirmDiveMax =
-      Number.isFinite(opts.liveConfirmMaxDivesPer300S as number) && (opts.liveConfirmMaxDivesPer300S as number) >= 0
-        ? Math.floor(opts.liveConfirmMaxDivesPer300S as number)
-        : LIVE_CONFIRM_MAX_DIVES_PER_300S;
+    // ADAAAA-8518 (AC5): cost is OBSERVED per stream, so the run needs the
+    // decide fee to publish `diveAdmission.diveCostUsd = decideFee x dives`.
+    this.confirmDiveFeeUsd =
+      Number.isFinite(opts.decideFeeUsd as number) && (opts.decideFeeUsd as number) >= 0
+        ? (opts.decideFeeUsd as number)
+        : undefined;
   }
 
-  /** ADAAAA-8513 (AC3/AC7): the configured per-300 s dive cap this run uses. */
-  private readonly confirmDiveMax: number;
+  /** ADAAAA-8518 (AC5): decide fee per call, for the published dive cost. */
+  private readonly confirmDiveFeeUsd: number | undefined;
 
   /** ADAAAA-8005 (gate 3): the per-row trigger -> delivered collector for this
    *  run. The live observers feed it the window stage clocks; the server's
@@ -5085,20 +5089,25 @@ export class LiveRunShared {
   private overflowedConfirmDiveEntries: PendingConfirmDive[] = [];
   /** Dive keys already attempted this run (one dive per distinct goal). */
   private confirmDiveAttempts = new Set<string>();
-  /** ADAAAA-8513 (AC1): budget refusals per descriptor (bound = 3). */
-  private confirmBudgetAttemptCounts = new Map<string, number>();
+  /** ADAAAA-8518 (AC3): first wall-ms each descriptor waited for a decide slot. */
+  private confirmDiveQueueWaitSince = new Map<string, number>();
   /** ADAAAA-8513 (AC4): drops keyed by cause (never a bare integer). */
   private confirmDiveDropsByReason = new Map<string, number>();
-  /** Sliding per-stream dive budget (the configured per-300 s cap, with
-   *  `min(3, cap)` reserved for provisional-goal rows — AC3). */
+  /** ADAAAA-8518 (AC1): the OPTIONAL emergency brake (inert unless an explicit
+   *  positive cap is configured — the product does not cap dives). */
   readonly confirmBudget = new ConfirmDiveBudget();
   /** Confirm calls this run made — metered like a decide call. */
   private confirmDiveCallCount = 0;
   /** Dives that issued a confirm call (the billable count; a pre-flight drop
    *  that never reached the model is NOT counted here — AC-A4). */
   private confirmDiveRunCount = 0;
-  /** Dives DROPPED (busy pool, budget, timeout, transport, parse). */
+  /** Dives DROPPED (pool_busy, brake, timeout, transport, parse). */
   private confirmDiveDroppedCount = 0;
+  /** ADAAAA-8518 (AC5): admission counters a stored row publishes. */
+  private confirmDiveDispatchedCount = 0;
+  private confirmDiveQueuedCount = 0;
+  private confirmDiveMaxInFlightSeen = 0;
+  private confirmDiveCapacitySeen = 0;
 
   /** ADAAAA-8205: hold a published provisional row's dive descriptor. */
   notePendingConfirmDive(entry: PendingConfirmDive): void {
@@ -5107,7 +5116,7 @@ export class LiveRunShared {
     const key = confirmDiveKey(entry);
     this.pendingConfirmDiveEntries = this.pendingConfirmDiveEntries.filter((e) => confirmDiveKey(e) !== key);
     this.pendingConfirmDiveEntries.push(entry);
-    if (this.pendingConfirmDiveEntries.length > 16) {
+    if (this.pendingConfirmDiveEntries.length > LIVE_CONFIRM_PENDING_RING) {
       // ADAAAA-8513 (AC4): the eviction is a DROP WITH A CAUSE, not a silent
       // shift(). The descriptor goes to the overflow list the pump stamps
       // (`descriptor_overflow`) so the row never stays `provisional` with no
@@ -5138,20 +5147,40 @@ export class LiveRunShared {
   noteConfirmDiveAttempt(key: string): void {
     if (key) this.confirmDiveAttempts.add(key);
   }
-  /** ADAAAA-8513 (AC1): budget refusals this descriptor already absorbed. */
-  budgetAttempts(key: string): number {
-    return this.confirmBudgetAttemptCounts.get(key) ?? 0;
+  /** ADAAAA-8518 (AC3): stamp (first time) and return this descriptor's slot wait. */
+  noteConfirmDiveQueueWait(key: string, nowMs: number): number {
+    if (!key) return 0;
+    const t = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const since = this.confirmDiveQueueWaitSince.get(key);
+    if (since === undefined) {
+      this.confirmDiveQueueWaitSince.set(key, t);
+      return 0;
+    }
+    return Math.max(0, t - since);
   }
-  /** ADAAAA-8513 (AC1): record one budget refusal and return the new count. */
-  noteBudgetAttempt(key: string): number {
-    const n = this.budgetAttempts(key) + 1;
-    this.confirmBudgetAttemptCounts.set(key, n);
-    return n;
+  /** ADAAAA-8518 (AC3): forget a queue stamp (dispatched or dropped). */
+  clearConfirmDiveQueueWait(key: string): void {
+    if (key) this.confirmDiveQueueWaitSince.delete(key);
+  }
+  /** ADAAAA-8518 (AC5): count one admitted dive + the in-flight/capacity it saw. */
+  noteConfirmDiveDispatched(inFlight: number, capacity: number): void {
+    this.confirmDiveDispatchedCount++;
+    const cap = Number.isFinite(capacity) && capacity >= 1 ? Math.floor(capacity) : 1;
+    this.confirmDiveCapacitySeen = cap;
+    const live = Number.isFinite(inFlight) && inFlight > 0 ? Math.floor(inFlight) : 1;
+    if (live > this.confirmDiveMaxInFlightSeen) this.confirmDiveMaxInFlightSeen = live;
+  }
+  /** ADAAAA-8518 (AC5): count one due dive that found no free decide slot. */
+  noteConfirmDiveQueued(capacity: number): void {
+    this.confirmDiveQueuedCount++;
+    const cap = Number.isFinite(capacity) && capacity >= 1 ? Math.floor(capacity) : 1;
+    this.confirmDiveCapacitySeen = cap;
   }
   /** ADAAAA-8205: forget a settled/dropped dive (the row no longer waits). */
   dropPendingConfirmDive(key: string): void {
     if (!key) return;
     this.pendingConfirmDiveEntries = this.pendingConfirmDiveEntries.filter((e) => confirmDiveKey(e) !== key);
+    this.confirmDiveQueueWaitSince.delete(key);
   }
   /** ADAAAA-8205: count one dropped dive + name why (audit/metrics). */
   noteConfirmDiveDropped(reason: string): void {
@@ -5172,9 +5201,19 @@ export class LiveRunShared {
   confirmDivePendingCount(): number {
     return this.pendingConfirmDiveEntries.length + this.overflowedConfirmDiveEntries.length;
   }
-  /** ADAAAA-8513 (AC3): the admission block at the run's content clock. */
-  confirmDiveBudget(): ConfirmDiveBudgetSnapshot {
-    return this.confirmBudget.snapshot(this.lastTimestamp(), this.confirmDiveMaxPer300s());
+  /** ADAAAA-8518 (AC5): the admission block a stored row publishes. */
+  confirmDiveAdmission(): ConfirmDiveAdmissionSnapshot {
+    const billed = this.confirmDiveCallCount;
+    const fee = this.confirmDiveFeeUsd;
+    return {
+      dispatched: this.confirmDiveDispatchedCount,
+      queued: this.confirmDiveQueuedCount,
+      maxInFlight: this.confirmDiveMaxInFlightSeen,
+      capacityEffective: this.confirmDiveCapacitySeen,
+      divesBilled: billed,
+      // AC5: `decideFee x dives`; 0 when the run carried no fee (a $0 harness).
+      diveCostUsd: Number(((fee ?? 0) * billed).toFixed(6)),
+    };
   }
   /** ADAAAA-8205: count one settled dive (a confirm call was made). */
   noteConfirmDiveDone(_ok: boolean, _latencyMs: number): void {
@@ -5193,13 +5232,6 @@ export class LiveRunShared {
   /** ADAAAA-8205: dives dropped without moving the row. */
   confirmDiveDropped(): number {
     return this.confirmDiveDroppedCount;
-  }
-  /** ADAAAA-8205: the configured default budget for this run. */
-  confirmDiveMaxPer300s(): number {
-    // ADAAAA-8513: the SAME cap the pump admits against (cfg value), never the
-    // compile-time fallback — otherwise `diveBudget.cap` can disagree with the
-    // spend the lane actually enforced.
-    return this.confirmDiveMax;
   }
 
   /** ADAAAA-8006: resolve ONE demoted row against a later window's scoreboard
@@ -10282,13 +10314,14 @@ export async function analyzeJob(
             // ADAAAA-8205: the async confirm lane's meter, read at the same
             // instant as the decide counters so the cost term and the meter
             // describe one point in the run. ADAAAA-8513 adds the per-cause
-            // drops and the admission block (cap / reserved / spent / retries).
+            // drops; ADAAAA-8518 publishes the capacity-only admission block
+            // (dispatched / queued / maxInFlight / capacity / dives / cost).
             {
               calls: run.confirmDiveCalls(),
               dives: run.confirmDiveCount(),
               dropped: run.confirmDiveDropped(),
               byReason: run.confirmDroppedByReason(),
-              budget: run.confirmDiveBudget(),
+              admission: run.confirmDiveAdmission(),
             },
             // ADAAAA-8344: the adapter's per-job stage summary (same instant as
             // the counters above). Undefined when no decide was instrumented, so

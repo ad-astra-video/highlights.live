@@ -1,27 +1,25 @@
 // ADAAAA-8513 — evidence-first confirm-dive admission (parent ADAAAA-8512,
 // origin lane ADAAAA-8205, grading sibling ADAAAA-8506).
 //
-// The CEO rule this pins: "if there is evidence of a goal then the deep dive
-// should happen to confirm it and correctly get the clip." The lane as shipped
-// violated it four ways; each AC below is a $0 unit proof, no leg / GPU / deploy:
-//   AC1 a budget refusal is TRANSIENT (pending, retried, bounded) — never a
-//       first-refusal terminal drop;
-//   AC2 due dives rank EVIDENCE first (measured score > goal-line > audio-only),
-//       so the last token goes to the strongest window, not the oldest;
-//   AC3 `min(3, cap)` tokens are reserved for provisional-goal rows and the
-//       admission block is published on `observeMetrics.diveBudget`;
+// ADAAAA-8518 SUPERSEDED the admission half of this ticket: the per-300 s budget
+// cap and the reserved goal slice are gone (CEO directive on ADAAAA-8512), and
+// the per-stream one-in-flight serialization is gone too. What this file keeps
+// pinning is the part that still ships:
+//   AC2 due dives rank EVIDENCE first (measured score > goal-line > audio-only);
+//   AC3 the published admission block survives buildLiveObserveMetrics and the
+//       stored job record (contract + SQLite);
 //   AC4 drops are counted per CAUSE and the pending ring's eviction is a stamped
 //       `descriptor_overflow`, never a silent shift();
-//   AC5 the stream-end drain leaves NO descriptor pending — a finished job
-//       cannot keep a `provisional` row with no verdict field.
+//   AC5 the stream-end drain leaves NO descriptor pending.
+// The AC1/AC3 cap+reserved proofs moved to `live-confirm-admission-8518.test.ts`
+// (unlimited default, capacity-only queueing, observed dive cost).
 import { describe, expect, it, vi } from "vitest";
 import {
   CONFIRM_DROP_REASONS,
   ConfirmDiveBudget,
-  LIVE_CONFIRM_BUDGET_ATTEMPTS,
+  ConfirmDiveDispatcher,
   LIVE_CONFIRM_LOOKAHEAD_S,
-  LIVE_CONFIRM_MAX_DIVES_PER_300S,
-  LIVE_CONFIRM_RESERVED_DIVES,
+  LIVE_CONFIRM_PENDING_RING,
   confirmDiveAdoption,
   confirmDiveEvidenceTier,
   confirmDiveKey,
@@ -91,16 +89,10 @@ function observer(): LiveObserver {
   return new LiveObserver({ cadenceS: 3, windowS: 10, fps: 2, onDecide: async () => false });
 }
 
-describe("AC1 — a budget refusal retries, bounded, and never stamps a pending row", () => {
-  it("leaves the descriptor pending, then dives it once the window slides", async () => {
+describe("AC1 — the dive brake is INERT by default (ADAAAA-8518 supersedes the cap)", () => {
+  it("dives every due descriptor at the shipped default, with no budget refusal", async () => {
     const run = new LiveRunShared({ audioRetainS: 400 });
-    const dropped = vi.fn();
-    const realDrop = run.dropPendingConfirmDive.bind(run);
-    (run as any).dropPendingConfirmDive = (key: string) => {
-      dropped(key);
-      realDrop(key);
-    };
-    for (let i = 0; i < LIVE_CONFIRM_MAX_DIVES_PER_300S + 1; i++) {
+    for (let i = 0; i < 12; i++) {
       run.notePendingConfirmDive(
         entry({
           highlightId: `hl-${i}`,
@@ -111,89 +103,67 @@ describe("AC1 — a budget refusal retries, bounded, and never stamps a pending 
       );
     }
     const confirm = vi.fn(async () => ({ goalConfirmed: "confirmed_goal" as const, corroborated: true }));
-    const adopt = vi.fn(async () => "promoted" as const);
-
-    const first = await runDueConfirmDives({
+    const out = await runDueConfirmDives({
       run,
       io: io({ confirm }),
       nowTs: 500,
       jobId: "job-8513",
-      maxDivesPer300s: LIVE_CONFIRM_MAX_DIVES_PER_300S,
-      adopt,
+      // No explicit brake: `undefined`/`null` must resolve to UNLIMITED.
+      maxDivesPer300s: null,
+      adopt: async () => "promoted" as const,
       log: () => {},
     });
-    expect(first.dives).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
-    expect(first.dropped).toBe(0);
-    expect(first.retries).toBe(1);
-    expect(run.pendingConfirmDives()).toHaveLength(1);
-    // The refused descriptor is still pending and was NOT handed to the row
-    // writer (no `dropped` verdict), while the eight settled ones were.
-    expect(dropped).not.toHaveBeenCalledWith(confirmDiveKey(run.pendingConfirmDives()[0]));
-    expect(adopt).toHaveBeenCalledTimes(LIVE_CONFIRM_MAX_DIVES_PER_300S);
-
-    const second = await runDueConfirmDives({
-      run,
-      io: io({ confirm }),
-      nowTs: 500 + 301,
-      jobId: "job-8513",
-      maxDivesPer300s: LIVE_CONFIRM_MAX_DIVES_PER_300S,
-      adopt,
-      log: () => {},
-    });
-    expect(second.dives).toBe(1);
-    expect(second.retries).toBe(0);
-    expect(run.pendingConfirmDives()).toHaveLength(0);
-    expect(confirm).toHaveBeenCalledTimes(LIVE_CONFIRM_MAX_DIVES_PER_300S + 1);
+    expect(out.dives).toBe(12);
+    expect(out.retries).toBe(0);
+    expect(out.dropped).toBe(0);
+    expect(confirm).toHaveBeenCalledTimes(12);
+    expect(run.confirmDroppedByReason().budget).toBe(0);
+    expect(run.confirmBudget.refusalsCount()).toBe(0);
+    expect(new ConfirmDiveBudget().refusalsCount()).toBe(0);
   });
 
-  it("abandons the retry after LIVE_CONFIRM_BUDGET_ATTEMPTS refusals, with a stamped budget drop", async () => {
+  it("an explicit positive brake stays PENDING while live and stamps `budget` at stream end", async () => {
     const run = new LiveRunShared({ audioRetainS: 400 });
-    run.notePendingConfirmDive(entry({ evidence: { provisional: true } }));
-    const results: ConfirmDiveResult[] = [];
-    // cap 0: every tick refuses, so the descriptor burns its retry bound.
-    for (let i = 0; i < LIVE_CONFIRM_BUDGET_ATTEMPTS; i++) {
-      const out = await runDueConfirmDives({
-        run,
-        io: io(),
-        nowTs: 130,
-        jobId: "job-8513",
-        maxDivesPer300s: 0,
-        adopt: async (_e, result) => {
-          results.push(result);
-          return "unchanged" as const;
-        },
-        log: () => {},
-      });
-      if (i < LIVE_CONFIRM_BUDGET_ATTEMPTS - 1) {
-        expect(out.dropped).toBe(0);
-        expect(run.pendingConfirmDives()).toHaveLength(1);
-        expect(results).toHaveLength(0);
-      } else {
-        expect(out.dropped).toBe(1);
-        expect(run.pendingConfirmDives()).toHaveLength(0);
-        expect(results.map((r) => r.droppedReason)).toEqual(["budget"]);
-      }
+    for (let i = 0; i < 3; i++) {
+      run.notePendingConfirmDive(
+        entry({
+          highlightId: `b-${i}`,
+          goalEventTs: 40 + i * 10,
+          window: { lo: 30 + i * 10, hi: 40 + i * 10 },
+          evidence: { provisional: true },
+        })
+      );
     }
-    expect(run.confirmDiveDropped()).toBe(1);
-    expect(run.confirmDroppedByReason().budget).toBe(1);
-    expect(run.confirmBudget.retriesCount()).toBe(LIVE_CONFIRM_BUDGET_ATTEMPTS);
-  });
-
-  it("a busy pool stays TERMINAL (only budget is transient)", async () => {
-    const run = new LiveRunShared({ audioRetainS: 400 });
-    run.notePendingConfirmDive(entry({ evidence: { provisional: true } }));
-    const out = await runDueConfirmDives({
+    const live = await runDueConfirmDives({
       run,
       io: io(),
-      nowTs: 130,
+      nowTs: 100,
       jobId: "job-8513",
-      busy: () => "inflight=3",
-      adopt: async () => "unchanged" as const,
+      maxDivesPer300s: 1,
+      adopt: async () => "promoted" as const,
       log: () => {},
     });
-    expect(out.dropped).toBe(1);
+    expect(live.dives).toBe(1);
+    expect(live.retries).toBe(2);
+    expect(live.dropped).toBe(0);
+    expect(run.pendingConfirmDives()).toHaveLength(2);
+
+    const reasons: Array<string | undefined> = [];
+    await runDueConfirmDives({
+      run,
+      io: io(),
+      nowTs: 200,
+      jobId: "job-8513",
+      maxDivesPer300s: 1,
+      drain: true,
+      adopt: async (_e, result) => {
+        reasons.push(result.droppedReason);
+        return "unchanged" as const;
+      },
+      log: () => {},
+    });
     expect(run.pendingConfirmDives()).toHaveLength(0);
-    expect(run.confirmDroppedByReason().pool_busy).toBe(1);
+    expect(reasons).toContain("budget");
   });
 });
 
@@ -214,7 +184,7 @@ describe("AC2 — evidence-first ordering", () => {
     expect(confirmDiveEvidenceTier(audio)).toBe(0);
   });
 
-  it("the last budget token goes to the ranked-top window, not the oldest", async () => {
+  it("takes the free decide slot for the ranked-top window, not the oldest", async () => {
     const run = new LiveRunShared({ audioRetainS: 400 });
     // Nine due windows. The first eight (oldest) are audio-only noise; the ninth
     // is the LATEST and the only measured score transition.
@@ -237,6 +207,7 @@ describe("AC2 — evidence-first ordering", () => {
       })
     );
     const dived: string[] = [];
+    const dispatcher = new ConfirmDiveDispatcher(() => 1);
     const out = await runDueConfirmDives({
       run,
       io: io({
@@ -247,92 +218,57 @@ describe("AC2 — evidence-first ordering", () => {
       }),
       nowTs: 1000,
       jobId: "job-8513",
-      maxDivesPer300s: 1,
+      dispatcher,
       adopt: async () => "promoted" as const,
       log: () => {},
     });
-    // One token: it went to the measured goal at 360 s, not to the oldest noise.
+    // One slot: it went to the measured goal at 360 s, not to the oldest noise.
     expect(out.dives).toBe(1);
     expect(dived).toEqual(["ts-360"]);
-    // The remaining eight stay pending (AC1), they are not stamped dropped.
+    // The remaining eight stay pending and are NOT stamped dropped while live.
     expect(run.pendingConfirmDives()).toHaveLength(8);
     expect(run.confirmDiveDropped()).toBe(0);
   });
 });
 
-describe("AC3 — the reserved goal slice and the published admission block", () => {
-  it("publishes cap / reserved / spentReserved / spentGeneral / retries", async () => {
-    // Compose the same cap the pump is given, so the published block reports it.
-    const run = new LiveRunShared({ audioRetainS: 400, liveConfirmMaxDivesPer300S: 8 });
+describe("AC3 — the published admission block (capacity, not a cap)", () => {
+  it("publishes dispatched / queued / maxInFlight / capacity / dives and survives the job record", async () => {
+    const run = new LiveRunShared({ audioRetainS: 400, decideFeeUsd: 0.025 });
     run.notePendingConfirmDive(entry({ highlightId: "p1", goalEventTs: 40, window: { lo: 30, hi: 40 }, evidence: { provisional: true } }));
     run.notePendingConfirmDive(entry({ highlightId: "g1", goalEventTs: 50, window: { lo: 40, hi: 50 } }));
-    await runDueConfirmDives({
-      run,
-      io: io(),
-      nowTs: 100,
-      jobId: "job-8513",
-      maxDivesPer300s: 8,
-      adopt: async () => "promoted" as const,
-      log: () => {},
-    });
-    const snap = run.confirmDiveBudget();
-    expect(snap.cap).toBe(8);
-    expect(snap.reserved).toBe(Math.min(LIVE_CONFIRM_RESERVED_DIVES, 8));
-    expect(snap.spentReserved).toBe(1);
-    expect(snap.spentGeneral).toBe(1);
-    expect(snap.retries).toBe(0);
-    expect(ConfirmDiveBudget.reservedTokens(3)).toBe(3);
-    expect(ConfirmDiveBudget.reservedTokens(1)).toBe(1);
-  });
-
-  it("publishes the configured cap, not the compile-time default", () => {
-    // ADAAAA-8513 verification defect: the pump admits against
-    // cfg.liveConfirmMaxDivesPer300S, so the stored `diveBudget.cap` must be
-    // that same number (an operator-composed 4 used to report cap: 8).
-    const composed = new LiveRunShared({ audioRetainS: 400, liveConfirmMaxDivesPer300S: 4 });
-    expect(composed.confirmDiveMaxPer300s()).toBe(4);
-    expect(composed.confirmDiveBudget()).toMatchObject({ cap: 4, reserved: LIVE_CONFIRM_RESERVED_DIVES });
-    // The default is still the shipped constant (AC7: unchanged at 8).
-    expect(new LiveRunShared().confirmDiveBudget().cap).toBe(LIVE_CONFIRM_MAX_DIVES_PER_300S);
-  });
-
-  it("a general dive cannot spend the reserved slice", async () => {
-    const b = new ConfirmDiveBudget();
-    // cap 8 -> 5 general tokens; the provisional rows still get their 3.
-    for (let i = 0; i < 5; i++) expect(b.allow(10 + i, 8, false)).toBe(true);
-    expect(b.allow(16, 8, false)).toBe(false);
-    for (let i = 0; i < LIVE_CONFIRM_RESERVED_DIVES; i++) expect(b.allow(17 + i, 8, true)).toBe(true);
-    expect(b.allow(20, 8, true)).toBe(false);
-    expect(b.snapshot(20, 8)).toMatchObject({ cap: 8, reserved: 3, spentReserved: 3, spentGeneral: 5 });
-  });
-
-  it("survives buildLiveObserveMetrics and the stored job record (contract + SQLite)", async () => {
-    const run = new LiveRunShared({ audioRetainS: 400 });
-    run.notePendingConfirmDive(entry({ evidence: { provisional: true, scoreMeasured: true } }));
+    const dispatcher = new ConfirmDiveDispatcher(() => 2);
     await runDueConfirmDives({
       run,
       io: io({ confirm: async () => ({ goalConfirmed: "not_goal" as const, corroborated: false }) }),
-      nowTs: 130,
+      nowTs: 100,
       jobId: "job-8513",
+      dispatcher,
       adopt: async () => "refuted" as const,
       log: () => {},
     });
-    run.noteConfirmDiveDropped("pool_busy:inflight=3");
+    const snap = run.confirmDiveAdmission();
+    expect(snap).toMatchObject({
+      dispatched: 2,
+      queued: 0,
+      maxInFlight: 2,
+      capacityEffective: 2,
+      divesBilled: 2,
+      diveCostUsd: 0.05,
+    });
+    // No cap/reserved/spent fields: the cap is gone with the budget.
+    expect(snap).not.toHaveProperty("cap");
+    expect(snap).not.toHaveProperty("reserved");
+
     const metrics = buildLiveObserveMetrics(observer(), undefined, {
       calls: run.confirmDiveCalls(),
       dives: run.confirmDiveCount(),
       dropped: run.confirmDiveDropped(),
       byReason: run.confirmDroppedByReason(),
-      budget: run.confirmDiveBudget(),
+      admission: run.confirmDiveAdmission(),
     });
-    expect(metrics.diveBudget).toMatchObject({
-      cap: LIVE_CONFIRM_MAX_DIVES_PER_300S,
-      reserved: LIVE_CONFIRM_RESERVED_DIVES,
-      spentReserved: 1,
-      spentGeneral: 0,
-      retries: 0,
-    });
-    expect(metrics.confirmDroppedByReason).toMatchObject({ pool_busy: 1 });
+    expect(metrics.diveAdmission).toMatchObject({ dispatched: 2, capacityEffective: 2, divesBilled: 2 });
+    expect(metrics.diveAdmission).not.toHaveProperty("cap");
+    expect(metrics).not.toHaveProperty("diveBudget");
 
     const db = new SqliteDb(":memory:");
     const store = new Store(db);
@@ -342,9 +278,9 @@ describe("AC3 — the reserved goal slice and the published admission block", ()
       observeMetrics: { ...metrics, decideCalls: 66 },
     });
     const stored = await db.getJob(job.id);
-    // `JobSchema.parse` must not strip the two new fields (the ADAAAA-8219 trap).
-    expect(stored!.observeMetrics!.diveBudget).toEqual(metrics.diveBudget);
-    expect(stored!.observeMetrics!.confirmDroppedByReason!.pool_busy).toBe(1);
+    // `JobSchema.parse` must not strip the admission block (the ADAAAA-8219 trap).
+    expect(stored!.observeMetrics!.diveAdmission).toEqual(metrics.diveAdmission);
+    expect(stored!.observeMetrics!.confirmDroppedByReason!.pool_busy).toBe(0);
     for (const cause of ["budget", "timeout", "transport_failure", "passthrough", "no_persisted_frames"]) {
       expect(stored!.observeMetrics!.confirmDroppedByReason).toHaveProperty(cause, 0);
     }
@@ -372,21 +308,22 @@ describe("AC4 — drops counted per cause, ring eviction stamped", () => {
       no_persisted_frames: 1,
       frame_unreadable: 1,
     });
-    // The six AC causes are always present, even at zero.
+    // The AC cause list is always present, even at zero.
     for (const cause of CONFIRM_DROP_REASONS) expect(byReason).toHaveProperty(cause, expect.any(Number));
     expect(run.confirmDiveDropped()).toBe(7);
   });
 
   it("stamps a ring eviction as descriptor_overflow instead of shift()-ing it away", async () => {
     const run = new LiveRunShared({ audioRetainS: 400 });
-    for (let i = 0; i < 17; i++) {
+    for (let i = 0; i < LIVE_CONFIRM_PENDING_RING + 1; i++) {
       run.notePendingConfirmDive(
         entry({ highlightId: `ov-${i}`, goalEventTs: 100 + i, window: { lo: 90 + i, hi: 100 + i }, evidence: { provisional: true } })
       );
     }
-    // The ring is 16; the overflow list holds the evicted descriptor and the
-    // drop is already counted at eviction time.
-    expect(run.pendingConfirmDives()).toHaveLength(16);
+    // The ring is a memory bound (`LIVE_CONFIRM_PENDING_RING`), not a dive cap;
+    // the overflow list holds the evicted descriptor and the drop is already
+    // counted at eviction time.
+    expect(run.pendingConfirmDives()).toHaveLength(LIVE_CONFIRM_PENDING_RING);
     expect(run.confirmDiveDropped()).toBe(1);
     expect(run.confirmDroppedByReason().descriptor_overflow).toBe(1);
 
@@ -396,8 +333,7 @@ describe("AC4 — drops counted per cause, ring eviction stamped", () => {
       io: io(),
       nowTs: 500,
       jobId: "job-8513",
-      // No budget pressure here: every pending descriptor dives.
-      maxDivesPer300s: 32,
+      dispatcher: ConfirmDiveDispatcher.unbounded(),
       adopt: async (e, result) => {
         results.set(e.highlightId, result.droppedReason);
         return "unchanged" as const;
@@ -411,23 +347,24 @@ describe("AC4 — drops counted per cause, ring eviction stamped", () => {
 });
 
 describe("AC5 — end-of-stream drain leaves no descriptor pending", () => {
-  it("dives what the budget can afford and stamps what it cannot, so no row stays unreadable", async () => {
+  it("stamps what the pool could not take, so no row stays unreadable", async () => {
     const run = new LiveRunShared({ audioRetainS: 400 });
-    // Three provisional descriptors still pending at stream end.
     for (let i = 0; i < 3; i++) {
       run.notePendingConfirmDive(
         entry({ highlightId: `end-${i}`, goalEventTs: 30 + i * 10, window: { lo: 20 + i * 10, hi: 30 + i * 10 }, evidence: { provisional: true } })
       );
     }
-    // Burn the whole budget first so the drain can only afford one dive... then
-    // set the cap to 1 to force the other two through the terminal budget path.
     const results: Array<{ id: string; reason?: string }> = [];
+    // A dispatcher whose single slot is already held: at stream end nothing can
+    // be admitted, so every descriptor must be stamped terminal `pool_busy`.
+    const dispatcher = new ConfirmDiveDispatcher(() => 1);
+    expect(dispatcher.tryAdmit()).toBe(true);
     const out = await runDueConfirmDives({
       run,
       io: io(),
       nowTs: 50 + LIVE_CONFIRM_LOOKAHEAD_S,
       jobId: "job-8513",
-      maxDivesPer300s: 1,
+      dispatcher,
       drain: true,
       adopt: async (e, result) => {
         results.push({ id: e.highlightId, reason: result.droppedReason });
@@ -435,13 +372,12 @@ describe("AC5 — end-of-stream drain leaves no descriptor pending", () => {
       },
       log: () => {},
     });
-    expect(out.dives).toBe(1);
-    expect(out.dropped).toBe(2);
+    dispatcher.release();
+    expect(out.dives).toBe(0);
+    expect(out.dropped).toBe(3);
     expect(run.pendingConfirmDives()).toHaveLength(0);
-    expect(results.filter((r) => r.reason === "budget")).toHaveLength(2);
-    expect(run.confirmDroppedByReason().budget).toBe(2);
-    // Every adoption carries a terminal reason, so the row gets a verdict field.
-    expect(results.every((r) => r.reason === "budget" || r.reason === undefined)).toBe(true);
+    expect(results.filter((r) => r.reason === "pool_busy")).toHaveLength(3);
+    expect(run.confirmDroppedByReason().pool_busy).toBe(3);
   });
 
   it("stamps a malformed descriptor instead of leaving it provisional forever", async () => {
@@ -476,12 +412,12 @@ describe("AC5 — end-of-stream drain leaves no descriptor pending", () => {
       diveAt: new Date().toISOString(),
       diveLatencyMs: 0,
       contextDegraded: [],
-      droppedReason: "budget",
+      droppedReason: "pool_busy",
     });
     await store.attestDeferredGoal("h-drain", adoption.patch as any);
     const after = store.getHighlight("h-drain") as any;
     expect(store.highlightsForJob(job.id).length).toBe(before);
-    expect(after.confirmAttestation).toMatchObject({ goalConfirmed: "dropped", dropReason: "budget" });
+    expect(after.confirmAttestation).toMatchObject({ goalConfirmed: "dropped", dropReason: "pool_busy" });
     expect(after.pendingConfirmDive).toBeUndefined();
     expect(after.outcome).toBe("big_play");
     expect(after.clipUri).toBe("/clips/h-drain.mp4");
