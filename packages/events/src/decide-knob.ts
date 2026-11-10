@@ -52,23 +52,34 @@ export const DECIDE_OPPORTUNITIES_3S_PER_300S = {
 export const DECIDE_BROWSER_BAND_3S_PER_300S = { low: 72.76, high: 84.51 } as const;
 
 /**
- * How the opportunity density GROWS when the cadence leaves 3 s.
+ * Opportunity density at the 5 s cadence — the ONLY row in `est-v2` with no
+ * measured stream behind it (spec rev 3 §3, §9).
  *
- * `browser` = 0.64: the measured 3 s interval (3.553 s, 8526 `meanCadenceMs`)
- * divided by the interval a 5 s cadence forces (5.553 s) — the cadence adds 2 s
- * to whatever the stream already offers, so it is NOT a plain 3/5.
+ * `browser: 50.3` is the number spec rev 3 publishes for the shipped default:
+ * the midpoint of the measured 3 s band scaled by the measured-interval ratio
+ * (`(72.76 + 84.51) / 2 x 0.64 = 50.33`). It is 0.5 % above the plain
+ * `78.2 x 0.64 = 50.05` product, because the printed row and the printed band
+ * edges are derived from the same scaled pair. Use it verbatim: AC3 grades the
+ * default at **$2.01/h** (band $1.86-$2.16) and 50.05 would print $2.00.
  *
- * `analyzer` = 0.6: on the RTMP/file rail the cadence IS the limiter (104
- * decides / 300 s against a 2.885 s interval), so moving 3 s -> 5 s scales the
- * rate by 3/5 exactly.
- *
- * The browser 5 s row is the only EXTRAPOLATION in `est-v2` (spec §9): it is
- * shipped with its band printed, never as a bare point.
+ * `analyzer: 62.4` is exact — on the RTMP/file rail the cadence IS the limiter,
+ * so 3 s -> 5 s scales the rate by 3/5 (`104 x 0.6`), which prices to $2.50/h.
  */
-export const DECIDE_CADENCE_GROWTH = {
-  browser: { 3: 1, 5: 0.64 },
-  analyzer: { 3: 1, 5: 0.6 },
+export const DECIDE_OPPORTUNITIES_5S_PER_300S = {
+  browser: 50.3,
+  analyzer: 62.4,
 } as const;
+
+/**
+ * How the MEASURED browser band scales when the cadence leaves 3 s.
+ *
+ * `0.64` = the measured 3 s interval (`3.553 s`, 8526 `meanCadenceMs`) divided
+ * by the interval a 5 s cadence forces (`5.553 s`) — the cadence adds 2 s to
+ * whatever the stream already offers, so it is NOT a plain 3/5. The band edges
+ * are what keep the printed estimate honest: $1.86-$2.16 at 5 s, $2.91-$3.38
+ * at 3 s.
+ */
+export const DECIDE_BROWSER_BAND_SCALE_5S = 0.64;
 
 /** Which rail a job's source resolves onto: a browser/screen capture is the
  *  browser rail, every server-side ingest (RTMP / file-sim / file) is the
@@ -77,13 +88,18 @@ export const DECIDE_CADENCE_GROWTH = {
 export type DecideRail = "browser" | "analyzer";
 
 export function decideRailForSource(source: string | undefined | null): DecideRail {
-  return source === "browser" || source === "screen" ? "browser" : "analyzer";
+  // `screenshare` is the app's CLIENT-side capture (getDisplayMedia -> WebRTC),
+  // i.e. the browser rail: quoting it the analyzer's 104 opportunities would be
+  // 33 % pessimistic on the very rail the economy default sells (spec §3).
+  return source === "browser" || source === "screen" || source === "screenshare" ? "browser" : "analyzer";
 }
 
 /** Opportunities per 300 s of content clock at this cadence on this rail. */
 export function decideOpportunitiesPer300s(rail: DecideRail, cadenceSec: number): number {
   const cadence = normaliseCadence(cadenceSec);
-  return DECIDE_OPPORTUNITIES_3S_PER_300S[rail] * DECIDE_CADENCE_GROWTH[rail][cadence];
+  return cadence === 3
+    ? DECIDE_OPPORTUNITIES_3S_PER_300S[rail]
+    : DECIDE_OPPORTUNITIES_5S_PER_300S[rail];
 }
 
 /** The MEASURED band for the browser rail scaled to this cadence. The analyzer
@@ -93,9 +109,10 @@ export function decideBandPer300s(rail: DecideRail, cadenceSec: number): [number
   const cadence = normaliseCadence(cadenceSec);
   const point = decideOpportunitiesPer300s(rail, cadence);
   if (rail !== "browser") return [point, point];
+  const scale = cadence === 3 ? 1 : DECIDE_BROWSER_BAND_SCALE_5S;
   return [
-    DECIDE_BROWSER_BAND_3S_PER_300S.low * DECIDE_CADENCE_GROWTH.browser[cadence],
-    DECIDE_BROWSER_BAND_3S_PER_300S.high * DECIDE_CADENCE_GROWTH.browser[cadence],
+    DECIDE_BROWSER_BAND_3S_PER_300S.low * scale,
+    DECIDE_BROWSER_BAND_3S_PER_300S.high * scale,
   ];
 }
 

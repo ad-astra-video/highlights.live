@@ -136,3 +136,54 @@ describe("clip counts on the tile (ADAAAA-7854)", () => {
     expect(customer).not.toContain("raw rows");
   });
 });
+
+// ADAAAA-8544 item 7 (monitor side): the live job header states the FROZEN
+// decide posture — cadence, cap, the `est-v2` point BESIDE its measured band —
+// and never re-derives a price from the current form state. It is a spend
+// readout, so it stays behind the same ADAAAA-7727 admin gate as Cost.
+const KNOB_JOB = {
+  ...JOB,
+  source: "browser",
+  decideKnob: {
+    cadenceSec: 5 as const,
+    rateCapPer300s: null,
+    resolvedSource: "default" as const,
+    opportunitiesPer300s: 50.3,
+    usdPerDecide: 0.0033324,
+    predictedUsdPerHour: 2.01143664,
+    predictedBandUsdPerHour: [1.862146, 2.162905] as [number, number],
+    estimateVersion: "est-v2",
+  },
+};
+
+function headerWithKnob(admin: boolean): string {
+  return renderToStaticMarkup(
+    React.createElement(JobDetailMetrics, { job: KNOB_JOB as any, frameCount: 240, partition: { ok: true }, admin })
+  );
+}
+
+describe("the live decide posture readout (ADAAAA-8544)", () => {
+  it("states the stamped posture with its point and measured band for an admin", () => {
+    const html = headerWithKnob(true);
+    expect(html).toContain("data-detail-decide-knob");
+    expect(html).toContain("Decide posture");
+    expect(html).toContain("5 s cadence");
+    expect(html).toContain("uncapped");
+    expect(html).toContain("approx $2.01/h");
+    expect(html).toContain("measured band $1.86/h-$2.16/h");
+    expect(html).toContain("est-v2");
+  });
+
+  it("renders no posture (and no dollars) for a customer session", () => {
+    const html = headerWithKnob(false);
+    expect(html).not.toContain("data-detail-decide-knob");
+    expect(html).not.toContain("Decide posture");
+    expect(html).not.toContain("$");
+  });
+
+  it("renders nothing when the record predates the knob", () => {
+    const html = header(true);
+    expect(html).not.toContain("data-detail-decide-knob");
+    expect(html).not.toContain("Decide posture");
+  });
+});

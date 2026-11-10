@@ -27,16 +27,15 @@ const cents = (usd: number) => Number(usd.toFixed(2));
 const usdFor = (decidesPer300s: number) => decidesPer300s * DECIDE_USD_PER_DECIDE * 12;
 
 describe("est-v2 (ADAAAA-8544 AC3): the shipped estimate reproduces the resolved table", () => {
-  it("prices the DEFAULT posture (browser, 5 s, uncapped) at ~$2.01/h with the measured band", () => {
+  it("prices the DEFAULT posture (browser, 5 s, uncapped) at exactly $2.01/h with the measured band", () => {
     const est = estimateDecideUsdPerHour({ cadenceSec: 5, rateCapPer300s: null, rail: "browser" });
-    // The spec's table prints $2.01 from its own 50.3-decide row; the formula in
-    // §3 (78.2 x 0.64 = 50.05 decides / 300 s) evaluates to $2.0015, i.e. $2.00
-    // to the cent. The gap is 0.6 % and inside AC3's +/-10 % grade, so the test
-    // pins BOTH: the cent value this code ships and the table's printed row.
-    expect(cents(est.usdPerHour)).toBe(2.0);
-    expect(Math.abs(est.usdPerHour - 2.01) / 2.01).toBeLessThanOrEqual(0.01);
+    // AC3 grades the shipped default as $2.01/h. The density is spec rev 3 §3's
+    // own printed row (50.3 decides / 300 s = the midpoint of the scaled measured
+    // band), not the 50.05 product `78.2 x 0.64`, which would print $2.00.
+    expect(cents(est.usdPerHour)).toBe(2.01);
+    expect(est.usdPerHour).toBeCloseTo(2.0114, 3);
     expect(est.bandUsdPerHour.map(cents)).toEqual([1.86, 2.16]);
-    expect(est.opportunitiesPer300s).toBeCloseTo(50.048, 3);
+    expect(est.opportunitiesPer300s).toBe(50.3);
     expect(est.estimateVersion).toBe(DECIDE_ESTIMATE_VERSION);
   });
 
@@ -137,9 +136,9 @@ describe("resolveDecideKnob (ADAAAA-8544 AC1): the stamp is frozen with its prov
     expect(stamp.cadenceSec).toBe(5);
     expect(stamp.rateCapPer300s).toBeNull();
     expect(stamp.resolvedSource).toBe("default");
-    expect(stamp.opportunitiesPer300s).toBeCloseTo(50.048, 3);
+    expect(stamp.opportunitiesPer300s).toBe(50.3);
     expect(stamp.usdPerDecide).toBe(DECIDE_USD_PER_DECIDE);
-    expect(cents(stamp.predictedUsdPerHour)).toBe(2.0);
+    expect(cents(stamp.predictedUsdPerHour)).toBe(2.01);
     expect(stamp.predictedBandUsdPerHour.map(cents)).toEqual([1.86, 2.16]);
     expect(stamp.estimateVersion).toBe("est-v2");
     // The stamp round-trips through the persisted contract — an unparseable
@@ -173,6 +172,9 @@ describe("resolveDecideKnob (ADAAAA-8544 AC1): the stamp is frozen with its prov
   it("routes the source to the right rail (a browser stream is not quoted 104)", () => {
     expect(decideRailForSource("browser")).toBe("browser");
     expect(decideRailForSource("screen")).toBe("browser");
+    // The app's client-side capture id: it POSTs `source: "browser"`, so the
+    // control must quote the browser rail for it too.
+    expect(decideRailForSource("screenshare")).toBe("browser");
     expect(decideRailForSource("rtmp")).toBe("analyzer");
     expect(decideRailForSource("file-sim")).toBe("analyzer");
     expect(decideRailForSource("file")).toBe("analyzer");
@@ -200,7 +202,7 @@ describe("the control copy (ADAAAA-8544 item 7)", () => {
     expect(label).toContain("measured band");
     expect(label).toContain("$2.91/h-$3.38/h");
     const economy = decideEstimateLabel({ cadenceSec: 5, rateCapPer300s: null, rail: "browser" });
-    expect(economy).toContain("approx $2.00/h");
+    expect(economy).toContain("approx $2.01/h");
     expect(economy).toContain("$1.86/h-$2.16/h");
   });
 });

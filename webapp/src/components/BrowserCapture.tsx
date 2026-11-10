@@ -12,7 +12,22 @@ import { StreamHealthStrip } from "./StreamHealthStrip";
 // The start path is unchanged for the user: Share screen / tab / window ->
 // getDisplayMedia -> POST /jobs -> (provider) navigate to the job detail page.
 // This component only starts/stops the provider's session and previews it.
-export function BrowserCapture({ gameHint }: { gameHint: string }) {
+export function BrowserCapture({
+  gameHint,
+  decideKnob,
+  knobInvalid = false,
+}: {
+  gameHint: string;
+  /** ADAAAA-8544: the per-stream decide knob resolved by the /app form. The
+   *  capture path POSTs `/jobs` itself (`source: "browser"`), so the control's
+   *  posture has to travel with the start — a capture that ignored it would run
+   *  the deploy-time default while the price on screen said otherwise. */
+  decideKnob?: { cadenceSec: 3 | 5; rateCapPer300s: number | null };
+  /** ADAAAA-8544: the form's cap failed its floor check. The message renders in
+   *  the knob block above; this only keeps the capture from POSTing a knob the
+   *  route would 422. */
+  knobInvalid?: boolean;
+}) {
   const cap = useLiveCapture();
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -43,7 +58,12 @@ export function BrowserCapture({ gameHint }: { gameHint: string }) {
         />
         <div className="flex flex-col gap-2">
           {!cap.sharing ? (
-            <button className="btn-neon" data-capture-start onClick={() => void cap.start(gameHint)} disabled={cap.busy}>
+            <button
+              className="btn-neon"
+              data-capture-start
+              onClick={() => void cap.start(gameHint, decideKnob)}
+              disabled={cap.busy || knobInvalid}
+            >
               <Play className="mr-2 inline h-4 w-4" /> {cap.busy ? "Starting…" : "Share screen / tab / window"}
             </button>
           ) : (

@@ -1,6 +1,7 @@
 import type { Job } from "../lib/api";
 import { candidateCountLabel, decideCallsCount, stageACountLabel } from "../lib/jobDetail";
 import { sourceLabel } from "../lib/vodJobs";
+import { decideKnobReadout } from "../lib/decideKnob";
 
 // ADAAAA-7727 (Inc 1 of ADAAAA-7726): the per-job metric readouts were rendered
 // for every signed-in user, so a customer session showed spend, decide/perceive
@@ -17,7 +18,7 @@ import { sourceLabel } from "../lib/vodJobs";
 // React context so the gate itself is SSR-testable.
 
 type MetricJob = Pick<Job, "source" | "gameHint" | "framesAnalyzed"> &
-  Partial<Pick<Job, "costUsd" | "decideCalls" | "observeMetrics" | "candidatesTriggered">> & {
+  Partial<Pick<Job, "costUsd" | "decideCalls" | "observeMetrics" | "candidatesTriggered" | "decideKnob">> & {
     stageAMetrics?: any;
     stageAMetricsStatus?: "measured" | "n/a";
   };
@@ -120,6 +121,16 @@ export function JobDetailMetrics({
         <div data-detail-stage-a>
           <div className="text-xs uppercase tracking-wide text-mut">Audio Stage-A</div>
           <div>{stageACountLabel(job)}</div>
+        </div>
+      )}
+      {admin && job.decideKnob && (
+        // ADAAAA-8544 item 7 (monitor side): the posture this live job is
+        // RUNNING, read from the frozen stamp — never a re-estimate of the
+        // current form state. Admin-only for the same reason as the cost read
+        // beside it (ADAAAA-7727): it is a spend figure on a completed row.
+        <div data-detail-decide-knob>
+          <div className="text-xs uppercase tracking-wide text-mut">Decide posture</div>
+          <div>{decideKnobReadout(job.decideKnob)}</div>
         </div>
       )}
       {admin && (
