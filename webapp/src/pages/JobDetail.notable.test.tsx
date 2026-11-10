@@ -184,7 +184,7 @@ describe("notable moments are rows of the ONE Highlights grid (ADAAAA-8530 super
     // ADAAAA-7737's markup guard: the machine kind marker IS an outcome code, and
     // the lane marker is operator-only, so a customer session gets neither.
     expect(html).not.toContain("data-notable-kind");
-    expect(html).not.toContain("data-confirm-lane");
+    expect(html).not.toContain("data-detail-confirm-lane");
   });
 
   it("the operator notable card keeps its internals in the collapsed Pipeline detail", () => {
@@ -194,7 +194,7 @@ describe("notable moments are rows of the ONE Highlights grid (ADAAAA-8530 super
     expect(html).toContain(">85<");
     expect(html).toContain("player falls to the ground");
     // The lane value is an operator read-out, so a grader can census it.
-    expect(html).toContain('data-confirm-lane="absent"');
+    expect(html).toContain('data-detail-confirm-lane="absent"');
   });
 
   it("the postable card keeps the shipped Highlight label (no regression)", () => {
