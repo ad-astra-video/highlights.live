@@ -259,6 +259,9 @@ describe("buildPostableHighlights — notable moments never add or drop rows (N1
       contradicting: 0,
       postable: 0,
       merged: 0,
+      // ADAAAA-8549: the attached-replay bucket is part of the row identity; on
+      // this job it is (correctly) empty.
+      replay: 0,
     });
     expect(countsFromPostable(out)).toEqual({
       rawHighlights: 6,
@@ -267,6 +270,7 @@ describe("buildPostableHighlights — notable moments never add or drop rows (N1
       rejectedHighlights: 1,
       notScoringHighlights: 5,
       contradictingHighlights: 0,
+      replayHighlights: 0,
     });
     // The flat notable lane is unchanged (same rows): the projection is the only
     // thing grouping.

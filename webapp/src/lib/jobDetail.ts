@@ -590,6 +590,15 @@ export interface JobDetail {
     rawHighlights?: number;
     postableHighlights?: number;
     mergedHighlights?: number;
+    // ADAAAA-8549 (AC3 of ADAAAA-8542): the remaining buckets of the row
+    // identity `raw = postable + merged + rejected + notScoring + contradicting
+    // (+ replay)`. The server computed them read-time all along but the payload
+    // schema stripped them, so a page could not reconcile its own counters.
+    // Additive optional — absent on servers that predate them.
+    rejectedHighlights?: number;
+    notScoringHighlights?: number;
+    contradictingHighlights?: number;
+    replayHighlights?: number;
     // ADAAAA-7664: a LIVE job records its decide invocations in the observe
     // snapshot (`observeMetrics.decideCalls`) rather than the job-level
     // `decideCalls` field, which only the VOD path wrote. The header must fall
@@ -614,6 +623,12 @@ export interface JobDetail {
   /** ADAAAA-7621: clips the overlap dedupe folded into a moment that stays in
    * `highlights`; each carries `duplicateOf` = the owning moment's id. */
   duplicateHighlights?: JobDetailHighlight[];
+  /** ADAAAA-8542 (AC3) / ADAAAA-8549: where every persisted highlight row lands
+   * on THIS payload — either `served` (the surface that leads to it) or
+   * `unrepresented` (with the reason). Additive optional, absent on servers that
+   * predate it; a legacy payload fabricates nothing. Mirrors `rowAccounting` in
+   * JobDetailSchema (`@highlights/events`). */
+  rowAccounting?: JobDetailRowAccounting;
   traces: JobTrace[];
   sections: FrameSection[];
   /** Capacity budget the job ran under (3 live / 8 VOD). */
@@ -1138,6 +1153,88 @@ export interface HighlightContentCounts {
  */
 export function hasHighlightContent(c: HighlightContentCounts): boolean {
   return c.postable > 0 || c.notable > 0 || c.merged > 0 || c.summaries > 0;
+}
+
+/** ADAAAA-8542 (AC3) / ADAAAA-8549: where a persisted row lands on the page.
+ * `card` = a postable card, `notable_card` = a notable card's owner,
+ * `sibling_clip` = a notable card's rail option, `replay_alternative` = a replay
+ * clip under its owner's alternatives; every other value is a reason a row has
+ * NO page representation (`merged_duplicate` is deduped by design,
+ * `notable_option_over_rail_cap` is beyond the rail, `unaccounted` is the
+ * fail-closed value a shipped projection must never emit). */
+export type JobDetailRowRepresentation =
+  | "card"
+  | "notable_card"
+  | "sibling_clip"
+  | "replay_alternative"
+  | "merged_duplicate"
+  | "notable_option_over_rail_cap"
+  | "rejected"
+  | "not_scoring"
+  | "contradicting"
+  | "replay_owner_missing"
+  | "unaccounted";
+
+export interface JobDetailRowAccounting {
+  /** Every persisted row the page leads to, and the surface that leads to it. */
+  served: { id: string; representation: JobDetailRowRepresentation }[];
+  /** Every persisted row with NO page representation, with the reason. */
+  unrepresented: { id: string; reason: JobDetailRowRepresentation }[];
+}
+
+/**
+ * ADAAAA-8549 (AC3 of ADAAAA-8542): the webapp's own cross-check of the served
+ * row accounting against the arrays the page actually renders.
+ *
+ * A page that counts cards under-reports a job whose notable moment carries
+ * `siblingClips`: browser job 50b7aed6 delivered 4 rows and served 3 notable
+ * cards, and the 4th id was a sibling option of the second card — it looked
+ * "lost" only to a reader that scanned `highlights[]` and `notableHighlights[]`.
+ * `rendered` is every id the arrays below reach (the merged lane included, since
+ * those rows render inside their owner's merged group); `unreachable` is any id
+ * the payload CLAIMS is served but no rendered lane carries — it must be empty,
+ * and a non-empty list means the payload and the page disagree.
+ *
+ * Pure and read-only; `highlightMomentEntries` stays the single grid list (this
+ * is a diagnostic projection, not a second rendering lane).
+ */
+export function servedHighlightRowIds(
+  detail: Pick<JobDetail, "highlights" | "notableHighlights"> &
+    Partial<Pick<JobDetail, "duplicateHighlights" | "rowAccounting">>
+): {
+  lanes: { postable: string[]; notable: string[]; sibling: string[]; alternative: string[]; merged: string[] };
+  rendered: string[];
+  declaredServed: string[];
+  unrepresented: string[];
+  unreachable: string[];
+} {
+  const postableRows = detail.highlights ?? [];
+  const notableMoments = detail.notableHighlights ?? [];
+  const lanes = {
+    postable: postableRows.map((h) => h.id),
+    notable: notableMoments.map((m) => m.id),
+    sibling: notableMoments.flatMap((m) => (m.siblingClips ?? []).map((s) => s.id)),
+    alternative: postableRows.flatMap((h) => (h.alternatives ?? []).map((a) => a.id)),
+    merged: (detail.duplicateHighlights ?? []).map((h) => h.id),
+  };
+  const rendered = [
+    ...new Set([
+      ...lanes.postable,
+      ...lanes.notable,
+      ...lanes.sibling,
+      ...lanes.alternative,
+      ...lanes.merged,
+    ]),
+  ];
+  const declaredServed = (detail.rowAccounting?.served ?? []).map((r) => r.id);
+  const renderedSet = new Set(rendered);
+  return {
+    lanes,
+    rendered,
+    declaredServed,
+    unrepresented: (detail.rowAccounting?.unrepresented ?? []).map((r) => r.id),
+    unreachable: declaredServed.filter((id) => !renderedSet.has(id)),
+  };
 }
 
 /**
