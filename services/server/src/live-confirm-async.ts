@@ -172,6 +172,17 @@ export interface ConfirmAttestation {
    *  Present so a finished job's provisional row always carries a stored verdict
    *  field instead of staying `status:"provisional"` with nothing to read. */
   dropReason?: string;
+  /** ADAAAA-8542: which evidence actually carried the promotion when the row's
+   *  own window measured no transition. Only
+   *  `frame_attestation_over_unread_score_lane` exists today: the dive's frame
+   *  attestation promoted the row because the score lane produced ZERO samples
+   *  (a dead lane has no later read to wait for). The ordinary promotion carries
+   *  no basis field, so a pre-change row stays byte-identical. */
+  promotionBasis?: string;
+  /** ADAAAA-8542: the read counts that proved the lane was DEAD (not "read and
+   *  unchanged"), so a reader can tell a fallback promotion from a measured one
+   *  without re-reading the decide audit. */
+  scoreLane?: { scoreReads: number; preSamples: number; postSamples: number; need: number };
 }
 
 /**
@@ -512,6 +523,9 @@ export type NonScoreCorroborationSource = (typeof NON_SCORE_CORROBORATION_SOURCE
 export interface RowMeasuredScoreEvidence {
   attestationUsed?: {
     scoreBoardChanged?: boolean;
+    /** ADAAAA-8134/8542: every parseable reading in the judged read span. */
+    scoreReads?: number;
+    preSamples?: number;
     postSamples?: number;
     need?: number;
   } | null;
@@ -542,12 +556,38 @@ export function rowMeasuredScoreTransition(row: RowMeasuredScoreEvidence): boole
   return !!pre && !!post && pre !== post;
 }
 
+/**
+ * ADAAAA-8542: was this row's score lane DEAD — i.e. it produced no samples at
+ * all — rather than "read and unchanged"?
+ *
+ * The distinction is the whole point of the 8239 hold. A window that was READ
+ * and measured no transition must keep holding (the falsifier job `8dd6a383`
+ * carried `postSamples: 0` of `need: 2` over a legible `1-1` span: the lane was
+ * live, the transition simply was not there). A window whose lane produced
+ * ZERO parseable readings for the whole judged span has no "later score read"
+ * to wait for — on the browser/media rail that state is terminal (measured
+ * ADAAAA-8508: `scoreReads=0` on 4/4 rows across 18.5 min), so holding it
+ * forever is what shipped three dive-confirmed goals as celebrations
+ * (ADAAAA-8417 symptom).
+ *
+ * Fail-closed by construction: the row must DISCLOSE the counts
+ * (`attestationUsed.scoreReads`). A row that discloses nothing keeps the 8239
+ * hold, because a missing disclosure is not a measurement of the lane's state.
+ */
+export function scoreLaneProducedNoSamples(row: RowMeasuredScoreEvidence): boolean {
+  const used = row?.attestationUsed;
+  if (!used) return false;
+  if (typeof used.scoreReads !== "number") return false;
+  return used.scoreReads === 0 && (used.preSamples ?? 0) === 0 && (used.postSamples ?? 0) === 0;
+}
+
 /** One-line, gradable rendering of the row's own measurement, for the hold
  *  reason and the provisional note (so an audit can read WHY it was held). */
 export function describeRowMeasurement(row: RowMeasuredScoreEvidence): string {
   const used = row?.attestationUsed;
   const parts = [
     `scoreBoardChanged=${used?.scoreBoardChanged === true}`,
+    ...(typeof used?.scoreReads === "number" ? [`scoreReads=${used.scoreReads}`] : []),
     `postSamples=${typeof used?.postSamples === "number" ? used.postSamples : "absent"}`,
     `need=${typeof used?.need === "number" ? used.need : "absent"}`,
   ];
@@ -653,19 +693,45 @@ export function confirmDiveAdoption(
   // ADAAAA-8239: a frame/commentary-only confirmation cannot promote past a
   // window the MEASURED lane read as "no transition". Computed before the promote
   // arm so the hold reason is available to every arm below it.
+  // ADAAAA-8542: ...but a window whose lane produced NO samples at all has no
+  // "later score read" to wait for. That case promotes on the dive's own frame
+  // attestation and says so on the row, instead of holding forever (the browser
+  // rail measured `scoreReads=0` for the whole job — ADAAAA-8508/8417). A window
+  // that WAS read and measured no transition keeps holding.
   const needsMeasuredTransition =
     goalConfirmed === "confirmed_goal" && frameOnlyCorroborationNeedsTransition(row, verdict);
-  if (goalConfirmed === "confirmed_goal" && corroborated && !needsMeasuredTransition) {
+  const laneProducedNoSamples = needsMeasuredTransition && scoreLaneProducedNoSamples(row);
+  const promotionAttestation: ConfirmAttestation = laneProducedNoSamples
+    ? {
+        ...attestation,
+        promotionBasis: "frame_attestation_over_unread_score_lane",
+        scoreLane: {
+          scoreReads: row.attestationUsed?.scoreReads ?? 0,
+          preSamples: row.attestationUsed?.preSamples ?? 0,
+          postSamples: row.attestationUsed?.postSamples ?? 0,
+          need: row.attestationUsed?.need ?? 0,
+        },
+      }
+    : attestation;
+  if (
+    goalConfirmed === "confirmed_goal" &&
+    corroborated &&
+    (!needsMeasuredTransition || laneProducedNoSamples)
+  ) {
     return {
       kind: "promoted",
       patch: {
         outcome: "scoring_play",
         eventType: "GOAL",
         provisionalGoal: undefined,
-        confirmAttestation: attestation,
+        confirmAttestation: promotionAttestation,
         pendingConfirmDive: undefined,
       },
-      reason: `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"})`,
+      reason: laneProducedNoSamples
+        ? `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"}) ` +
+          `and the score lane produced no samples at all (${describeRowMeasurement(row)}), ` +
+          "so the window is promoted on the dive's frame attestation instead of being held forever"
+        : `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"})`,
     };
   }
   // B3: refute only a row that actually carries a provisional marker. A
@@ -693,7 +759,22 @@ export function confirmDiveAdoption(
     : goalConfirmed === "confirmed_goal"
       ? "The deep dive described a goal but could not corroborate it, so this moment is still unconfirmed."
       : "The deep dive did not confirm this goal, so this moment stays unconfirmed.";
-  const provisional = { ...prev, status: "provisional", refuted: true, note };
+  // ADAAAA-8542 (AC4): a HELD row is not a REFUTED row. Both keep the
+  // provisional marker (AC-A7: the badge is never removed), but the marker now
+  // says which one it is: `held` + `holdReason` for a confirmation waiting on a
+  // measurement, `refuted: true` only when the dive actually went against the
+  // call. The row still does not enter the scoring lane (`kind` stays
+  // `refuted` = "did not promote"), so every existing count/lane rule holds.
+  const provisional = needsMeasuredTransition
+    ? {
+        ...prev,
+        status: "provisional",
+        refuted: false,
+        held: true,
+        holdReason: "score_lane_read_no_transition",
+        note,
+      }
+    : { ...prev, status: "provisional", refuted: true, note };
   return {
     kind: "refuted",
     patch: {

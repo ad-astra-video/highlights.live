@@ -24,7 +24,7 @@ import type { ConfirmRecord, HighlightConfirmation, HighlightRecord, HighlightTr
 
 /** Which lane confirmed the window. `unconfirmed` = accepted with no stored
  *  measurement AND no dive (never a claim that the clip is wrong). */
-export type ConfirmationLane = "measured" | "dive" | "dive_disagreed" | "unconfirmed";
+export type ConfirmationLane = "measured" | "dive" | "dive_disagreed" | "dive_held" | "unconfirmed";
 
 /** The measurement a lane-1 label names (strongest channel first, the same
  *  order `frameLocalizationScore()` ranks them). */
@@ -83,6 +83,7 @@ export interface ConfirmationInput {
 const LANE_LABELS = {
   dive: "Confirmed by deep dive (Stage-2)",
   diveDisagreed: "dive did not corroborate",
+  diveHeld: "Deep dive confirmed the goal — held: this window's score lane read nothing",
   noMeasurementNoDive: "Accepted without corroboration — no measurement and no dive",
   legacy: "Accepted — confirmation lane not recorded (legacy row)",
 } as const;
@@ -295,9 +296,27 @@ export function servedConfirmation(derived: WindowConfirmation | undefined): Hig
  * and the card renders UNCONFIRMED rather than claiming a lane.
  */
 export function confirmationForHighlightRow(
-  row: Pick<HighlightRecord, "status" | "trigger">,
+  row: Pick<HighlightRecord, "status" | "trigger"> & {
+    /** ADAAAA-8542: a HELD confirmation marker on the row itself (the dive
+     *  confirmed the goal, the window measured no transition). Read here so the
+     *  badge distinguishes HELD from REFUTED without a second derivation. */
+    provisionalGoal?: { held?: boolean; refuted?: boolean } | null;
+  },
   candidate?: ConfirmationInput
 ): HighlightConfirmation | undefined {
+  // ADAAAA-8542: a held row is neither confirmed nor refuted. It wins over the
+  // candidate-derived lane (which still reads `dive`, because the dive's verdict
+  // really is `confirmed_goal`): the row is a notable celebration whose
+  // promotion is waiting on evidence the rail never produced.
+  if (row.provisionalGoal?.held === true) {
+    const derived = candidate ? diveVerdict(candidate.confirm) : undefined;
+    return servedConfirmation({
+      lane: "dive_held",
+      label: LANE_LABELS.diveHeld,
+      measurement: "dive",
+      ...(derived ? { dive: derived } : {}),
+    });
+  }
   if (candidate) return servedConfirmation(deriveConfirmation(candidate));
   // Highlight row status is pending|accepted|rejected; `pending` is not an
   // accepted row, so it maps onto the non-accepted lane and only a stored

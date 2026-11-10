@@ -125,7 +125,7 @@ export interface ConfirmRecord {
  * (`?inspect=1` / `/sections/:index/inspect`) and are absent from the default
  * payload.
  */
-export type ConfirmationLane = "measured" | "dive" | "dive_disagreed" | "unconfirmed";
+export type ConfirmationLane = "measured" | "dive" | "dive_disagreed" | "dive_held" | "unconfirmed";
 export type ConfirmationMeasurement = "goal_line" | "ball_in_net" | "score" | "ball_outcome" | "dive" | "none";
 export interface ConfirmationFlags {
   scoreboardChanged: boolean | null;
@@ -1515,10 +1515,15 @@ export type HighlightConfirmation = Pick<WindowConfirmation, "lane" | "label">;
  */
 export function confirmationBadge(
   h: Pick<JobDetailHighlight, "confirmation">
-): { lane: ConfirmationLane | null; confirmed: boolean; text: "CONFIRMED" | "UNCONFIRMED" } {
+): { lane: ConfirmationLane | null; confirmed: boolean; text: "CONFIRMED" | "HELD" | "UNCONFIRMED" } {
   const lane = h.confirmation?.lane ?? null;
-  const confirmed = lane === "measured" || lane === "dive";
-  return { lane, confirmed, text: confirmed ? "CONFIRMED" : "UNCONFIRMED" };
+  // ADAAAA-8542: `dive_held` is a THIRD state. The dive confirmed the goal but
+  // the row's own window measured no transition, so the moment is neither
+  // confirmed nor refuted — rendering it as CONFIRMED contradicted the stored
+  // `refuted` marker, and rendering it as UNCONFIRMED hid a confirmed goal.
+  const held = lane === "dive_held";
+  const confirmed = !held && (lane === "measured" || lane === "dive");
+  return { lane, confirmed, text: held ? "HELD" : confirmed ? "CONFIRMED" : "UNCONFIRMED" };
 }
 
 /**
