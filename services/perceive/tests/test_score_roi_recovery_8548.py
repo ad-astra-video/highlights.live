@@ -264,3 +264,73 @@ def test_fallback_allowance_grows_with_the_job_and_is_capped():
     assert _score_fallback_allowance(s) == 174
     s.frames_processed = 10**6
     assert _score_fallback_allowance(s) == _SCORE_FALLBACK_MAX_READS
+
+
+class DiscoveryDet(HashtagDet):
+    """A region-capable detector whose discovery pass points the ROI at the hashtag."""
+
+    def __init__(self, caption: str = "soccer scoreboard", bbox=(0.0, 0.0, 1.0, 0.25)):
+        super().__init__()
+        self.regions = [{"caption": caption, "bbox": list(bbox)}]
+        self.discover_calls = 0
+
+    def discover(self, image, task=None):
+        self.discover_calls += 1
+        return {"regions": self.regions}
+
+
+class DiscoveryScoreDet(DiscoveryDet):
+    """Discovery-sourced ROI that DOES print the two-sided score."""
+
+    def ocr(self, rgb, roi=None):
+        self.ocr_calls.append(roi)
+        if roi is None:
+            self.whole_frame_calls += 1
+        return [SCORE_LINE]
+
+
+def test_discovered_hashtag_region_is_reresolved_then_abandoned(client, monkeypatch, caplog):
+    """A DISCOVERED region (not just the prior) that prints only a hashtag is dropped.
+
+    The ticket's measured defect was a discovered/selected box pointing at the
+    hashtag graphic; the shipped top-band test only covers the fallback prior, so
+    this pins the discovered-source path through the real `POST /app/analyze` frame
+    path: the region is attributed, re-resolved, and finally abandoned.
+    """
+    det = DiscoveryDet()
+    frames = (
+        SCOREBOARD_SELECT_MAX_FRAMES
+        + (_SCOREBOARD_ROI_DIGITLESS_FRAMES + 1) * _SCOREBOARD_ROI_RERESOLVE_MAX
+        + 4
+    )
+    with caplog.at_level(logging.INFO, logger=_app.log.name):
+        _, state = _run(client, det, monkeypatch, frames=frames)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert det.discover_calls > 0, "discovery never ran, so the source was not discovery"
+    assert any("source=discovery" in m for m in messages), "the discovered box was not attributed"
+    assert any("scoreboard ROI re-resolve" in m and "from_source=discovery" in m for m in messages)
+    assert state.scoreboard_roi_reresolves == _SCOREBOARD_ROI_RERESOLVE_MAX
+    assert state.scoreboard_roi_source == "abandoned_bottom_prior"
+    assert _app._same_roi(state.scoreboard_roi, BOTTOM)
+
+
+def test_discovered_legible_score_pays_no_extra_read_per_frame(client, monkeypatch):
+    """No regression on the discovered path: a legible crop is never churned."""
+    det = DiscoveryScoreDet()
+    monkeypatch.setattr(_app, "get_detector", lambda lora_ref=None: det)
+    sid = f"sess-{uuid.uuid4().hex[:8]}"
+    for seq in range(SCOREBOARD_SELECT_MAX_FRAMES):
+        assert _post(client, sid, seq, timestamp=seq / 3.0).status_code == 200
+    state = app.state.registry.get(sid)
+    det.ocr_calls.clear()
+    det.whole_frame_calls = 0
+    for seq in range(SCOREBOARD_SELECT_MAX_FRAMES, SCOREBOARD_SELECT_MAX_FRAMES + 12):
+        assert _post(client, sid, seq, timestamp=seq / 3.0).status_code == 200
+
+    assert state.scoreboard_roi_source == "discovery"
+    assert state.scoreboard_roi_reresolves == 0
+    assert state.score_fallback_reads == 0
+    assert det.whole_frame_calls == 0
+    assert len(det.ocr_calls) == 12
+    assert all(call is not None for call in det.ocr_calls)
