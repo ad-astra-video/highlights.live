@@ -11,14 +11,16 @@
 
 export const ROUTES = {
   perceive: "highlights-perceive",
-  // ADAAAA-8553 S1: decide now registers FIVE per-container ids, but this
-  // constant is still the ONE fixed id the client posts to. Remaining single-id
-  // call sites (the S2 fix, ADAAAA-8559, owns them):
-  //   packages/livepeer-session/src/index.ts:1231  POST /apps/highlights-decide/app/<path>
-  //   services/server/src/livepeer-adapter.ts:546, 898, 963, 1023  `app: ROUTES.decide` payment descriptors
-  //   services/server/src/livepeer-adapter.ts:974  /apps/highlights-decide/app/confirm doc
-  // `isDecideRunnerApp` (index.ts:516) still matches discovery by the shared
-  // `highlights-live/decide` leaf and must NOT be switched to runner ids.
+  // ADAAAA-8559 (S2): this is the decide APP name (the capability/discovery
+  // leaf and the payment descriptor), NOT the route the client posts to. Since
+  // S1 registers five per-container runners, every decide attempt selects a
+  // runner id from the probe's pool and posts `/apps/{runner_id}/app/<path>`.
+  // `ROUTES.decide` survives in two places only:
+  //   - `isDecideRunnerApp` matching the shared `highlights-live/decide` leaf
+  //     (must NOT be switched to runner-id prefix matching);
+  //   - the pre-probe single-registration fallback route, used only while the
+  //     pool is empty (dark discovery). On a probed fleet that retired id is
+  //     never posted.
   decide: "highlights-decide",
   train: "highlights-train",
 } as const;
@@ -466,6 +468,17 @@ export interface DecideAttemptTiming {
   parseMs: number;
   /** The attempt threw at the transport (network/TLS/reset) — no status. */
   transportError?: boolean;
+  /** ADAAAA-8559: the decide runner id this attempt was routed to (the
+   * orchestrator route segment). Set on every attempt including the legacy
+   * single-registration fallback, so attribution needs no nginx `up=` join. */
+  runnerId?: string;
+  /** ADAAAA-8559: that runner's discovery tier (`5090` / `x99-fallback` /
+   * `unknown` / `legacy-single` for the pre-probe fallback route). */
+  runnerTier?: string;
+  /** ADAAAA-8559: this client's in-flight decide count for that runner AFTER
+   * this attempt took its slot (1 = exclusive). Feeds AC4's concurrency
+   * watermark. */
+  runnerInFlight?: number;
 }
 
 /** Result of one signer discovery, reduced to the decide-relevant numbers. */
@@ -479,6 +492,90 @@ export interface DecideCapacityProbeResult {
   /** ADAAAA-8262: how many decide runners the answer carried (0 = empty fleet),
    * so a failed probe is distinguishable from a runner-less advertisement. */
   runners?: number;
+  /** ADAAAA-8559: the decide runners THEMSELVES, so an attempt can pick one.
+   *
+   * `advertised` stays the sum over decide runners; this list is the routing
+   * input. Only runners whose route (= runner id) is derivable from the
+   * discovery `url` (`<orch>/apps/<id>/app`) appear here — a single-registration
+   * advertisement with no route leaves the list empty, and the client then keeps
+   * today's fixed-id path unchanged. */
+  pool?: DecideRunnerPoolEntry[];
+}
+
+/** ADAAAA-8559: one decide runner exactly as discovery described it. */
+export interface DecideRunnerPoolEntry {
+  /** The runner id — which IS the orchestrator route (`/apps/{id}/app`). */
+  runner_id: string;
+  /** Advertised capacity (`capacity`, falling back to `capacity_available`). */
+  capacity: number;
+  /** Slots reported free at probe time; absent when not advertised. */
+  capacity_available?: number;
+  /** `metadata.tier` (`5090` / `x99-fallback`); `unknown` when absent. */
+  tier: string;
+}
+
+/** ADAAAA-8559: per-runner decide attribution (AC4/AC5 gradeable from the job
+ * record instead of nginx/router logs). Counters are per job (delta from the
+ * `beginDecideJob` baseline); `maxInFlight` is the watermark since that start. */
+export interface DecideRunnerAttribution {
+  runner_id: string;
+  tier: string;
+  /** Attempts this client routed to the runner. */
+  attempts: number;
+  /** Attempts the runner answered 200 (the billable ones). */
+  served: number;
+  /** 503 no-capacity responses from this runner. */
+  s503: number;
+  /** 404 runner/session-not-found responses from this runner. */
+  s404: number;
+  /** Peak LOCAL concurrency sent to the runner (<= its advertised capacity on a
+   * healthy fleet). */
+  maxInFlight: number;
+}
+
+/** ADAAAA-8559: selection order for the decide pool. Lower rank is preferred:
+ * the three 5090 workers first, then an unknown tier, then the x99 fallbacks. */
+export function decideTierRank(tier: string): number {
+  if (tier === "5090") return 0;
+  if (tier === "x99-fallback") return 2;
+  return 1;
+}
+
+/**
+ * ADAAAA-8559: the runner id from a discovery `url`.
+ *
+ * go-livepeer exposes a single-shot runner as `<orch>/apps/<runner_id>/app` and
+ * a persistent one as `<orch>/apps/<runner_id>/session`; `runner.route` IS the
+ * runner id for dynamic registrations (`ai/runner/live_runner.go`). A proxied
+ * runner exposes `/apps/proxy/<proxy_id>/...`, which carries no runner id, so
+ * it returns null and the pool simply omits that runner.
+ */
+export function decideRunnerIdFromDiscoveryUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  const m = /\/apps\/([^/?#]+)\/(?:session|app)(?:[/?#]|$)/.exec(url);
+  if (!m || m[1] === "proxy") return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return m[1];
+  }
+}
+
+/**
+ * ADAAAA-8559: a runner's `tier` from its discovery metadata. The registrars
+ * publish JSON (`{"tier": "5090", ...}`); the `tier=5090,seqs=4` k=v spelling is
+ * accepted too. Anything else reads `unknown` (which ranks below 5090).
+ */
+export function decideRunnerTierFromMetadata(metadata: string | undefined): string {
+  if (!metadata) return "unknown";
+  try {
+    const parsed = JSON.parse(metadata) as { tier?: unknown };
+    if (parsed && typeof parsed.tier === "string" && parsed.tier.trim()) return parsed.tier.trim();
+  } catch {
+    /* not JSON — fall through to the k=v form */
+  }
+  const m = /(?:^|[,;\s])tier\s*=\s*([^,;\s]+)/i.exec(metadata);
+  return m ? m[1] : "unknown";
 }
 
 /** Per-job decide-admission counters surfaced on the job's observe metrics. */
@@ -495,6 +592,11 @@ export interface DecideAdmissionMetrics {
   capacityProbeErrors: number;
   /** {advertised, funded, effective} at snapshot time. */
   capacity: DecideCapacitySnapshot;
+  /** ADAAAA-8559: per-runner serving attribution for this job, so AC4 (spread,
+   * concurrency, zero 503) is gradeable from the stored record. Empty when the
+   * decide path made no call since `beginDecideJob`. Optional so older/hand-built
+   * metric objects stay assignable; the client always fills it. */
+  runnerAttribution?: DecideRunnerAttribution[];
 }
 
 /** A decide that lost admission: the queue budget expired or the runner stayed
@@ -539,11 +641,14 @@ export function summarizeDecideDiscovery(
   const runners = (Array.isArray(discovery) ? discovery : [])
     .flatMap((o) => (Array.isArray(o?.runners) ? o.runners : []))
     .filter((r) => isDecideRunnerApp(r?.app));
-  if (runners.length === 0) return { capacity: null, noneAvailable: false };
+  if (runners.length === 0) return { capacity: null, noneAvailable: false, pool: [] };
   let sum = 0;
   let known = false;
   let everyAvailableKnown = true;
   let everyAvailableZero = true;
+  // ADAAAA-8559: the pool, keyed by runner id (the signer can repeat an
+  // orchestrator, and two answers for one id must not double-list it).
+  const pool = new Map<string, DecideRunnerPoolEntry>();
   for (const r of runners) {
     const advertised = typeof r.capacity === "number" && Number.isFinite(r.capacity)
       ? r.capacity
@@ -559,11 +664,32 @@ export function summarizeDecideDiscovery(
     } else {
       everyAvailableKnown = false;
     }
+    // A runner with no usable capacity number is still routable, but it cannot
+    // be ranked; it stays out of the pool so selection only weighs measured
+    // registrations. A runner whose route is not derivable keeps today's
+    // fixed-id fallback (pool stays empty for a single unnamed registration).
+    const runnerId = decideRunnerIdFromDiscoveryUrl(r.url);
+    if (runnerId && advertised !== null) {
+      const capacity = Math.max(0, Math.floor(advertised));
+      const prev = pool.get(runnerId);
+      // Keep the wider advertisement of a duplicated id.
+      if (!prev || capacity > prev.capacity) {
+        pool.set(runnerId, {
+          runner_id: runnerId,
+          capacity,
+          ...(typeof r.capacity_available === "number" && Number.isFinite(r.capacity_available)
+            ? { capacity_available: Math.max(0, Math.floor(r.capacity_available)) }
+            : {}),
+          tier: decideRunnerTierFromMetadata(r.metadata),
+        });
+      }
+    }
   }
   return {
     capacity: known ? sum : null,
     noneAvailable: everyAvailableKnown && everyAvailableZero,
     runners: runners.length,
+    pool: [...pool.values()],
   };
 }
 
@@ -572,6 +698,16 @@ export function summarizeDecideDiscovery(
 interface DecideGrant {
   release: () => void;
   probe: boolean;
+}
+
+/** ADAAAA-8559: one runner's cumulative counters (see {@link DecideRunnerAttribution}). */
+interface DecideRunnerStat {
+  tier: string;
+  attempts: number;
+  served: number;
+  s503: number;
+  s404: number;
+  maxInFlight: number;
 }
 
 interface DecideQueueItem {
@@ -824,6 +960,20 @@ export class LivepeerClient {
   private capacityProbeErrorCount = 0;
   /** Monotonic decide-CALL sequence (a retry reuses its call's seq). */
   private decideSeq = 0;
+  /** ADAAAA-8559: the decide runners the last well-formed probe described; the
+   * selection input. Empty = dark discovery / a single unnamed registration, in
+   * which case routing stays on the legacy fixed id (today's behaviour). */
+  private decidePool: DecideRunnerPoolEntry[] = [];
+  /** ADAAAA-8559: LOCAL in-flight decides per runner id (selection input). */
+  private decideRunnerInFlight = new Map<string, number>();
+  /** ADAAAA-8559: when each runner was last PICKED (LRU tie-break, so a
+   * sequential stream rotates over the fleet instead of pinning one worker). */
+  private decideRunnerLastPick = new Map<string, number>();
+  private decidePickSeq = 0;
+  /** ADAAAA-8559: cumulative per-runner counters (job deltas are reported). */
+  private decideRunnerStats = new Map<string, DecideRunnerStat>();
+  /** ADAAAA-8559: counter snapshot at job start (see {@link beginDecideJob}). */
+  private decideRunnerBaseline = new Map<string, DecideRunnerStat>();
   /** Counter baseline captured at job start; the snapshot reports the DELTA so
    * a shared client (one adapter per server process) serves each job's numbers
    * instead of zeroing a job that is still running. */
@@ -867,7 +1017,42 @@ export class LivepeerClient {
       pauses: this.decidePausesCount,
       probeErrors: this.capacityProbeErrorCount,
     };
+    // ADAAAA-8559: same DELTA convention for the per-runner attribution, and the
+    // concurrency watermark is reset to the live count so `maxInFlight` reads as
+    // "since this job started" on a shared client.
+    this.decideRunnerBaseline = new Map(
+      [...this.decideRunnerStats].map(([id, stat]) => [id, { ...stat }] as const),
+    );
+    for (const [id, stat] of this.decideRunnerStats) stat.maxInFlight = this.decideRunnerInFlight.get(id) ?? 0;
     void this.refreshDecideCapacity(true);
+  }
+
+  /**
+   * ADAAAA-8559: which runner served this job's decides, and how hard each was
+   * driven. Per-job deltas from the {@link beginDecideJob} baseline; the
+   * concurrency watermark is per job start. `[]` when no decide ran yet, so a
+   * record can say "not measured" instead of inventing zeros.
+   */
+  decideRunnerAttribution(): DecideRunnerAttribution[] {
+    const out: DecideRunnerAttribution[] = [];
+    for (const [runner_id, stat] of this.decideRunnerStats) {
+      const base = this.decideRunnerBaseline.get(runner_id);
+      const delta = (now: number, then: number | undefined): number => Math.max(0, now - (then ?? 0));
+      const entry: DecideRunnerAttribution = {
+        runner_id,
+        tier: stat.tier,
+        attempts: delta(stat.attempts, base?.attempts),
+        served: delta(stat.served, base?.served),
+        s503: delta(stat.s503, base?.s503),
+        s404: delta(stat.s404, base?.s404),
+        maxInFlight: stat.maxInFlight,
+      };
+      if (entry.attempts === 0 && entry.served === 0) continue;
+      out.push(entry);
+    }
+    return out.sort(
+      (a, b) => decideTierRank(a.tier) - decideTierRank(b.tier) || a.runner_id.localeCompare(b.runner_id),
+    );
   }
 
   /** ADAAAA-8254: the per-job counters + capacity snapshot for the job record. */
@@ -880,6 +1065,7 @@ export class LivepeerClient {
       decidePauses: delta(this.decidePausesCount, this.decideBaseline.pauses),
       capacityProbeErrors: delta(this.capacityProbeErrorCount, this.decideBaseline.probeErrors),
       capacity: { ...this.capacitySnapshot },
+      runnerAttribution: this.decideRunnerAttribution(),
     };
   }
 
@@ -946,6 +1132,24 @@ export class LivepeerClient {
       }
       if (result && typeof result.capacity === "number" && Number.isFinite(result.capacity)) {
         this.lastAdvertisedCapacity = Math.max(0, Math.floor(result.capacity));
+      }
+      if (result && Array.isArray(result.pool)) {
+        // ADAAAA-8559: a well-formed answer replaces the selection pool. An
+        // answer that carries NO `pool` field (older probe wiring) leaves the
+        // last known pool in place, the same way `capacity: null` keeps the
+        // last-known number; an answer with `pool: []` is a real empty fleet.
+        this.decidePool = result.pool
+          .filter((r) => r && typeof r.runner_id === "string" && r.runner_id.length > 0)
+          .map((r) => ({
+            runner_id: r.runner_id,
+            capacity: typeof r.capacity === "number" && Number.isFinite(r.capacity)
+              ? Math.max(0, Math.floor(r.capacity))
+              : 0,
+            ...(typeof r.capacity_available === "number" && Number.isFinite(r.capacity_available)
+              ? { capacity_available: Math.max(0, Math.floor(r.capacity_available)) }
+              : {}),
+            tier: typeof r.tier === "string" && r.tier ? r.tier : "unknown",
+          }));
       }
       // `capacity === null` (no usable field) is NOT zero capacity: keep the last
       // known value and fall through to the funded ceiling when there is none.
@@ -1150,6 +1354,92 @@ export class LivepeerClient {
   }
 
   /**
+   * ADAAAA-8559: pick the runner for this attempt.
+   *
+   * - Empty pool (dark discovery, or a single registration whose route the
+   *   advertisement did not carry): the legacy fixed `highlights-decide` id and
+   *   today's retry-on-same-id behaviour — byte-identical to pre-8559, which the
+   *   current suite pins (ADAAAA-8559 AC4).
+   * - Otherwise: never a runner this CALL already tried, preferring `tier=5090`
+   *   over `x99-fallback`, then least LOCAL in-flight, then wider capacity. The
+   *   pick and its counter bump are synchronous, so two attempts admitted in the
+   *   same tick cannot both pick the same idle runner.
+   *
+   * Returns null when every runner in a non-empty pool has been tried: the call
+   * is out of hops and must fail with the typed/untyped error rather than
+   * hammering one id.
+   */
+  private selectDecideRunner(tried: ReadonlySet<string>): string | null {
+    if (this.decidePool.length === 0) {
+      // Single-registration fallback: one fixed id and today's retry-on-same-id
+      // behaviour (the current suite pins exactly that).
+      return ROUTES.decide;
+    }
+    let best: DecideRunnerPoolEntry | null = null;
+    for (const r of this.decidePool) {
+      if (tried.has(r.runner_id)) continue;
+      if (best === null || this.compareRunnerRank(r, best) < 0) best = r;
+    }
+    return best ? best.runner_id : null;
+  }
+
+  /** ADAAAA-8559: tier preference first, then least local in-flight, then the
+   * least-recently PICKED runner (so sequential decisions rotate across the fleet
+   * — AC4 requires all three 5090s to serve, not just the first), then the wider
+   * advertised capacity, then the id (deterministic). */
+  private compareRunnerRank(a: DecideRunnerPoolEntry, b: DecideRunnerPoolEntry): number {
+    const tier = decideTierRank(a.tier) - decideTierRank(b.tier);
+    if (tier !== 0) return tier;
+    const inFlight =
+      (this.decideRunnerInFlight.get(a.runner_id) ?? 0) - (this.decideRunnerInFlight.get(b.runner_id) ?? 0);
+    if (inFlight !== 0) return inFlight;
+    const lastPick =
+      (this.decideRunnerLastPick.get(a.runner_id) ?? -1) - (this.decideRunnerLastPick.get(b.runner_id) ?? -1);
+    if (lastPick !== 0) return lastPick;
+    const capacity = b.capacity - a.capacity;
+    if (capacity !== 0) return capacity;
+    return a.runner_id.localeCompare(b.runner_id);
+  }
+
+  /** ADAAAA-8559: the single-shot decide route. The runner id IS the route
+   * segment; with an empty pool it is the legacy aggregate id. */
+  private decidePath(runnerId: string, path: string): string {
+    return `/apps/${encodeURIComponent(runnerId)}/app/${path}`;
+  }
+
+  /** ADAAAA-8559: the runner's attribution record (created on first use). */
+  private runnerStat(runnerId: string): DecideRunnerStat {
+    const tier =
+      this.decidePool.find((r) => r.runner_id === runnerId)?.tier ??
+      (runnerId === ROUTES.decide ? "legacy-single" : "unknown");
+    let stat = this.decideRunnerStats.get(runnerId);
+    if (!stat) {
+      stat = { tier, attempts: 0, served: 0, s503: 0, s404: 0, maxInFlight: 0 };
+      this.decideRunnerStats.set(runnerId, stat);
+    } else {
+      stat.tier = tier;
+    }
+    return stat;
+  }
+
+  /** ADAAAA-8559: take this attempt's place in the runner's local in-flight
+   * count and return that count (1 = exclusive). */
+  private enterRunner(runnerId: string): number {
+    const inFlight = (this.decideRunnerInFlight.get(runnerId) ?? 0) + 1;
+    this.decideRunnerInFlight.set(runnerId, inFlight);
+    const stat = this.runnerStat(runnerId);
+    stat.attempts++;
+    stat.maxInFlight = Math.max(stat.maxInFlight, inFlight);
+    return inFlight;
+  }
+
+  /** ADAAAA-8559: hand the runner slot back (idempotent, never below 0). */
+  private leaveRunner(runnerId: string): void {
+    const inFlight = this.decideRunnerInFlight.get(runnerId) ?? 0;
+    if (inFlight > 0) this.decideRunnerInFlight.set(runnerId, inFlight - 1);
+  }
+
+  /**
    * ADAAAA-8254: issue one decide app-call through the admission queue.
    *
    * Each attempt takes a queue slot, issues the request, and releases the slot
@@ -1157,7 +1447,7 @@ export class LivepeerClient {
    * of the FIFO queue and waits on the shared pause instead of sleeping inside
    * its slot (that was the per-request probe fan-out this ticket removes).
    *
-   * Two transients stay retryable:
+   * Two transients stay retryable — and as of ADAAAA-8559 they HOP:
    *   - `503 no capacity available for runner` — a capacity episode. The shared
    *     pause window paces every waiter; retries are exhausted -> typed
    *     {@link DecideCapacityError} + `decideDropped`, which the live rail logs
@@ -1168,6 +1458,12 @@ export class LivepeerClient {
    *     a restart (ADAAAA-6623). A 404 means the request was NOT routed /
    *     processed, so a retry cannot double-bill or double-persist a highlight.
    *     This path keeps the ADAAAA-6709 exponential backoff 500 ms -> 8 s.
+   *
+   * ADAAAA-8559: both retryable transients now move to the NEXT runner in the
+   * discovered pool (excluding the ids this call already posted to) instead of
+   * re-posting the same id, bounded by the unchanged attempt budget and by the
+   * pool size. The admission queue, the shared 503 pause window and the typed
+   * error semantics are untouched.
    */
   private async decideAdmitted(
     path: string,
@@ -1190,6 +1486,11 @@ export class LivepeerClient {
     // FIFO position instead of queueing behind newer windows.
     const seq = this.decideSeq++;
     let lastStatus = 0;
+    // ADAAAA-8559: runners this CALL already posted to. A 503/404 hops to the
+    // next untried runner instead of retrying the same id; a hop is bounded by
+    // the unchanged attempt budget AND by the pool size.
+    const tried = new Set<string>();
+    let poolExhausted = false;
     for (let attempt = 0; ; attempt++) {
       const attemptStart = Date.now();
       // ADAAAA-8254: refresh the advertised capacity on the decide path too, at
@@ -1199,6 +1500,22 @@ export class LivepeerClient {
         void this.refreshDecideCapacity();
       }
       const grant = await this.acquireDecideSlot(deadline, callStartedAt, seq);
+      // ADAAAA-8559: select INSIDE the granted slot, and bump the runner's local
+      // in-flight count synchronously with the pick, so two attempts admitted in
+      // the same tick cannot both choose the same idle runner.
+      const runnerId = this.selectDecideRunner(tried);
+      if (runnerId === null) {
+        // Every runner in a non-empty pool has been tried: no hop left.
+        if (grant.probe) this.probeOutstanding = false;
+        grant.release();
+        poolExhausted = true;
+        break;
+      }
+      tried.add(runnerId);
+      // LRU tie-break input: a sequential stream rotates over the fleet.
+      this.decideRunnerLastPick.set(runnerId, this.decidePickSeq++);
+      const runnerInFlight = this.enterRunner(runnerId);
+      const runnerTier = this.runnerStat(runnerId).tier;
       // ADAAAA-8344: per-attempt transport stages. Every clock read is a plain
       // `Date.now()` around work the client already does, so the decide path is
       // byte-identical and the hook is the only addition.
@@ -1228,6 +1545,11 @@ export class LivepeerClient {
               ttfbMs,
               bodyMs,
               parseMs,
+              // ADAAAA-8559: which runner this attempt went to, and how many
+              // local decides were in flight on it (AC4 attribution).
+              runnerId,
+              runnerTier,
+              runnerInFlight,
             });
           } catch {
             /* instrumentation must never fail a decide */
@@ -1236,10 +1558,10 @@ export class LivepeerClient {
         const tRequest = Date.now();
         let res: Awaited<ReturnType<Transport["request"]>>;
         try {
-          // ADAAAA-8553 S1: still a FIXED decide id, so the four new 5090/x99
-          // registrations are invisible here until S2 (ADAAAA-8559) selects a
-          // discovered runner per attempt.
-          res = await this.transport.request("POST", `/apps/${ROUTES.decide}/app/${path}`, {
+          // ADAAAA-8559: the attempt posts to the SELECTED runner id, which is
+          // the orchestrator route segment. Only the pre-probe fallback uses the
+          // retired aggregate id (see selectDecideRunner).
+          res = await this.transport.request("POST", this.decidePath(runnerId, path), {
             headers,
             body: bodyText,
           });
@@ -1284,23 +1606,34 @@ export class LivepeerClient {
             data = text;
           }
           parseMs = Date.now() - tParse;
+          // ADAAAA-8559: this runner served (and billed) the decide.
+          this.runnerStat(runnerId).served++;
           noteAttempt(res.status);
           return { status: res.status, data };
         }
         lastStatus = res.status;
-        if (res.status === 503) this.noteDecide503();
+        if (res.status === 503) {
+          this.noteDecide503();
+          this.runnerStat(runnerId).s503++;
+        } else {
+          this.runnerStat(runnerId).s404++;
+        }
         retryable = true;
         noteAttempt(res.status);
       } finally {
         // Clear the single-flight probe marker before handing the slot back so
         // the next window can grant its own probe (or normal admission).
         if (grant.probe) this.probeOutstanding = false;
+        // ADAAAA-8559: release the runner's local slot before the admission slot.
+        this.leaveRunner(runnerId);
         grant.release();
       }
       if (!retryable) break;
       if (attempt >= maxAttempts - 1) break;
-      // A 503 is paced by the shared pause (the next acquire waits on it); a 404
-      // keeps its own exponential backoff so a flapping runner is not hammered.
+      // ADAAAA-8559: a 503/404 HOPS to the next untried runner on the next
+      // iteration (selectDecideRunner excludes `tried`). A 503 is paced by the
+      // shared pause (the next acquire waits on it); a 404 keeps its own
+      // exponential backoff so a flapping runner is not hammered.
       if (lastStatus !== 503) {
         await new Promise((r) => setTimeout(r, Math.min(backoffBaseMs * 2 ** attempt, DECIDE_BACKOFF_MAX_MS)));
       }
@@ -1312,11 +1645,14 @@ export class LivepeerClient {
       throw new DecideCapacityError(
         Date.now() - callStartedAt,
         this.decideQueueMaxWaitMs,
-        `decide runner unavailable after ${maxAttempts} attempts (503 no capacity)`,
+        `decide runner unavailable after ${maxAttempts} attempts over ${tried.size} runner(s) (503 no capacity)`,
       );
     }
     const detail = "runner not found / session not found (lost decide runner)";
-    throw new Error(`decide runner unavailable after ${maxAttempts} attempts (last HTTP ${lastStatus}: ${detail})`);
+    throw new Error(
+      `decide runner unavailable after ${maxAttempts} attempts over ${tried.size} runner(s)` +
+        `${poolExhausted ? " (decide pool exhausted)" : ""} (last HTTP ${lastStatus}: ${detail})`,
+    );
   }
 
   /**
