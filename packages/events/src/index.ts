@@ -1472,6 +1472,18 @@ export const JobSchema = z.object({
   rawHighlights: z.number().int().min(0).optional(),
   postableHighlights: z.number().int().min(0).optional(),
   mergedHighlights: z.number().int().min(0).optional(),
+  // ADAAAA-8549 (AC3 of ADAAAA-8542): the drop buckets the row identity needs —
+  // `rawHighlights - postableHighlights = mergedHighlights + rejectedHighlights +
+  // notScoringHighlights + contradictingHighlights + replayHighlights`. They were
+  // already computed read-time and spread into the payload but this schema
+  // stripped them, so the identity could not be checked on the wire. Additive
+  // optional, same projection as above.
+  rejectedHighlights: z.number().int().min(0).optional(),
+  notScoringHighlights: z.number().int().min(0).optional(),
+  contradictingHighlights: z.number().int().min(0).optional(),
+  /** ADAAAA-8549: attached replay rows (`replayOf` set) — delivered under their
+   * owner's `alternatives[]`, in no other bucket. */
+  replayHighlights: z.number().int().min(0).optional(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
   attempts: z.number().int().min(0).optional(),

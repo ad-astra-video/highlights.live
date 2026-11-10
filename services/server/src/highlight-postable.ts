@@ -104,7 +104,17 @@ export interface PostableHighlights {
   duplicates: PostableHighlight[];
   /** Counts for the operator summary: how many persisted rows came in and how
    * many were dropped by each rule (rejected / not scoring / contradicting). */
-  counts: { total: number; rejected: number; notScoring: number; contradicting: number; postable: number; merged: number };
+  counts: {
+    total: number;
+    rejected: number;
+    notScoring: number;
+    contradicting: number;
+    postable: number;
+    merged: number;
+    /** ADAAAA-8549: attached replay rows, in their own bucket (see
+     * `PostableHighlightCounts.replayHighlights`). */
+    replay: number;
+  };
   /** ADAAAA-8542 (AC3): where EVERY persisted row lands on the page, so a
    * delivered row can never be silently absent. See {@link RowAccounting}. */
   rowAccounting: RowAccounting;
@@ -150,7 +160,10 @@ export type RowRepresentation =
   /** Rule 3: the record's own verdict contradicts the accept. */
   | "contradicting"
   /** A replay whose owner row is not present in the list (fail-closed). */
-  | "replay_owner_missing";
+  | "replay_owner_missing"
+  /** Fail-closed: no lane and no known drop rule explains this row. Never
+   * produced by a shipped projection (ADAAAA-8549). */
+  | "unaccounted";
 
 export interface RowAccounting {
   /** Every persisted row served as a card (or as a served replay), and how. */
@@ -159,7 +172,10 @@ export interface RowAccounting {
   unrepresented: { id: string; reason: RowRepresentation }[];
 }
 
-/** Why a row that is in no bucket has no page representation. */
+/** Why a row that is in no bucket has no page representation. Fail-closed: a row
+ * that matches no known rule answers `unaccounted`, never a plausible-looking
+ * default. `unaccounted` must never be produced by a shipped projection — its
+ * presence means a new drop path escaped the gate (ADAAAA-8549). */
 function unrepresentedReason(row: HighlightRecord): RowRepresentation {
   if (row.status === "rejected") return "rejected";
   if (row.outcome !== "scoring_play") {
@@ -169,7 +185,10 @@ function unrepresentedReason(row: HighlightRecord): RowRepresentation {
       ? "notable_option_over_rail_cap"
       : "not_scoring";
   }
-  return "contradicting";
+  // A non-postable scoring_play row is only `contradicting` when its own verdict
+  // refutes the goal. Anything else reached NO lane and matched NO rule — say so
+  // instead of asserting a cause.
+  return hasContradictingVerdict(row) ? "contradicting" : "unaccounted";
 }
 
 /**
@@ -266,7 +285,19 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
   // `raw - postable = merged + rejected + notScoring + contradicting` still
   // holds against the RAW row total.
   const visible = list.filter((h) => !h.replayOf);
-  const counts = { total: list.length, rejected: 0, notScoring: 0, contradicting: 0, postable: 0, merged: 0 };
+  const counts = {
+    total: list.length,
+    rejected: 0,
+    notScoring: 0,
+    contradicting: 0,
+    postable: 0,
+    merged: 0,
+    // ADAAAA-8549: replay rows are dropped before every bucket, so without their
+    // own bucket they vanish between `total` and the rest and the row identity
+    // `total - postable = merged + rejected + notScoring + contradicting` is short
+    // by exactly the replay count. Count them explicitly instead.
+    replay: list.length - visible.length,
+  };
   const candidates: HighlightRecord[] = [];
   const notable: HighlightRecord[] = [];
   for (const h of visible) {
@@ -663,6 +694,11 @@ export interface PostableHighlightCounts {
   rejectedHighlights: number;
   notScoringHighlights: number;
   contradictingHighlights: number;
+  /** ADAAAA-8549: attached replay rows (`replayOf` set). They are delivered under
+   * their owner's `alternatives[]` and touch no other bucket, so the row identity
+   * is `raw = postable + merged + rejected + notScoring + contradicting + replay`
+   * (the four-term form holds when `replay` is 0). */
+  replayHighlights: number;
 }
 
 /**
@@ -686,6 +722,7 @@ export function countsFromPostable(out: PostableHighlights): PostableHighlightCo
     rejectedHighlights: counts.rejected,
     notScoringHighlights: counts.notScoring,
     contradictingHighlights: counts.contradicting,
+    replayHighlights: counts.replay,
   };
 }
 

@@ -28,6 +28,7 @@ import {
   verdictText,
   verdictCriterionText,
   dataItemValueText,
+  servedHighlightRowIds,
   type JobDetailHighlight,
 } from "./jobDetail";
 
@@ -518,5 +519,104 @@ describe("verdictText / verdictCriterionText (ADAAAA-8187)", () => {
     expect(dataItemValueText(null)).toBe("—");
     expect(dataItemValueText({ a: 1 })).toBe("a: 1");
     expect(dataItemValueText(["a", "b"])).toBe("a, b");
+  });
+});
+
+// ADAAAA-8549 (AC3 of ADAAAA-8542): the payload now states where every persisted
+// row lands. This is the webapp-side assertion that the stated served set really
+// is reachable from the arrays the page renders — the counting mistake that made
+// row eccc4e25 look lost on job 50b7aed6 was reading `highlights[]` and
+// `notableHighlights[]` and forgetting that a notable card's other windows ride
+// `siblingClips[]`.
+describe("servedHighlightRowIds (ADAAAA-8549 row accounting)", () => {
+  function hl(over: Partial<JobDetailHighlight> = {}): JobDetailHighlight {
+    return {
+      id: "h1",
+      jobId: "j1",
+      clipUri: "/jobs/j1/clips/h1.mp4",
+      start: 0,
+      end: 15,
+      score: 70,
+      status: "accepted",
+      createdAt: "2026-11-10T03:20:00.000Z",
+      ...over,
+    };
+  }
+
+  it("reaches every row of the AC3 shape: 3 notable cards covering 4 rows", () => {
+    const detail = {
+      highlights: [] as JobDetailHighlight[],
+      notableHighlights: [
+        hl({ id: "r-83" }),
+        hl({
+          id: "r-183",
+          siblingClips: [{ id: "r-234", start: 233.67, end: 248.67, clipUri: "/jobs/j1/clips/r-234.mp4" }],
+        }),
+        hl({ id: "r-616" }),
+      ],
+      duplicateHighlights: [] as JobDetailHighlight[],
+      rowAccounting: {
+        served: [
+          { id: "r-83", representation: "notable_card" as const },
+          { id: "r-183", representation: "notable_card" as const },
+          { id: "r-234", representation: "sibling_clip" as const },
+          { id: "r-616", representation: "notable_card" as const },
+        ],
+        unrepresented: [],
+      },
+    };
+    const served = servedHighlightRowIds(detail);
+    expect(served.lanes.notable).toEqual(["r-83", "r-183", "r-616"]);
+    expect(served.lanes.sibling).toEqual(["r-234"]);
+    expect(served.rendered).toEqual(["r-83", "r-183", "r-616", "r-234"]);
+    expect(served.declaredServed.length).toBe(4);
+    // The assertion: the payload's served set is exactly what the page reaches.
+    expect(served.unreachable).toEqual([]);
+    expect(served.unrepresented).toEqual([]);
+  });
+
+  it("flags a served id no rendered lane carries (payload/page disagreement)", () => {
+    const served = servedHighlightRowIds({
+      highlights: [hl({ id: "goal-1" })],
+      notableHighlights: [],
+      duplicateHighlights: [],
+      rowAccounting: {
+        served: [
+          { id: "goal-1", representation: "card" as const },
+          { id: "ghost-1", representation: "sibling_clip" as const },
+        ],
+        unrepresented: [],
+      },
+    });
+    expect(served.rendered).toEqual(["goal-1"]);
+    expect(served.unreachable).toEqual(["ghost-1"]);
+  });
+
+  it("treats a merged row as rendered (inside its owner's group) but disclosed", () => {
+    const served = servedHighlightRowIds({
+      highlights: [hl({ id: "goal-1", mergedIds: ["dup-1"], duplicateCount: 1 })],
+      notableHighlights: [],
+      duplicateHighlights: [hl({ id: "dup-1", duplicateOf: "goal-1" })],
+      rowAccounting: {
+        served: [{ id: "goal-1", representation: "card" as const }],
+        unrepresented: [{ id: "dup-1", reason: "merged_duplicate" as const }],
+      },
+    });
+    expect(served.lanes.merged).toEqual(["dup-1"]);
+    expect(served.rendered).toEqual(["goal-1", "dup-1"]);
+    expect(served.unrepresented).toEqual(["dup-1"]);
+    expect(served.unreachable).toEqual([]);
+  });
+
+  it("tolerates a legacy payload with no rowAccounting (fabricates nothing)", () => {
+    const served = servedHighlightRowIds({
+      highlights: [],
+      notableHighlights: [hl({ id: "r-1" })],
+      duplicateHighlights: [],
+    });
+    expect(served.rendered).toEqual(["r-1"]);
+    expect(served.declaredServed).toEqual([]);
+    expect(served.unrepresented).toEqual([]);
+    expect(served.unreachable).toEqual([]);
   });
 });

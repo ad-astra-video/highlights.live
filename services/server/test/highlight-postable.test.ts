@@ -250,6 +250,8 @@ describe("clip counts (ADAAAA-7854)", () => {
       rejectedHighlights: 1,
       notScoringHighlights: 0,
       contradictingHighlights: 2,
+      // ADAAAA-8549: no attached replay rows on this job.
+      replayHighlights: 0,
     });
     // The count is a projection of the same pass that builds the list.
     const out = buildPostableHighlights(d61Highlights());
