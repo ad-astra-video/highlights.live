@@ -5401,9 +5401,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ("why is this $2.00 when I asked for a cap?") is answered by the record.
       // The RAIL comes from the source: quoting the analyzer's 104-decides rate on
       // a browser stream is 33 % pessimistic (spec §3).
+      //
+      // Pass the RAW submitted values, never `knobInput`'s: the validator fills an
+      // absent input with the shipped default (5 s / uncapped), so handing it here
+      // would make every bare submit assert the default as the user's choice.
       const decideKnob = resolveDecideKnob({
-        cadenceSec: knobInput.cadenceSec,
-        rateCapPer300s: knobInput.rateCapPer300s,
+        cadenceSec: req.body?.cadenceSec,
+        rateCapPer300s: req.body?.rateCapPer300s,
         rail: decideRailForSource(req.body.source ?? "file"),
         envRateCapPer300s: null,
         envDecideKeepRatio: cfg.liveDecideKeepRatio,

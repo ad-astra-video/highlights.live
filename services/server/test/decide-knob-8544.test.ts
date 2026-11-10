@@ -27,6 +27,7 @@ import { windowAuditForJob } from "../src/window-audit";
 import { buildLiveAnalyzerConfig } from "../src/api";
 import { MediaRailObserver } from "../src/media-rail";
 import { loadConfig } from "../src/config";
+import { buildTestApp } from "./helpers";
 
 const BASE_ENV = { PERCEIVE_URL: "http://p", DECIDE_URL: "http://d", LIVE_OBSERVE_LOOP: "1" };
 const cfgFor = (overrides: Record<string, string> = {}) => loadConfig({ ...BASE_ENV, ...overrides });
@@ -291,5 +292,92 @@ describe("wiring guards — the knob reaches BOTH rails and the route", () => {
     const api = serverSrc("api.ts");
     expect(api).toMatch(/liveObserveCadenceS: decideKnob\?\.cadenceSec \?\? cfg\.liveObserveCadenceS/);
     expect(api).toMatch(/liveDecideRateCapPer300s: decideKnob\?\.rateCapPer300s \?\? null/);
+  });
+});
+
+// --- AC1 at the ROUTE ------------------------------------------------------
+//
+// The first cut resolved the knob from `validateDecideKnobInput`'s output, which
+// FILLS an absent input with the shipped default — so a bare POST /jobs stamped
+// `resolvedSource: "user"` and the record could not tell the CEO-ruled economy
+// default from a real choice. These assertions run the real route (buildTestApp,
+// in-memory sqlite, no GPU, no live job) rather than the resolver in isolation,
+// because the defect lived in the caller.
+describe("AC1 at the route — the stamp reports what the client sent, not the validator's default", () => {
+  async function registerUser(app: any, email: string): Promise<string> {
+    const r = await app.inject({ method: "POST", url: "/auth/register", payload: { email, password: "password123" } });
+    expect(r.statusCode).toBe(200);
+    return r.json().token as string;
+  }
+
+  async function submit(app: any, token: string, payload: Record<string, unknown>) {
+    const r = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload });
+    return { statusCode: r.statusCode, body: r.json() };
+  }
+
+  it("a bare POST /jobs stamps resolvedSource 'default' (5 s, uncapped) — never 'user'", async () => {
+    const { app, store } = await buildTestApp();
+    const token = await registerUser(app, "knob-bare@test.dev");
+    const res = await submit(app, token, { source: "browser", gameHint: "x" });
+    expect(res.statusCode).toBe(200);
+    const jobId = res.body.job.id;
+    const stored = store.getJob(jobId) as any;
+    expect(stored.decideKnob).toBeTruthy();
+    expect(stored.decideKnob.resolvedSource).toBe("default");
+    expect(stored.decideKnob.cadenceSec).toBe(5);
+    expect(stored.decideKnob.rateCapPer300s).toBeNull();
+    // AC1: the audit echoes the stored stamp field for field, so it reads
+    // 'default' too (a recomputation would drop back to 'user'/'default' drift).
+    expect(windowAuditForJob(stored).decideKnob).toEqual(stored.decideKnob);
+    await app.close();
+  });
+
+  it("an explicit value is 'user' — including an explicit 5 s and an explicit null cap", async () => {
+    const { app, store } = await buildTestApp();
+    const token = await registerUser(app, "knob-user@test.dev");
+
+    const three = await submit(app, token, { source: "browser", gameHint: "x", cadenceSec: 3 });
+    expect(three.statusCode).toBe(200);
+    expect((store.getJob(three.body.job.id) as any).decideKnob.resolvedSource).toBe("user");
+    expect((store.getJob(three.body.job.id) as any).decideKnob.cadenceSec).toBe(3);
+
+    // Choosing the default value IS a choice: the record must say so.
+    const five = await submit(app, token, { source: "browser", gameHint: "x", cadenceSec: 5 });
+    expect(five.statusCode).toBe(200);
+    expect((store.getJob(five.body.job.id) as any).decideKnob.resolvedSource).toBe("user");
+    expect((store.getJob(five.body.job.id) as any).decideKnob.cadenceSec).toBe(5);
+
+    const capped = await submit(app, token, { source: "browser", gameHint: "x", rateCapPer300s: 63 });
+    expect(capped.statusCode).toBe(200);
+    const cappedStamp = (store.getJob(capped.body.job.id) as any).decideKnob;
+    expect(cappedStamp.resolvedSource).toBe("user");
+    expect(cappedStamp.rateCapPer300s).toBe(63);
+    expect(cappedStamp.predictedUsdPerHour).toBeGreaterThan(0);
+    await app.close();
+  });
+
+  it("a below-floor cap is a 422 at the route and creates no job row", async () => {
+    const { app, store } = await buildTestApp();
+    const token = await registerUser(app, "knob-floor@test.dev");
+    const before = store.listAllJobs().length;
+    const res = await submit(app, token, { source: "browser", gameHint: "x", rateCapPer300s: 62 });
+    expect(res.statusCode).toBe(422);
+    expect(res.body.code).toBe("decide_rate_below_coverage_floor");
+    expect(store.listAllJobs().length).toBe(before);
+    // 63 on the same route is accepted (boundary).
+    const ok = await submit(app, token, { source: "browser", gameHint: "x", rateCapPer300s: 63 });
+    expect(ok.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("wiring guard: the route hands resolveDecideKnob the raw body, not knobInput", () => {
+    const src = readFileSync(new URL("../src/api.ts", import.meta.url), "utf8");
+    const at = src.indexOf("const decideKnob = resolveDecideKnob({");
+    expect(at).toBeGreaterThan(0);
+    const call = src.slice(at, at + 400);
+    expect(call).toContain("cadenceSec: req.body?.cadenceSec");
+    expect(call).toContain("rateCapPer300s: req.body?.rateCapPer300s");
+    expect(call).not.toContain("knobInput.cadenceSec");
+    expect(call).not.toContain("knobInput.rateCapPer300s");
   });
 });

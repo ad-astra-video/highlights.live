@@ -261,6 +261,12 @@ export interface DecideKnobStamp {
  *   3. `env` — a job whose observer is still driven by the deploy-time
  *      `LIVE_DECIDE_KEEP_RATIO`, which is the only posture a pre-knob build can
  *      have.
+ *
+ * `cadenceSec` / `rateCapPer300s` MUST be the values the client actually sent
+ * (raw request body), not `validateDecideKnobInput`'s output: that validator
+ * fills an absent input with the shipped default, so a caller that forwards it
+ * would stamp every bare submit as `"user"` and the record could no longer tell
+ * the shipped economy default from a real choice.
  */
 export function resolveDecideKnob(input: {
   cadenceSec?: unknown;
