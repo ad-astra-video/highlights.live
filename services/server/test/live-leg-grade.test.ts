@@ -212,6 +212,36 @@ describe("gradeLiveLeg shape gates (ADAAAA-8487)", () => {
     });
     expect(withOffset.stageSumMismatchRows).toBe(0);
   });
+
+  // ADAAAA-8487 / ADAAAA-8529 item 3: a live `done` record used to carry no end
+  // stamp, so every funded leg graded `duration_unknown` against the 480 s floor
+  // and the harness wall clock had to be pasted in by hand. The settlements now
+  // stamp `endedAt`; the grader must read it, and must still grade a pre-fix leg
+  // whose only duration is the harness's own clock.
+  it("derives the duration from startedAt/endedAt and prefers endedAt over finishedAt", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: QUIET_ROWS,
+      startedAt: "2026-11-09T22:28:08.000Z",
+      endedAt: "2026-11-09T22:36:08.000Z",
+      // finalization tail after accrual: must NOT be counted in the duration
+      finishedAt: "2026-11-09T22:36:38.000Z",
+      decideP50Ms: 2_274,
+      accepted: 6,
+      deliveredGoalRows: 0,
+    });
+    expect(g.durationS).toBeCloseTo(480, 3);
+  });
+
+  it("grades a pre-fix leg from the harness duration instead of duration_unknown", () => {
+    const noStamps = gradeLiveLeg({ mode: "funded", rows: QUIET_ROWS, decideP50Ms: 1_400, accepted: 9, deliveredGoalRows: 0 });
+    expect(noStamps.durationS).toBeNull();
+    expect(noStamps.acB.reasons.some((r) => r.startsWith("duration_unknown"))).toBe(true);
+
+    const harnessClock = gradeLiveLeg({ mode: "funded", rows: QUIET_ROWS, durationS: 480, decideP50Ms: 1_400, accepted: 9, deliveredGoalRows: 0 });
+    expect(harnessClock.durationS).toBe(480);
+    expect(harnessClock.acB.reasons.some((r) => r.startsWith("duration_unknown"))).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
