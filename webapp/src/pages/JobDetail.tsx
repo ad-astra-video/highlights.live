@@ -67,7 +67,10 @@ import {
   type LiveCapture,
   summaryEntryTimestamp,
   type MergedMomentGroup,
-  notableBadge,
+  confirmationBadge,
+  playTypeText,
+  highlightMomentEntries,
+  type HighlightMomentEntry,
 } from "../lib/jobDetail";
 import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
@@ -1370,15 +1373,15 @@ export interface HighlightCardProps {
    *  no trigger and no outcome reason. Defaults to the operator surface for
    *  direct component renders; the page always passes the session role. */
   admin?: boolean;
-  /** ADAAAA-8178: this card is a row of the NOTABLE lane (non-postable by the
-   *  precision gate). It renders the SAME card — the parity the ticket asks for —
-   *  with exactly three differences, all driven here:
-   *   - the metadata row carries ONE notable badge (see `notableBadge`),
-   *     `data-detail-notable-badge` + `data-notable-kind`;
+  /** ADAAAA-8178/8530: this card is a NOTABLE moment row of the ONE Highlights
+   *  list (non-postable by the precision gate). It renders the SAME card the
+   *  postable feed uses, with three differences driven here:
    *   - no verdict slot (Reject/Approve would imply the clip can be published);
-   *   - no batch checkbox (batch export covers postable ids only).
-   *  Download / Copy Link, the caption editor and the title chips stay. The root
-   *  keeps `data-detail-highlight` and gains `data-detail-notable-card`. */
+   *   - no batch checkbox (batch export covers postable ids only);
+   *   - its play type reads as plain detail text.
+   *  The confirmation badge, the clip rail, Download / Copy Link, the caption
+   *  editor and the title chips are IDENTICAL on both. The root keeps
+   *  `data-detail-highlight` and gains `data-detail-notable-card`. */
   notable?: boolean;
 }
 
@@ -1424,10 +1427,12 @@ export function HighlightCard({
   const copyTarget = postTitleOf(h);
   const announcer = suggestCaption(h, summaryLog, grounding);
   const shownCaption = localCaption ?? (caption || copyTarget);
-  // ADAAAA-8178: the notable lane's ONE badge (provisional goal > big play >
-  // near miss). `null` on a notable row whose outcome is neither, in which case
-  // the card simply carries no badge rather than inventing a label.
-  const notableBadgeInfo = notable ? notableBadge(h) : null;
+  // ADAAAA-8530 (D1 = A, confirmation state): the card's ONE badge states
+  // whether a pipeline lane actually confirmed this window. Fail-closed: a row
+  // with no derived lane (absent `confirmation`) reads UNCONFIRMED.
+  const badge = confirmationBadge(h);
+  // Play type is PLAIN DETAIL TEXT now — never badge copy (AC2).
+  const playType = playTypeText(h);
   const durationS = Math.max(0, Math.round(h.end - h.start));
   function setCaption(value: string) {
     setLocalCaption(value);
@@ -1486,36 +1491,34 @@ export function HighlightCard({
           >
             {durationS}s
           </span>
-          {/* ADAAAA-8139 (interim step): a demoted goal window whose ASR / frame /
-              crowd cue said "goal" before the scoreboard change landed. It is a
-              LABEL on a celebration, never a postable GOAL — the marker clears
-              in place when the deferred re-attestation confirms the score.
-              ADAAAA-8178: on a NOTABLE card this marker is folded into the single
-              notable badge below, so the lane never prints the same string twice. */}
-          {h.provisionalGoal && !notable && (
+          {/* ADAAAA-8530 (D1 = A): ONE badge per card = CONFIRMATION STATE.
+              Green only when a pipeline lane actually confirmed the window
+              (`measured` / `dive`); muted/yellow for `dive_disagreed`,
+              `unconfirmed`, or a row whose lane could not be derived. Play
+              taxonomy moved to the plain detail line below — the badge never
+              names a play type and never asserts a goal. */}
+          <span
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+              badge.confirmed ? "border-green/50 bg-green/10 text-green" : "border-yellow/50 bg-yellow/10 text-yellow"
+            }`}
+            data-detail-confirmed-badge={badge.confirmed ? "confirmed" : "unconfirmed"}
+            data-confirm-lane={admin ? (badge.lane ?? "absent") : undefined}
+            title={admin ? h.confirmation?.label : undefined}
+          >
+            {badge.text}
+          </span>
+          {/* ADAAAA-8530: play type (big play / near miss / goal-shaped) is plain
+              detail text now, never badge copy — and it never asserts a goal:
+              a demoted row reads "goal-shaped play …", not "GOAL". The row's
+              stored cue note stays admin-only. */}
+          {(playType || h.provisionalGoal) && (
             <span
-              className="rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
-              data-detail-provisional-goal
-              title={admin ? h.provisionalGoal.note : undefined}
-            >
-              GOAL (unconfirmed)
-            </span>
-          )}
-          {/* ADAAAA-8178: the notable lane's ONE badge — same yellow pill as the
-              provisional marker above. Precedence: provisional goal >
-              BIG PLAY > NEAR MISS. Customer text only: the cue note (which names
-              ASR/frame/crowd cues) stays admin-only, and so does the machine
-              `data-notable-kind` marker — its values ARE outcome codes
-              (`near_miss`), and ADAAAA-7737's markup guard forbids those tokens
-              in a customer session. The badge TEXT is the customer surface. */}
-          {notableBadgeInfo && (
-            <span
-              className="rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
-              data-detail-notable-badge
-              data-notable-kind={admin ? notableBadgeInfo.kind : undefined}
+              className="text-xs text-mut"
+              data-detail-play-type
+              {...(h.provisionalGoal ? { "data-detail-provisional-goal": true } : {})}
               title={admin && h.provisionalGoal ? h.provisionalGoal.note : undefined}
             >
-              {notableBadgeInfo.text}
+              {h.provisionalGoal ? "goal-shaped play — no measured confirmation yet" : playType}
             </span>
           )}
           {/* ADAAAA-8205: the async Stage-2 dive read this moment and did not
@@ -1688,22 +1691,21 @@ function LaneRowFacts({
 }) {
   return (
     <>
-      <span className="font-bold text-ink">
+      <span className="font-bold text-ink" data-detail-moment-range>
         T+{Math.round(h.start)}s → T+{Math.round(h.end)}s
       </span>
-      {/* ADAAAA-8139 (interim step): the notable lane is where a demoted goal
-          lives, so the provisional marker belongs on this row too — the customer
-          row gains a label only, no cue names, score or outcome code.
+      {/* ADAAAA-8530: the provisional marker is PLAIN DETAIL TEXT, never a badge
+          — the card's one badge is confirmation state. It states the taxonomy
+          ("goal-shaped play") and never asserts a scored goal.
           ADAAAA-8199 AC6: NEVER on the merged lane. A merged row is a duplicate
-          whose transition already has a confirmed GOAL, so "GOAL (unconfirmed)"
-          there would re-open the exact symptom this ticket closes. */}
+          whose transition already has a confirmed GOAL. */}
       {h.provisionalGoal && lane === "notable" && (
         <span
-          className="ml-2 rounded-full border border-yellow/50 bg-yellow/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-yellow"
+          className="ml-2 text-xs text-mut"
           data-detail-provisional-goal
           title={admin ? h.provisionalGoal.note : undefined}
         >
-          GOAL (unconfirmed)
+          goal-shaped play — no measured confirmation yet
         </span>
       )}
       {/* ADAAAA-8205: the refuted marker is customer copy, not a cue name — the
@@ -1726,92 +1728,117 @@ function LaneRowFacts({
 }
 
 /**
- * Compact row list for the lanes ADAAAA-7621 put beside the postable gallery:
- * `duplicateHighlights` (overlapping clips the dedupe folded into a kept
- * moment) and `notableHighlights` (non-scoring near_miss / big_play clips the
- * precision gate keeps out of the postable list).
+ * ADAAAA-8530: the ONE Highlights grid.
+ *
+ * Postable moments and notable moments are rows of the same list, ordered by
+ * moment start (`highlightMomentEntries`). A notable row with footage renders the
+ * same `HighlightCard` (clip rail, caption, Download / Copy Link) with `notable`;
+ * a notable row with neither footage nor a named clip failure stays a text row in
+ * this same grid. Every card carries the ONE confirmation badge
+ * (`data-detail-confirmed-badge`) that `HighlightCard` renders from the served
+ * row's `confirmation`.
+ */
+export function HighlightMomentGrid({
+  entries,
+  onDecision,
+  onClipChoice,
+  pendingClipChoice = null,
+  pendingStatus = null,
+  captionOf,
+  onCaptionChange,
+  summaryLog,
+  fastRail = false,
+  selectedIds = [],
+  onToggleSelect,
+  admin = true,
+}: {
+  entries: HighlightMomentEntry[];
+  onDecision?: (h: JobDetailHighlight, status: "accepted" | "rejected") => void;
+  onClipChoice?: (h: JobDetailHighlight, alternativeId: string | null) => void;
+  pendingClipChoice?: { id: string; alternativeId: string | null } | null;
+  pendingStatus?: { id: string; status: "accepted" | "rejected" } | null;
+  captionOf?: (h: JobDetailHighlight) => string;
+  onCaptionChange?: (h: JobDetailHighlight, value: string) => void;
+  summaryLog?: SummaryLogEntry[];
+  fastRail?: boolean;
+  selectedIds?: string[];
+  onToggleSelect?: (h: JobDetailHighlight) => void;
+  admin?: boolean;
+}) {
+  return (
+    <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3" data-detail-highlight-grid>
+      {entries.map(({ highlight: h, notable, textRow }) =>
+        textRow ? (
+          <div
+            key={h.id}
+            className="rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
+            data-detail-lane-row="notable"
+          >
+            <LaneRowFacts h={h} admin={admin} lane="notable" />
+          </div>
+        ) : (
+          <HighlightCard
+            key={h.id}
+            highlight={h}
+            notable={notable}
+            onDecision={notable ? undefined : onDecision}
+            onClipChoice={notable ? undefined : onClipChoice}
+            pendingClipChoice={
+              !notable && pendingClipChoice && pendingClipChoice.id === h.id ? pendingClipChoice.alternativeId : null
+            }
+            pendingStatus={!notable && pendingStatus && pendingStatus.id === h.id ? pendingStatus.status : null}
+            caption={captionOf?.(h) ?? ""}
+            onCaptionChange={onCaptionChange}
+            summaryLog={summaryLog}
+            fastRail={fastRail}
+            selectable={!notable}
+            selected={!notable && selectedIds.includes(h.id)}
+            onToggleSelect={notable ? undefined : onToggleSelect}
+            admin={admin}
+          />
+        )
+      )}
+    </div>
+  );
+}
+
+/**
+ * Compact row list for the merged-clip ledger ADAAAA-7621 put beside the grid:
+ * `duplicateHighlights` — overlapping clips the dedupe folded into a kept moment.
  *
  * Merged rows stay text-only: their footage lives in the moment they were folded
  * into, and a second playable card would re-present it as if it were its own
- * highlight (the bug ADAAAA-7621 closed).
+ * highlight (the bug ADAAAA-7621 closed). The lane is a dedupe ledger, NOT a
+ * moment list.
  *
- * ADAAAA-8135: the NOTABLE lane is different — a row that carries footage gets a
- * playable clip card, because a detected play the scoring lane demoted must stay
- * inspectable ("detected → notable → no clip" was the reported experience).
- * ADAAAA-8178 supersedes that compact row with the real `HighlightCard`: a notable
- * row with footage now renders the SAME card the postable feed uses (badge +
- * Download + Copy Link + caption), minus the verdict slot and the batch checkbox.
- * Only a row with neither `clipUri` nor `clipError` stays a text row, and a row
- * with a `clipError` names its reason through the shared VideoClip failure state
- * ("Clip unavailable").
+ * ADAAAA-8530: the notable lane that used to live here is gone — notable moments
+ * are rows of the Highlights grid above (`HighlightMomentGrid`), and a notable
+ * row without footage is a text row inside that grid.
  */
 export function SecondaryHighlightLane({
   title,
   note,
   highlights,
-  tone = "mut",
-  lane,
+  lane = "merged",
   admin = true,
-  captionOf,
-  onCaptionChange,
-  summaryLog,
-  fastRail = false,
 }: {
   title: string;
   note: string;
   highlights: JobDetailHighlight[];
-  tone?: "mut" | "yellow";
-  /** `data-detail-lane` value so tests/QA can target the lane. */
-  lane: "merged" | "notable";
+  /** `data-detail-lane` value so tests/QA can target the lane (merged only). */
+  lane?: "merged";
   /** Operator session? A customer row (ADAAAA-7737) is the time range only —
    *  no score, no event taxonomy, no outcome code, no reason. */
   admin?: boolean;
-  /** ADAAAA-8178: the page's caption state, so a notable card's caption editor
-   *  is the SAME editor (and the same value) the postable cards use. */
-  captionOf?: (h: JobDetailHighlight) => string;
-  onCaptionChange?: (h: JobDetailHighlight, value: string) => void;
-  /** ADAAAA-7881/7958: the summary log the notable card's suggested caption and
-   *  title chips derive from — identical inputs to the postable card. */
-  summaryLog?: SummaryLogEntry[];
-  fastRail?: boolean;
 }) {
   if (highlights.length === 0) return null;
-  // ADAAAA-8178: a NOTABLE row that carries footage (or a named clip failure)
-  // now renders the SAME `HighlightCard` the postable feed uses, with a badge —
-  // the lane is no longer a compact-row surface for those rows. A row with
-  // neither `clipUri` nor `clipError` stays a text row: the card's empty-src
-  // state says "clip processing…", which would be a lie for a row that will
-  // never get a clip. The merged lane stays text-only (its footage lives in the
-  // moment it was folded into — the bug ADAAAA-7621 closed).
-  const notableCards =
-    lane === "notable" ? highlights.filter((h) => !!(h.clipUri || h.clipError)) : [];
-  const textRows = highlights.filter((h) => !notableCards.includes(h));
   return (
     <div className="mt-6" data-detail-lane={lane}>
-      <h4 className={`text-sm font-bold ${tone === "yellow" ? "text-yellow" : "text-mut"}`}>{title}</h4>
+      <h4 className="text-sm font-bold text-mut">{title}</h4>
       <div className="mt-1 text-xs text-mut">{note}</div>
-      {notableCards.length > 0 && (
-        <div
-          className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3"
-          data-detail-notable-card-grid
-        >
-          {notableCards.map((h) => (
-            <HighlightCard
-              key={h.id}
-              highlight={h}
-              notable
-              caption={captionOf?.(h) ?? ""}
-              onCaptionChange={onCaptionChange}
-              summaryLog={summaryLog}
-              fastRail={fastRail}
-              admin={admin}
-            />
-          ))}
-        </div>
-      )}
-      {textRows.length > 0 && (
+      {highlights.length > 0 && (
         <ul className="mt-2 space-y-1">
-          {textRows.map((h) => (
+          {highlights.map((h) => (
             <li
               key={h.id}
               className="rounded-lg border border-mut/30 bg-mut/10 px-2 py-1 text-xs text-mut"
@@ -2628,6 +2655,15 @@ export function JobDetail() {
     () => postableHighlights.filter((h) => selectedIds.includes(h.id)),
     [postableHighlights, selectedIds]
   );
+  // ADAAAA-8530: ONE Highlights list. The notable moments (non-scoring / demoted
+  // play, clustered into one card per moment by ADAAAA-8422) are rows of the SAME
+  // grid, ordered by moment start with the postable cards; a notable row with
+  // neither footage nor a named clip failure stays a text row inside the list.
+  const notableMoments = useMemo(() => detail?.notableHighlights ?? [], [detail]);
+  const momentEntries = useMemo(
+    () => highlightMomentEntries(postableHighlights, notableMoments),
+    [postableHighlights, notableMoments]
+  );
   const captionOf = useCallback(
     (h: JobDetailHighlight) =>
       // ADAAAA-8318: the batch manifest / captions.txt ships the COPY TARGET (the
@@ -3102,57 +3138,39 @@ export function JobDetail() {
               )}
             </div>
           )}
-          <div className="mt-3 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {noHighlightContent && (
-              <div className="text-mut" data-detail-no-highlights>No accepted highlights for this job.</div>
-            )}
-            {detail.highlights
-              .filter((h) => h.status !== "rejected")
-              .map((h) => (
-                <HighlightCard
-                  key={h.id}
-                  highlight={h}
-                  onDecision={review}
-                  onClipChoice={pickClip}
-                  pendingClipChoice={pendingClipChoice?.id === h.id ? pendingClipChoice.alternativeId : null}
-                  pendingStatus={pendingReview?.id === h.id ? pendingReview.status : null}
-                  caption={captionOf(h)}
-                  onCaptionChange={setHighlightCaption}
-                  summaryLog={detail.job.summaryLog}
-                  fastRail={detail.job.source !== "file"}
-                  selectable
-                  selected={selectedIds.includes(h.id)}
-                  onToggleSelect={toggleSelectHighlight}
-                  admin={admin}
-                />
-              ))}
-          </div>
+          {noHighlightContent ? (
+            <div className="mt-3 text-mut" data-detail-no-highlights>No accepted highlights for this job.</div>
+          ) : (
+            /* ADAAAA-8530: postable moments and notable moments are ONE list,
+               ordered by moment start. A notable row without footage stays a text
+               row in this same list (never a card with an empty player). */
+            <HighlightMomentGrid
+              entries={momentEntries}
+              onDecision={review}
+              onClipChoice={pickClip}
+              pendingClipChoice={pendingClipChoice}
+              pendingStatus={pendingReview}
+              captionOf={captionOf}
+              onCaptionChange={setHighlightCaption}
+              summaryLog={detail.job.summaryLog}
+              fastRail={detail.job.source !== "file"}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelectHighlight}
+              admin={admin}
+            />
+          )}
 
-          {/* ADAAAA-7621: the two lanes the dedupe/precision gate moved out of
-              the postable gallery. Merged clips are listed once here (their
-              footage lives in the moment they were folded into) and notable
-              non-scoring clips are visible but never presented as goals. */}
+          {/* ADAAAA-7621: the merged-clip ledger. These are NOT moments — their
+              footage lives in the moment they were folded into, so they stay a
+              text-only lane and never become a second card (the bug 7621 closed).
+              ADAAAA-8530: the notable lane that used to sit beside it was removed
+              — notable moments are rows of the grid above. */}
           <SecondaryHighlightLane
             lane="merged"
             title="Merged into a highlight"
             note="Overlapping clips folded into the moment above so the same footage is not posted twice."
             highlights={detail.duplicateHighlights ?? []}
             admin={admin}
-          />
-          <SecondaryHighlightLane
-            lane="notable"
-            title="Notable — not a goal"
-            note="Non-scoring plays (near miss / big play). They stay off the postable goal list."
-            tone="yellow"
-            highlights={detail.notableHighlights ?? []}
-            admin={admin}
-            // ADAAAA-8178: a notable card is the postable card, so it takes the
-            // same caption state + summary-log inputs (and the same fast-rail
-            // corroboration rule) as the cards above.
-            captionOf={captionOf}
-            onCaptionChange={setHighlightCaption}
-            summaryLog={detail.job.summaryLog}
-            fastRail={detail.job.source !== "file"}
           />
 
           {/* ADAAAA-7915 (increment 3): the clips this viewer rejected stay on

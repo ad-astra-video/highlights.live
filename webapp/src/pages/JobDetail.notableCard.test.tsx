@@ -1,18 +1,20 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
-import { HighlightCard, HighlightActionRow, SecondaryHighlightLane } from "./JobDetail";
-import type { JobDetailHighlight } from "../lib/jobDetail";
+import { HighlightCard, HighlightActionRow, HighlightMomentGrid, SecondaryHighlightLane } from "./JobDetail";
+import { highlightMomentEntries, type HighlightConfirmation, type JobDetailHighlight } from "../lib/jobDetail";
 import { copyExportLink, exportUrl } from "../lib/highlightPost";
 
-// ADAAAA-8178: the notable-play lane must render the SAME card the postable
-// highlights use, with ONE badge added (BIG PLAY / GOAL (UNCONFIRMED) / NEAR
-// MISS). These tests pin the acceptance criteria that are specific to the badge
-// and the action surface (AC2–AC5); the lane parity / text-row rules (AC1, AC3's
-// merged-lane half) live in JobDetail.notable.test.tsx.
+// ADAAAA-8530 (D1 = option A, confirmation state): ONE badge per Highlights card
+// and it states CONFIRMATION, not the play taxonomy. These tests pin the badge
+// contract on the card plus the action surface (AC2, and the parts of AC3/AC4/AC5
+// that are specific to the badge); the one-list / text-row rules live in
+// JobDetail.notable.test.tsx and the SSR fixtures in
+// JobDetail.confirmationBadge.test.tsx.
 //
-// Fixture: the notable rows the ticket is about — a demoted big play, a
-// provisional goal, and a near miss — all carrying footage.
+// Superseded by this ticket: `data-detail-notable-badge` (BIG PLAY / NEAR MISS /
+// GOAL (unconfirmed)) is gone. Play type is plain detail text and never badge
+// copy.
 
 function text(html: string): string {
   return html.replace(/<!--\s*-->/g, "");
@@ -46,17 +48,21 @@ function count(html: string, needle: string): number {
   return html.split(needle).length - 1;
 }
 
+function confirmation(lane: HighlightConfirmation["lane"]): HighlightConfirmation {
+  return { lane, label: `lane ${lane}` };
+}
+
 /**
- * The badge element's OWN markup (ADAAAA-8318).
+ * The badge element's OWN markup (ADAAAA-8318/8530).
  *
- * The card now carries a copy target (`data-detail-copy-target`) whose
- * deterministic label can legitimately contain the moment-type words the badge
- * uses (`BIG PLAY · 4:21` is ADAAAA-8302 Option 2's own example). "Exactly one
- * badge" is a statement about the BADGE, so the label counts below are scoped to
- * the badge element instead of the whole card.
+ * The card also carries a copy target (`data-detail-copy-target`) whose
+ * deterministic label can legitimately contain the moment-type words a play
+ * detail line uses (`BIG PLAY · 4:21` is ADAAAA-8302 Option 2's own example).
+ * "Exactly one badge, and it is the confirmation state" is a statement about the
+ * BADGE, so the counts below are scoped to the badge element.
  */
 function badgeHtml(html: string): string {
-  const at = html.indexOf("data-detail-notable-badge");
+  const at = html.indexOf("data-detail-confirmed-badge");
   if (at < 0) return "";
   const start = html.lastIndexOf("<", at);
   const end = html.indexOf("</span>", at);
@@ -71,71 +77,93 @@ function card(row: JobDetailHighlight, admin = true): string {
   );
 }
 
-describe("AC2 — exactly one notable badge per card, with the documented precedence", () => {
-  const cases: Array<[string, JobDetailHighlight, string, string]> = [
-    ["provisional goal", hl({ id: "p1", provisionalGoal: provisional() }), "goal_unconfirmed", "GOAL (unconfirmed)"],
-    ["big play", hl({ id: "p2", outcome: "big_play" }), "big_play", "BIG PLAY"],
-    ["near miss", hl({ id: "p3", outcome: "near_miss", eventType: "NEAR_MISS" }), "near_miss", "NEAR MISS"],
+function grid(rows: JobDetailHighlight[], admin = true): string {
+  return text(
+    renderToString(
+      React.createElement(HighlightMomentGrid, {
+        entries: highlightMomentEntries([], rows),
+        captionOf: () => "",
+        admin,
+      })
+    )
+  );
+}
+
+describe("AC2 — exactly ONE badge per card, and it states CONFIRMATION", () => {
+  const cases: Array<[string, JobDetailHighlight, string, boolean]> = [
+    ["a measured window", hl({ id: "p1", confirmation: confirmation("measured") }), "CONFIRMED", true],
+    ["a dive-corroborated window", hl({ id: "p2", confirmation: confirmation("dive") }), "CONFIRMED", true],
+    ["a disagreed dive", hl({ id: "p3", confirmation: confirmation("dive_disagreed") }), "UNCONFIRMED", false],
+    ["an unconfirmed window", hl({ id: "p4", confirmation: confirmation("unconfirmed") }), "UNCONFIRMED", false],
+    ["a row with no derived lane (legacy)", hl({ id: "p5" }), "UNCONFIRMED", false],
   ];
 
-  for (const [name, row, kind, label] of cases) {
-    it(`renders one ${label} badge (kind=${kind}) for a ${name} row`, () => {
+  for (const [name, row, label, confirmed] of cases) {
+    it(`renders exactly one ${label} badge for ${name}`, () => {
       const html = card(row);
-      expect(count(html, "data-detail-notable-badge")).toBe(1);
-      expect(count(html, `data-notable-kind="${kind}"`)).toBe(1);
+      expect(count(html, "data-detail-confirmed-badge")).toBe(1);
+      expect(count(html, `data-detail-confirmed-badge="${confirmed ? "confirmed" : "unconfirmed"}"`)).toBe(1);
       expect(count(badgeHtml(html), label)).toBe(1);
     });
   }
 
-  it("precedence: a provisional goal that is also a big_play reads GOAL (unconfirmed), never BIG PLAY", () => {
-    const html = card(hl({ provisionalGoal: provisional(), outcome: "big_play" }));
-    expect(count(html, "data-detail-notable-badge")).toBe(1);
-    expect(count(badgeHtml(html), "GOAL (unconfirmed)")).toBe(1);
-    expect(count(badgeHtml(html), "BIG PLAY")).toBe(0);
-    // The generic provisional chip is folded into the notable badge: no second
-    // copy of the same string on the card.
-    expect(count(html, "data-detail-provisional-goal")).toBe(0);
+  it("the badge TEXT is never a play taxonomy or a goal claim", () => {
+    for (const row of [
+      hl({ id: "b1", outcome: "big_play" }),
+      hl({ id: "b2", outcome: "near_miss", eventType: "NEAR_MISS" }),
+      hl({ id: "b3", provisionalGoal: provisional() }),
+      hl({ id: "b4", provisionalGoal: provisional(), outcome: "big_play" }),
+    ]) {
+      const badge = badgeHtml(card(row));
+      expect(badge).not.toContain("GOAL (unconfirmed)");
+      expect(badge).not.toContain("BIG PLAY");
+      expect(badge).not.toContain("NEAR MISS");
+      expect(badge).toMatch(/>(CONFIRMED|UNCONFIRMED)</);
+    }
   });
 
-  it("no badge for a notable row whose outcome is neither (it is never mislabelled)", () => {
+  it("play type is PLAIN detail text on the card (never the badge)", () => {
+    expect(card(hl({ outcome: "big_play" }))).toContain(">big play<");
+    expect(card(hl({ outcome: "near_miss", eventType: "NEAR_MISS" }))).toContain(">near miss<");
+    expect(card(hl({ provisionalGoal: provisional() }))).toContain("goal-shaped play");
+  });
+
+  it("a notable row whose outcome carries no play type still carries the badge", () => {
     const html = card(hl({ outcome: "scoring_play" }));
-    expect(count(html, "data-detail-notable-badge")).toBe(0);
-    expect(count(badgeHtml(html), "BIG PLAY")).toBe(0);
-    expect(count(badgeHtml(html), "NEAR MISS")).toBe(0);
-    expect(count(badgeHtml(html), "GOAL (unconfirmed)")).toBe(0);
+    expect(count(html, "data-detail-confirmed-badge")).toBe(1);
+    expect(badgeHtml(html)).toContain("UNCONFIRMED");
+    expect(html).not.toContain("data-detail-play-type");
   });
 
-  it("the plain (postable) card still renders no notable badge", () => {
-    const html = text(
-      renderToString(React.createElement(HighlightCard, { highlight: hl(), onDecision: () => {} }))
-    );
-    expect(count(html, "data-detail-notable-badge")).toBe(0);
-    expect(count(html, "data-detail-notable-card")).toBe(0);
-  });
-
-  it("a lane of the three fixture rows carries exactly three badges and no duplicates", () => {
+  it("the plain (postable) card carries the SAME single badge", () => {
     const html = text(
       renderToString(
-        React.createElement(SecondaryHighlightLane, {
-          lane: "notable",
-          title: "Notable — not a goal",
-          note: "Non-scoring plays (near miss / big play). They stay off the postable goal list.",
-          tone: "yellow",
-          highlights: [
-            hl({ id: "n1", outcome: "big_play" }),
-            hl({ id: "n2", provisionalGoal: provisional() }),
-            hl({ id: "n3", outcome: "near_miss", eventType: "NEAR_MISS" }),
-          ],
+        React.createElement(HighlightCard, {
+          highlight: hl({ confirmation: confirmation("measured") }),
+          onDecision: () => {},
         })
       )
     );
-    expect(count(html, "data-detail-notable-badge")).toBe(3);
-    // one badge kind each, counted inside each badge element
-    const badges = html.split("data-detail-notable-badge").slice(1);
-    const kinds = badges.map((chunk) => chunk.slice(0, chunk.indexOf("</span>") + 7));
-    expect(kinds.filter((b) => b.includes("BIG PLAY")).length).toBe(1);
-    expect(kinds.filter((b) => b.includes("GOAL (unconfirmed)")).length).toBe(1);
-    expect(kinds.filter((b) => b.includes("NEAR MISS")).length).toBe(1);
+    expect(count(html, "data-detail-confirmed-badge")).toBe(1);
+    expect(badgeHtml(html)).toContain("CONFIRMED");
+    expect(count(html, "data-detail-notable-card")).toBe(0);
+    // The superseded notable badge marker never renders anywhere.
+    expect(count(html, "data-detail-notable-badge")).toBe(0);
+  });
+
+  it("a grid of three notable moments carries one badge each, census = lane census", () => {
+    const html = grid([
+      hl({ id: "n1", outcome: "big_play" }),
+      hl({ id: "n2", provisionalGoal: provisional() }),
+      hl({ id: "n3", outcome: "near_miss", eventType: "NEAR_MISS", confirmation: confirmation("measured") }),
+    ]);
+    expect(count(html, "data-detail-confirmed-badge")).toBe(3);
+    expect(count(html, 'data-detail-confirmed-badge="confirmed"')).toBe(1);
+    expect(count(html, 'data-detail-confirmed-badge="unconfirmed"')).toBe(2);
+    const badges = html.split("data-detail-confirmed-badge").slice(1);
+    const texts = badges.map((chunk) => chunk.slice(0, chunk.indexOf("</span>") + 7));
+    expect(texts.filter((b) => b.includes(">CONFIRMED<")).length).toBe(1);
+    expect(texts.filter((b) => b.includes(">UNCONFIRMED<")).length).toBe(2);
   });
 });
 
@@ -232,8 +260,13 @@ describe("AC5 — a customer session sees the badge text only", () => {
   // never see is the interior of the pipeline; what they post is the caption.
   it("keeps the badge and drops score / eventType / outcome / reason field / cue names", () => {
     const html = card(hl({ outcome: "big_play", provisionalGoal: undefined }), false);
-    expect(count(html, "data-detail-notable-badge")).toBe(1);
-    expect(html).toContain("BIG PLAY");
+    expect(count(html, "data-detail-confirmed-badge")).toBe(1);
+    expect(count(html, ">UNCONFIRMED<")).toBe(1);
+    // The play type is plain lower-case detail text — never an outcome code.
+    expect(html).toContain(">big play<");
+    // The badge ELEMENT is the confirmation state; the caption copy target
+    // ("BIG PLAY · 0:05") is the posting surface, not badge copy (ADAAAA-8302).
+    expect(badgeHtml(html)).not.toContain("BIG PLAY");
     for (const internal of [
       "score 85",
       "BIG_PLAY",
@@ -242,16 +275,23 @@ describe("AC5 — a customer session sees the badge text only", () => {
       "data-detail-pipeline",
       "data-detail-trigger",
       "data-notable-kind",
+      // The lane itself is operator-only (ADAAAA-8530).
+      "data-confirm-lane",
     ]) {
       expect(html).not.toContain(internal);
     }
   });
 
-  it("keeps the provisional badge text but not the cue note or the cue names", () => {
+  it("keeps the confirmation badge text but not the cue note or the cue names", () => {
     const html = card(hl({ provisionalGoal: provisional() }), false);
-    expect(html).toContain("GOAL (unconfirmed)");
+    expect(count(html, ">UNCONFIRMED<")).toBe(1);
+    expect(html).toContain("goal-shaped play");
+    expect(html).not.toContain("GOAL (unconfirmed)");
     expect(html).not.toContain("asr_goal_call");
     expect(html).not.toContain("crowd_reaction");
     expect(html).not.toContain(provisional().note);
+    // The lane label is operator-only.
+    expect(html).not.toContain("data-confirm-lane");
+    expect(html).not.toContain("lane unconfirmed");
   });
 });
