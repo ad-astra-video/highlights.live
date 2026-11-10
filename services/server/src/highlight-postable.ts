@@ -136,10 +136,11 @@ export type RowRepresentation =
   | "notable_card"
   /** A notable moment's other window (`notableHighlights[].siblingClips[]`). */
   | "sibling_clip"
-  /** Merged into a moment (`duplicateHighlights[]` / the owner's `mergedIds`). */
-  | "merged_duplicate"
   /** A replay delivered under its owner's `alternatives[]` (ADAAAA-8321). */
   | "replay_alternative"
+  /** Merged into another moment's footage (`duplicateHighlights[]`): deduped by
+   *  design, so it has no card of its own — disclosed, never a silent gap. */
+  | "merged_duplicate"
   /** Same notable moment, but beyond the rail cap (`MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT`). */
   | "notable_option_over_rail_cap"
   /** Rule 1: a human rejected it. */
@@ -152,7 +153,7 @@ export type RowRepresentation =
   | "replay_owner_missing";
 
 export interface RowAccounting {
-  /** Every persisted row the served payload can reach, with how it is served. */
+  /** Every persisted row served as a card (or as a served replay), and how. */
   served: { id: string; representation: RowRepresentation }[];
   /** Every persisted row with NO page representation, with the reason. */
   unrepresented: { id: string; reason: RowRepresentation }[];
@@ -175,22 +176,18 @@ function unrepresentedReason(row: HighlightRecord): RowRepresentation {
  * ADAAAA-8542 (AC3): account for every persisted row against the served
  * projection. Pure: the inputs are not read beyond their ids.
  *
- * Reachable means "the detail payload leads to this row": a postable moment's
- * own clip, a notable moment's own clip, a notable moment's `siblingClips[]`
- * option, the duplicate lane, or a replay alternative whose owner is served.
+ * Reachable means "the detail payload leads to this row AS A CARD": a postable
+ * moment's own clip, a notable moment's own clip, a notable moment's
+ * `siblingClips[]` option, or a replay alternative whose owner is served. A row
+ * merged into another moment's footage (and every gate drop) is DELIVERED but
+ * has no card of its own, so it is disclosed in `unrepresented` with its reason.
  */
 export function accountHighlightRows(
   list: HighlightRecord[],
   out: Pick<PostableHighlights, "highlights" | "duplicates" | "notableMoments">
 ): RowAccounting {
   const reachable = new Map<string, RowRepresentation>();
-  for (const h of out.highlights) {
-    if (!reachable.has(h.id)) reachable.set(h.id, "card");
-    for (const mergedId of h.mergedIds ?? []) {
-      if (!reachable.has(mergedId)) reachable.set(mergedId, "merged_duplicate");
-    }
-  }
-  for (const d of out.duplicates) if (!reachable.has(d.id)) reachable.set(d.id, "merged_duplicate");
+  for (const h of out.highlights) if (!reachable.has(h.id)) reachable.set(h.id, "card");
   for (const m of out.notableMoments.moments) {
     if (!reachable.has(m.owner.id)) reachable.set(m.owner.id, "notable_card");
     for (const option of m.options) if (!reachable.has(option.id)) reachable.set(option.id, "sibling_clip");
@@ -206,8 +203,14 @@ export function accountHighlightRows(
       continue;
     }
     const representation = reachable.get(row.id);
-    if (representation) accounting.served.push({ id: row.id, representation });
-    else accounting.unrepresented.push({ id: row.id, reason: unrepresentedReason(row) });
+    if (representation) {
+      accounting.served.push({ id: row.id, representation });
+      continue;
+    }
+    // A row merged into another moment's footage is DELIVERED but has no card of
+    // its own (that is the dedupe); it is disclosed with its reason, not served.
+    const merged = out.duplicates.some((d) => d.id === row.id) || out.highlights.some((m) => (m.mergedIds ?? []).includes(row.id));
+    accounting.unrepresented.push({ id: row.id, reason: merged ? "merged_duplicate" : unrepresentedReason(row) });
   }
   const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   accounting.served.sort(byId);
