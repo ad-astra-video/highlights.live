@@ -22,18 +22,19 @@
 // `runner not found` 404s in the 12 min following the router restart, versus
 // 1878 flap lines / 4332 404s before it.
 //
-// This suite pins the config surface so a future edit cannot drop `resolve`
-// (or the `zone` it requires) silently.
+// ADAAAA-8553 S1: this router is now a MANUAL/DEBUG path and the `DECIDE_URL`
+// fallback. Decide is registered per CONTAINER (one registrar per worker, ids
+// `highlights-decide-5090-1..3` / `-x99` / `-x99-b`), so the registry — not this
+// pool — owns readiness, capacity and failover. The assertions here still pin
+// the router config because it remains in compose and must not silently rot;
+// the per-container registrar payloads and health/unregister behaviour are
+// pinned in `live-runner-registrar.test.ts`.
 import { describe, it, expect } from "vitest";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
 const conf = readFileSync(repoFile("docker/decide-router.conf"), "utf8");
-const compose = readFileSync(repoFile("docker/docker-compose.yml"), "utf8");
 
 /** The body of one `upstream <name> { ... }` block. */
 function upstreamBlock(name: string): string {
@@ -92,203 +93,7 @@ describe("decide router upstreams (ADAAAA-8083)", () => {
     }
   });
 
-  it("declares the routed set: capacity == primaries x 2 seq per 5090 worker", () => {
-    // ADAAAA-8281 AC2: admission reads the runner registration's capacity, and
-    // that number is the routed set — 3 primary workers at `--max-num-seqs 2`
-    // each = 6. Since the dynamic-registration follow-up there is no
-    // runners.json to keep in step: the registrar DERIVES the number from this
-    // same pool (`RUNNER_CAPACITY=auto`), so a pool edit cannot drift from the
-    // advertised ceiling. Pinning the arithmetic here fails the suite if the
-    // parser ever counts a `backup` line (the x99 pair is failover only).
-    const block = upstreamBlock("decide_pool");
-    const primaries = block
-      .split("\n")
-      .filter((l) => /^\s*server\s+\S+:\d+/.test(l) && !/\bbackup\b/.test(l));
-    expect(primaries.length).toBe(3);
-    expect(registrarCapacity()).toBe(primaries.length * 2);
-  });
-
   it("keeps the router-local liveness endpoint that never proxies", () => {
     expect(conf).toMatch(/location\s+=\s+\/nginx-health/);
-  });
-});
-
-// ADAAAA-8088: the decide runner's health probe must hit the router-local
-// endpoint, not the proxied `/health`. go-livepeer (v0.9.2,
-// `ai/runner/live_runner.go`) probes every STATIC runner on a 5 s ticker with a
-// 3 s timeout and, on a SINGLE failed probe, sets `Status = "unavailable"` and
-// releases every session on that runner. `health_url` is relative to
-// `runner_url` (staticRunnerHealthURL joins them), so with `runner_url =
-// http://decide-router:8081` a `/health` probe is proxied into the decide pool
-// and pays any upstream connect/inference stall. `/nginx-health` answers inside
-// nginx (`return 200`), so a worker stall can no longer fail the probe.
-//
-// ADAAAA-8281 follow-up: the registration is no longer a JSON file — the
-// `registrar-decide` sidecar heartbeats the runner's own description. These
-// tests run the sidecar's parser (`--print-payload` / `--print-capacity`, no
-// network) so the config asserted here is byte-for-byte what the box sends to
-// `POST /runners/heartbeat`, and they require python3 (present on the dev box
-// and on the deploy host; see docker/live-runner-registrar.py).
-const registrar = repoFile("docker/live-runner-registrar.py");
-
-function registrarEnv(overrides: Record<string, string>): NodeJS.ProcessEnv {
-  return { ...process.env, ...overrides };
-}
-
-/** Resolve the decide registration exactly as the compose sidecar does. */
-function decideRegistrarPayload(): Record<string, any> {
-  const out = execFileSync(
-    "python3",
-    [registrar, "--print-payload"],
-    {
-      encoding: "utf8",
-      env: registrarEnv({
-        RUNNER_ID: "highlights-decide",
-        RUNNER_APP: "highlights-live/decide",
-        RUNNER_URL: "http://decide-router:8081",
-        RUNNER_HEALTH_URL: "/nginx-health",
-        RUNNER_MODE: "single-shot",
-        RUNNER_PROXY: "1",
-        RUNNER_CAPACITY: "auto",
-        RUNNER_AUTO_CONF: repoFile("docker/decide-router.conf"),
-        RUNNER_AUTO_SEQS: "2",
-        RUNNER_METADATA: '{"model": "m", "engine": "vllm", "quantization": "q", "maxConcurrency": 8}',
-        RUNNER_PRICE: "0.01",
-        RUNNER_PRICE_UNIT: "fixed",
-      }),
-    },
-  );
-  return JSON.parse(out);
-}
-
-function registrarCapacity(): number {
-  const out = execFileSync("python3", [registrar, "--print-capacity"], {
-    encoding: "utf8",
-    env: registrarEnv({
-      RUNNER_CAPACITY: "auto",
-      RUNNER_AUTO_CONF: repoFile("docker/decide-router.conf"),
-      RUNNER_AUTO_SEQS: "2",
-    }),
-  });
-  return Number(out.trim());
-}
-
-describe("decide runner health probe (ADAAAA-8088)", () => {
-  it("decide registration probes the router-local /nginx-health", () => {
-    const payload = decideRegistrarPayload();
-    expect(payload.runner_id).toBe("highlights-decide");
-    expect(payload.app).toBe("highlights-live/decide");
-    expect(payload.runner_url).toBe("http://decide-router:8081");
-    // A heartbeat carries no health_url (the registry only probes STATIC runners);
-    // the registrar uses RUNNER_HEALTH_URL locally to decide whether to heartbeat.
-    expect("health_url" in payload).toBe(false);
-    expect(payload.mode).toBe("single-shot");
-    expect(payload.capacity).toBe(6);
-    // The sidecar env carries the health path the registrar probes:
-    // RUNNER_HEALTH_URL=/nginx-health in docker/docker-compose.yml.
-    expect(compose).toMatch(/RUNNER_HEALTH_URL=\/nginx-health/);
-  });
-
-  it("the health endpoint answers inside nginx and never proxies", () => {
-    const start = conf.indexOf("location = /nginx-health");
-    expect(start).toBeGreaterThanOrEqual(0);
-    const end = conf.indexOf("\n    }", start);
-    const block = conf.slice(start, end);
-    expect(block).toMatch(/return\s+200/);
-    expect(block).not.toMatch(/proxy_pass/);
-  });
-});
-
-// ADAAAA-8281 (integrated reliability): a deploy rewrites `decide-router.conf`,
-// and the registrar re-reads it every 5 s. A read that lands mid-write sees a
-// TRUNCATED pool block (upstream opened, two of three servers present, no
-// closing brace). The old parser counted those two servers and published
-// `2 x 2 = 4`, which the decision server latches for the whole session — on the
-// box the advertised ceiling flapped 6 -> 4 -> 6 across the 15:46-16:00Z deploy
-// rewrites and one session (3ee24d68) stored `advertised: 4, effective: 4`.
-// These tests pin the guard: an incomplete read must never shrink the
-// advertised routed set.
-describe("registrar capacity guard (ADAAAA-8281)", () => {
-  const truncated = () => {
-    const start = conf.indexOf("upstream decide_pool {");
-    expect(start).toBeGreaterThanOrEqual(0);
-    // Cut right after the SECOND primary `server` line: the shape a mid-write
-    // read produced on the box.
-    const lines = conf.slice(start).split("\n");
-    const serverIdx = lines
-      .map((l, i) => (/^\s*server\s+/.test(l) && !/\bbackup\b/.test(l) ? i : -1))
-      .filter((i) => i >= 0);
-    return conf.slice(0, start) + lines.slice(0, serverIdx[1] + 1).join("\n");
-  };
-
-  it("refuses a truncated pool read instead of publishing 2 x seqs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "registrar-conf-"));
-    const path = join(dir, "decide-router.conf");
-    writeFileSync(path, truncated());
-    let status = 0;
-    let stderr = "";
-    try {
-      execFileSync("python3", [registrar, "--print-capacity"], {
-        encoding: "utf8",
-        env: registrarEnv({
-          RUNNER_CAPACITY: "auto",
-          RUNNER_AUTO_CONF: path,
-          RUNNER_AUTO_SEQS: "2",
-        }),
-      });
-    } catch (err: any) {
-      status = err.status;
-      stderr = String(err.stderr ?? "");
-    }
-    expect(status).toBe(3);
-    expect(stderr).toMatch(/capacity read incomplete/);
-  });
-
-  it("refuses a conf that has no decide_pool block at all", () => {
-    const dir = mkdtempSync(join(tmpdir(), "registrar-conf-"));
-    const path = join(dir, "decide-router.conf");
-    writeFileSync(path, "http {\n}\n");
-    let status = 0;
-    try {
-      execFileSync("python3", [registrar, "--print-capacity"], {
-        encoding: "utf8",
-        env: registrarEnv({ RUNNER_CAPACITY: "auto", RUNNER_AUTO_CONF: path, RUNNER_AUTO_SEQS: "2" }),
-      });
-    } catch (err: any) {
-      status = err.status;
-    }
-    expect(status).toBe(3);
-  });
-
-  it("keeps heartbeating the last known capacity through a partial read", () => {
-    // The registry expires a dynamic runner after a 20 s TTL with no heartbeat,
-    // so the guard must HOLD and still heartbeat — not skip the tick.
-    const dir = mkdtempSync(join(tmpdir(), "registrar-conf-"));
-    const path = join(dir, "decide-router.conf");
-    writeFileSync(path, truncated());
-    const harness = `
-import importlib.util, json, sys
-spec = importlib.util.spec_from_file_location("reg", sys.argv[1])
-m = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(m)
-cfg = m.RunnerConfig({
-    "RUNNER_ID": "highlights-decide", "RUNNER_APP": "highlights-live/decide",
-    "RUNNER_URL": "http://decide-router:8081", "RUNNER_CAPACITY": "auto",
-    "RUNNER_AUTO_CONF": sys.argv[2], "RUNNER_AUTO_SEQS": "2",
-})
-r = m.Registrar(cfg)
-r.registered = True
-r.last_capacity = 6
-sent = []
-r.healthy = lambda: True
-r.heartbeat = lambda p: (sent.append(p["capacity"]), True)[1]
-r.tick()
-print(json.dumps({"sent": sent, "holding": r.holding_capacity}))
-`;
-    const out = execFileSync("python3", ["-c", harness, registrar, path], { encoding: "utf8" });
-    // The hold line prints to stdout first; the harness's JSON is the last line.
-    const result = JSON.parse(out.trim().split("\n").pop()!);
-    expect(result.sent).toEqual([6]);
-    expect(result.holding).toBe(true);
   });
 });

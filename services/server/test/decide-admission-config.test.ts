@@ -21,33 +21,47 @@ import { loadConfig } from "../src/config";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
 const compose = readFileSync(repoFile("docker/docker-compose.yml"), "utf8");
-// ADAAAA-8281 follow-up: the registration is dynamic now (`POST
-// /runners/heartbeat` from docker/live-runner-registrar.py); there is no
-// runners.json. Resolve the decide registration by running the sidecar's own
-// payload builder, so these assertions describe exactly what the box sends.
+// ADAAAA-8281 follow-up / ADAAAA-8553 S1: the registration is dynamic now
+// (`POST /runners/heartbeat` from docker/live-runner-registrar.py) and decide
+// is registered PER CONTAINER: five ids, literal capacity, all on
+// `highlights-live/decide`. Resolve each payload by running the sidecar's own
+// builder, so these assertions describe exactly what the box sends.
 const registrar = repoFile("docker/live-runner-registrar.py");
 
-function decideRegistration(): Record<string, any> {
-  const out = execFileSync("python3", [registrar, "--print-payload"], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      RUNNER_ID: "highlights-decide",
-      RUNNER_APP: "highlights-live/decide",
-      RUNNER_URL: "http://decide-router:8081",
-      RUNNER_HEALTH_URL: "/nginx-health",
-      RUNNER_MODE: "single-shot",
-      RUNNER_PROXY: "1",
-      RUNNER_CAPACITY: "auto",
-      RUNNER_AUTO_CONF: repoFile("docker/decide-router.conf"),
-      RUNNER_AUTO_SEQS: "2",
-      RUNNER_METADATA:
-        '{"model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", "engine": "vllm", "quantization": "compressed-tensors INT4", "maxConcurrency": 8}',
-      RUNNER_PRICE: "0.01",
-      RUNNER_PRICE_UNIT: "fixed",
-    },
+const DECIDE_RUNNERS = [
+  { id: "highlights-decide-5090-1", url: "http://192.168.1.151:8091", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-2", url: "http://192.168.1.151:8092", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-3", url: "http://192.168.1.151:8093", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-x99", url: "http://decide:8081", capacity: 2, tier: "x99-fallback", seqs: 2 },
+  { id: "highlights-decide-x99-b", url: "http://decide-b:8081", capacity: 2, tier: "x99-fallback", seqs: 2 },
+];
+
+function decideRegistrations(): Array<Record<string, any>> {
+  return DECIDE_RUNNERS.map((r) => {
+    const out = execFileSync("python3", [registrar, "--print-payload"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        RUNNER_ID: r.id,
+        RUNNER_APP: "highlights-live/decide",
+        RUNNER_URL: r.url,
+        RUNNER_HEALTH_URL: "/health",
+        RUNNER_MODE: "single-shot",
+        RUNNER_PROXY: "0",
+        RUNNER_CAPACITY: String(r.capacity),
+        RUNNER_METADATA: JSON.stringify({
+          model: "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4",
+          engine: "vllm",
+          quantization: "compressed-tensors INT4",
+          tier: r.tier,
+          seqs: r.seqs,
+        }),
+        RUNNER_PRICE: "0.01",
+        RUNNER_PRICE_UNIT: "fixed",
+      },
+    });
+    return JSON.parse(out);
   });
-  return JSON.parse(out);
 }
 
 /** The `environment:` block of one compose service, as text. */
@@ -91,30 +105,32 @@ describe("decide admission config (ADAAAA-7773)", () => {
     expect(server).toContain("NO LONGER the admission\n      # ceiling");
   });
 
-  it("the decide runner advertises the ROUTED set: 6 slots, derived from the pool", () => {
-    // ADAAAA-8281: the pool's primary upstreams are the three 5090 decide
-    // workers at `--max-num-seqs 2` each; the x99 pair is `backup` only, so the
-    // capacity the router actually balances across is 3 x 2 = 6. ADAAAA-8437:
-    // that 6 IS the admission (`effective`), and the funded DECIDE_CONCURRENCY=8
-    // is only the reporting value / dark-discovery fallback — which is why the
-    // next capacity change is a worker-seqs re-create, not this knob.
-    //
-    // The number is NOT written in a config file any more: the sidecar derives
-    // it from the pool (`RUNNER_CAPACITY=auto`), which is why this test runs the
-    // registrar rather than reading JSON. If someone hardcodes 6 again the
-    // pool-parser assertion in decide-router-upstreams.test.ts is what catches
-    // the drift; here we pin that the shipped sidecar still derives, and that
-    // the engine metadata keeps its own maxConcurrency (8), which is NOT the
-    // admission ceiling.
-    const registration = decideRegistration();
-    expect(registration.capacity).toBe(6);
-    expect(registration.mode).toBe("single-shot");
-    expect(registration.runner_id).toBe("highlights-decide");
-    const md = JSON.parse(registration.metadata);
-    expect(md.maxConcurrency).toBe(8);
-    // The sidecar env must keep the derivation, not a literal capacity.
-    expect(serviceBlock("registrar-decide")).toContain("RUNNER_CAPACITY=auto");
-    expect(serviceBlock("registrar-decide")).toContain("RUNNER_AUTO_SEQS=${DECIDE_WORKER_SEQS:-2}");
+  it("the decide fleet advertises the per-container set: 16 slots across 5 registrations", () => {
+    // ADAAAA-8553 S1: decide no longer registers once behind the router. Each
+    // container declares its own LITERAL capacity (4 per 5090 worker, 2 per
+    // x99 worker), and discovery sums them on `highlights-live/decide`:
+    // 4 + 4 + 4 + 2 + 2 = 16. ADAAAA-8437 then makes that sum the admission
+    // ceiling (`effective`); the funded DECIDE_CONCURRENCY=8 is only reporting
+    // and the dark-discovery fallback.
+    const registrations = decideRegistrations();
+    expect(registrations.map((r) => r.runner_id)).toEqual([
+      "highlights-decide-5090-1",
+      "highlights-decide-5090-2",
+      "highlights-decide-5090-3",
+      "highlights-decide-x99",
+      "highlights-decide-x99-b",
+    ]);
+    expect(registrations.map((r) => r.capacity)).toEqual([4, 4, 4, 2, 2]);
+    expect(registrations.reduce((sum, r) => sum + r.capacity, 0)).toBe(16);
+    for (const registration of registrations) {
+      expect(registration.app).toBe("highlights-live/decide");
+      expect(registration.mode).toBe("single-shot");
+      expect(JSON.parse(registration.metadata).tier).toMatch(/^(5090|x99-fallback)$/);
+    }
+    // The shipped sidecars pin literals, never a pool derivation.
+    expect(serviceBlock("registrar-decide-x99")).toContain("RUNNER_CAPACITY=2");
+    expect(serviceBlock("registrar-decide-x99-b")).toContain("RUNNER_CAPACITY=2");
+    expect(compose).not.toContain("RUNNER_CAPACITY=auto");
   });
 
   it("config.ts reads the env and keeps the client's own default when unset", () => {

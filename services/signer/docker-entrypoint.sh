@@ -122,8 +122,9 @@ fi
 # in this signer's /discover-orchestrators answer, and go-livepeer caches that
 # answer for -liveAICapReportInterval (default 25 MINUTES). A dynamically
 # registered runner can change its capacity on one heartbeat, so the default
-# cache turns "re-route the pool + recreate registrar-decide" into a ~25 min
-# blind spot on the advertised ceiling. Forward a shorter interval when the
+# cache turns "change a decide container's literal capacity + recreate its
+# registrar" into a ~25 min blind spot on the advertised ceiling. Forward a
+# shorter interval when the
 # binary knows the flag (same probe-before-forward guard as
 # -livePaymentReserve above: an unknown flag makes livepeer print usage and
 # exit, which would crash-loop the signer).

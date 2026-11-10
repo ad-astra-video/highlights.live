@@ -3832,7 +3832,9 @@ export interface LiveObserveMetricsSnapshot {
     /** False = the last probe failed (distinct from an empty fleet). */
     probeOk?: boolean;
     /** ADAAAA-8504: decide REGISTRATIONS in the last well-formed answer (0 =
-     *  none) — one `highlights-decide` app however wide the worker set is. */
+     *  none). ADAAAA-8553 S1 registers FIVE per-container decide runners
+     *  (`highlights-decide-5090-1..3`, `-x99`, `-x99-b`), so this reads 5 —
+     *  not a worker count, and no longer the one aggregate id. */
     decideRegistrations?: number;
     /** LEGACY: the pre-8504 name of `decideRegistrations` (read-only). */
     runners?: number;
@@ -3852,8 +3854,9 @@ export interface LiveObserveMetricsSnapshot {
  *
  * Two things this guarantees:
  * - `runners` is emitted as `decideRegistrations` (AC3). On this fleet the number
- *   counts decide REGISTRATIONS — the box registers one `highlights-decide` even
- *   at 3 workers x 4 seqs — so the old name invited the false `runners >= 3`
+ *   counts decide REGISTRATIONS — since ADAAAA-8553 S1 the box registers FIVE
+ *   per-container decide runners, where it used to register one aggregate
+ *   `highlights-decide` — so the old name invited the false `runners >= 3`
  *   check. The `[decide-capacity]` log line keeps printing `runners=` because ops
  *   greps it (AC2); only the RECORD field is renamed.
  * - `at` dates the snapshot, so a grader can tell a job-start posture from a

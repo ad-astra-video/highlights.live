@@ -513,11 +513,11 @@ services:
   # probe did. It also unregisters on SIGTERM, so a stopped sidecar never leaves
   # a phantom runner behind.
   #
-  # `RUNNER_CAPACITY=auto` on decide derives the advertised ceiling from
-  # `decide-router.conf`: PRIMARY upstream count x 2 seqs per 5090 worker. That
-  # is the routed set, so the pool membership stays the single declared source
-  # the admission gate reads, and re-routing the pool + restarting this sidecar
-  # changes `advertised` with NO orchestrator restart and NO session drop.
+  # `RUNNER_CAPACITY` is a LITERAL per-container slot count (4 per 5090 worker,
+  # 2 per x99 worker) and every decide container registers under its OWN id
+  # (ADAAAA-8553 S1). The registry — not `decide-router` — owns decide
+  # readiness, capacity and failover: five registrations on the shared
+  # `app=highlights-live/decide` leaf advertise 4+4+4+2+2 = 16 slots.
   registrar-perceive:
     image: ${LIVE_RUNNER_REGISTRAR_IMAGE:-python:3.12-alpine}
     container_name: highlights-registrar-perceive
@@ -552,42 +552,76 @@ services:
       - ./live-runner-registrar.py:/opt/live-runner-registrar.py:ro
     networks: [hl]
 
-  registrar-decide:
+  # ADAAAA-8553 S1: the x99 pair registers PER CONTAINER. These two sidecars
+  # live on this host; the three 5090 workers register from ai-server-5090x3-1
+  # with docker/registrar-5090.sh (they are plain `docker run` containers, not
+  # compose services here). Each sidecar probes ONLY its own container's
+  # `/health` and unregisters ONLY its own id, so one dead worker releases only
+  # that worker's sessions. `decide-router` stays for manual/debug and the
+  # `DECIDE_URL` fallback; it is no longer in the registration path.
+  registrar-decide-x99:
     image: ${LIVE_RUNNER_REGISTRAR_IMAGE:-python:3.12-alpine}
-    container_name: highlights-registrar-decide
+    container_name: highlights-registrar-decide-x99
     command: ["python3", "/opt/live-runner-registrar.py"]
     restart: unless-stopped
     depends_on:
-      decide-router:
+      decide:
         condition: service_started
       orchestrator:
         condition: service_started
     environment:
       - ORCH_URL=https://orchestrator:8935
       - ORCH_SECRET=${ORCHESTRATOR_SECRET:-highlights-secret}
-      # MUST match ROUTES.decide; ONE decide registration fronts the whole pool,
-      # so the 5090 trio + x99 failover stay a router concern, not a registry one.
-      - RUNNER_ID=highlights-decide
+      - RUNNER_ID=highlights-decide-x99
       - RUNNER_APP=highlights-live/decide
-      - RUNNER_URL=http://decide-router:8081
-      - RUNNER_HEALTH_URL=/nginx-health
+      - RUNNER_URL=http://decide:8081
+      - RUNNER_HEALTH_URL=/health
       - RUNNER_MODE=single-shot
-      - RUNNER_PROXY=1
-      # The routed set, read from the pool: 3 primary 5090 workers x 2 seqs = 6.
-      - RUNNER_CAPACITY=auto
-      - RUNNER_AUTO_CONF=/etc/decide-router/nginx.conf
-      - RUNNER_AUTO_SEQS=${DECIDE_WORKER_SEQS:-2}
-      - 'RUNNER_METADATA={"model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", "engine": "vllm", "quantization": "compressed-tensors INT4", "maxConcurrency": 8}'
+      - RUNNER_PROXY=0
+      # The x99 worker's own vLLM `--max-num-seqs 2`, declared literally.
+      - RUNNER_CAPACITY=2
+      - 'RUNNER_METADATA={"model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", "engine": "vllm", "quantization": "compressed-tensors INT4", "tier": "x99-fallback", "seqs": 2}'
       - RUNNER_VERSION=0.1.0
       - RUNNER_GPU_ID=1
       - RUNNER_GPU_NAME=NVIDIA GeForce RTX 5070 Ti
       - RUNNER_GPU_VRAM_MB=16303
       - RUNNER_PRICE=0.01
       - RUNNER_PRICE_UNIT=fixed
-      - REGISTRAR_LOG_PREFIX=[registrar-decide]
+      - REGISTRAR_LOG_PREFIX=[registrar-decide-x99]
     volumes:
       - ./live-runner-registrar.py:/opt/live-runner-registrar.py:ro
-      - ./decide-router.conf:/etc/decide-router/nginx.conf:ro
+    networks: [hl]
+
+  registrar-decide-x99-b:
+    image: ${LIVE_RUNNER_REGISTRAR_IMAGE:-python:3.12-alpine}
+    container_name: highlights-registrar-decide-x99-b
+    command: ["python3", "/opt/live-runner-registrar.py"]
+    restart: unless-stopped
+    depends_on:
+      decide-b:
+        condition: service_started
+      orchestrator:
+        condition: service_started
+    environment:
+      - ORCH_URL=https://orchestrator:8935
+      - ORCH_SECRET=${ORCHESTRATOR_SECRET:-highlights-secret}
+      - RUNNER_ID=highlights-decide-x99-b
+      - RUNNER_APP=highlights-live/decide
+      - RUNNER_URL=http://decide-b:8081
+      - RUNNER_HEALTH_URL=/health
+      - RUNNER_MODE=single-shot
+      - RUNNER_PROXY=0
+      - RUNNER_CAPACITY=2
+      - 'RUNNER_METADATA={"model": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", "engine": "vllm", "quantization": "compressed-tensors INT4", "tier": "x99-fallback", "seqs": 2}'
+      - RUNNER_VERSION=0.1.0
+      - RUNNER_GPU_ID=1
+      - RUNNER_GPU_NAME=NVIDIA GeForce RTX 5070 Ti
+      - RUNNER_GPU_VRAM_MB=16303
+      - RUNNER_PRICE=0.01
+      - RUNNER_PRICE_UNIT=fixed
+      - REGISTRAR_LOG_PREFIX=[registrar-decide-x99-b]
+    volumes:
+      - ./live-runner-registrar.py:/opt/live-runner-registrar.py:ro
     networks: [hl]
 
   server:

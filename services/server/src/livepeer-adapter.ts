@@ -976,7 +976,8 @@ export class OrchestratorAdapter implements PipelineClient {
    * payload = the ConfirmRequest fields the /confirm endpoint consumes. The
    * runner returns a passthrough (goalConfirmed null) when disabled or
    * unparseable; a transport failure rejects so the caller keeps the Stage-1
-   * verdict. */
+   * verdict. ADAAAA-8553 S1 flags this `highlights-decide` id as a remaining
+   * fixed-id call site; S2 (ADAAAA-8559) moves it onto a selected runner. */
   async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string; jobId?: string }): Promise<ConfirmDecision> {
     const payerAddress = this.payerAddress;
     const payload = {

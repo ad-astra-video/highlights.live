@@ -175,16 +175,19 @@ gate in `packages/livepeer-session/src/index.ts`. Two properties matter:
    board ruling on ADAAAA-8418 rejected the funded-8 ceiling ("The
    DECIDE_CONCURRENCY artificially limiting to 8 is wrong. It should just be
    limited by the capacity available"), superseding the ADAAAA-7803 framing and
-   the ADAAAA-8254 "funded wins, discovery can only lower it" rule. Today the
-   routed set is the three 5090 workers at 2 seqs (`docker/decide-router.conf`
-   primaries; the x99 pair is `backup` only), so `advertised`/`effective` read 6 —
-   and 12 the moment `DECIDE_WORKER_SEQS` is raised to 4 (that re-create is
-   cost-gated on ADAAAA-8418). `DECIDE_CONCURRENCY` survives on the snapshot as
+   the ADAAAA-8254 "funded wins, discovery can only lower it" rule. Since
+   ADAAAA-8553 S1 decide is registered per CONTAINER: five registrations
+   (`highlights-decide-5090-1..3` at capacity 4 each, `highlights-decide-x99`
+   and `-x99-b` at capacity 2 each) sum to `advertised`/`effective` 16 on the
+   shared `highlights-live/decide` leaf. The x99 pair is real fallback capacity,
+   not a router `backup` term, so it counts (the ADAAAA-8418 ruling).
+   `DECIDE_CONCURRENCY` survives on the snapshot as
    `funded` for reporting only, and is the fallback when discovery is dark
    (`effective == funded`, a box that never probes is unchanged).
    **The cap is not a funding posture**: it guards a malformed advertisement (a
-   truncated pool read, a mis-set `--max-num-seqs`, a sum that includes the
-   failover pair), so a bad discovery cannot open admission unboundedly.
+   duplicated runner id, a mis-set literal capacity, a registration that
+   advertises more slots than its container has), so a bad discovery cannot
+   open admission unboundedly.
    `capacity_available` is recorded but never sizes the gate (it is transient);
    two consecutive all-zero samples hold the queue (one probe per backoff
    window). Discovery errors / timeouts (2 s) / malformed answers keep the LAST
@@ -218,9 +221,11 @@ QA can grade a run from `GET /admin/jobs/:id/window-audit` (admin) or the stored
 reading container logs — including a media-rail (browser/RTMP) share, which folds
 the snapshot it LATCHED at job start. `at` dates that snapshot (ISO wall clock).
 ADAAAA-8504 renamed the old `runners` field to `decideRegistrations` in the
-RECORD: the number counts decide registrations, and the box registers exactly one
-`highlights-decide` app however wide the worker set is, so it is not a worker
-count. Old rows still parse (`runners` is read back when present) and the
+RECORD: the number counts decide registrations, and since ADAAAA-8553 S1 the box
+registers FIVE per-container decide runners (`highlights-decide-5090-1..3` and
+the x99 pair), so it is 5 — not a worker count backwards-compatible with the old
+single `highlights-decide` aggregate. Old rows still parse (`runners` is read
+back when present) and the
 `[decide-capacity]` log line keeps its `runners=` label because ops greps it.
 `probeOk`/`source` are provenance only (ADAAAA-8262): `probeOk: false`
 means the last discovery probe FAILED, while `probeOk: true, decideRegistrations: 0` means
@@ -234,106 +239,101 @@ What must NOT change with this feature: `OBSERVE_CADENCE_S` (3 s), the 10 s live
 window, the live frame budget, `LIVE_DECIDE_KEEP_RATIO`, the funded capacity, and
 the VOD 402 → signer → retry path (VOD shares the gate and inherits the queue).
 
-### The routed set is what `advertised` must read (ADAAAA-8281)
+### Per-container decide registrations (ADAAAA-8553 S1)
 
 `advertised` is the sum of `capacity` over the `highlights-live/decide` runners
-the signer answers with. The box has exactly ONE such registration
-(`runner_id = highlights-decide`, `runner_url = http://decide-router:8081`), so
-that registration's `capacity` **is** the declared routed set — and
-`docker/decide-router.conf` is the same declaration seen from the pool side:
+the signer answers with. Since ADAAAA-8553 S1 the box registers ONE runner per
+decide container, so five registrations — not a router pool — are the declared
+routed set:
 
-| Source | Field | Declares |
-|---|---|---|
-| `docker/decide-router.conf` | `upstream decide_pool` | three PRIMARY upstreams `192.168.1.151:8091/8092/8093`; the x99 pair `decide`/`decide-b` as `backup` (failover only) |
-| `registrar-decide` sidecar env | `RUNNER_CAPACITY=auto` + `RUNNER_AUTO_SEQS=2` | `3 primary workers x --max-num-seqs 2 = 6`, DERIVED from the pool at every heartbeat |
+| runner_id | host | runner_url | capacity | metadata |
+|---|---|---|---|---|
+| `highlights-decide-5090-1` | ai-server-5090x3-1 | `http://192.168.1.151:8091` | 4 | `tier=5090, seqs=4` |
+| `highlights-decide-5090-2` | ai-server-5090x3-1 | `http://192.168.1.151:8092` | 4 | `tier=5090, seqs=4` |
+| `highlights-decide-5090-3` | ai-server-5090x3-1 | `http://192.168.1.151:8093` | 4 | `tier=5090, seqs=4` |
+| `highlights-decide-x99` | x99 | `http://decide:8081` | 2 | `tier=x99-fallback, seqs=2` |
+| `highlights-decide-x99-b` | x99 | `http://decide-b:8081` | 2 | `tier=x99-fallback, seqs=2` |
 
-There is no second file to keep in step: the capacity is computed from the pool
-(`docker/live-runner-registrar.py` `pool_capacity`) at EVERY heartbeat, so the
-advertised ceiling follows a pool edit with no orchestrator restart. Read the
-three-hop latency before promising "immediately", because each hop caches:
+Every registration keeps `app=highlights-live/decide` and `proxy=0`, so
+discovery capacity summing keeps matching and the runner id stays the route
+(`/apps/<runner_id>/app/...`). `RUNNER_CAPACITY` is a LITERAL per-container
+number — the worker's own `--max-num-seqs` — so a capacity change is a decision
+about that container, not about a shared router file. The old
+`RUNNER_CAPACITY=auto` derivation from `docker/decide-router.conf` is retired;
+`decide-router` stays in compose as a manual/debug path and the `DECIDE_URL`
+fallback.
+
+Where the registrars run:
+
+- **x99:** `registrar-decide-x99` and `registrar-decide-x99-b` in
+  `docker/docker-compose.yml`, one per decide container, each probing
+  `RUNNER_URL/health`.
+- **5090 host:** `docker/registrar-5090.sh` starts
+  `highlights-registrar-decide-5090-1..3` as `docker run --network host`
+  containers on ai-server-5090x3-1, with `ORCH_URL=https://192.168.1.6:8935`
+  and runner urls `http://192.168.1.151:809{1,2,3}` — the addresses S0
+  (ADAAAA-8557) proved reachable. The orchestrator secret is inherited by name
+  (`-e ORCH_SECRET`) and is never printed.
+
+The three-hop latency still applies, but every hop is now per registration:
 
 | Hop | Bound | Why |
 |---|---|---|
-| registrar -> orchestrator registry | one heartbeat (5 s) | the sidecar re-reads `RUNNER_AUTO_CONF` each tick; an IN-PLACE file write (`cat new > conf`, same inode) is visible without a container restart, a rename-based write (`sed -i`) is NOT (bind-mounted inode) |
+| registrar -> orchestrator registry | one heartbeat (5 s) | the sidecar heartbeats its literal capacity every tick |
 | orchestrator registry -> signer snapshot | `-liveAICapReportInterval` (compose ships `60s`; go-livepeer's default is 25 MINUTES) | `/discover-orchestrators` serves a cached capability snapshot |
 | signer snapshot -> server admission | `DECIDE_CAPACITY_REFRESH_S` (default 60 s, probed on the decide path) | `[decide-capacity]` only logs when the snapshot changes |
 
-**Do not restart `registrar-decide` while a decide is in flight.** A graceful
-shutdown unregisters the runner, and go-livepeer's `removeRunnerWithRunnerLocked`
-releases EVERY session on it (`live runner deregistered` / `live runner session
-released` in `highlights-orchestrator`). The sidecar unregisters on purpose (a
-stopped sidecar must not leave a phantom runner for the 20 s TTL), so the safe
-operator actions are: edit the conf IN PLACE and let the next heartbeat
-re-derive (no restart at all), or recreate the sidecar in a quiet window.
+**Restart order.** A coordinated restart comes up with an EMPTY registry
+(registrations are in-memory), so every registrar must re-register inside one
+heartbeat:
 
-**A deploy rewrites the inode, so recreate the sidecar after it.** The conf is
-bind-mounted INTO the sidecar as a single file; `git fetch` +
-`git reset --hard origin/master` replaces `docker/decide-router.conf` with a new
-inode, and the running sidecar keeps reading the previous file at the old inode
-until it is recreated. Observed 2026-11-07: host conf had three primaries while
-`docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py
---print-capacity` still answered 4. After any deploy that changes the file:
+1. Orchestrator first, in a QUIET window — its restart drops live sessions.
+2. x99 registrars:
+   `docker compose --env-file .env -f docker-compose.yml up -d --no-deps --force-recreate registrar-decide-x99 registrar-decide-x99-b`
+3. 5090 host: `./docker/registrar-5090.sh` (re-creates all three sidecars; run
+   `./docker/registrar-5090.sh down` first for a clean unregister).
 
-```sh
-docker compose --env-file .env -f docker-compose.yml up -d --no-deps \
-  --force-recreate registrar-decide
-docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py --print-capacity
-```
+For a SINGLE worker: restart that container, wait for its `/health`, then
+recreate ONLY its registrar (`docker rm -f highlights-registrar-decide-5090-N`
+and re-run the script on that host; on x99 `--force-recreate` only the one
+sidecar). Never restart another container's registrar: a graceful shutdown
+unregisters that id and releases its sessions, and a per-container fleet has no
+reason to touch a healthy peer.
 
-**A conf read that lands mid-write HOLDS the last capacity; it never publishes a short one.**
-The sidecar re-parses `decide-router.conf` every 5 s, and a deploy's `git reset` truncates that
-file while it is being replaced. A partial parse used to count the primaries that were already
-written and publish `2 workers x 2 = 4` with no error; the server latches a session's ceiling at
-start, so one unlucky read capped a whole session (job `3ee24d68`, 16:00Z, stored
-`advertised=4 effective=4`). Since the 8281 guard (`7d938ca`): a `decide_pool` block that is not
-seen AND closed raises instead of counting (a conf with no block is equally unusable — never
-publish `1`), the tick keeps the LAST published capacity and still heartbeats (the registry's 20 s
-TTL would otherwise expire the runner and release its sessions), and each episode logs one
-`holding N` line and one `capacity readable again` line so a dip is visible instead of silent.
+**Prove five registrations, never one:**
 
 ```sh
-# A hold is healthy: capacity is unchanged while the rewrite finishes, decides keep flowing.
-docker logs highlights-registrar-decide --since 10m 2>&1 | grep -E "holding|capacity changed|capacity readable"
-# --print-capacity now REFUSES rather than print a short number; exit 3 is a mid-write read,
-# not a broken sidecar. Re-run once the deploy has finished writing the file.
-docker exec highlights-registrar-decide python3 /opt/live-runner-registrar.py --print-capacity; echo "exit=$?"
-# -> exit=3  capacity read incomplete: no closed `decide_pool` block in /etc/decide-router/nginx.conf
+# exactly 5 after a coordinated restart. 1 means the retired aggregate sidecar
+# is still what the box runs; 4 means one per-container registrar is missing.
+docker logs --since 120s highlights-orchestrator | grep -c 'live runner registered'
+
+docker logs --since 60s highlights-orchestrator | grep 'live runner registered'
+# -> runner_id=highlights-decide-5090-1 / ...-2 / ...-3 / -x99 / -x99-b, x5
+
+docker exec highlights-signer wget -qO- \
+  'http://127.0.0.1:7936/discover-orchestrators?caps=highlights-live/decide' \
+  | jq '[.[].runners[] | select(.app == "highlights-live/decide")]
+        | {count: length, capacity: (map(.capacity) | add)}'
+# {"count": 5, "capacity": 16}
 ```
 
-`services/server/test/decide-router-upstreams.test.ts` pins
-`registrar capacity === primary_count * 2` (and that `backup` lines are never
-counted), so the two cannot drift silently. With L1 in force the box prints
-`[decide-capacity] advertised=6 funded=8 effective=6 probeOk=true runners=1 source=probe cap=32`.
-Since ADAAAA-8437 admission follows that advertisement, so the deciding set —
-not the funded bar — is the lever: raising `DECIDE_WORKER_SEQS` 2 -> 4 makes the
-pool advertise 12 and the gate admits 12 with no code change (cost-gated on
-ADAAAA-8418).
+**Failure isolation.** Stopping one decide container (or its registrar) removes
+ONLY that `runner_id` within one interval + TTL (<= 25 s); its own sessions are
+released and the other four stay `ready`. The sidecar probes only ITS OWN
+`RUNNER_URL/health` and unregisters only ITS OWN id — a shared probe would flip
+all five. That isolation is pinned in
+`services/server/test/live-runner-registrar.test.ts`, which also pins the five
+payloads (capacity 4/4/4/2/2, `app=highlights-live/decide`, tier+seqs metadata,
+proxy omitted); `decide-admission-config.test.ts` pins the 16-slot sum. The old
+`primary_count * seqs` pool pin is gone with the `auto` derivation.
 
-Restore, one command per knob, each returning the pre-8281 state:
-
-```sh
-# pool: x99 pair primary again, no backup, no 5090 upstreams
-cp docker/decide-router.conf.bak-8281-* docker/decide-router.conf
-docker compose -f docker-compose.yml up -d --no-deps --force-recreate decide-router
-# ...then re-derive the advertised capacity (no orchestrator restart needed)
-docker compose -f docker-compose.yml up -d --no-deps --force-recreate registrar-decide
-
-# capacity back to a literal fleet number (pre-8281 posture): override the
-# derivation on the sidecar, then recreate only it
-#   RUNNER_CAPACITY=8 in registrar-decide's environment
-docker compose -f docker-compose.yml up -d --no-deps --force-recreate registrar-decide
-
-# funded concurrency: NOT changed by this landing (DECIDE_CONCURRENCY=8)
-```
-
-**The bind-mounted conf is an inode, not a path.** `decide-router` mounts
-`decide-router.conf` as a single file; a `mv`/atomic replace of the host file
-leaves the container serving the OLD inode, and `docker restart` does NOT remount
-it — only `--force-recreate` does. Measured on the 8281 landing: host md5
-`708048fc…` vs container md5 `9ac3c308…`, `nginx -T` still listing 2 upstreams
-after a reload that read the new host file. Write the file in place
-(`cat new > decide-router.conf`) or force-recreate, then always prove membership
-from `docker exec highlights-decide-router nginx -T`, never from the host file.
+**The router conf is still an inode, not a path.** `decide-router.conf` remains
+bind-mounted into `decide-router`; a `mv`/atomic replace leaves the container
+serving the OLD inode and `docker restart` does NOT remount it — only
+`--force-recreate` does. Write the file in place (`cat new > decide-router.conf`)
+or force-recreate, then prove membership from
+`docker exec highlights-decide-router nginx -T`, never from the host file. This
+now affects only the manual/debug path; registration capacity no longer reads it.
 
 ### Dynamic live-runner registration (no `runners.json`)
 
@@ -347,74 +347,39 @@ API. The box uses the second one — the static file and
     POST /runners/<runner_id>/unregister   Authorization: <heartbeat_secret>      (shutdown / unhealthy)
 
 Dynamic registration is enabled by `-orchSecret` being non-empty; the
-`registrar-perceive` / `registrar-decide` sidecars
-(`docker/live-runner-registrar.py`, image `python:3.12-alpine`) present that
-secret on first registration and keep the entry alive afterwards. The heartbeat
-TTL is 20 s, so the sidecar's 5 s interval is what keeps the runner visible.
+`registrar-perceive` sidecar and the five per-container decide registrars
+(`registrar-decide-x99` / `-x99-b` in compose, `registrar-decide-5090-1..3` from
+`docker/registrar-5090.sh`) all run `docker/live-runner-registrar.py` (image
+`python:3.12-alpine`), present that secret on first registration and keep the
+entry alive afterwards. The heartbeat TTL is 20 s, so the sidecar's 5 s interval
+is what keeps each runner visible.
 
 Two behaviours differ from the static path and are handled by the sidecar:
 
-- **Readiness is reported, not probed.** `checkStaticRunnerHealth` only walks
-  STATIC runners. The sidecar therefore probes the runner's own health endpoint
-  (perceive `/health`, decide `/nginx-health`), heartbeats `status: ready` only
-  while it answers, and `POST .../unregister`s when it does not — so a dead
-  worker's sessions are released exactly as the static probe used to release
-  them, instead of the registration merely going stale.
-- **`runner_id` is the route.** The server calls
-  `/apps/highlights-perceive/session` and `/apps/highlights-decide/app/...`
-  (`ROUTES` in `packages/livepeer-session/src/index.ts`), so the sidecar's
-  `RUNNER_ID` MUST stay byte-identical to those constants. A different id
-  registers fine and is invisible to the client.
+- **Readiness is reported, not probed, and it is PER CONTAINER.**
+  `checkStaticRunnerHealth` only walks STATIC runners. Each sidecar probes only
+  ITS OWN container's `/health` (perceive `/health`, decide `/health`),
+  heartbeats `status: ready` only while that answers, and `POST
+  .../unregister`s that one id when it does not — so a dead worker's sessions
+  are released exactly as the static probe used to release them, and healthy
+  peers are untouched. There is no shared/router health probe any more.
+- **`runner_id` is the route.** The perceive client calls
+  `/apps/highlights-perceive/session`, and the decide client still calls a
+  single fixed `/apps/highlights-decide/app/...` until the S2 client change
+  lands (ADAAAA-8559). The decide registrations use
+  `highlights-decide-5090-1..3` / `-x99` / `-x99-b`, so that fixed id is a known
+  remaining single-id call site, not a registration: a client that keeps calling
+  it cannot see the five runners.
 
-Restart order after changing the orchestrator's command line: the orchestrator
-comes up with an EMPTY registry and each sidecar re-registers within one
-heartbeat. Recreate them together, and gate on a quiet box (orchestrator restart
-drops live sessions):
-
-```sh
-cd /home/brad/highlights.live/docker
-docker compose --env-file .env -f docker-compose.yml up -d --no-deps \
-  --force-recreate orchestrator registrar-perceive registrar-decide
-```
-
-Prove it from the orchestrator's own log (`live runner registered`) and the
-signer's discovery answer, never from a file:
-
-```sh
-docker logs --since 60s highlights-orchestrator | grep 'live runner registered'
-docker exec highlights-signer wget -qO- 'http://127.0.0.1:7936/discover-orchestrators?caps=highlights-live/decide'
-```
+Restart order and the 5-line proof are in
+[Per-container decide registrations](#per-container-decide-registrations-adaaaa-8553-s1)
+above. Recreate the orchestrator, then the x99 registrars, then run
+`docker/registrar-5090.sh` on the 5090 host — all in a quiet window, because an
+orchestrator restart drops live sessions.
 
 A runner whose container has no registrar sidecar is simply absent from
 discovery (that is why `train`, which only ships in
 `docker-compose.gpu.yml`, is not registered on this box).
-
-#### Re-derive the advertised capacity from a pool edit (ADAAAA-8292)
-
-```sh
-cd /home/brad/highlights.live
-
-# 1. edit the POOL. In place: same inode, so both the router and the registrar
-#    sidecar see it; `sed -i` renames and the bind-mounted containers do not.
-python3 - <<'PY'
-p = "docker/decide-router.conf"
-t = open(p).read()
-open(p, "w").write(t.replace("    server 192.168.1.151:8093", "#   server 192.168.1.151:8093", 1))
-PY
-docker exec highlights-decide-router nginx -t && docker exec highlights-decide-router nginx -s reload
-
-# 2. NOTHING else to restart. The registrar re-reads the conf every 5 s and
-#    heartbeats the new capacity; the orchestrator registry is live.
-docker logs --tail 5 highlights-registrar-decide     # "capacity changed ... 6 -> 4"
-
-# 3. the advertised number follows within the signer interval + the server probe:
-sleep 70
-docker exec highlights-server curl -s \
-  'http://signer:7936/discover-orchestrators?caps=highlights-live/decide' | jq '.[].runners[].capacity'
-docker logs highlights-server | grep '\[decide-capacity\]' | tail -2
-
-# 4. restore the pool the same way (uncomment, nginx -t, nginx -s reload)
-```
 
 `LIVE_AI_CAP_REPORT_INTERVAL` (compose default `60s`) is the knob for hop 2; set
 it back to go-livepeer's default by removing the compose line (25 min) only if
