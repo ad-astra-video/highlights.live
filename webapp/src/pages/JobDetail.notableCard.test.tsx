@@ -276,7 +276,7 @@ describe("AC5 — a customer session sees the badge text only", () => {
       "data-detail-trigger",
       "data-notable-kind",
       // The lane itself is operator-only (ADAAAA-8530).
-      "data-confirm-lane",
+      "data-detail-confirm-lane",
     ]) {
       expect(html).not.toContain(internal);
     }
@@ -291,7 +291,7 @@ describe("AC5 — a customer session sees the badge text only", () => {
     expect(html).not.toContain("crowd_reaction");
     expect(html).not.toContain(provisional().note);
     // The lane label is operator-only.
-    expect(html).not.toContain("data-confirm-lane");
+    expect(html).not.toContain("data-detail-confirm-lane");
     expect(html).not.toContain("lane unconfirmed");
   });
 });
