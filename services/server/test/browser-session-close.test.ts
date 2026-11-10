@@ -255,4 +255,78 @@ describe("browser job lifecycle on media session close (ADAAAA-7689 AC3)", () =>
     await app.close();
     await media.close();
   });
+
+});
+
+// ADAAAA-8487: the browser/media-rail share is a LIVE job, so its terminal
+// record must carry the end-of-accrual stamps the RTMP and VOD paths write
+// (ADAAAA-8061). `finishBrowserJob` used to persist only `{status:"done"}`, so a
+// delivered browser share kept `startedAt` with no `endedAt`/`finishedAt` — the
+// offline leg grader then read `duration_unknown` and AC-B's shape floor had to
+// be supplied by hand from the harness wall clock (the 480 s funded leg).
+describe("browser job terminal record stamps the end of accrual (ADAAAA-8487)", () => {
+  async function closeShare(app: any, token: string, jobId: string, reason: string) {
+    const m = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: {},
+    });
+    expect(m.statusCode).toBe(200);
+    const closed = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/media/session-closed`,
+      payload: { sessionId: m.json().mediaSessionId, reason },
+    });
+    expect(closed.statusCode).toBe(200);
+    const r = await app.inject({
+      method: "GET",
+      url: `/jobs/${jobId}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    return r.json().job;
+  }
+
+  it("writes endedAt + finishedAt when the share settles `done`", async () => {
+    const media = await mediaStub();
+    const { app } = await buildTestApp({ MEDIA_SERVER_URL: media.url });
+    const token = await register(app, "accrual1@test.dev", "password123");
+    const jobId = await browserJob(app, token);
+    const before = Date.now();
+    const job = await closeShare(app, token, jobId, "client-closed");
+
+    expect(job.status).toBe("done");
+    expect(typeof job.endedAt).toBe("string");
+    expect(typeof job.finishedAt).toBe("string");
+    expect(Number.isFinite(Date.parse(job.endedAt))).toBe(true);
+    expect(Number.isFinite(Date.parse(job.finishedAt))).toBe(true);
+    // The accrual end is the settle itself, not the row's creation second.
+    expect(Date.parse(job.endedAt)).toBeGreaterThanOrEqual(before - 1);
+    // End of accrual never lands after end of finalization, and a share that
+    // carries a start stamp derives a non-negative duration offline.
+    expect(Date.parse(job.endedAt)).toBeLessThanOrEqual(Date.parse(job.finishedAt));
+    if (job.startedAt) {
+      expect(Date.parse(job.endedAt) - Date.parse(job.startedAt)).toBeGreaterThanOrEqual(0);
+    }
+
+    await app.close();
+    await media.close();
+  });
+
+  it("stamps endedAt on the `failed` outcome too (media-node-restart)", async () => {
+    const media = await mediaStub();
+    const { app } = await buildTestApp({ MEDIA_SERVER_URL: media.url });
+    const token = await register(app, "accrual2@test.dev", "password123");
+    const jobId = await browserJob(app, token);
+    const job = await closeShare(app, token, jobId, "media-node-restart");
+
+    expect(job.status).toBe("failed");
+    expect(typeof job.endedAt).toBe("string");
+    expect(typeof job.finishedAt).toBe("string");
+    expect(Number.isFinite(Date.parse(job.endedAt))).toBe(true);
+    expect(Date.parse(job.endedAt)).toBeLessThanOrEqual(Date.parse(job.finishedAt));
+
+    await app.close();
+    await media.close();
+  });
 });
