@@ -501,23 +501,32 @@ export const DecideCapacitySnapshotSchema = z.object({
 export type DecideCapacitySnapshot = z.infer<typeof DecideCapacitySnapshotSchema>;
 
 /**
- * ADAAAA-8513 (AC3): the confirm-dive ADMISSION block on a live observe
- * snapshot. `cap` is the configured per-300 s budget the pump admits against,
- * `reserved` is the slice kept for provisional-goal rows (`min(3, cap)`),
- * `spentReserved` / `spentGeneral` are what the sliding window actually spent on
- * each side, and `retries` counts budget refusals that left a descriptor pending
- * for a later tick (AC1). Additive optional on the record: a row written before
- * this field existed carries none, so a reader must say "not recorded" rather
+ * ADAAAA-8518 (AC5): the confirm-dive ADMISSION block on a live observe
+ * snapshot. Capacity is the ONLY gate and it queues: `dispatched` dives started,
+ * `queued` due dives that found no free slot (left PENDING, retried next tick),
+ * `maxInFlight` the peak concurrent dives, `capacityEffective` the measured
+ * decide capacity compared against, `divesBilled` the confirm calls billed and
+ * `diveCostUsd` their cost (`decideFee x divesBilled`). There is no cap field:
+ * the product does not cap dives (CEO directive on ADAAAA-8512, 22:14Z); cost is
+ * observed, not enforced. Additive optional on the record: a row written before
+ * this block existed carries none, so a reader must say "not recorded" rather
  * than 0.
  */
-export const DiveBudgetSnapshotSchema = z.object({
-  cap: z.number().int().min(0),
-  reserved: z.number().int().min(0),
-  spentReserved: z.number().int().min(0),
-  spentGeneral: z.number().int().min(0),
-  retries: z.number().int().min(0),
+export const DiveAdmissionSnapshotSchema = z.object({
+  /** Dives admitted and started (a started dive may still fail pre-call). */
+  dispatched: z.number().int().min(0),
+  /** Times a due dive had no free decide slot (it stayed PENDING). */
+  queued: z.number().int().min(0),
+  /** Peak dives in flight across the server while this stream admitted. */
+  maxInFlight: z.number().int().min(0),
+  /** The measured decide capacity admission compared against. */
+  capacityEffective: z.number().int().min(0),
+  /** Confirm calls the stream BILLED (the same count `confirmCalls` carries). */
+  divesBilled: z.number().int().min(0),
+  /** `decideFee x divesBilled` — cost is OBSERVED per stream, not capped. */
+  diveCostUsd: z.number().min(0),
 });
-export type DiveBudgetSnapshot = z.infer<typeof DiveBudgetSnapshotSchema>;
+export type DiveAdmissionSnapshot = z.infer<typeof DiveAdmissionSnapshotSchema>;
 
 // Live decide-observer cadence + decide gemma E2E latency snapshot (ADAAAA-7011).
 // Recorded on a live job when the decide-observer is enabled, so the cadence +
@@ -844,9 +853,15 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // `frame_unreadable` / `descriptor_overflow` when observed), so "why did the
   // dive not run" is readable off the stored row without a log join.
   confirmDroppedByReason: z.record(z.string(), z.number().int().min(0)).optional(),
-  // ADAAAA-8513 (AC3): cap / reserved slice / spend per side / pending-retry
-  // count. Absent on pre-change rows, same convention as `decideCapacity`.
-  diveBudget: DiveBudgetSnapshotSchema.optional(),
+  // ADAAAA-8518 (AC5): the capacity-only admission block. Replaces the deleted
+  // `diveBudget` (cap / reserved / spend per side / retries) — the product has
+  // no dive cap, so there is no cap to publish. Same convention: absent on
+  // pre-change rows and when the confirm lane never ran.
+  diveAdmission: DiveAdmissionSnapshotSchema.optional(),
+  // ADAAAA-8518 (AC5): `costUsd` normalised to one hour of stream — the
+  // observable the CEO chose instead of a cap. Additive optional: absent when
+  // the confirm lane never ran or the stream had no duration.
+  costPerStreamHour: z.number().min(0).optional(),
   // ADAAAA-8254: decide ADMISSION counters, so QA can grade the capacity-aware
   // ceiling + ordered 503 queue from the job record instead of container logs.
   // Additive optional: absent on records written before this field existed.

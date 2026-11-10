@@ -113,9 +113,12 @@ export interface MediaRailObserverOptions {
   cadenceS?: number;
   windowS?: number;
   maxFrames?: number;
-  /** ADAAAA-8513 (AC3): the configured confirm-dive cap this rail's run uses,
-   *  so its published `diveBudget.cap` matches the pump's admission. */
-  liveConfirmMaxDivesPer300S?: number;
+  /** ADAAAA-8518 (AC1): the OPTIONAL emergency brake — `null`/absent is
+   *  UNLIMITED, so the rail's run never caps a dive at the shipped default. */
+  liveConfirmMaxDivesPer300S?: number | null;
+  /** ADAAAA-8518 (AC5): decide fee per call, so the rail's run publishes
+   *  `diveAdmission.diveCostUsd = decideFee x dives` on the share's record. */
+  decideFeeUsd?: number;
   /** The rail's INGEST/sample clock (the cadence the media node samples at and
    *  the clock this rail persists + cuts clips on). ADAAAA-8102: this is NOT the
    *  analysis rate any more — use {@link contentFps} for that. */
@@ -427,6 +430,7 @@ export class MediaRailObserver {
       audioRetainS: opts.audioRetainS,
       jobId: opts.jobId,
       liveConfirmMaxDivesPer300S: opts.liveConfirmMaxDivesPer300S,
+      decideFeeUsd: opts.decideFeeUsd,
     });
     // ADAAAA-7987: pipeline the decide pass exactly like the analyzer
     // live-observe path (ADAAAA-7771 depth + ADAAAA-7878 off-loop issue). The
@@ -914,8 +918,10 @@ export class MediaRailObserver {
           dropped: this.run.confirmDiveDropped(),
           // ADAAAA-8513 (AC3/AC4): the same per-cause + admission block the
           // analyzer pass publishes, so a media-rail share's row carries it too.
+          // ADAAAA-8518 (AC5): `admission` is capacity-only (+ observed dive
+          // cost); the retired per-window budget block is not published.
           byReason: this.run.confirmDroppedByReason(),
-          budget: this.run.confirmDiveBudget(),
+          admission: this.run.confirmDiveAdmission(),
         },
         // ADAAAA-8344: the adapter's per-job decide-stage summary, read at share
         // end like the decide counters. Absent when no decide was instrumented.
