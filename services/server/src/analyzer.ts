@@ -3664,6 +3664,37 @@ export interface AnalyzeOutcome {
   vodObserveMetrics?: VodObserveMetricsSnapshot;
 }
 
+/** ADAAAA-8564 (Fix A): the row-level accounting a live run publishes on
+ * `observeMetrics.rowAccounting`.
+ *
+ * The ticket's premise was `accepted 11 -> delivered 7`, i.e. "four accepted
+ * moments lost". Nothing was lost: `accepted` counts decided WINDOWS (and this
+ * run's 11 = 3 GOAL-lane accepts + 8 windows a burst guard dropped), while the
+ * board shows ROWS (7 = 3 GOAL + 4 celebrations the goal gate demoted but still
+ * delivered). Publishing both sides makes the two numbers reconcile on the
+ * stored record instead of reading as a client-visible drop:
+ *
+ *   persistedRows === servedCards === acceptedWindows + demotedCelebrations
+ *   accepted      === acceptedWindows + suppressedWindows
+ *
+ * Measured on live job `54c03cfc` (the 8534 leg): 3 + 4 = 7 and 3 + 8 = 11.
+ */
+export interface LiveRowAccountingSnapshot {
+  /** Decided windows whose accept verdict was TRUE (the row is a highlight). */
+  acceptedWindows: number;
+  /** Highlight rows this run persisted (`highlights.length`). */
+  persistedRows: number;
+  /** Rows whose persist ACK completed — what a viewer actually received. */
+  servedCards: number;
+  /** Windows a dedupe guard dropped BEFORE persist (goal burst, celebration
+   *  duplicate, in-place promotion). A dropped window, never a dropped moment. */
+  suppressedWindows: number;
+  /** Rows the goal gate delivered as a celebration (the ADAAAA-7996 demotion
+   *  and the ADAAAA-7865 repeat-goal downgrade): they ship, and the legacy
+   *  `accepted` predicate refuses them, which is half of the observed gap. */
+  demotedCelebrations: number;
+}
+
 /** ADAAAA-7011: live decide-observer cadence + decide gemma E2E latency
  * snapshot, recorded onto the live job so the cadence + gemma E2E latency are
  * inspectable on the Livepeer runner (the ~30 s budget = ~3 s cadence + the
@@ -3671,8 +3702,19 @@ export interface AnalyzeOutcome {
 export interface LiveObserveMetricsSnapshot {
   /** Number of decide invocations that fired on the cadence. */
   decideCalls: number;
-  /** Decisions that became an accepted highlight. */
+  /** Decisions that became an accepted highlight.
+   *
+   * ADAAAA-8564 (Fix A): the LEGACY window counter — the accept verdict of a
+   * decided window, not a row count. It over-counts a burst-suppressed window
+   * (the suppression branch returns the pre-suppression GOAL verdict) and
+   * under-counts a demoted celebration that DID ship. {@link rowAccounting} is
+   * the row-level truth; the two reconcile as
+   * `accepted === acceptedWindows + suppressedWindows`. */
   accepted: number;
+  /** ADAAAA-8564 (Fix A): row accounting for this run, published so a reader
+   * can never again take `accepted` for `delivered`. Absent on VOD and on a run
+   * whose accept path was not instrumented. */
+  rowAccounting?: LiveRowAccountingSnapshot;
   /** Max frames in a single decide payload (<= LIVE_OBSERVE_MAX_FRAMES). */
   maxFrames: number;
   /** Mean decide gemma end-to-end latency (ms). */
@@ -4083,7 +4125,11 @@ export function buildLiveObserveMetrics(
   /** ADAAAA-8351: the effective ASR wait posture of this run. Absent (or a zero
    *  budget) leaves the row byte-identical to today — the three fields below are
    *  written only when `LIVE_DECIDE_ASR_WAIT_MS` was actually configured. */
-  asr?: { waitMs: number; misses: number; laneWidth: number }
+  asr?: { waitMs: number; misses: number; laneWidth: number },
+  /** ADAAAA-8564 (Fix A): the run's row accounting. Absent (VOD / a rail with no
+   *  accept instrumentation) leaves the record byte-identical to today, so no
+   *  reader can mistake an unmeasured 0 for "no rows". */
+  rowAccounting?: LiveRowAccountingSnapshot
 ): LiveObserveMetricsSnapshot {
   const samples = obs.latencySamples();
   const cadences = samples.map((s) => s.cadenceMs).filter((c) => c > 0);
@@ -4096,6 +4142,7 @@ export function buildLiveObserveMetrics(
   return {
     decideCalls,
     accepted: obs.acceptedCount(),
+    ...(rowAccounting ? { rowAccounting } : {}),
     maxFrames: obs.maxFrameCount(),
     meanE2eMs: Number(obs.meanE2eMs().toFixed(1)),
     maxE2eMs: Number(obs.maxE2eMs().toFixed(1)),
@@ -4698,6 +4745,33 @@ export class LiveRunShared {
    * Bounded by {@link SCORE_READ_LEDGER_SPAN_S} + {@link SCORE_READ_LEDGER_MAX}.
    * Never fabricated: an unparseable scorebug contributes nothing. */
   private scoreReadLedger: TimelineScoreReading[] = [];
+  /** ADAAAA-8564 (Fix C): the highest score state this run has READ.
+   *
+   * {@link scoreReadLedger} is bounded to {@link SCORE_READ_LEDGER_SPAN_S} (120 s)
+   * behind the newest reading, which is enough to attest a window but forgets a
+   * state the run already passed. Live job `54c03cfc` (the 8534 leg,
+   * `kids510.vp8.ivf`) measured `2-2` at 351.1 s and then, 128 s later, a
+   * deferred read at 479.081 s reported `1-1 -> 2-1` — a REWIND — and the
+   * deferred lane promoted the celebration row to a second GOAL on it, because
+   * nothing compared the read against the run's own earlier state. A football
+   * score never decreases, so a transition whose POST state sits below a state
+   * the run already read is not a new goal: fail closed, and the next forward
+   * read from the new baseline attests normally. Deliberately not time-bounded
+   * (that is the point); a run that switches to a lower-scoring source stays
+   * fail-closed at or below the old high-water until it reads past it.
+   *
+   * This is the narrow root-cause guard. The withdrawn "one transitionKey = one
+   * GOAL for the whole run" rule is NOT landed: on this same leg the second clip
+   * legitimately repeated `1-1 -> 2-1 -> 2-2`, so a run-wide key ledger would
+   * have demoted the genuine `2-1 > 2-2` goal at 351.118 s. */
+  private scoreHighWater: [number, number] | null = null;
+  /** ADAAAA-8564 (Fix A): row accounting published on `observeMetrics`. The
+   * three counters below are incremented at the accept seam and at the dedupe
+   * guards; `persistedRows` and `servedCards` are read off the ledgers at
+   * snapshot time (accumulating them would let a re-emit double-count). */
+  private acceptedWindowCount = 0;
+  private celebrationRowCount = 0;
+  private suppressedWindowCount = 0;
   /** ADAAAA-7988: the live rail's bounded ledger of decided windows (their own
    * content instant + description class), used to cite the attack/shot window
    * that a celebration window follows. Fed on the DECIDE path; read on the
@@ -5054,6 +5128,10 @@ export class LiveRunShared {
   noteScoreReadings(observations: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined): number {
     const readings = scoreReadingsFromTimeline(observations);
     if (!readings.length) return 0;
+    // ADAAAA-8564 (Fix C): every parseable read raises the run's high-water, even
+    // when the ledger drops it later for age — the high-water is what makes a
+    // rewind visible after the 120 s retention window has forgotten the state.
+    for (const r of readings) this.noteScoreHighWater(r.score);
     let added = 0;
     for (const r of readings) {
       let lo = 0;
@@ -5080,6 +5158,55 @@ export class LiveRunShared {
   /** ADAAAA-8134: the run's score readings, oldest first (read-only). */
   scoreReadBuffer(): readonly TimelineScoreReading[] {
     return this.scoreReadLedger;
+  }
+  /** ADAAAA-8564 (Fix C): raise the run's score high-water. Highest total goals
+   * wins; a tie keeps the state first read, so a later `2-2` re-read does not
+   * replace the `2-2` that was already credited. Fed from
+   * {@link noteScoreReadings} only: this is READ evidence, never an inference. */
+  private noteScoreHighWater(score: [number, number]): void {
+    if (!Array.isArray(score) || score.length !== 2) return;
+    const total = score[0] + score[1];
+    if (this.scoreHighWater === null || total > this.scoreHighWater[0] + this.scoreHighWater[1]) {
+      this.scoreHighWater = [score[0], score[1]];
+    }
+  }
+  /** ADAAAA-8564 (Fix C): has this run already READ a state strictly ahead of
+   * `score`? A transition that LANDS there is a rewind (a repeated broadcast
+   * overlay, a stale/mis-OCR read, or a different source's scoreboard), never a
+   * new goal. Public for the deferred lane and for audit + tests. */
+  scoreStateAlreadyRead(score: [number, number] | undefined | null): boolean {
+    if (!score || !Array.isArray(score) || score.length !== 2) return false;
+    if (this.scoreHighWater === null) return false;
+    return score[0] + score[1] < this.scoreHighWater[0] + this.scoreHighWater[1];
+  }
+  /** ADAAAA-8564 (Fix C): the run's score high-water (read-only, audit/tests). */
+  scoreHighWaterState(): [number, number] | null {
+    return this.scoreHighWater === null ? null : [this.scoreHighWater[0], this.scoreHighWater[1]];
+  }
+  /** ADAAAA-8564 (Fix A): one window's accept verdict was TRUE. */
+  noteAcceptedWindow(): void {
+    this.acceptedWindowCount++;
+  }
+  /** ADAAAA-8564 (Fix A): one row was delivered in the celebration lane (the
+   *  ADAAAA-7996 goal-gate demotion or the ADAAAA-7865 repeat-goal downgrade). */
+  noteCelebrationRow(): void {
+    this.celebrationRowCount++;
+  }
+  /** ADAAAA-8564 (Fix A): a dedupe guard dropped this window before persist. */
+  noteSuppressedWindow(): void {
+    this.suppressedWindowCount++;
+  }
+  /** ADAAAA-8564 (Fix A): the row-accounting block for `observeMetrics`.
+   * `servedCards` is supplied by the caller (the observer owns the delivery
+   * tracker), so a run with no delivery tracker reports what it persisted. */
+  rowAccounting(servedCards: number): LiveRowAccountingSnapshot {
+    return {
+      acceptedWindows: this.acceptedWindowCount,
+      persistedRows: this.highlights.length,
+      servedCards,
+      suppressedWindows: this.suppressedWindowCount,
+      demotedCelebrations: this.celebrationRowCount,
+    };
   }
   /** ADAAAA-8006: a LIVE goal-shaped accept that had to be demoted for lack of a
    * measured attestation inside its judged window. Kept (bounded) so a later
@@ -5310,6 +5437,22 @@ export class LiveRunShared {
       return [];
     }
     const entry = matches[0];
+    // ADAAAA-8564 (Fix C): a transition whose POST state lands BELOW a state this
+    // run already READ is a rewind, not a new goal. Measured on live job
+    // `54c03cfc`: the board read `2-2` at 351.1 s, then this lane's deferred read
+    // at 479.081 s reported `1-1 -> 2-1` and promoted the celebration to a second
+    // GOAL row. Fail closed and CONSUME the entry (an already-answered window must
+    // not be re-asked): the next forward read from the new baseline attests.
+    if (this.scoreStateAlreadyRead(d.post)) {
+      this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
+      console.error(
+        `[live-goal-gate-upgrade:${entry.jobId}] refused: the transition read at ${d.deltaTs}s ` +
+          `(${d.pre.join("-")} -> ${d.post.join("-")}) lands below the score state this run already ` +
+          `read (${(this.scoreHighWater ?? []).join("-")}) — a rewind cannot attest a new GOAL ` +
+          `(demoted window [${entry.lo}, ${entry.hi}] stays a celebration)`
+      );
+      return [];
+    }
     const ownedByDeliveredGoal = this.acceptedGoalEvents.some(
       (ev) =>
         (ev.start <= d.deltaTs && d.deltaTs <= ev.end) || (ev.anchorTs > entry.hi && ev.anchorTs <= d.deltaTs)
@@ -6725,6 +6868,9 @@ export async function acceptVideoDecision(
   });
   if (goalBurst && !burstOwnerPromotion) {
     const suppressionReason = formatGoalBurstSuppressionReason(goalBurst);
+    // ADAAAA-8564 (Fix A): a dropped WINDOW — the moment may still ship through a
+    // row another window accepted (this leg: 8 suppressed windows, 0 lost moments).
+    run.noteSuppressedWindow();
     console.error(
       `[goal-burst-suppress:${cfg.jobId}] @${candidate.timestamp}s ${goalShapedEventType} ` +
         `suppressionReason=${suppressionReason} (candidate carried transition=${candidateTransitionKey ?? "none"})`
@@ -6892,6 +7038,8 @@ export async function acceptVideoDecision(
           `(anchor ${celebrationDup.celebration.anchorTs.toFixed(1)}s): same reason within ` +
           `${CELEBRATION_DUPLICATE_GAP_S}s`;
     console.error(`[celebration-row-dedupe:${cfg.jobId}] ${dupeWhy} — dropped accept @${loc.ts.toFixed(3)}s`);
+    // ADAAAA-8564 (Fix A): a dropped window (the moment is already on the board).
+    run.noteSuppressedWindow();
     buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
       reason: `celebration_duplicate:${celebrationDup.kind};${dupeWhy}`,
       evidence: {
@@ -7033,6 +7181,9 @@ export async function acceptVideoDecision(
         suppression: goalBurst!,
         attestationUsed,
       });
+      // ADAAAA-8564 (Fix A): this window persisted no row of its own — it promoted
+      // an already-delivered celebration instead. Counted as a dropped window.
+      run.noteSuppressedWindow();
       buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
         reason: promotionReason,
         evidence: {
@@ -7102,6 +7253,8 @@ export async function acceptVideoDecision(
         candidateTs: candidate.timestamp,
         transitionKey: candidateTransitionKey,
       });
+      // ADAAAA-8564 (Fix A): promoted in place — no row of its own.
+      run.noteSuppressedWindow();
       buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
         reason:
           `goal_promoted_in_place:${promoted.highlightId}@${promoted.anchorTs.toFixed(3)}s` +
@@ -7326,6 +7479,12 @@ export async function acceptVideoDecision(
     createdAt: new Date().toISOString(),
   };
   run.highlights.push(rec);
+  // ADAAAA-8564 (Fix A): the accept seam counts the ROW it just persisted, which
+  // is the only number that matches what the board serves. A row the gate
+  // demoted to a celebration ships too — it is the half of the gap the legacy
+  // window counter (`observeMetrics.accepted`) refuses to count.
+  if (isAcceptedHighlight(decision, cfg.preferLabels)) run.noteAcceptedWindow();
+  else run.noteCelebrationRow();
   // ADAAAA-8006: a demoted LIVE goal stays eligible for re-attestation. Hold the
   // delivered row plus the write-seam surface the gate produced for its
   // scoring-lane verdict, so a later scoreboard read can re-emit it as a GOAL
@@ -10378,7 +10537,10 @@ export async function analyzeJob(
               waitMs: Math.max(0, Math.floor(cfg.decideAsrWaitMs ?? 0)),
               misses: cfg.decideAsrWaitStats?.misses ?? 0,
               laneWidth: Math.max(1, Math.floor(cfg.decideAsrPrefetchConcurrency ?? 2)),
-            }
+            },
+            // ADAAAA-8564 (Fix A): the row accounting, read at the same instant so
+            // `accepted` and the rows it should have counted reconcile on the row.
+            run.rowAccounting(liveObserver.deliveredLatencyStats()?.samples ?? 0)
           ),
           // ADAAAA-8254: the decide admission counters + capacity snapshot, read
           // off the gate at the same instant.
