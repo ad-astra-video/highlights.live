@@ -464,15 +464,18 @@ describe("ADAAAA-8254 summarizeDecideDiscovery", () => {
       summarizeDecideDiscovery([
         { runners: [runner("highlights-decide", 4, 2), runner("highlights-perceive", 8, 8)] },
       ])
-    ).toEqual({ capacity: 4, noneAvailable: false, runners: 1 });
+    ).toEqual({ capacity: 4, noneAvailable: false, runners: 1, pool: [] });
     expect(
       summarizeDecideDiscovery([{ runners: [runner("highlights-decide", 4, 0), runner("highlights-live/decide", 2, 0)] }])
-    ).toEqual({ capacity: 6, noneAvailable: true, runners: 2 });
+    ).toEqual({ capacity: 6, noneAvailable: true, runners: 2, pool: [] });
     // Absent capacity_available is not "zero available".
     expect(summarizeDecideDiscovery([{ runners: [runner("highlights-decide", 4)] }])).toEqual({
       capacity: 4,
       noneAvailable: false,
       runners: 1,
+      // ADAAAA-8559: no route in the url => no pool entry => the client keeps
+      // the single-registration fallback (today's behaviour).
+      pool: [],
     });
   });
 

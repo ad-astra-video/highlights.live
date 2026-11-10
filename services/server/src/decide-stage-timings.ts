@@ -68,6 +68,11 @@ export interface DecideStageTimings {
   paidRetries: number;
   /** Measured wall of the WHOLE decide call (adapter entry -> verdict). */
   totalMs: number;
+  /** ADAAAA-8559: the decide runner id that served this call (the orchestrator
+   * route segment `/apps/<id>/app`), and its discovery tier. Absent when the
+   * call never reached a runner. */
+  runnerId?: string;
+  runnerTier?: string;
   /** `totalMs - (payloadBuild + serialize + probe + signer + paid)`; the
    * un-attributed remainder of the call (accept-gate staging, hook overhead). */
   residualMs: number;

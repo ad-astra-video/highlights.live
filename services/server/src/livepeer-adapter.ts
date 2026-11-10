@@ -778,6 +778,12 @@ export class OrchestratorAdapter implements PipelineClient {
       const totalMs = Date.now() - decideStartedAt;
       const sum = (xs: number[]): number => xs.reduce((a, b) => a + Number(b || 0), 0);
       const firstAttempt = paidAttempts[0] ?? probeAttempts[0];
+      // ADAAAA-8559: the runner that SERVED the call — the last attempt that
+      // answered 200. Offchain the call completes on the unpaid probe, so the
+      // probe attempts must be considered too, not only the paid re-POST.
+      const served = [...paidAttempts, ...probeAttempts]
+        .filter((a) => a.status === 200 && a.runnerId)
+        .at(-1);
       const timing: DecideStageTimings = {
         jobId: opts?.jobId,
         groupKey: opts?.groupKey,
@@ -798,6 +804,7 @@ export class OrchestratorAdapter implements PipelineClient {
         paidRetries: paidAttempts.length,
         totalMs,
         residualMs: 0,
+        ...(served?.runnerId ? { runnerId: served.runnerId, runnerTier: served.runnerTier ?? "unknown" } : {}),
       };
       // The named stages are clocked with separate `Date.now()` reads, so their
       // sum can exceed the outer wall by a millisecond or two. The residual is
@@ -811,6 +818,19 @@ export class OrchestratorAdapter implements PipelineClient {
           (timing.payloadBuildMs + timing.serializeMs + timing.probeMs + timing.signerMs + timing.paidMs)
       );
       this.lastDecideStages = timing;
+      // ADAAAA-8559: attribution at the client, replacing the nginx `up=` join.
+      // One line per decide naming the runner that SERVED it (the 200), the tier
+      // it came from, how many hops the call needed and the local concurrency it
+      // saw, so AC4 can be read off the server log as well as the job record.
+      if (served) {
+        const attempts = [...paidAttempts, ...probeAttempts];
+        const maxInFlight = Math.max(0, ...attempts.map((a) => a.runnerInFlight ?? 0));
+        console.log(
+          `[decide-runner] kind=decide job=${opts?.jobId ?? "-"} group=${opts?.groupKey ?? "-"}` +
+            ` runner=${served.runnerId} tier=${served.runnerTier ?? "unknown"}` +
+            ` attempts=${attempts.length} inFlight=${served.runnerInFlight ?? 0} maxInFlight=${maxInFlight}`,
+        );
+      }
       decideStageRecorder.record(timing);
       if (this.onDecideStages) {
         try {
@@ -970,14 +990,15 @@ export class OrchestratorAdapter implements PipelineClient {
    * `decide`: one fixed-price live-runner app call, with the 402 -> signer ->
    * retry payment flow on-chain. The payload maps TrainRunRequest fields to the
    * train-entrypoint env contract (manifest path + hyper-params). */
-  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). Mirrors `decide`:
-   * one fixed-price decide-runner app call to `/apps/highlights-decide/app/confirm`,
-   * with the same 402 -> signer -> retry payment flow on-chain. Slides the
-   * payload = the ConfirmRequest fields the /confirm endpoint consumes. The
-   * runner returns a passthrough (goalConfirmed null) when disabled or
-   * unparseable; a transport failure rejects so the caller keeps the Stage-1
-   * verdict. ADAAAA-8553 S1 flags this `highlights-decide` id as a remaining
-   * fixed-id call site; S2 (ADAAAA-8559) moves it onto a selected runner. */
+  /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). One fixed-price
+   * decide-runner app call to `/apps/<selected-runner>/app/confirm`, with the
+   * same 402 -> signer -> retry payment flow on-chain. Slides the payload = the
+   * ConfirmRequest fields the /confirm endpoint consumes. ADAAAA-8559: the route
+   * segment is the runner the client's pool selection picked, so no call site
+   * pins the retired aggregate `highlights-decide` id any more; `ROUTES.decide`
+   * here is the payment DESCRIPTOR app, not a route. The runner returns a
+   * passthrough (goalConfirmed null) when disabled or unparseable; a transport
+   * failure rejects so the caller keeps the Stage-1 verdict. */
   async confirm(req: ConfirmRequest, opts?: { reasoningEffort?: string; jobId?: string }): Promise<ConfirmDecision> {
     const payerAddress = this.payerAddress;
     const payload = {
