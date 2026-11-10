@@ -239,8 +239,9 @@ arithmetic and its exact decomposition, a localized trigger counted against the
 row's own timestamp, negative-clock clamping, p50/p95/max, the tracker's
 pending -> ack handshake incl. a retried persist not double-counting, and the
 `LiveObserver -> observeMetrics.deliveredLatency` wiring for accepted vs rejected
-windows), and `services/server/test/live-delivery-asr-8611.test.ts` (the ASR lane
+windows), and `services/server/test/asr-headroom-8611.test.ts` (the ASR lane
 on the row and the stage identity staying exact, the lane stamped before and
 after the decide, the lane surviving `JobSchema.parse`, the headroom clamp's
-pure arithmetic, the inert default, and a trimmed wait proceeding inline without
-aborting the prefetch).
+pure arithmetic, the inert default, a trimmed wait proceeding inline without
+aborting the prefetch, the `[live-deliver]` evidence line, and the config +
+compose posture).
