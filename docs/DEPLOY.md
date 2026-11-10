@@ -290,6 +290,9 @@ heartbeat:
 1. Orchestrator first, in a QUIET window — its restart drops live sessions.
 2. x99 registrars:
    `docker compose --env-file .env -f docker-compose.yml up -d --no-deps --force-recreate registrar-decide-x99 registrar-decide-x99-b`
+   **and remove the retired aggregate sidecar** — compose leaves it running as
+   an orphan otherwise, and it would register a sixth `highlights-decide`:
+   `docker rm -f highlights-registrar-decide` (or add `--remove-orphans`).
 3. 5090 host: `./docker/registrar-5090.sh` (re-creates all three sidecars; run
    `./docker/registrar-5090.sh down` first for a clean unregister).
 
