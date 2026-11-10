@@ -851,6 +851,11 @@ export class LiveObserver {
    *  It is resolved once, in the constructor, into an absolute rate on
    *  {@link DecideRateCredit}; `1`/unset keeps the pass unbounded. */
   private readonly decideKeepRatio: number;
+  /** ADAAAA-8544: the per-job decide RATE cap — charged decides per 300 s of
+   *  CONTENT clock. `null` = uncapped (the shipped economy default). This is the
+   *  knob the user sets on `POST /jobs`; {@link decideKeepRatio} is its legacy
+   *  deploy-time fallback and only applies when this is null. */
+  private readonly decideRateCapPer300s: number | null;
   /** ADAAAA-8431: the absolute decide-rate budget (charged decides per 300 s of
    *  SERVED clock). Null = no rate cap (keep unset/1), byte-identical to the
    *  shipped pass. Both live rails construct their observer here, so this one
@@ -941,6 +946,20 @@ export class LiveObserver {
      *  byte-identical to the unbounded pass. Wired from
      *  `LIVE_DECIDE_KEEP_RATIO` on BOTH live rails. */
     decideKeepRatio?: number;
+    /** ADAAAA-8544: the per-job decide RATE cap — charged decides per 300 s of
+     *  CONTENT clock (the user-facing knob). A positive integer caps the pass;
+     *  `null`/absent leaves it uncapped. When set it REPLACES
+     *  {@link decideKeepRatio}: the user's stated posture wins over the
+     *  deploy-time fraction, which stays only as the fallback for a job started
+     *  before the knob existed (`resolvedSource: "env"`). The route enforces the
+     *  63-decide coverage floor (422 `decide_rate_below_coverage_floor`); the
+     *  observer only normalises, so a test can drive any positive rate.
+     *
+     *  What it touches: ONLY this throttle gate (a dropped window advances the
+     *  cadence, spends no budget token, leaves a due trigger PENDING and is
+     *  counted in `throttleSkippedWindows`). The window span, the audio-noise
+     *  trigger and the VOD fields are untouched — AC2. */
+    decideRateCapPer300s?: number | null;
     /** ADAAAA-8431: the SERVED clock the decide-rate budget accrues on, epoch
      *  milliseconds. Defaults to `Date.now`; tests inject a simulated clock so a
      *  300 s share can be driven without waiting 300 s of wall time. */
@@ -998,19 +1017,40 @@ export class LiveObserver {
     // unbounded, so an unset env is byte-identical.
     const keepRatio = Number(opts.decideKeepRatio ?? 1);
     this.decideKeepRatio = Number.isFinite(keepRatio) && keepRatio > 0 && keepRatio < 1 ? keepRatio : 1;
+    // ADAAAA-8544: the per-job RATE cap. Only a positive finite number caps the
+    // pass; anything else (`undefined`, `null`, 0, NaN) leaves it uncapped, which
+    // is the shipped default posture (economy: 5 s cadence, uncapped).
+    const rateCap = Number(opts.decideRateCapPer300s);
+    this.decideRateCapPer300s =
+      opts.decideRateCapPer300s !== undefined &&
+      opts.decideRateCapPer300s !== null &&
+      Number.isFinite(rateCap) &&
+      rateCap > 0
+        ? Math.floor(rateCap)
+        : null;
     // ADAAAA-8431: resolve that fraction ONCE into the units the spend cap and
     // the coverage floor are both written in — charged decides per 300 s of
     // content clock. `keep x 104` is the rate the ratio was authored to mean on
     // the analyzer rail; it is clamped to the ratified 66 target (ADAAAA-8427)
     // and never applied per opportunity, so the same keep value charges the same
     // rate on a rail offering 73 opportunities as on one offering 104.
+    //
+    // ADAAAA-8544: the PER-JOB knob is the primary source. The user's stated rate
+    // (`POST /jobs.rateCapPer300s`, frozen on the record as
+    // `observeMetrics.decideKnob`) goes straight into the same credit budget —
+    // no convention conversion, because the knob is already written in the units
+    // the cap and the floor use. The keep-ratio path above stays as the fallback
+    // for a job started before the knob existed (`resolvedSource: "env"`).
+    const knobRatePer300s = this.decideRateCapPer300s ?? 0;
     const ratePer300s =
-      this.decideKeepRatio < 1
-        ? Math.min(
-            LIVE_DECIDE_RATE_TARGET_PER_300S,
-            Math.floor(this.decideKeepRatio * LIVE_DECIDE_OPPORTUNITY_CONVENTION_PER_300S)
-          )
-        : 0;
+      knobRatePer300s > 0
+        ? knobRatePer300s
+        : this.decideKeepRatio < 1
+          ? Math.min(
+              LIVE_DECIDE_RATE_TARGET_PER_300S,
+              Math.floor(this.decideKeepRatio * LIVE_DECIDE_OPPORTUNITY_CONVENTION_PER_300S)
+            )
+          : 0;
     this.decideRate = ratePer300s > 0 ? new DecideRateCredit(ratePer300s) : null;
     this.wallClock = opts.wallClock ?? (() => Date.now());
     // ADAAAA-8108 (AC-E3): the enrichment arm. Any value outside the two
@@ -1412,9 +1452,17 @@ export class LiveObserver {
     return this.rateCappedSkips;
   }
   /** ADAAAA-8431: the absolute rate this pass is budgeted to (charged decides /
-   *  300 s of content clock); 0 = no rate cap. */
+   *  300 s of content clock); 0 = no rate cap. ADAAAA-8544: a per-job knob rate
+   *  is reported here verbatim, which is what proves the stamp reached the
+   *  observer. */
   decideRatePer300s(): number {
     return this.decideRate?.per300s ?? 0;
+  }
+  /** ADAAAA-8544: decide opportunities this pass SAW (kept + dropped), i.e. the
+   *  density the stream actually offered. Written to the record on every rail so
+   *  the window audit can contrast it with the stamped prediction. */
+  decideOpportunityCount(): number {
+    return this.decideOpportunities;
   }
   /** ADAAAA-7771: the last window ISSUED (content ts + measured lag), for the
    *  `[live-lag]` evidence line. Independent of the settle ordering. */
@@ -1565,17 +1613,23 @@ export class LiveObserver {
     // bypasses the gate and charges anyway (repaying as debt), so a fired audio
     // event is decided at its cadence instead of waiting ~1 interval for a token
     // — the anchored fire's live lens is 1-5 s and must not grow to ~4.5 s.
-    if (this.decideRate && !force && !anchored) {
-      // One opportunity per cadence window: a dropped window leaves a due
-      // trigger PENDING, and without this guard the trigger would re-present an
-      // opportunity on every intervening frame (measured on the first cut: 154
-      // opportunities / 300 s against 97 decides, which re-inflated the rate the
-      // cap exists to bound).
-      if (this.lastOpportunityTs !== null && nowTs - this.lastOpportunityTs < this.cadenceS - 1e-9) {
-        return;
-      }
+    // ADAAAA-8544: one OPPORTUNITY per cadence window, counted on EVERY rail —
+    // capped or not — so the record states the density its stream actually
+    // offered. That is the number the admin window audit contrasts with the
+    // stamped prediction, and the shipped default posture is UNCAPPED: counting
+    // only inside the rate gate would leave the economy posture with no measured
+    // density at all. A repeated frame inside one cadence period is the SAME
+    // opportunity, never a new one (a dropped window leaves a due trigger
+    // PENDING and would otherwise re-present itself on every frame: measured on
+    // the first cut as 154 opportunities / 300 s against 97 decides).
+    const isNewOpportunity =
+      this.lastOpportunityTs === null || nowTs - this.lastOpportunityTs >= this.cadenceS - 1e-9;
+    if (isNewOpportunity) {
       this.lastOpportunityTs = nowTs;
       this.decideOpportunities++;
+    }
+    if (this.decideRate && !force && !anchored) {
+      if (!isNewOpportunity) return;
       if (!this.decideRate.available(this.wallClock())) {
         this.rateCappedSkips++;
         this.lastFireTs = nowTs;

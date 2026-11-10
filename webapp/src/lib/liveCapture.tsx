@@ -97,7 +97,7 @@ export interface LiveCaptureValue {
   /** The live "recording not captured" copy, `null` while the recorder is
    *  healthy or still starting. */
   recordingNotice: string | null;
-  start: (gameHint: string) => Promise<void>;
+  start: (gameHint: string, decideKnob?: { cadenceSec: 3 | 5; rateCapPer300s: number | null }) => Promise<void>;
   stop: () => Promise<void>;
   dismissError: () => void;
 }
@@ -706,7 +706,7 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     return v;
   }
 
-  async function start(gameHint: string) {
+  async function start(gameHint: string, decideKnob?: { cadenceSec: 3 | 5; rateCapPer300s: number | null }) {
     if (startingRef.current || sharingRef.current) return;
     startingRef.current = true;
     setBusy(true);
@@ -726,7 +726,13 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
 
       // ONE job per start. Navigation happens on the id in the 202; it must
       // never re-submit this request.
-      const job = await api<{ job: { id: string } }>("/jobs", { body: { source: "browser", gameHint } });
+      //
+      // ADAAAA-8544: the decide knob the user set on `/app` rides this POST. It
+      // is omitted when the caller has no posture (an older caller), which the
+      // route resolves to the shipped default exactly as before.
+      const job = await api<{ job: { id: string } }>("/jobs", {
+        body: { source: "browser", gameHint, ...(decideKnob ?? {}) },
+      });
       jobIdRef.current = job.job.id;
       setJobId(job.job.id);
       setLastJobId(job.job.id);
