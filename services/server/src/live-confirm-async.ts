@@ -16,10 +16,16 @@
 // insert — through the promote-in-place write path ADAAAA-8199 built
 // (`store.attestDeferredGoal`), so there is one writer for a verdict move.
 //
-// Bounds are enforced HERE, not by convention:
+// Bounds are enforced HERE, not by convention (ADAAAA-8518):
 //  - one dive per distinct goal (`goalEventTs` + `confirmReuseWindowS`);
-//  - `LIVE_CONFIRM_MAX_DIVES_PER_300S` (default 3) per stream;
-//  - one dive in flight per stream, and a BUSY decide pool drops (never queues);
+//  - NO per-300 s dive cap: `LIVE_CONFIRM_MAX_DIVES_PER_300S` defaults to
+//    UNLIMITED and is an operator emergency brake only (a positive value caps,
+//    a non-positive one never means "no dives");
+//  - NO per-stream one-in-flight serialization: a stream holds as many dives in
+//    flight as the MEASURED decide capacity allows (`ConfirmDiveDispatcher`).
+//    A dive with no free slot stays PENDING and replans on the next tick;
+//    `pool_busy` is stamped only at stream end or after the explicit queue
+//    bound — never as a first-tick drop;
 //  - context is rebuilt from PERSISTED artifacts only (frames on disk + the
 //    stage-1 analysis). A signal that cannot be reconstructed (motion
 //    trajectories, optical flow, the audio clip) is stamped in `contextDegraded`
@@ -28,18 +34,33 @@
 //    closed: the row is untouched and the dive is counted as dropped.
 import { selectRereadFrames, withTimeout, type FrameRereadCandidate } from "./live-frame-reread.js";
 
-/** Default per-stream dive budget: one 300 s window may spend at most this many.
+/** ADAAAA-8518 (AC1): the operator EMERGENCY BRAKE, not a product cap.
  *
- *  Cap-derived, not detector-derived (ADAAAA-8506). The CEO-locked ceiling is
- *  $2.75 per stream-hour and a dive bills the same `decideFee` as a Stage-1 read,
- *  so the whole lane shares 2.75 / 0.0033 = 833 calls/hour = 69.4 calls per
- *  300 s. At the ratified Stage-1 cell (66 charged decides / 300 s, ADAAAA-8427,
- *  wired by ADAAAA-8431) that leaves 3 dives. The previous 8 was sized for the
- *  detector's false-positive rate against an older 61-decide cell and put the
- *  armed lane 6.6 % over the cap; do not raise it without a re-priced ceiling. */
-export const LIVE_CONFIRM_MAX_DIVES_PER_300S = 3;
-/** The budget's sliding window (seconds). */
-export const LIVE_CONFIRM_BUDGET_WINDOW_S = 300;
+ *  Default is `null` = UNLIMITED: an absent / non-positive value never resolves
+ *  to a number that caps, so the dive runs whenever the accept carried evidence
+ *  (the CEO's rule on ADAAAA-8512). Only an explicit POSITIVE value caps, and
+ *  `0` never means "no dives" — the accepted tradeoff is that cost is OBSERVED
+ *  per stream (see `diveAdmission`), not enforced in code. */
+export function normalizeConfirmDiveCap(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+/** ADAAAA-8513 (AC4) / ADAAAA-8518 (AC1): the PENDING DESCRIPTOR RING bound.
+ *
+ *  This is a memory guard on how many un-dived descriptors a run may hold, NOT
+ *  an admission cap: an evicted descriptor is stamped `descriptor_overflow` (a
+ *  terminal reason with a row verdict) rather than silently shifted away. It is
+ *  deliberately far above any measured evidence density (`c4d33a26`: 7.19
+ *  goal-shaped reads / 300 s) so it can never read as a dive cap — AC1's 20 due
+ *  descriptors in one window must all dispatch. */
+export const LIVE_CONFIRM_PENDING_RING = 64;
+/** ADAAAA-8518 (AC3): the EXPLICIT queue bound. A dive that cannot get a decide
+ *  slot waits up to this long before it is stamped `pool_busy`; before the bound
+ *  it stays PENDING and replans. Time, not a dive count — the lane holds no
+ *  fixed numeric dive limit. */
+export const LIVE_CONFIRM_QUEUE_WAIT_MS = 120_000;
 /** A dive that has not answered within this bound is DROPPED (fail closed). */
 export const LIVE_CONFIRM_DIVE_TIMEOUT_MS = 45_000;
 /** Frames the dive hands the model (the shipped `CONFIRM_MAX_FRAMES` cell). */
@@ -53,14 +74,6 @@ export const LIVE_CONFIRM_TRAIL_S = 4;
  *  Matches the ADAAAA-8006 deferred lookahead: the score re-read lane and the
  *  frame re-read lane both own the window until then. */
 export const LIVE_CONFIRM_LOOKAHEAD_S = 20;
-/** ADAAAA-8513 (AC1): budget refusals one descriptor may absorb before the
- *  retry is ABANDONED and the row is stamped `dropped:budget`. A budget refusal
- *  is TRANSIENT (the 300 s window slides), so it must never be terminal on the
- *  first refusal the way a pool-busy drop already is. */
-export const LIVE_CONFIRM_BUDGET_ATTEMPTS = 3;
-/** ADAAAA-8513 (AC3): tokens per 300 s RESERVED for provisional-goal rows.
- *  The effective slice is `min(this, maxDivesPer300s)`. */
-export const LIVE_CONFIRM_RESERVED_DIVES = 3;
 
 /** One pending dive, persisted with the row that published it. */
 export interface PendingConfirmDive {
@@ -162,105 +175,154 @@ export interface ConfirmAttestation {
 }
 
 /**
- * Sliding per-stream dive budget.
+ * ADAAAA-8518 (AC1): the OPTIONAL operator emergency brake.
  *
- * Content-clock based (the same clock the window schedule uses), so a 300 s
+ * Content-clock based (the same clock the window schedule uses), so the 300 s
  * window means 300 s of STREAM, not 300 s of wall time — a stalled stream cannot
- * bank dives. Refusals are counted, so AC-A4/A6 are readable off the record.
+ * bank dives. It is INERT by default (`max == null`): no stamp, no refusal, no
+ * `budget` drop. The CEO directive of record (ADAAAA-8512, 22:14Z) is that the
+ * product does not cap dives; only an explicitly configured positive value
+ * brakes, and a non-positive value is never read as "no dives".
  *
- * ADAAAA-8513 (AC3): `min(LIVE_CONFIRM_RESERVED_DIVES, max)` tokens in every
- * 300 s window are RESERVED for provisional-goal rows. A general dive (a row
- * with no provisional marker) draws from the remainder — the reserved slice is
- * never spent on one, so a celebration-shaped window cannot starve the goal the
- * stream still has to confirm. Note the published consequence: at a cap of 3 or
- * less the whole budget is the goal slice and general dives are refused (they
- * stay pending, then are stamped at stream end — AC5).
+ * The ADAAAA-8513 reserved-slice machinery (`min(3, cap)`, the snapshot's
+ * cap/reserved/spentReserved/spentGeneral) is DELETED with the cap: slots, not
+ * tokens, are the scarce resource now, so ranking (AC4) is all that is left.
  */
 export class ConfirmDiveBudget {
-  private stamps: { ts: number; reserved: boolean }[] = [];
+  private stamps: number[] = [];
   private refusals = 0;
-  private retries = 0;
+  /** The brake's fixed sliding window, in seconds of STREAM content. */
+  static readonly WINDOW_S = 300;
 
-  /** AC3: the reserved slice for a given cap (`min(3, max)`). */
-  static reservedTokens(max: number = LIVE_CONFIRM_MAX_DIVES_PER_300S): number {
-    return Math.min(LIVE_CONFIRM_RESERVED_DIVES, Math.max(0, Math.floor(max)));
-  }
-
-  /** Spend one dive at `nowTs`, or refuse when the window is exhausted. */
-  allow(
-    nowTs: number,
-    max: number = LIVE_CONFIRM_MAX_DIVES_PER_300S,
-    reserved: boolean = false
-  ): boolean {
-    if (!Number.isFinite(nowTs)) return false;
-    const cap = Math.max(0, Math.floor(max));
-    const cutoff = nowTs - LIVE_CONFIRM_BUDGET_WINDOW_S;
-    this.stamps = this.stamps.filter((s) => s.ts > cutoff);
+  /** Spend one dive at `nowTs`, or refuse when an EXPLICIT cap is exhausted.
+   *
+   *  A dive is stamped even when the brake is INERT (`cap == null`): the stamp is
+   *  a readout of dives spent in the window (`count`), never a gate, so an
+   *  uncapped stream still answers "how many dives ran in the last 300 s" without
+   *  the class ever refusing. */
+  allow(nowTs: number, max: number | null | undefined): boolean {
+    const cap = normalizeConfirmDiveCap(max);
+    if (!Number.isFinite(nowTs)) return true;
+    const cutoff = nowTs - ConfirmDiveBudget.WINDOW_S;
+    this.stamps = this.stamps.filter((ts) => ts > cutoff);
+    // No brake configured (the shipped default): stamp for the readout, never refuse.
+    if (cap == null) {
+      this.stamps.push(nowTs);
+      return true;
+    }
     if (this.stamps.length >= cap) {
       this.refusals++;
       return false;
     }
-    if (!reserved) {
-      // AC3: a general dive may only draw from the remainder.
-      const generalSpent = this.stamps.filter((s) => !s.reserved).length;
-      if (generalSpent >= cap - ConfirmDiveBudget.reservedTokens(cap)) {
-        this.refusals++;
-        return false;
-      }
-    }
-    this.stamps.push({ ts: nowTs, reserved });
+    this.stamps.push(nowTs);
     return true;
   }
 
   /** Dives spent inside the sliding window ending at `nowTs`. */
   count(nowTs: number): number {
-    const cutoff = nowTs - LIVE_CONFIRM_BUDGET_WINDOW_S;
-    return this.stamps.filter((s) => s.ts > cutoff).length;
+    const cutoff = nowTs - ConfirmDiveBudget.WINDOW_S;
+    return this.stamps.filter((ts) => ts > cutoff).length;
   }
 
+  /** Brake refusals observed (0 unless an explicit cap was configured). */
   refusalsCount(): number {
     return this.refusals;
   }
+}
 
-  /** AC1: count a budget refusal that left its descriptor PENDING (a retry). */
-  noteRetry(): void {
-    this.retries++;
+/**
+ * ADAAAA-8518 (AC3): the ONLY admission gate — measured decide capacity.
+ *
+ * One dispatcher per server, shared by every stream, so `inFlight` is the TOTAL
+ * number of dives in flight across streams and admission compares it to the
+ * decide fleet the signer probe measured (`observeMetrics.decideCapacity`).
+ * There is no fixed numeric dive limit anywhere in the lane.
+ */
+export class ConfirmDiveDispatcher {
+  private inFlightCount = 0;
+  private maxSeen = 0;
+  private dispatchedCount = 0;
+  private lastCapacity = 0;
+
+  constructor(private capacityOf: () => number) {}
+
+  /** Point admission at the client whose signer probe measures the fleet. */
+  useCapacitySource(capacityOf: () => number): void {
+    this.capacityOf = capacityOf;
   }
 
-  retriesCount(): number {
-    return this.retries;
+  /** A dispatcher with no capacity information (unit harnesses, $0 tests). */
+  static unbounded(): ConfirmDiveDispatcher {
+    return new ConfirmDiveDispatcher(() => Number.MAX_SAFE_INTEGER);
   }
 
-  /** AC3: the published `observeMetrics.diveBudget` block at `nowTs`. */
-  snapshot(
-    nowTs: number,
-    max: number = LIVE_CONFIRM_MAX_DIVES_PER_300S
-  ): ConfirmDiveBudgetSnapshot {
-    const cap = Math.max(0, Math.floor(max));
-    const cutoff = (Number.isFinite(nowTs) ? nowTs : 0) - LIVE_CONFIRM_BUDGET_WINDOW_S;
-    const live = this.stamps.filter((s) => s.ts > cutoff);
-    return {
-      cap,
-      reserved: ConfirmDiveBudget.reservedTokens(cap),
-      spentReserved: live.filter((s) => s.reserved).length,
-      spentGeneral: live.filter((s) => !s.reserved).length,
-      retries: this.retries,
-    };
+  /** The measured capacity right now; never below 1 (a gate that admits nothing
+   *  would starve every stream instead of queueing). */
+  capacity(): number {
+    const raw = Number(this.capacityOf());
+    const cap = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+    this.lastCapacity = cap;
+    return cap;
+  }
+
+  get inFlight(): number {
+    return this.inFlightCount;
+  }
+  get maxInFlight(): number {
+    return this.maxSeen;
+  }
+  get dispatched(): number {
+    return this.dispatchedCount;
+  }
+
+  /** Take a slot, or report that the pool is full (the dive stays PENDING). */
+  tryAdmit(): boolean {
+    if (this.inFlightCount >= this.capacity()) return false;
+    this.inFlightCount++;
+    this.dispatchedCount++;
+    if (this.inFlightCount > this.maxSeen) this.maxSeen = this.inFlightCount;
+    return true;
+  }
+
+  /** Give a slot back (always in a `finally`). */
+  release(): void {
+    this.inFlightCount = Math.max(0, this.inFlightCount - 1);
   }
 }
 
-/** ADAAAA-8513 (AC3): the admission block a stored live row publishes. */
-export interface ConfirmDiveBudgetSnapshot {
-  /** The configured per-300 s cap (`LIVE_CONFIRM_MAX_DIVES_PER_300S`). */
-  cap: number;
-  /** Tokens reserved for provisional-goal rows (`min(3, cap)`). */
-  reserved: number;
-  /** Reserved tokens spent inside the sliding window. */
-  spentReserved: number;
-  /** General tokens spent inside the sliding window. */
-  spentGeneral: number;
-  /** AC1: budget refusals that left a descriptor pending for a later tick. */
-  retries: number;
+/**
+ * ADAAAA-8518 (AC3): resolve the measured decide capacity from the ADAAAA-8254 /
+ * 8262 signer probe. `cfg.decideConcurrency` is the fallback ONLY when the probe
+ * has no answer (`source: "funded"` = nothing was ever advertised, or no
+ * snapshot at all) — never when it answered with a real fleet.
+ */
+export function diveCapacityFromProbe(
+  snapshot: { effective?: number; source?: string } | null | undefined,
+  fallback: number | undefined
+): number {
+  const fb = Number(fallback);
+  const fromConfig = Number.isFinite(fb) && fb >= 1 ? Math.floor(fb) : 2;
+  const eff = Number(snapshot?.effective);
+  const answered =
+    !!snapshot && Number.isFinite(eff) && eff >= 1 && snapshot.source !== "funded";
+  return answered ? Math.floor(eff) : fromConfig;
+}
+
+/** ADAAAA-8518 (AC5): the admission block a stored live row publishes. */
+export interface ConfirmDiveAdmissionSnapshot {
+  /** Dives admitted and started (a started dive may still fail pre-call). */
+  dispatched: number;
+  /** Times a due dive had no free decide slot (it stayed PENDING). */
+  queued: number;
+  /** Peak dives in flight across the server while this stream admitted. */
+  maxInFlight: number;
+  /** The measured decide capacity admission last compared against. */
+  capacityEffective: number;
+  /** Confirm calls the stream BILLED (`billableConfirmCalls` reads the same
+   *  `confirmCalls` count). */
+  divesBilled: number;
+  /** `decideFee x divesBilled` — cost is observed per stream, not enforced. */
+  diveCostUsd: number;
 }
 
 /**
@@ -948,16 +1010,19 @@ export interface ConfirmDiveRunState {
   /** ADAAAA-8513 (AC4): descriptors the pending ring evicted, awaiting a
    *  stamped `descriptor_overflow` verdict. Optional so older fakes still run. */
   takeOverflowedConfirmDives?(): readonly PendingConfirmDive[];
-  /** ADAAAA-8513 (AC1): budget refusals this descriptor already absorbed. */
-  budgetAttempts?(key: string): number;
-  /** ADAAAA-8513 (AC1): record one budget refusal; returns the new count. */
-  noteBudgetAttempt?(key: string): number;
-  /** ADAAAA-8513 (AC4): drops keyed by cause. */
+  /** ADAAAA-8518 (AC4): drops keyed by cause. */
   confirmDroppedByReason?(): Record<string, number>;
-  /** ADAAAA-8513 (AC3): the published admission block. */
-  confirmDiveBudget?(): ConfirmDiveBudgetSnapshot;
-  /** ADAAAA-8513 (AC7): the configured cap this run used. */
-  confirmDiveMaxPer300s?(): number;
+  /** ADAAAA-8518 (AC5): the published admission block. */
+  confirmDiveAdmission?(): ConfirmDiveAdmissionSnapshot;
+  /** ADAAAA-8518 (AC3): stamp/return the wall-ms this descriptor has waited for
+   *  a decide slot. Optional so simple fakes still run. */
+  noteConfirmDiveQueueWait?(key: string, nowMs: number): number;
+  /** ADAAAA-8518 (AC3): forget a queue stamp (dispatched or dropped). */
+  clearConfirmDiveQueueWait?(key: string): void;
+  /** ADAAAA-8518 (AC5): count one dispatch + the observed in-flight/capacity. */
+  noteConfirmDiveDispatched?(inFlight: number, capacity: number): void;
+  /** ADAAAA-8518 (AC5): count one no-slot admission. */
+  noteConfirmDiveQueued?(capacity: number): void;
 }
 
 /** The pump's per-tick accounting (what the tests and logs read). */
@@ -966,52 +1031,62 @@ export interface ConfirmDivePumpOutcome {
   dropped: number;
   promoted: number;
   refuted: number;
-  /** ADAAAA-8513 (AC1): budget refusals that stayed pending for a later tick. */
+  /** ADAAAA-8518 (AC1): emergency-brake refusals (0 at the shipped default). */
   retries: number;
+  /** ADAAAA-8518 (AC3): due dives with no free decide slot (left PENDING). */
+  queued: number;
   /** ADAAAA-8513 (AC4): overflow descriptors stamped on this tick. */
   overflowDropped: number;
 }
 
 /**
- * Pump the due dives for one window: plan -> budget -> busy check -> dive ->
- * adopt. Called OFF the accept path (fire-and-forget by the caller), so a slow
- * dive can never stall the live pass.
+ * Pump the due dives for one window: plan -> capacity -> brake -> dive -> adopt.
+ * Called OFF the accept path (fire-and-forget by the caller), so a slow dive can
+ * never stall the live pass.
  *
- * ADAAAA-8513 changes admission, all `$0`:
- *  - AC1: a `budget` refusal is TRANSIENT. The descriptor stays pending, is not
- *    marked attempted, and re-plans on a later tick; only the third refusal
- *    (or stream end, AC5) abandons it with a stamped `budget` drop. Pool-busy
- *    stays terminal because a saturated pool has no promise of later capacity.
- *  - AC2: `planDueConfirmDives` ranks evidence first, so the last token goes to
- *    the strongest window rather than the oldest.
- *  - AC3: provisional-goal rows spend the reserved slice; everything else draws
- *    from the remainder (`deps.maxDivesPer300s` still caps the total, so this is
- *    cost-neutral by construction).
+ * ADAAAA-8518 changes admission, all `$0`:
+ *  - AC1: there is NO product cap. `maxDivesPer300s` is the optional operator
+ *    emergency brake and is inert (`null`) at the shipped default, so no dive is
+ *    ever refused for a rate reason and `dropReason: "budget"` is never written.
+ *  - AC2/AC4: `planDueConfirmDives` ranks evidence first (measured score ->
+ *    goal-line -> audio-only, then `goalEventTs`), so scarce SLOTS go to the
+ *    strongest window rather than the oldest.
+ *  - AC3: the ONLY gate is the measured decide capacity (`dispatcher`). A dive
+ *    with no free slot stays PENDING and replans on the next tick; `pool_busy`
+ *    is stamped only at stream end or after the explicit queue-wait bound.
+ *    Every admitted dive runs CONCURRENTLY (N in flight for one stream), so the
+ *    old per-stream one-in-flight serialization is gone.
  *  - AC4: the ring's evicted descriptors are stamped `descriptor_overflow`.
- *  - AC5 (`drain`): every still-pending descriptor gets a terminal verdict, and
- *    a budget refusal at stream end is stamped instead of retried.
+ *  - AC5 (`drain`): every still-pending descriptor gets a terminal verdict.
  */
 export async function runDueConfirmDives(deps: {
   run: ConfirmDiveRunState;
   io: ConfirmDiveIo;
   nowTs: number;
   jobId: string;
-  maxDivesPer300s?: number;
+  /** AC1: operator emergency brake — `null`/absent is UNLIMITED. */
+  maxDivesPer300s?: number | null;
   lookaheadS?: number;
   reuseWindowS?: number;
   /** AC5: end-of-stream drain — no retries, no descriptor left pending. */
   drain?: boolean;
-  /** Returns a drop reason when the decide pool is saturated, else null. */
-  busy?: () => string | null;
+  /** AC3: the server-wide capacity dispatcher (the only admission gate). */
+  dispatcher?: ConfirmDiveDispatcher;
+  /** AC3: wall-ms a descriptor may wait for a slot before it is stamped. */
+  queueWaitMs?: number;
+  /** AC3: injectable wall clock (tests). */
+  nowMs?: number;
   /** Persist the adoption (the promote-in-place write path). */
   adopt: (entry: PendingConfirmDive, result: ConfirmDiveResult) => Promise<ConfirmDiveAdoption["kind"] | void> | ConfirmDiveAdoption["kind"] | void;
   log?: (line: string) => void;
 }): Promise<ConfirmDivePumpOutcome> {
-  const out: ConfirmDivePumpOutcome = { dives: 0, dropped: 0, promoted: 0, refuted: 0, retries: 0, overflowDropped: 0 };
+  const out: ConfirmDivePumpOutcome = { dives: 0, dropped: 0, promoted: 0, refuted: 0, retries: 0, queued: 0, overflowDropped: 0 };
   const log = deps.log ?? ((line: string) => console.error(line));
   const tag = `[live-confirm:${deps.jobId}]`;
   const nowTs = deps.nowTs;
-  const maxDives = deps.maxDivesPer300s ?? LIVE_CONFIRM_MAX_DIVES_PER_300S;
+  const nowMs = Number.isFinite(deps.nowMs) ? (deps.nowMs as number) : Date.now();
+  const dispatcher = deps.dispatcher ?? ConfirmDiveDispatcher.unbounded();
+  const queueWaitMs = Math.max(0, deps.queueWaitMs ?? LIVE_CONFIRM_QUEUE_WAIT_MS);
   // AC4: a ring eviction is a DROP with a stamped reason, never a silent shift().
   // The count was taken at eviction time; this only settles the row (adoption).
   const pendingKeys = new Set(deps.run.pendingConfirmDives().map(confirmDiveKey));
@@ -1029,78 +1104,95 @@ export async function runDueConfirmDives(deps: {
     attempted: deps.run.confirmDiveAttempted(),
     reuseWindowS: deps.reuseWindowS,
   });
+  // AC2/AC3: admitted dives run CONCURRENTLY — the pump awaits them together, so
+  // one stream can hold N in flight (bounded only by decide capacity). The loop
+  // itself never awaits a dive, so admission is decided against the in-flight
+  // count of the whole batch.
+  const running: Promise<void>[] = [];
   for (const entry of due) {
     const key = confirmDiveKey(entry);
-    // Busy pool: DROP, never queue (AC-A6). Checked before the budget so a busy
-    // window cannot consume a dive the stream still needs later.
-    const busyReason = deps.busy?.() ?? null;
-    if (busyReason) {
-      deps.run.dropPendingConfirmDive(key);
-      deps.run.noteConfirmDiveDropped(`pool_busy:${busyReason}`);
-      out.dropped++;
-      log(`${tag} dive for ${entry.highlightId} dropped: decide pool busy (${busyReason})`);
-      // AC4: a drop is terminal — stamp the row so no finished job keeps a
-      // provisional row with no stored verdict field.
-      await deps.adopt(entry, droppedDiveResult("pool_busy"));
-      continue;
-    }
-    // AC3: a provisional-goal row spends the reserved slice; every other row
-    // draws from the remainder.
-    const reserved = entry.evidence?.provisional === true;
-    if (!deps.run.confirmBudget.allow(nowTs, maxDives, reserved)) {
-      // AC1: a budget refusal is TRANSIENT — the sliding window releases tokens
-      // later. Never mark it attempted and never clear its descriptor, or the
-      // goal loses its only dive to a timing accident.
-      const attempts = deps.run.noteBudgetAttempt?.(key) ?? 1;
-      deps.run.confirmBudget.noteRetry();
-      out.retries++;
-      if (deps.drain !== true && attempts < LIVE_CONFIRM_BUDGET_ATTEMPTS) {
+    // AC3: capacity first. A full pool must not consume the emergency brake's
+    // token — the descriptor stays PENDING and keeps its place in the queue.
+    const capacity = dispatcher.capacity();
+    if (!dispatcher.tryAdmit()) {
+      const waitedMs = deps.run.noteConfirmDiveQueueWait?.(key, nowMs) ?? 0;
+      deps.run.noteConfirmDiveQueued?.(capacity);
+      out.queued++;
+      if (deps.drain !== true && waitedMs < queueWaitMs) {
         log(
-          `${tag} budget (${maxDives}/${LIVE_CONFIRM_BUDGET_WINDOW_S}s) exhausted — dive for ` +
-            `${entry.highlightId} stays PENDING (attempt ${attempts}/${LIVE_CONFIRM_BUDGET_ATTEMPTS}), retried on the next tick`
+          `${tag} no free decide slot (inFlight=${dispatcher.inFlight}/${capacity}) — dive for ` +
+            `${entry.highlightId} stays PENDING (waited ${Math.round(waitedMs)} ms of ${queueWaitMs} ms), replanned next tick`
         );
         continue;
       }
-      // Terminal: the per-descriptor retry bound is spent, or the stream ended.
-      // Settle the descriptor with a stamped reason (AC4/AC5), no model call.
+      // Terminal ONLY at stream end or after the explicit queue bound (AC3):
+      // settle the row with a stamped reason, no model call.
+      deps.run.dropPendingConfirmDive(key);
+      deps.run.clearConfirmDiveQueueWait?.(key);
+      deps.run.noteConfirmDiveDropped("pool_busy");
+      out.dropped++;
+      log(
+        `${tag} no free decide slot (inFlight=${dispatcher.inFlight}/${capacity}) — dive for ` +
+          `${entry.highlightId} stamped pool_busy after ${Math.round(waitedMs)} ms${deps.drain ? " at stream end" : ""}`
+      );
+      await deps.adopt(entry, droppedDiveResult("pool_busy"));
+      continue;
+    }
+    // AC1: the OPTIONAL emergency brake, inert at the shipped default. Checked
+    // after the slot so a capacity refusal never spends a brake token.
+    if (!deps.run.confirmBudget.allow(nowTs, deps.maxDivesPer300s ?? null)) {
+      dispatcher.release();
+      out.retries++;
+      if (deps.drain !== true) {
+        log(`${tag} emergency dive brake (${normalizeConfirmDiveCap(deps.maxDivesPer300s)}/300 s) — dive for ${entry.highlightId} stays PENDING`);
+        continue;
+      }
       deps.run.dropPendingConfirmDive(key);
       deps.run.noteConfirmDiveDropped("budget");
       out.dropped++;
-      log(
-        `${tag} budget (${maxDives}/${LIVE_CONFIRM_BUDGET_WINDOW_S}s) exhausted — dive for ` +
-          `${entry.highlightId} abandoned after ${attempts} attempt(s)${deps.drain ? " at stream end" : ""}`
-      );
+      log(`${tag} emergency dive brake exhausted at stream end — ${entry.highlightId} abandoned with a stamped budget drop`);
       await deps.adopt(entry, droppedDiveResult("budget"));
       continue;
     }
     // One attempt per entry, marked BEFORE the call so a retried pump can never
-    // double-bill the same goal. (A budget REFUSAL above returns before this.)
+    // double-bill the same goal.
     deps.run.noteConfirmDiveAttempt(key);
-    const result = await runConfirmDive(entry, deps.io, { jobId: deps.jobId, log });
-    out.dives++;
-    // AC-A4: only a dive that actually ISSUED a decide call is billable. The two
-    // pre-flight drops (`no_persisted_frames`, `frame_unreadable`) never reach
-    // the model, so counting them as confirm calls would over-bill `costUsd` and
-    // break the identity `confirmCalls == calls made` that a stored-row read
-    // grades. `confirmDropped` still counts them (AC-A6).
-    if (confirmDiveMadeCall(result)) deps.run.noteConfirmDiveDone(result.ok, result.latencyMs);
-    if (!result.ok) {
-      deps.run.dropPendingConfirmDive(key);
-      deps.run.noteConfirmDiveDropped(result.droppedReason ?? "failed");
-      out.dropped++;
-      // AC4: stamp the terminal drop verdict on the row (the descriptor is
-      // cleared by the same patch), so a finished job never keeps a provisional
-      // row with no stored verdict field.
-      await deps.adopt(entry, result);
-      continue;
-    }
-    const kind = await deps.adopt(entry, result);
-    // Settled: the row no longer waits on a dive (the row patch also clears its
-    // stored descriptor through the one verdict-move writer).
-    deps.run.dropPendingConfirmDive(key);
-    if (kind === "promoted") out.promoted++;
-    else if (kind === "refuted") out.refuted++;
+    deps.run.clearConfirmDiveQueueWait?.(key);
+    deps.run.noteConfirmDiveDispatched?.(dispatcher.inFlight, capacity);
+    running.push(
+      (async () => {
+        try {
+          const result = await runConfirmDive(entry, deps.io, { jobId: deps.jobId, log });
+          out.dives++;
+          // AC-A4: only a dive that actually ISSUED a decide call is billable.
+          // The two pre-flight drops (`no_persisted_frames`, `frame_unreadable`)
+          // never reach the model, so counting them as confirm calls would
+          // over-bill `costUsd` and break the identity `confirmCalls == calls
+          // made` that a stored-row read grades. `confirmDropped` still counts them.
+          if (confirmDiveMadeCall(result)) deps.run.noteConfirmDiveDone(result.ok, result.latencyMs);
+          if (!result.ok) {
+            deps.run.dropPendingConfirmDive(key);
+            deps.run.noteConfirmDiveDropped(result.droppedReason ?? "failed");
+            out.dropped++;
+            // AC4: stamp the terminal drop verdict on the row (the descriptor is
+            // cleared by the same patch), so a finished job never keeps a
+            // provisional row with no stored verdict field.
+            await deps.adopt(entry, result);
+            return;
+          }
+          const kind = await deps.adopt(entry, result);
+          // Settled: the row no longer waits on a dive (the row patch also
+          // clears its stored descriptor through the one verdict-move writer).
+          deps.run.dropPendingConfirmDive(key);
+          if (kind === "promoted") out.promoted++;
+          else if (kind === "refuted") out.refuted++;
+        } finally {
+          dispatcher.release();
+        }
+      })()
+    );
   }
+  await Promise.all(running);
   // AC5: a drained pump must leave NO descriptor pending. Anything the plan
   // could not judge (a malformed window) is settled with its own stamped reason
   // rather than left `provisional` with nothing to read on a finished job.
