@@ -3402,7 +3402,10 @@ const CORROBORATION_ANCHOR_S = 2;
  */
 export function windowCorroborated(
   highlights: readonly CorroborationWindow[] | undefined,
-  ts: number
+  ts: number,
+  /** ADAAAA-8645: the caller's corroboration decision (the served lane). Defaults
+   *  to the row-only rule, which a caller WITHOUT candidate records can use. */
+  corroboratedOf: (h: CorroborationWindow) => boolean = isCorroboratedHighlight
 ): boolean {
   if (!Number.isFinite(ts)) return false;
   for (const h of highlights ?? []) {
@@ -3413,7 +3416,7 @@ export function windowCorroborated(
       start != null && end != null && ts >= start - CORROBORATION_SLACK_S && ts <= end + CORROBORATION_SLACK_S;
     const atAnchor = anchor != null && Math.abs(ts - anchor) <= CORROBORATION_ANCHOR_S;
     if (!inClip && !atAnchor) continue;
-    if (isCorroboratedHighlight(h)) return true;
+    if (corroboratedOf(h)) return true;
   }
   return false;
 }

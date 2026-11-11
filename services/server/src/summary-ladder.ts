@@ -329,12 +329,21 @@ function tidyColourStrip(text: string): string {
 function propagateCorroboration(
   entries: NormalizedEntry[],
   accepted: HighlightRecord[],
-  fastRail: boolean
+  fastRail: boolean,
+  /**
+   * ADAAAA-8645: the FAST-rail corroboration decision the caller supplies (the
+   * served confirmation lane), so a chapter's goal claim is gated by exactly the
+   * lane that badges its card. Absent -> the row-only rule.
+   */
+  corroboratedOf?: CorroboratedOf
 ): NormalizedEntry[] {
   if (!fastRail) return entries;
   const windows = accepted as CorroborationWindow[];
+  const isCorroborated = corroboratedOf
+    ? (h: CorroborationWindow) => corroboratedOf(h as unknown as HighlightRecord)
+    : isCorroboratedHighlight;
   const gated = entries.map((e) => {
-    const corroborated = windowCorroborated(windows, e.windowTs);
+    const corroborated = windowCorroborated(windows, e.windowTs, isCorroborated);
     const text = gateUncorroboratedGoal(e.clean, corroborated);
     return {
       entry: text === e.clean ? { ...e, corroborated } : { ...e, clean: text, corroborated },
@@ -428,8 +437,24 @@ function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
   return out;
 }
 
+/**
+ * ADAAAA-8645: how a caller says one stored highlight is corroborated. The
+ * served read routes pass the card's own confirmation lane, so the MATCH SUMMARY
+ * and the card's badge can never disagree about the same row.
+ */
+export type CorroboratedOf = (h: HighlightRecord) => boolean;
+
 /** Accepted GOAL highlights, in time order, with a monotonic 1-based index. */
-export function goalTimelineFrom(highlights: HighlightRecord[]): Array<SummaryChapterGoal & { highlightId: string }> {
+export function goalTimelineFrom(
+  highlights: HighlightRecord[],
+  /**
+   * ADAAAA-8645: how the CALLER decides a row is corroborated. The served detail
+   * route passes the card's own confirmation lane (`laneConfirmsGoal`), so the
+   * banner's count and the card's badge are the same predicate. Absent -> the
+   * row-only rule (a caller without candidate records, e.g. a VOD ladder read).
+   */
+  corroboratedOf?: CorroboratedOf
+): Array<SummaryChapterGoal & { highlightId: string }> {
   return (highlights ?? [])
     .filter((h) => (h as any).eventType === "GOAL" && (h as any).status === "accepted")
     .slice()
@@ -441,15 +466,18 @@ export function goalTimelineFrom(highlights: HighlightRecord[]): Array<SummaryCh
         // Round to 0.1 s so stored float noise (31.300000000000004) never leaks
         // into the rendered ladder.
         ts: Math.round(Number(anyH.start ?? 0) * 10) / 10,
-        // ADAAAA-8645: the banner's `verified` reads the SAME corroboration rule
-        // the card's CONFIRMED/HELD/UNCONFIRMED badge is derived from
-        // (`isCorroboratedHighlight`, which reads the row's own
-        // `attestationUsed` / `confirmAttestation` with the served lane's dive
-        // precedence). The old inline rule read only the LEGACY top-level
-        // `corroborated` / `goalConfirmed` pair, which the live write path never
-        // populates — so job `f02ec0bf` printed "2 accepted goals (0
-        // corroborated)" while both of its cards served CONFIRMED.
-        verified: isCorroboratedHighlight(anyH),
+        // ADAAAA-8645: the banner's `verified` reads the decision the CALLER
+        // supplies — on the served routes that is the card's own confirmation
+        // lane (`laneConfirmsGoal(confirmationFor(h).lane)`), so the MATCH
+        // SUMMARY count and the CONFIRMED badge are one predicate. Without a
+        // caller rule (a VOD ladder read has no candidates) it falls back to
+        // `isCorroboratedHighlight`, the row-only rule, which reads the row's
+        // own `attestationUsed` / `confirmAttestation` with the dive precedence.
+        // The old inline rule read only the LEGACY top-level `corroborated` /
+        // `goalConfirmed` pair, which the live write path never populates — so
+        // job `f02ec0bf` printed "2 accepted goals (0 corroborated)" while both
+        // of its cards served CONFIRMED.
+        verified: corroboratedOf ? corroboratedOf(h) : isCorroboratedHighlight(anyH),
         highlightId: String(anyH.id ?? ""),
       };
     });
@@ -674,16 +702,24 @@ export function buildSummaryLadder(input: {
    * carries no corroboration evidence and its items are graded unchanged (AC8).
    */
   fastRail?: boolean;
+  /**
+   * ADAAAA-8645: the FAST rail's corroboration decision — the served detail
+   * routes pass the card's own confirmation lane, so the MATCH SUMMARY count and
+   * the CONFIRMED badge are one predicate on one page. Ignored on the VOD rail,
+   * whose ladder stays byte-identical (AC8).
+   */
+  corroborated?: CorroboratedOf;
 }): SummaryLadder {
   const rawEntries = normalizeLog(input.summaryLog ?? []);
   const accepted = (input.highlights ?? []).filter((h) => (h as any).status === "accepted");
   const fastRail = input.fastRail === true;
+  const corroboratedOf = fastRail ? input.corroborated : undefined;
   // ADAAAA-8014 (§2) applies to the FAST rail, the surface the §2 acceptance is
   // graded on. The long-form VOD ladder is graded byte-identical (AC8), so its
   // stored items are not re-shaped here.
-  const gated = propagateCorroboration(rawEntries, accepted, fastRail);
+  const gated = propagateCorroboration(rawEntries, accepted, fastRail, corroboratedOf);
   const entries = fastRail ? finalizeServedShapes(gated) : gated;
-  const timeline = goalTimelineFrom(input.highlights ?? []);
+  const timeline = goalTimelineFrom(input.highlights ?? [], corroboratedOf);
 
   // The audit list is what the WRITE seam refused: a score string `text_raw` still
   // carries that the stored `text` does not (ADAAAA-8059: the read path no longer

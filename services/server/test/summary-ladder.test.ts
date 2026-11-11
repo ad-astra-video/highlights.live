@@ -350,6 +350,31 @@ describe("summary ladder edge cases (ADAAAA-7623)", () => {
     expect(out.matchSummary.text).toContain("#1 1:33 (never corroborated)");
   });
 
+  // ADAAAA-8645: the served routes pass the card's own lane predicate, so rows
+  // that carry NO attestation (legacy live rows whose lane still derives from
+  // their stored window) count exactly like their CONFIRMED badge. The VOD rail
+  // ignores the predicate so its ladder stays byte-identical (AC8).
+  it("counts the caller's lane-confirmed rows and ignores the predicate on the VOD rail", () => {
+    const highlights = [{ id: "legacy", start: 10, eventType: "GOAL", status: "accepted", corroborated: false }] as any;
+    const live = buildSummaryLadder({
+      summaryLog: [{ seq: 1, ts: "t", windowTs: 10, text: "A shot is taken." }],
+      highlights,
+      gameHint: "Soccer",
+      fastRail: true,
+      corroborated: (h) => (h as any).id === "legacy",
+    });
+    expect(live.matchSummary.verifiedGoalCount).toBe(1);
+    expect(live.matchSummary.text).toContain("1 accepted goal (1 corroborated)");
+    const vod = buildSummaryLadder({
+      summaryLog: [{ seq: 1, ts: "t", windowTs: 10, text: "A shot is taken." }],
+      highlights,
+      gameHint: "Soccer",
+      fastRail: false,
+      corroborated: () => true,
+    });
+    expect(vod.matchSummary.verifiedGoalCount).toBe(0);
+  });
+
   it("caps the rollup at 1500 chars even for a very long match", () => {
     const longLog = Array.from({ length: 400 }, (_, i) => ({
       seq: i + 1,
