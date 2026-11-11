@@ -346,7 +346,8 @@ function main(): void {
   lines.push(`  duration   ${dur}  (floor ${grade.floorS} s)`);
   lines.push(
     `  delivered  n=${grade.n}${grade.anchors ? ` anchored of N=${grade.anchors.anchors}` : ""}  rows=${grade.nRows}` +
-      `  p50=${grade.p50Ms} ms  p95=${grade.p95Ms} ms  max=${grade.maxMs} ms`
+      `  p50=${grade.p50Ms} ms  p95=${grade.p95Ms} ms  max=${grade.maxMs} ms` +
+      `  p95(nearest-rank)=${grade.p95NearestRankMs} ms`
   );
   if (grade.anchors) {
     // The AC-B shape amendment asks for these on EVERY leg (ADAAAA-8487): `n`,

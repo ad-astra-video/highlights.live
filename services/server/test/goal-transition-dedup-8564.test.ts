@@ -257,3 +257,112 @@ describe("ADAAAA-8564 / Fix A: row accounting reconciles `accepted` with the row
     expect(buildLiveObserveMetrics(observer).rowAccounting).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8604 / R1: a football score is monotone PER TEAM, not by total.
+//
+// The Fix C guard compared `post[0] + post[1] < highWater[0] + highWater[1]`, so a
+// read that swaps the sides (`1-2` already read, then `2-1` attested) passes on an
+// equal TOTAL. Measured on the served build of `3f5734e`: high-water `[1,2]`, a
+// parked celebration, deferred read `1-1 -> 2-1` -> 1 upgrade, i.e. a second GOAL
+// on the same client-visible shape the parent ticket was opened about, one
+// split-order away.
+describe("ADAAAA-8604 / R1: the rewind compare is per team, not by total", () => {
+  it("refuses a same-total reversed split (run read 1-2, the deferred read lands 2-1)", () => {
+    const run = new LiveRunShared();
+    run.noteScoreReadings([
+      { ts: 20.0, ocr: ["1 - 2"] },
+      { ts: 23.0, ocr: ["1 - 2"] },
+    ]);
+    expect(run.scoreHighWaterState()).toEqual([1, 2]);
+    parkCelebration(run, 24.0, 30.0);
+    const upgrades = run.resolveDeferredGoalAttestation({
+      readAt: 30.0,
+      delta: deltaOf([1, 1], [2, 1], 28.0),
+    });
+    // 1-2 and 2-1 both total 3, so the total compare attests this. Per team it is
+    // a rewind (the side that read 2 cannot read 1 later), so it must not mint a
+    // second GOAL — the window stays the celebration it was accepted as.
+    expect(upgrades).toEqual([]);
+  });
+
+  it("still attests a genuine per-team forward step that reaches the same total", () => {
+    // Guard against over-suppression: 1-2 -> 2-2 raises one side and keeps the
+    // other, which is a forward step, not a rewind.
+    const run = new LiveRunShared();
+    run.noteScoreReadings([{ ts: 20.0, ocr: ["1 - 2"] }]);
+    parkCelebration(run, 24.0, 30.0);
+    const upgrades = run.resolveDeferredGoalAttestation({
+      readAt: 30.0,
+      delta: deltaOf([1, 2], [2, 2], 28.0),
+    });
+    expect(upgrades).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8604 / R2: the run-wide high-water is re-baselined on a detected kickoff.
+//
+// Measured on the served build of `3f5734e`: high-water `[3,2]`, then two `0-0`
+// reads (a new match starting), a parked celebration, deferred read
+// `0-0 -> 1-0` -> 0 upgrades. The new match's real goals all ship as celebrations
+// until the running total passes `3+2` — silently. A kickoff is two CONTIGUOUS
+// `0-0` reads after a non-zero high-water; the `54c03cfc` rewind read `1-1` and
+// never `0-0`, so it still fails closed (R1 above and the four Fix C tests).
+describe("ADAAAA-8604 / R2: a detected kickoff re-baselines the score high-water", () => {
+  it("attests the new match's first goal (0-0 -> 1-0) after a 3-2 first match", () => {
+    const run = new LiveRunShared();
+    run.noteScoreReadings([
+      { ts: 10.0, ocr: ["3 - 2"] },
+      { ts: 40.0, ocr: ["0 - 0"] },
+      { ts: 43.0, ocr: ["0 - 0"] },
+    ]);
+    expect(run.scoreHighWaterState()).toEqual([0, 0]);
+    expect(run.scoreKickoffBaselineResets()).toBe(1);
+    parkCelebration(run, 40.0, 48.0);
+    const upgrades = run.resolveDeferredGoalAttestation({
+      readAt: 50.0,
+      delta: deltaOf([0, 0], [1, 0], 45.0),
+    });
+    expect(upgrades).toHaveLength(1);
+  });
+
+  it("does not re-baseline on a SINGLE 0-0 read (one flicker is not a kickoff)", () => {
+    const run = new LiveRunShared();
+    run.noteScoreReadings([
+      { ts: 10.0, ocr: ["3 - 2"] },
+      { ts: 12.0, ocr: ["0 - 0"] },
+    ]);
+    expect(run.scoreHighWaterState()).toEqual([3, 2]);
+    parkCelebration(run, 12.0, 18.0);
+    const upgrades = run.resolveDeferredGoalAttestation({
+      readAt: 20.0,
+      delta: deltaOf([0, 0], [1, 0], 15.0),
+    });
+    expect(upgrades).toEqual([]);
+  });
+
+  it("does not re-baseline when a non-zero read lands between the two 0-0 reads", () => {
+    const run = new LiveRunShared();
+    run.noteScoreReadings([
+      { ts: 10.0, ocr: ["3 - 2"] },
+      { ts: 12.0, ocr: ["0 - 0"] },
+      { ts: 14.0, ocr: ["0 - 1"] },
+      { ts: 16.0, ocr: ["0 - 0"] },
+    ]);
+    // No re-baseline: the high-water is still the 3-2 state the run really read.
+    expect(run.scoreHighWaterState()).toEqual([3, 2]);
+  });
+
+  it("counts a re-produced window's 0-0 frame as one read, not two", () => {
+    // Overlapping decide windows carry the same content frames; a re-decided
+    // window must not fabricate the kickoff pair out of one read.
+    const run = new LiveRunShared();
+    run.noteScoreReadings([
+      { ts: 10.0, ocr: ["3 - 2"] },
+      { ts: 40.0, ocr: ["0 - 0"] },
+    ]);
+    run.noteScoreReadings([{ ts: 40.0, ocr: ["0 - 0"] }]);
+    expect(run.scoreHighWaterState()).toEqual([3, 2]);
+  });
+});

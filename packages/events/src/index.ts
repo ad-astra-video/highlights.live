@@ -1947,6 +1947,13 @@ export const HighlightRecordSchema = z.object({
       preSamples: z.number().int().min(0).optional(),
       postSamples: z.number().int().min(0).optional(),
       need: z.number().int().min(0).optional(),
+      /** ADAAAA-8610: the ACCEPT lane measured a legible transition and REFUSED
+       * it because its POST state lands below a score state this run already read
+       * (a rewind: replayed overlay, stale/mis-OCR read, or a scoreboard that
+       * reset on screen). Names the real refusal on the demoted row, so a grade
+       * can tell "no measurement" apart from "measured and refused". Additive
+       * optional — absent on every row the gate did not refuse. */
+      scoreRewindRefusal: z.string().optional(),
     })
     .optional(),
   /** ADAAAA-8139 (interim step, CEO ask 2026-11-06): a LIVE goal accept the
@@ -2032,6 +2039,23 @@ export const HighlightRecordSchema = z.object({
        *  `timeout` / `transport_failure` / `passthrough`). Additive optional; a
        *  verdict-producing dive never carries it. */
       dropReason: z.string().optional(),
+      /** ADAAAA-8647: which evidence carried a dead-lane promotion
+       *  (`frame_attestation_over_unread_score_lane`). The writer
+       *  (`live-confirm-async.ts`) always stamped it, but this schema did not
+       *  declare it, so zod STRIPPED it on persist and no stored row or page
+       *  could report the promotion basis. Additive optional. */
+      promotionBasis: z.string().optional(),
+      /** ADAAAA-8647: the pooled score-read counts that proved the lane was
+       *  DEAD (zero samples) rather than read-and-unchanged, so a fallback
+       *  promotion is gradable from the row alone. Additive optional. */
+      scoreLane: z
+        .object({
+          scoreReads: z.number().int().min(0),
+          preSamples: z.number().int().min(0),
+          postSamples: z.number().int().min(0),
+          need: z.number().int().min(0),
+        })
+        .optional(),
     })
     .optional(),
   deferredAttestation: z
