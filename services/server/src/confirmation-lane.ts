@@ -94,9 +94,11 @@ const LANE_LABELS = {
   noMeasurementNoDive: "Accepted without corroboration — no measurement and no dive",
   legacy: "Accepted — confirmation lane not recorded (legacy row)",
   // ADAAAA-8678: an unapproved (`pending`) row states the approve queue, never
-  // "accepted" — that word is a claim only a settled row supports.
-  pendingNoMeasurementNoDive: "Awaiting approval — measured no goal signal and ran no dive",
-  pendingNoCapture: "Awaiting approval — no measurement and no dive recorded",
+  // "accepted" — that word is a claim only a settled row supports. Deliberately
+  // ONE sentence: the only way to reach this lane is "no dive is recorded", and
+  // the row may still store accept-lane evidence (`attestationUsed`) this
+  // derivation does not read, so the sentence must not claim "no measurement".
+  pending: "Awaiting approval — no confirming dive recorded for this window",
 } as const;
 
 /** Read the Stage-1 verdict's measured criteria (`verdict.criteria`) out of a
@@ -253,7 +255,7 @@ export function diveVerdictFromAttestation(
  *   4. accepted with neither → `unconfirmed`; the label says which of the two
  *      honest cases it is (no measurement at all vs a legacy row with no
  *      captures) and never claims corroboration.
- *   4b. ADAAAA-8678: a `pending` (unapproved) row with neither → `unconfirmed`
+ *   4b. ADAAAA-8678: a `pending` (unapproved) row with no dive → `unconfirmed`
  *      too, worded as the approve queue ("Awaiting approval — …"), so an
  *      auto-publish-off card states its lane instead of serving no block at all.
  *   5. a rejected/suppressed row with no dive → no block at all (the row is
@@ -319,7 +321,7 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
   if (input.status === "pending") {
     return {
       lane: "unconfirmed",
-      label: hasCapture ? LANE_LABELS.pendingNoMeasurementNoDive : LANE_LABELS.pendingNoCapture,
+      label: LANE_LABELS.pending,
       measurement: "none",
       flags: stage1,
       flagsSource: stage1 ? "stage1_verdict" : undefined,
