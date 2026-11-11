@@ -1,0 +1,106 @@
+{
+ "provenance": {
+  "source": "DEPLOYED producer build f1e7cc3 (highlights-decide, 2026-11-11T02:10:43Z) \u2014 rule-fallback analysis capture",
+  "builtWith": "services/decide/app/gemma.py::decide_with_gemma(..., url=unreachable) -> _window_analysis(response=_response_block(result))",
+  "note": "probe-free: no decide/gemma call. This is the exact shape that was rejected at the decide-note seam on live job 22ff6ca2-96c0-4b97-bcb3-d762c14e6b1a, whose six `decide_audit` rows with no `reasoning` in raw_reply are PROSE replies (parse_decision -> None -> this rule-fallback dict).",
+  "measuredRejection": "[decide-note:22ff6ca2-96c0-4b97-bcb3-d762c14e6b1a] window analysis rejected: response.reasoning: Expected string, received null",
+  "mode": "base-deployed",
+  "promptNote": "analysis.prompt is \"\" on this path by design (no model call), which is what the server received"
+ },
+ "raw_reply": "The ball clearly crosses the goal line and enters the net, as seen in the dense frame sequence and the final keyframe where the net ripples.",
+ "analysis": {
+  "prompt": "",
+  "dataItems": [
+   {
+    "type": "candidate",
+    "label": "Candidate event type",
+    "value": "BIG_PLAY"
+   },
+   {
+    "type": "game",
+    "label": "Game hint",
+    "value": "unspecified"
+   },
+   {
+    "type": "tracking",
+    "label": "Track count",
+    "value": 2
+   },
+   {
+    "type": "tracking",
+    "label": "Max tracked velocity",
+    "value": 0.4
+   },
+   {
+    "type": "ocr",
+    "label": "OCR hits",
+    "value": 0
+   },
+   {
+    "type": "scoreboard",
+    "label": "Scoreboard score change",
+    "value": "no"
+   },
+   {
+    "type": "frames",
+    "label": "Frames shown (1 FPS temporal window)",
+    "value": 0
+   },
+   {
+    "type": "images",
+    "label": "Context images",
+    "value": 0
+   },
+   {
+    "type": "audio",
+    "label": "Audio provided (commentary/crowd)",
+    "value": "no"
+   },
+   {
+    "type": "goal_line",
+    "label": "Goal-line ground-truth (perceive homography)",
+    "value": "not available"
+   }
+  ],
+  "frames": [],
+  "images": [],
+  "audio": {
+   "uri": "",
+   "sampleRate": 16000,
+   "path": "none"
+  },
+  "asr": {
+   "transcript": ""
+  },
+  "perceiveTimeline": {
+   "records": 0,
+   "chars": 0,
+   "compacted": "none",
+   "seeds": 0,
+   "withFindings": 0
+  },
+  "response": {
+   "isHighlight": false,
+   "score": 36.0,
+   "eventType": "BIG_PLAY",
+   "reason": "2 track(s); fast move 0.40; notability 36 < bar 60",
+   "outcome": "not_highlight",
+   "nearMiss": false,
+   "reasoning": null,
+   "verdict": null,
+   "evidenceAttested": [],
+   "audioContext": {
+    "path": "none",
+    "transcribed": false,
+    "asrRan": false,
+    "asrLatencyS": 0.0,
+    "asrSource": "none",
+    "windowAudioPresent": false,
+    "noAudioReason": "no_audio_clip"
+   },
+   "runningSummary": "[not_highlight] BIG_PLAY \u2014 2 track(s); fast move 0.40; notability 36 < bar 60",
+   "postTitle": null,
+   "source": "rule-fallback"
+  }
+ }
+}

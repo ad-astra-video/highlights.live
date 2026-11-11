@@ -710,9 +710,9 @@ def parse_decision(text: str) -> dict | None:
         # play — surfaced at a lower score, labeled distinctly below.
         "outcome": outcome,
         "nearMiss": outcome == "near_miss",
-        # I1 reviewer-facing rationale (always present so the API response shape
-        # is stable whether or not the model populated them).
-        "reasoning": _as_text(obj.get("reasoning")),
+        # I1 reviewer-facing rationale: ADDITIVE, so it is stamped below only when
+        # the reply actually carried one (ADAAAA-8635) — see the `reasoning`
+        # block next to `phase` after this dict.
         "verdict": _normalize_verdict(obj.get("verdict")),
         "evidenceAttested": _as_str_list(obj.get("evidenceAttested")),
         # ADAAAA-7111 (Increment D): the running video summary the model updated
@@ -725,6 +725,21 @@ def parse_decision(text: str) -> dict | None:
         "postTitle": _as_text(obj.get("postTitle")),
         "source": "gemma",
     }
+    # ADAAAA-8635: the reviewer rationale is ADDITIVE (I1) exactly like `phase`,
+    # so a reply that omits it adds NO KEY — `""` and absent both mean "no
+    # rationale". It used to be stamped unconditionally, and the sibling
+    # producers that build a decision WITHOUT the key (the deterministic
+    # rule-fallback dict, a group verdict the model returned without it) then had
+    # `_response_block` turn the missing key into an explicit ``"reasoning": null``
+    # on the retained per-window analysis. The server's
+    # ``AnalysisResponseSchema.reasoning`` (``.optional()``) rejects an explicit
+    # null, so that ONE field dropped the WHOLE window analysis (prompt,
+    # dataItems, frames, response) from the decide note — measured on job
+    # 22ff6ca2-96c0-4b97-bcb3-d762c14e6b1a, where a prose (unparseable) gemma
+    # reply fell back to the rule and lost its analysis block (ADAAAA-8632).
+    reasoning = _as_text(obj.get("reasoning"))
+    if reasoning:
+        decision["reasoning"] = reasoning
     # ADAAAA-8625: the footage phase is ADDITIVE metadata (ADAAAA-8325), so an
     # UNKNOWN phase must add NO KEY at all. It used to land here as an explicit
     # ``None``, which the wire then carried as ``"phase": null``: the live
@@ -2621,7 +2636,6 @@ def _response_block(decision: dict) -> dict:
         "reason": decision.get("reason"),
         "outcome": decision.get("outcome"),
         "nearMiss": decision.get("nearMiss"),
-        "reasoning": decision.get("reasoning"),
         "verdict": decision.get("verdict"),
         "evidenceAttested": decision.get("evidenceAttested") or [],
         "audioContext": decision.get("audioContext"),
@@ -2637,6 +2651,17 @@ def _response_block(decision: dict) -> dict:
     # (dropping the whole window analysis for every live window).
     if decision.get("phase"):
         block["phase"] = decision.get("phase")
+    # ADAAAA-8635: the rationale is optional exactly like `phase`, and it is the
+    # one field that was still stamped unconditionally. `decision.get()` on a
+    # decision WITHOUT a rationale (the deterministic rule-fallback dict, a group
+    # verdict the model returned without the key, a pre-I1 reply) produced an
+    # explicit ``"reasoning": null``; the server's
+    # ``AnalysisResponseSchema.reasoning`` (``.optional()``) rejected the null and
+    # deleted the WHOLE per-window analysis block. Absent = no rationale, so the
+    # key is added only when there is one.
+    reasoning = decision.get("reasoning")
+    if reasoning:
+        block["reasoning"] = reasoning
     return block
 
 

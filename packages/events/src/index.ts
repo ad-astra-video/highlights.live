@@ -2336,8 +2336,8 @@ export type AnalysisAsr = z.infer<typeof AnalysisAsrSchema>;
 export const AnalysisResponseSchema = z.object({
   isHighlight: z.boolean().optional(),
   score: z.number().min(0).max(100).optional(),
-  eventType: z.string().optional(),
-  reason: z.string().optional(),
+  eventType: z.string().nullish(),
+  reason: z.string().nullish(),
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
   // ADAAAA-8325 (Inc 2): the footage phase retained with the raw decide reply.
   // ADAAAA-8625: `nullish`, not `optional`. The live compact contract never
@@ -2348,11 +2348,20 @@ export const AnalysisResponseSchema = z.object({
   // seam (`WindowAnalysisSchema.parse` in services/server/src/analyzer.ts).
   phase: z.enum(["live", "replay"]).nullish(),
   nearMiss: z.boolean().optional(),
-  reasoning: z.string().optional(),
+  // ADAAAA-8635: `nullish`, not `optional`, for the same reason `phase` is.
+  // These four are the decide boundary's OPTIONAL audit strings, and a decision
+  // built without one (the deterministic rule-fallback dict, a group verdict the
+  // model returned without the key, a pre-I1 reply) used to reach the wire as an
+  // explicit `null` — `_response_block` stamped `decision.get(k)`. `optional()`
+  // accepts only the ABSENT form, so one null reasoning deleted the WHOLE window
+  // analysis at the decide-note seam (`WindowAnalysisSchema.parse` in
+  // services/server/src/analyzer.ts, job 22ff6ca2 on the f1e7cc3 build).
+  // null and absent both mean "not captured"; a real value is unchanged.
+  reasoning: z.string().nullish(),
   verdict: z.unknown().optional(),
   evidenceAttested: z.array(z.string()).default([]),
   audioContext: z.unknown().optional(),
-  runningSummary: z.string().optional(),
+  runningSummary: z.string().nullish(),
   source: z.string().optional(),
 });
 export type AnalysisResponse = z.infer<typeof AnalysisResponseSchema>;
