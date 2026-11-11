@@ -1,5 +1,33 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`ADAAAA-8687: the shipped one-line caption shapes > tells a celebration row not to touch the score, and offers it no score fact 1`] = `
+"You write the BODY copy under a highlight clip's short headline.
+The headline is already on the card; your copy sits underneath it and must add detail.
+Rail: live. Write 2-3 sentences, 25-55 words.
+Rules:
+- State only what the evidence below supports.
+- Hit the length target: at least 25 words. If the copy runs short, add the clock, the competition or venue, or an attested action from the evidence.
+- Include at least one fact the headline does not carry: the clock or spell, the competition or venue, or a named player's attested action.
+- A name is optional. If the evidence names nobody, carry the depth with clock and action facts.
+- This is NOT a scoring play: the words 'goal', 'scoring', 'score' and 'net' are off limits. Do not describe a goal or a scoring chance, do not name the net, and do not state a score or whether it changed.
+- Never invent a name, a team, a venue or a statistic. When the evidence names nobody, describe roles only ('the midfielder', 'the keeper') and do not capitalize a made-up name.
+- Name the clock in your copy (the window label, e.g. \`0:12\`): with no score fact, the clock is the fact this card can carry.
+- Do not restate the headline or the announcer line.
+- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').
+Evidence:
+Verdict: big_play
+Reason: Ball shoots in midfield
+Headline: (none)
+Announcer line: Ball shoots in midfield
+Window: 0:12 (+12 s)
+Score transition: (none measured)
+Match context:
+(none)
+ASR transcript: (none)
+Adjacent scoring cue: (none)
+Body copy:"
+`;
+
 exports[`prompt contract (snapshot) > renders the VOD band and omits absent evidence without inventing any 1`] = `
 "You write the BODY copy under a highlight clip's short headline.
 The headline is already on the card; your copy sits underneath it and must add detail.
