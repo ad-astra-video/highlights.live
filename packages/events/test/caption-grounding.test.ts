@@ -831,6 +831,73 @@ describe("corroboration uses the banner's own rule (§3.4)", () => {
     expect(windowCorroborated([win({ goalConfirmed: "near_miss" })], 108)).toBe(false);
   });
 
+  // ADAAAA-8645: a LIVE row stores its evidence in `attestationUsed` and its
+  // Stage-2 verdict in `confirmAttestation`, never in the legacy top-level pair.
+  // Job f02ec0bf read "2 accepted goals (0 corroborated)" beside two CONFIRMED
+  // cards because the banner only looked at the legacy fields.
+  describe("a LIVE row's own attestation (ADAAAA-8645)", () => {
+    it("counts a measured scoreboard change as corroboration", () => {
+      expect(
+        isCorroboratedHighlight(
+          win({
+            attestationUsed: {
+              scoreBoardChanged: true,
+              goalCrossed: false,
+              ballOutcome: null,
+              corroborated: false, // the DIVE flag: no dive corroborated this row
+              goalConfirmed: null,
+              scoreReads: 32,
+            },
+          })
+        )
+      ).toBe(true);
+      expect(windowCorroborated([win({ attestationUsed: { scoreBoardChanged: true, corroborated: false } })], 108)).toBe(true);
+    });
+
+    it("counts a dive-confirmed row whose window measured nothing", () => {
+      expect(
+        isCorroboratedHighlight(
+          win({
+            attestationUsed: { scoreBoardChanged: false, goalCrossed: false, ballOutcome: null, corroborated: true, goalConfirmed: "confirmed_goal", scoreReads: 0 },
+            confirmAttestation: { goalConfirmed: "confirmed_goal", corroborated: true },
+          })
+        )
+      ).toBe(true);
+    });
+
+    it("a stored refutation WINS over a measured score change", () => {
+      // Row 85a89562: the score lane measured 1-1 -> 2-1 and the dive said not_goal.
+      const refuted = win({
+        attestationUsed: { scoreBoardChanged: true, goalCrossed: false, ballOutcome: null, corroborated: false, goalConfirmed: null, scoreReads: 18 },
+        confirmAttestation: { goalConfirmed: "not_goal", corroborated: false },
+      });
+      expect(isCorroboratedHighlight(refuted)).toBe(false);
+      expect(windowCorroborated([refuted], 108)).toBe(false);
+    });
+
+    it("a near_miss dive is a refutation even when the frame flag says corroborated", () => {
+      expect(isCorroboratedHighlight(win({ confirmAttestation: { goalConfirmed: "near_miss", corroborated: true } }))).toBe(false);
+      expect(
+        isCorroboratedHighlight(win({ confirmAttestation: { goalConfirmed: "confirmed_goal", corroborated: false } }))
+      ).toBe(false);
+    });
+
+    it("an attestation that measured nothing is not corroboration", () => {
+      expect(
+        isCorroboratedHighlight(
+          win({
+            attestationUsed: { scoreBoardChanged: false, goalCrossed: false, ballOutcome: null, corroborated: false, goalConfirmed: null, scoreReads: 0 },
+          })
+        )
+      ).toBe(false);
+    });
+
+    it("reads the goal line and a ball-in-net outcome as measured evidence", () => {
+      expect(isCorroboratedHighlight(win({ attestationUsed: { goalCrossed: true, scoreBoardChanged: false } }))).toBe(true);
+      expect(isCorroboratedHighlight(win({ attestationUsed: { ballOutcome: "goal", scoreBoardChanged: false } }))).toBe(true);
+    });
+  });
+
   it("fails closed on a net-crossing shape the claim lexicon has not learned", () => {
     // The measured chapter lead: "No. 8 headers ball into net — crowd erupts".
     const out = gateUncorroboratedGoal("No. 8 headers ball into net — crowd erupts", false);

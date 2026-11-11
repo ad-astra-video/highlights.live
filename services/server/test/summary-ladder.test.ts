@@ -288,6 +288,68 @@ describe("summary ladder edge cases (ADAAAA-7623)", () => {
     expect(out.matchSummary.text).toContain("#2 0:40 (never corroborated)");
   });
 
+  // ADAAAA-8645 (served build, job f02ec0bf): a LIVE highlight stores its goal
+  // evidence in `attestationUsed` / `confirmAttestation`, never in the legacy
+  // top-level pair. The banner read "2 accepted goals (0 corroborated)" while
+  // both cards served CONFIRMED (one measured 1-1 -> 2-1, one dive-confirmed).
+  it("counts a LIVE row's own attestation as corroborated (measured and dive)", () => {
+    const out = buildSummaryLadder({
+      summaryLog: [{ seq: 1, ts: "t", windowTs: 13, text: "The scoreboard moves to 2-1." }],
+      highlights: [
+        {
+          id: "a6e7bebf",
+          start: 13.3,
+          eventType: "GOAL",
+          status: "accepted",
+          outcome: "scoring_play",
+          attestationUsed: {
+            scoreBoardChanged: true,
+            goalCrossed: false,
+            ballOutcome: null,
+            corroborated: false, // the DIVE flag — no dive corroborated this row
+            goalConfirmed: null,
+            scoreReads: 32,
+          },
+        },
+        {
+          id: "d5e38c83",
+          start: 201.6,
+          eventType: "GOAL",
+          status: "accepted",
+          outcome: "scoring_play",
+          attestationUsed: { scoreBoardChanged: false, goalCrossed: false, ballOutcome: null, corroborated: true, goalConfirmed: "confirmed_goal", scoreReads: 0 },
+          confirmAttestation: { goalConfirmed: "confirmed_goal", corroborated: true },
+        },
+      ] as any,
+      gameHint: "Soccer",
+    });
+    expect(out.matchSummary.goalCount).toBe(2);
+    expect(out.matchSummary.verifiedGoalCount).toBe(2);
+    expect(out.matchSummary.text).toContain("2 accepted goals (2 corroborated)");
+    expect(out.matchSummary.text).not.toContain("never corroborated");
+  });
+
+  it("a dive-REFUTED row is still uncorroborated (the refutation wins)", () => {
+    const out = buildSummaryLadder({
+      summaryLog: [{ seq: 1, ts: "t", windowTs: 93, text: "The defender clears the ball." }],
+      highlights: [
+        {
+          id: "85a89562",
+          start: 93,
+          eventType: "GOAL",
+          status: "accepted",
+          outcome: "scoring_play",
+          attestationUsed: { scoreBoardChanged: true, goalCrossed: false, ballOutcome: null, corroborated: false, goalConfirmed: null, scoreReads: 18 },
+          confirmAttestation: { goalConfirmed: "not_goal", corroborated: false },
+        },
+      ] as any,
+      gameHint: "Soccer",
+    });
+    expect(out.matchSummary.goalCount).toBe(1);
+    expect(out.matchSummary.verifiedGoalCount).toBe(0);
+    expect(out.matchSummary.text).toContain("#1 1:33 (never corroborated)");
+  });
+
   it("caps the rollup at 1500 chars even for a very long match", () => {
     const longLog = Array.from({ length: 400 }, (_, i) => ({
       seq: i + 1,

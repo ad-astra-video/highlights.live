@@ -80,8 +80,22 @@ const OUTCOME_LABELS: Record<string, string> = {
  */
 export function postTitleLabel(eventType?: string | null, outcome?: string | null): string {
   const et = (eventType ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_");
-  if (TITLE_LABELS[et]) return TITLE_LABELS[et];
   const oc = (outcome ?? "").trim().toLowerCase();
+  const eventLabel = TITLE_LABELS[et];
+  // ADAAAA-8645 (measured on the served build, job `f02ec0bf` row `85a89562`): a
+  // row keeps its stored `eventType` ("GOAL") when the read seam demotes it — the
+  // demotion is a projection (`outcome: "big_play"`), never a rewrite of the
+  // stored row. Deriving the label from the taxonomy alone therefore served
+  // "GOAL · 1:40" on a row the dive REFUTED, i.e. the deterministic fallback
+  // asserted the very claim the read seam's own S2 rule refuses
+  // (`servedPostTitleViolations`: no goal claim when the stored verdict is not
+  // `scoring_play`). The served verdict wins over the stored taxonomy, so the
+  // label obeys the same rule the claim gate applies.
+  if (eventLabel === "GOAL" && oc && oc !== "scoring_play") {
+    const downgraded = OUTCOME_LABELS[oc];
+    if (downgraded && downgraded !== "GOAL") return downgraded;
+  }
+  if (eventLabel) return eventLabel;
   if (OUTCOME_LABELS[oc]) return OUTCOME_LABELS[oc];
   if (et) {
     const human = humanEventLabel(et).toUpperCase();

@@ -79,6 +79,24 @@ describe("deterministicPostTitle (the legacy / fallback title)", () => {
     expect(postTitleLabel(undefined, undefined)).toBe("HIGHLIGHT");
   });
 
+  // ADAAAA-8645 (served build, job f02ec0bf row 85a89562): a dive-refuted row is
+  // demoted by a PROJECTION (`outcome: "big_play"`) and keeps `eventType: "GOAL"`,
+  // so the deterministic title served "GOAL · 1:40" on the one row the dive
+  // refuted. The label follows the served verdict, exactly like the read seam's
+  // own S2 claim gate (`servedPostTitleViolations`).
+  it("never labels a demoted row GOAL (the served verdict wins over the taxonomy)", () => {
+    expect(postTitleLabel("GOAL", "big_play")).toBe("BIG PLAY");
+    expect(postTitleLabel("GOAL", "near_miss")).toBe("NEAR MISS");
+    expect(postTitleLabel("GOAL", "not_highlight")).toBe("HIGHLIGHT");
+    expect(postTitleLabel("GOAL", "scoring_play")).toBe("GOAL");
+    expect(postTitleLabel("GOAL")).toBe("GOAL");
+    expect(deterministicPostTitle({ eventType: "GOAL", outcome: "big_play", windowTs: 100 })).toBe("BIG PLAY · 1:40");
+    expect(deterministicPostTitle({ eventType: "GOAL", outcome: "scoring_play", windowTs: 208 })).toBe("GOAL · 3:28");
+    // A non-GOAL taxonomy keeps the existing precedence (no widened change).
+    expect(postTitleLabel("SHOT", "big_play")).toBe("SHOT");
+    expect(postTitleLabel("NEAR_MISS", "big_play")).toBe("NEAR MISS");
+  });
+
   it("formats the window clock as m:ss and refuses a bad ts", () => {
     expect(postTitleClock(72)).toBe("1:12");
     expect(postTitleClock(4.8)).toBe("0:04");
