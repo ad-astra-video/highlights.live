@@ -629,6 +629,15 @@ export interface ServerConfig {
   freeHighlights: number;
   /** Fixed fee per decide call (single shot, USD). Default $0.01. */
   decideFee: number;
+  /** ADAAAA-8668: the `summary` (body-copy) lane. Default ON when the decide
+   *  service is reachable; `SUMMARY_LANE=0` is the operator kill-switch (off =>
+   *  no call is ever issued and every promoted row keeps today's card exactly).
+   *  The lane is post-promotion and lowest priority, so it can never add detect
+   *  latency. */
+  summaryLaneEnabled: boolean;
+  /** ADAAAA-8668: per-call fee for the summary lane. Defaults to the AC5
+   *  ceiling (`1.5x DECIDE_FEE`) and is always clamped to it. */
+  summaryFee?: number;
   /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). When true, the
    * pass runs the decide `/confirm` deep-frame-dive for un-attested goal-type
    * candidates and adopts the reconciled verdict. Wired from
@@ -1243,6 +1252,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
     freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 10),
     decideFee: Number(env.DECIDE_FEE ?? 0.01),
+    // ADAAAA-8668: the post-promotion body-copy lane (default ON; `SUMMARY_LANE=0`
+    // is the operator kill-switch) and its own fee class, clamped to 1.5x
+    // `DECIDE_FEE` (`resolveSummaryFee`).
+    summaryLaneEnabled: env.SUMMARY_LANE !== "0" && env.SUMMARY_LANE !== "false",
+    summaryFee: env.SUMMARY_FEE ? Number(env.SUMMARY_FEE) : undefined,
     // Stage-2 goal/near-miss confirmation pass config flag (ADAAAA-6797).
     // Default OFF; ADAAAA-7663 makes it gate BOTH the VOD and the live pass, so
     // a flag-off deploy keeps the Stage-1 path byte-identical on both.
