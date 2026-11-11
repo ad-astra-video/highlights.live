@@ -62,7 +62,7 @@ import {
   type ScoreboardDeltaEvidence,
 } from "./analyzer";
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
-import type { LiveConsumeEvidence } from "./live-progress";
+import type { LiveConsumeEvidence, LiveSupplyEvidence } from "./live-progress";
 import { liveDecideAdmission } from "./live-decide-admission";
 import {
   audioTriggerFromCandidate,
@@ -595,6 +595,25 @@ export class MediaRailObserver {
       skippedTimestamps: [...this.skippedTs].sort((a, b) => a - b),
       analysedThroughTs: Number(this.lastConsumedTs.toFixed(3)),
       tapThroughTs: Number(this.lastSeenTs.toFixed(3)),
+    };
+  }
+
+  /**
+   * ADAAAA-8636: this share's LIVE SUPPLY counters — stale lag drops, admission
+   * skips and in-flight backpressure skips — read MID-SHARE from the rail's own
+   * observer. Same triple the completion report publishes as
+   * `observeMetrics.supplySkippedWindows` (ADAAAA-7808: throttle excluded), so
+   * the live chip and the settled record use one definition.
+   *
+   * This is the only in-flight source for the chip's `skippedWindows`; the
+   * summary-log gap heuristic is terminal-legacy-only. Reads counters already
+   * kept for the completion snapshot: no new meter, no decide call, no GPU.
+   */
+  liveSupplyEvidence(): LiveSupplyEvidence {
+    return {
+      skippedStaleWindows: this.live.skippedStaleWindowCount(),
+      admissionSkippedWindows: this.live.admissionSkipCount(),
+      backpressureSkippedWindows: this.live.backpressureSkipCount(),
     };
   }
 

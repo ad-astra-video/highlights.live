@@ -43,6 +43,17 @@ describe("liveProgressChipLabel", () => {
     expect(liveProgressChipLabel({ ...base, skippedWindows: 1 })).toContain("1 window skipped past the 30 s budget");
   });
 
+  it("renders no skip clause when an in-flight share has no supply evidence (ADAAAA-8636 AC-1)", () => {
+    // ADAAAA-8636: the server OMITS `skippedWindows` (`skipData: false`) while a
+    // live share has no rail counters in memory — the count is unknown, not 33
+    // and not 0. The chip must drop the clause rather than invent a number.
+    const { skippedWindows: _omitted, ...noCount } = base;
+    expect(liveProgressChipLabel({ ...noCount, skipData: false })).toBe("Processing - 26 s behind live");
+    expect(liveProgressChipLabel(noCount)).toBe("Processing - 26 s behind live");
+    // A MEASURED zero from the rail also renders no clause (there is nothing to say).
+    expect(liveProgressChipLabel({ ...base, skippedWindows: 0 })).toBe("Processing - 26 s behind live");
+  });
+
   it("renders nothing without a decided window / on a terminal job (state unknown)", () => {
     expect(liveProgressChipLabel(undefined)).toBeNull();
     expect(liveProgressChipLabel(null)).toBeNull();

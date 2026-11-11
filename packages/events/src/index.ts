@@ -2722,8 +2722,19 @@ export const LiveProgressSchema = z.object({
   processedThroughTs: z.number().min(0),
   /** liveEdgeTs - processedThroughTs, clamped >= 0. */
   lagSec: z.number().min(0),
-  /** Cadence windows dropped past the lag budget this run. */
-  skippedWindows: z.number().int().min(0),
+  /** SUPPLY skip count: cadence windows the rail could not serve (stale +
+   * admission + backpressure; never the funded throttle — ADAAAA-7808).
+   * ADAAAA-8636: OPTIONAL because an in-flight share whose rail counters are not
+   * in memory carries no honest count — the projection OMITS the field rather
+   * than synthesizing one from `summaryLog` caption gaps (the 02:34Z leg read a
+   * fabricated 33 against a continuous 261-window ledger). Always present on a
+   * settled record (`observeMetrics.supplySkippedWindows`, floor
+   * `skippedStaleWindows`). */
+  skippedWindows: z.number().int().min(0).optional(),
+  /** ADAAAA-8636: `false` when an in-flight share has no rail supply evidence
+   * (so `skippedWindows` is absent and the chip renders no skip clause).
+   * Omitted on a terminal record and while live counters are available. */
+  skipData: z.boolean().optional(),
   /** `unknown` when the derivation has no anchor / no decided window yet, and
    * for a terminal job (no live edge — the UI shows the completion state). */
   state: z.enum(["caught_up", "behind", "unknown"]),

@@ -73,8 +73,27 @@ export interface LiveProgress {
   /** SUPPLY skip count: cadence windows the rail could not serve (stale lag
    * drops + admission + backpressure). The funded decide-rate throttle is NOT
    * included — it is a spend decision, not missing coverage (ADAAAA-7808, PO
-   * ruling on ADAAAA-7802). */
-  skippedWindows: number;
+   * ruling on ADAAAA-7802).
+   *
+   * ADAAAA-8636 contract:
+   * - TERMINAL: always present. `observeMetrics.supplySkippedWindows` verbatim,
+   *   with `skippedStaleWindows` as the floor for a record written before that
+   *   field existed (ADAAAA-8526's 312/312 read is unchanged).
+   * - IN FLIGHT: present ONLY when the live rail's own in-memory supply
+   *   counters were handed in (`liveSupply`). It is NEVER synthesized from
+   *   `summaryLog` caption gaps: that log holds one row per KEPT CAPTION
+   *   (~24 s apart on the 02:34Z leg), so its gaps measure the summary writer,
+   *   not missing coverage. Replaying the old formula against a continuous
+   *   261-window / 8.6 s-max-step ledger invented 33 skipped windows.
+   * - IN FLIGHT with no rail evidence (rail gone, process restarted): the field
+   *   is OMITTED and `skipData` is `false`, so the chip renders no skip clause
+   *   instead of a fabricated count (no invented zero). */
+  skippedWindows?: number;
+  /** ADAAAA-8636: `false` when an in-flight share has NO rail supply evidence,
+   * i.e. `skippedWindows` is absent because the counters are not in memory.
+   * Omitted on a terminal record (the count is always known there) and omitted
+   * while the live counters are available. */
+  skipData?: boolean;
   state: "caught_up" | "behind" | "unknown";
   /** Wall clock this projection was derived at. */
   updatedAt: string;
@@ -121,6 +140,17 @@ export interface LiveConsumeEvidence {
   tapThroughTs?: number;
 }
 
+/** ADAAAA-8636: the live rail's in-memory SUPPLY counters, read mid-share by
+ * the ADAAAA-8250 pattern. Same names the completion report publishes into
+ * `observeMetrics`, so the in-flight number and the settled number are the SAME
+ * definition (stale + admission + backpressure; throttle excluded per
+ * ADAAAA-7808). Counts only — no timestamps, no decide inference, no GPU. */
+export interface LiveSupplyEvidence {
+  skippedStaleWindows?: number;
+  admissionSkippedWindows?: number;
+  backpressureSkippedWindows?: number;
+}
+
 export interface LiveProgressInput {
   /** The stored job record (in-flight or terminal). */
   job: Partial<
@@ -148,6 +178,16 @@ export interface LiveProgressInput {
    * share. Counts + content-clock positions only: no new meter, no new
    * inference. Ignored for a terminal job (AC-4). */
   liveConsume?: LiveConsumeEvidence | null;
+  /** ADAAAA-8636: the rail's LIVE supply counters for an in-flight job — the
+   *  `skippedStaleWindows + admissionSkippedWindows + backpressureSkippedWindows`
+   *  triple the completion report already publishes, read MID-SHARE from the
+   *  in-memory rail. This is the ONLY in-flight source for `skippedWindows`; the
+   *  summary-log gap heuristic is terminal-legacy-only (it measures the caption
+   *  cadence, and on the 02:34Z leg it invented 33 skips against a continuous
+   *  261-window ledger). `null`/absent = no rail evidence in memory, so the
+   *  projection omits the count instead of guessing. Ignored for a terminal job
+   *  (AC-2: the settled record's exact field wins). */
+  liveSupply?: LiveSupplyEvidence | null;
   /** ADAAAA-8265: content ts of the newest window whose verdict the run has
    * APPLIED (one row per decided window, rejected included). This is the
    * processed-through watermark — the `summaryLog` cadence measured the summary
@@ -256,14 +296,48 @@ export function liveContentAnchorMs(job: LiveProgressInput["job"] | undefined): 
 }
 
 /**
+ * ADAAAA-8636: the SUPPLY skip total from the live rail's in-memory counters —
+ * `skippedStaleWindows + admissionSkippedWindows + backpressureSkippedWindows`,
+ * the same definition `observeMetrics.supplySkippedWindows` publishes at share
+ * end (ADAAAA-7808). Never includes the funded throttle.
+ *
+ * Returns `null` when NO counter was supplied, so the caller can omit the field
+ * rather than assert an unmeasured 0. A negative/non-finite counter is ignored
+ * (never allowed to reduce another cause's real count).
+ */
+export function liveSupplySkippedWindows(live?: LiveSupplyEvidence | null): number | null {
+  if (!live) return null;
+  let sum = 0;
+  let seen = false;
+  for (const raw of [live.skippedStaleWindows, live.admissionSkippedWindows, live.backpressureSkippedWindows]) {
+    const n = finiteNumber(raw);
+    if (n === null) continue;
+    seen = true;
+    sum += Math.max(0, n);
+  }
+  return seen ? Math.max(0, Math.round(sum)) : null;
+}
+
+/**
  * Cadence windows swallowed between two consecutive DECIDED windows.
  *
- * The live observer fires one decide per cadence (3 s of content) and appends
- * exactly one summary entry per decided window. A stale drop advances the
- * cadence clock through the dropped content, so the next decided window's
- * content ts jumps by a WHOLE number of cadences. A delta of one cadence is the
- * normal step (0 skips); each extra full cadence is one window the budget
- * swallowed.
+ * ADAAAA-8636: TERMINAL-LEGACY ONLY. Use this exclusively as the fallback for a
+ * record written before `observeMetrics.supplySkippedWindows` existed; it must
+ * never be called for an in-flight job. `summaryLog` is appended only when the
+ * running-summary pass KEPT a caption (its own header says so; ~24 s apart on
+ * the 02:34Z leg, empty on short legs), so its gaps measure the summary writer,
+ * not decide progress — and each gap that happens to land on the 3 s grid is
+ * then read as missing coverage. On job `22ff6ca2` this reproduced 33 "skipped"
+ * windows against a continuous 261-window ledger (max step 8.6 s), and the two
+ * LARGEST summary gaps (106.6 s / 238.0 s) scored zero because they were
+ * off-grid. The in-flight count now comes from the rail's own supply counters
+ * (ADAAAA-8636, `liveSupply`) or is omitted.
+ *
+ * The arithmetic itself is unchanged for the legacy terminal fallback:
+ * a stale drop advances the cadence clock through the dropped content, so the
+ * next decided window's content ts jumps by a WHOLE number of cadences. A delta
+ * of one cadence is the normal step (0 skips); each extra full cadence is one
+ * window the budget swallowed.
  *
  * Conservative by design: a delta that is not (near) an exact cadence multiple
  * is not counted — an audio-trigger-anchored window can sit off the blind
@@ -390,24 +464,39 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
   const analysedLagSec =
     analysedPositionTs > 0 ? Math.max(0, round3(liveEdgeTs - analysedPositionTs)) : undefined;
 
-  // In flight the summary-log gaps are the only customer-safe skip evidence. At
-  // completion the run's own exact counter takes over as a floor — still only
-  // the COUNT is surfaced, never the observe snapshot it came from.
+  // ADAAAA-8636: `skippedWindows` is a SUPPLY fact, so in flight it may only
+  // come from a supply COUNTER — never from summary-log gap arithmetic (that
+  // log measures the caption cadence; it invented 33 skips on the 02:34Z leg's
+  // continuous ledger). Terminal keeps the exact record contract: the run's own
+  // `supplySkippedWindows` verbatim, else the legacy gap heuristic floored by
+  // the recorded stale counter. The heuristic is therefore TERMINAL-LEGACY-ONLY.
   const derivedSkips = skippedWindowsFromSummaryLog(entries, input.cadenceS);
-  const recordedSkips = terminal ? Math.max(0, Math.round(finiteNumber(job.observeMetrics?.skippedStaleWindows) ?? 0)) : 0;
-  // ADAAAA-7808 (PO ruling on ADAAAA-7802): on the shipped rail `skippedWindows`
-  // is the SUPPLY count — stale drops + admission + backpressure — and NEVER the
-  // throttle, which is a funded rate decision. A terminal record now carries that
-  // exact number, so it wins over the gap heuristic: with the rate cap on, the
-  // throttled windows leave cadence gaps the heuristic reads as skipped SUPPLY
-  // (measured 35 and 33 on the 2-stream ship row against a true supply of 1 and
-  // 0). The heuristic stays the fallback for records written before the field
-  // existed.
-  const exactSupply = terminal ? finiteNumber(job.observeMetrics?.supplySkippedWindows) : null;
-  const skippedWindows =
-    exactSupply !== null && exactSupply >= 0
-      ? Math.max(0, Math.round(exactSupply))
-      : Math.max(derivedSkips, recordedSkips);
+  let skippedWindows: number | undefined;
+  let skipData: boolean | undefined;
+  if (terminal) {
+    const recordedSkips = Math.max(0, Math.round(finiteNumber(job.observeMetrics?.skippedStaleWindows) ?? 0));
+    // ADAAAA-7808 (PO ruling on ADAAAA-7802): on the shipped rail
+    // `skippedWindows` is the SUPPLY count — stale drops + admission +
+    // backpressure — and NEVER the throttle, which is a funded rate decision. A
+    // terminal record now carries that exact number, so it wins over the gap
+    // heuristic: with the rate cap on, the throttled windows leave cadence gaps
+    // the heuristic reads as skipped SUPPLY (measured 35 and 33 on the 2-stream
+    // ship row against a true supply of 1 and 0). The heuristic stays the
+    // fallback for records written before the field existed.
+    const exactSupply = finiteNumber(job.observeMetrics?.supplySkippedWindows);
+    skippedWindows =
+      exactSupply !== null && exactSupply >= 0
+        ? Math.max(0, Math.round(exactSupply))
+        : Math.max(derivedSkips, recordedSkips);
+  } else {
+    // In flight the rail's in-memory counters are the ONLY honest source. When
+    // the rail is not in memory (process restart / evidence not wired), omit the
+    // count and say so via `skipData: false` — the chip renders no skip clause
+    // rather than a synthesized number or an invented zero.
+    const liveSkips = liveSupplySkippedWindows(input.liveSupply);
+    if (liveSkips !== null) skippedWindows = liveSkips;
+    else skipData = false;
+  }
 
   const state: LiveProgress["state"] =
     !LIVE_SOURCES.has(String(job.source ?? "")) || anchorMs === null || processedThroughTs <= 0
@@ -422,7 +511,10 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
     liveEdgeTs: round3(liveEdgeTs),
     processedThroughTs: round3(processedThroughTs),
     lagSec,
-    skippedWindows,
+    // ADAAAA-8636: omitted in flight when no rail supply evidence is at hand;
+    // always present on a terminal record (unchanged contract).
+    ...(skippedWindows !== undefined ? { skippedWindows } : {}),
+    ...(skipData !== undefined ? { skipData } : {}),
     state: terminal ? "unknown" : state,
     updatedAt: new Date(nowMs).toISOString(),
     // ADAAAA-8121: present only when the position is actually known, so a

@@ -126,7 +126,11 @@ export function liveProgressChipLabel(progress?: LiveProgress | null, staleSec =
   }
   const lag = Math.max(0, Math.round(Number(progress.lagSec) || 0));
   const head = progress.state === "caught_up" ? `Live - caught up (${lag} s)` : `Processing - ${lag} s behind live`;
-  const skipped = Math.max(0, Math.round(Number(progress.skippedWindows) || 0));
+  // ADAAAA-8636: `skipData: false` (absent `skippedWindows`) means an in-flight
+  // share has no rail supply evidence — render NO skip clause, never an invented
+  // zero, and never a number derived from summary-log caption gaps.
+  const skipped =
+    progress.skipData === false ? 0 : Math.max(0, Math.round(Number(progress.skippedWindows) || 0));
   const skippedClause =
     skipped === 0 ? "" : ` · ${skipped} window${skipped === 1 ? "" : "s"} skipped past the ${LIVE_PROGRESS_BUDGET_S} s budget`;
   return `${head}${skippedClause}${staleClause}`;
