@@ -66,6 +66,18 @@ export const INTERNAL_JOB_KEYS = [
   "observeMetrics",
   "vodObserveMetrics",
   "confirmMetrics",
+  // ADAAAA-8692: the JOB-LEVEL cost readout + summary lane rollup. They are the
+  // same spend class as `costUsd` / `observeMetrics` above — `costPerStreamHour`
+  // is `costUsd` normalised to a stream hour, and `summaryCalls` /
+  // `summaryDropped` / `summaryDroppedByReason` / `summaryP95Ms` mirror the
+  // inspector-only meter inside `observeMetrics`. Publishing them at the job
+  // level (so a stored-record read can grade AC5/AC6) must not become a new
+  // customer bleed path, so they are filtered here for a non-admin caller.
+  "costPerStreamHour",
+  "summaryCalls",
+  "summaryDropped",
+  "summaryDroppedByReason",
+  "summaryP95Ms",
   // ADAAAA-8544: the frozen decide-knob stamp carries the per-job PREDICTED
   // spend (`predictedUsdPerHour` + its band) — the same spend class as `costUsd`
   // above — so a customer payload omits it. The customer states their posture at

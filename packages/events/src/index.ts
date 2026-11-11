@@ -1624,6 +1624,26 @@ export const JobSchema = z.object({
   // month-to-date total. Additive optional — absent on VOD jobs and older rows.
   liveWatchMinutes: z.number().min(0).optional(),
   costUsd: z.number().min(0).optional(),
+  // ADAAAA-8692: the job-level COST READOUT — `costUsd` normalised to one hour
+  // of STREAM (live: perceived session seconds; VOD/file: probed source
+  // duration). Declared at the JOB level, not only inside `observeMetrics`,
+  // because the VOD/file completion path writes no `observeMetrics` at all: the
+  // nested-only field had no writer on that rail and three QA jobs in a row read
+  // `costPerStreamHour: null` (QA-C `ec068bcd`, QA-D `5cc78c08`, QA-E
+  // `572f1ec7`). Additive optional — absent when the stream clock is unknown.
+  costPerStreamHour: z.number().min(0).optional(),
+  // ADAAAA-8692: the job-level SUMMARY (body-copy) METER rollup — the same
+  // counters `ObserveMetricsSnapshotSchema` carries, published top-level so a
+  // job record answers "how many copy calls did this job bill, how many
+  // dropped, why, and at what p95" without an inspector-only `observeMetrics`
+  // read. Declared here because a zod object STRIPS undeclared keys (the
+  // ADAAAA-8242 / `decideStages` lesson): the rollup is computed and then
+  // dropped on persist without these lines. Additive optional — absent on every
+  // pre-change record and on a run whose summary lane never ran.
+  summaryCalls: z.number().int().min(0).optional(),
+  summaryDropped: z.number().int().min(0).optional(),
+  summaryDroppedByReason: z.record(z.string(), z.number().int().min(0)).optional(),
+  summaryP95Ms: z.number().min(0).optional(),
   scheduledAt: z.string().optional(),
   completedAt: z.string().optional(),
   // ADAAAA-8061: when the job stopped accruing (any terminal transition: done,

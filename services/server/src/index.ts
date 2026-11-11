@@ -17,6 +17,7 @@ import { runDatasetPurgeSweep, scheduleDatasetsPurgeForOwner } from "./dataset-l
 import { filePerceiveSessionLedger, releaseOrphanedPerceiveSessions } from "./perceive-ledger";
 import { outcomeForStrandedJob } from "./job-failure";
 import { accruedSecondsSince, buildTerminalAccountingPatch } from "./job-settlement";
+import { isLiveWatchSession } from "./live-watch-minutes";
 import { reconcileStaleMediaSessions } from "./media-session-reconcile";
 import Stripe from "stripe";
 
@@ -118,6 +119,12 @@ async function main() {
           decideFee: cfg.decideFee,
           decideCalls: decideRows > 0 ? decideRows : null,
           perceiveSessionS: perceiveS ?? null,
+          // ADAAAA-8692: a swept LIVE row's stream clock is the session it was
+          // accruing (the same denominator `liveWatchMinutes` uses). A VOD row's
+          // stream clock is the source clip, which this sweep cannot know — it
+          // passes nothing and the readout stays absent rather than priced off
+          // the wrong clock.
+          streamSeconds: isLiveWatchSession({ source: job.source }) ? perceiveS ?? null : null,
           costUnavailableReason: "decide-count-not-persisted",
         }),
       };
