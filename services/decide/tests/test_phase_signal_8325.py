@@ -8,7 +8,10 @@ contract the ticket asks for:
   * the model is asked for `phase` in the VOD (full) contract only — the live
     (compact) rail pays nothing;
   * `parse_decision` normalizes it exactly like `outcome` BUT with no default:
-    absent or malformed stays None (unknown), never `"live"`;
+    absent or malformed adds NO key (unknown), never `"live"` and never an
+    explicit `null` (ADAAAA-8625 — the explicit null dropped every live window
+    analysis at the server's `AnalysisResponseSchema`, which only tolerated an
+    ABSENT phase);
   * the deterministic CPU fallback returns None instead of guessing;
   * `/highlight` declares the field, so `response_model` (extra="ignore") does
     not silently drop it — the ADAAAA-7221 failure mode;
@@ -18,6 +21,7 @@ contract the ticket asks for:
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -28,6 +32,8 @@ from app.gemma import (
     PHASE_TAXONOMY,
     _OUTPUT_CONTRACT_COMPACT,
     _OUTPUT_CONTRACT_FULL,
+    _response_block,
+    _window_analysis,
     build_prompt,
     decide_with_gemma,
     normalize_phase,
@@ -117,23 +123,31 @@ def test_parse_decision_carries_a_live_phase():
     assert d["isHighlight"] is True
 
 
-def test_parse_decision_absent_phase_is_none_not_live():
+def test_parse_decision_absent_phase_is_omitted_not_null():
+    """ADAAAA-8625: an UNKNOWN phase adds NO KEY.
+
+    The live compact contract never asks the model for `phase`, so every live
+    reply omits it. Stamping an explicit ``None`` put ``"phase": null`` on the
+    wire, and the server's ``AnalysisResponseSchema.phase`` (``.optional()``)
+    rejected the explicit null — dropping the whole window analysis for every
+    live window. Absent = unknown, exactly as before (never an inferred "live").
+    """
     d = parse_decision('{"isHighlight":true,"score":88,"eventType":"GOAL","reason":"goal","outcome":"scoring_play"}')
     assert d is not None
-    # the key is always present so the response shape is stable ...
-    assert "phase" in d
-    # ... and an absent field is UNKNOWN, never an inferred "live"
-    assert d["phase"] is None
+    assert "phase" not in d
+    # the rest of the contract is untouched by the omission
+    assert d["outcome"] == "scoring_play"
+    assert d["isHighlight"] is True
 
 
-def test_parse_decision_malformed_phase_is_none_and_does_not_crash():
+def test_parse_decision_malformed_phase_is_dropped_and_does_not_crash():
     for raw in ('"REPLAAY"', '"scoring"', "42", "true", "null", '["live"]', '{"v":"live"}'):
         d = parse_decision(
             '{"isHighlight":false,"score":12,"eventType":"BIG_PLAY",'
             '"reason":"nothing","outcome":"not_highlight","phase":' + raw + "}"
         )
         assert d is not None, raw
-        assert d["phase"] is None, raw
+        assert "phase" not in d, raw
 
 
 def test_phase_is_metadata_and_never_moves_the_outcome_ladder():
@@ -227,7 +241,7 @@ def test_highlight_route_returns_the_phase(monkeypatch):
     assert r.json()["outcome"] == "big_play"
 
 
-def test_highlight_route_returns_null_for_an_absent_phase(monkeypatch):
+def test_highlight_route_omits_the_phase_when_unknown(monkeypatch):
     mock = MockLlama(
         '{"isHighlight":true,"score":92,"eventType":"GOAL",'
         '"reason":"ball crosses the line at t=2.4s","outcome":"scoring_play"}'
@@ -245,7 +259,75 @@ def test_highlight_route_returns_null_for_an_absent_phase(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["outcome"] == "scoring_play"
-    assert "phase" in body and body["phase"] is None
+    # ADAAAA-8625: the response model declares `phase`, so pydantic would stamp
+    # `"phase": null` here. The model serializer drops it: an unknown phase is
+    # ABSENT on the wire, both at the top level and inside the analysis block.
+    assert "phase" not in body
+    assert "phase" not in body["analysis"]["response"]
+
+
+def test_response_block_omits_an_unknown_phase_and_keeps_a_known_one():
+    """ADAAAA-8625: the analysis capture carries the phase only when it is known.
+
+    The analysis block is a plain dict passed through `/highlight` untouched, so
+    this is the field that actually reached the server as ``"phase": null`` and
+    dropped every live window analysis.
+    """
+    unknown_decision = parse_decision(
+        '{"isHighlight":false,"score":0,"eventType":"AUDIO_BURST",'
+        '"outcome":"not_highlight","reason":"ball in play"}'
+    )
+    assert unknown_decision is not None
+    unknown = _response_block(unknown_decision)
+    assert "phase" not in unknown
+    # an explicit null in the decision dict is the same UNKNOWN
+    assert "phase" not in _response_block({"outcome": "not_highlight", "phase": None})
+    # a known phase still rides the capture (VOD/replay parity)
+    known_decision = parse_decision(
+        '{"isHighlight":false,"score":20,"eventType":"BIG_PLAY",'
+        '"outcome":"big_play","reason":"replay insert","phase":"replay"}'
+    )
+    assert known_decision is not None
+    known = _response_block(known_decision)
+    assert known["phase"] == "replay"
+
+
+def _real_live_analysis():
+    """The real live-rail window analysis, built from a stored decide_audit row.
+
+    PROBE-FREE: `fixtures/live-reply-8625.json` is the verbatim `raw_reply` of a
+    live window on the deployed build (`highlights-live-decide:8603`, job
+    `a6d4380e`, `max_tokens=400` = the compact live contract), read out of
+    `decide_audit`. No engine call and no hand-shaped model output.
+    """
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "live-reply-8625.json").read_text()
+    )
+    raw = fixture["raw_reply"]
+    assert "phase" not in raw.lower(), "the live contract must not ask for a phase"
+    decision = parse_decision(raw)
+    assert decision is not None
+    analysis = _window_analysis(
+        prompt="live compact prompt (real prompt_text, trimmed)",
+        data_items=[],
+        frames=[],
+        images=[],
+        response=_response_block(decision),
+    )
+    return analysis
+
+
+def test_real_live_window_analysis_carries_no_phase_key():
+    """ADAAAA-8625 acceptance: on a REAL live reply the analysis block has no
+    `phase` key at all — the shape the server's AnalysisResponseSchema used to
+    reject (`Expected 'live' | 'replay', received null`)."""
+    analysis = _real_live_analysis()
+    assert "phase" not in analysis["response"]
+    # every other captured field survives the omission byte-for-byte
+    assert analysis["response"]["outcome"] == "not_highlight"
+    assert analysis["response"]["evidenceAttested"] == []
+    assert analysis["response"]["source"] == "gemma"
+    assert analysis["prompt"].startswith("live compact prompt")
 
 
 def test_decide_with_gemma_returns_the_phase_to_the_caller():

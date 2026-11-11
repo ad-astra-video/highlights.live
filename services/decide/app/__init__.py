@@ -7,7 +7,7 @@ import time
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, FastAPI, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 log = logging.getLogger("highlights.decide")
 
@@ -450,6 +450,24 @@ class HighlightDecision(BaseModel):
     # response boundary, so the webapp never received it. Additive optional;
     # absent on rule-path verdicts that never built a prompt.
     analysis: Optional[dict] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unknown_phase(self, handler):
+        """ADAAAA-8625: an UNKNOWN footage phase must not be stamped as
+        ``"phase": null`` on the wire.
+
+        ``phase`` is declared (ADAAAA-8325) because the response model is
+        ``extra="ignore"``, so pydantic serializes the field even when it is
+        None. The live compact contract never asks the model for a phase, so
+        every live window came back with an explicit null; the server's
+        ``AnalysisResponseSchema.phase`` (``.optional()``) rejects explicit null
+        and dropped the whole window analysis. Absent = unknown (AC8 unchanged);
+        a known phase is still emitted and serialized as before.
+        """
+        data = handler(self)
+        if data.get("phase") is None:
+            data.pop("phase", None)
+        return data
 
 
 def _is_gemma_mode() -> bool:

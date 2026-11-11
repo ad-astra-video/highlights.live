@@ -700,7 +700,7 @@ def parse_decision(text: str) -> dict | None:
         # are rejected as scoring highlights regardless of the model's
         # isHighlight field (which is where the spurious GOALs came from).
         is_hl = outcome_is_highlight(outcome)
-    return {
+    decision = {
         "isHighlight": is_hl,
         "score": score,
         "eventType": event_type,
@@ -709,11 +709,6 @@ def parse_decision(text: str) -> dict | None:
         # defaults to not_highlight). near_miss is notable but NOT a scoring
         # play — surfaced at a lower score, labeled distinctly below.
         "outcome": outcome,
-        # ADAAAA-8325 (Inc 2): the footage phase, normalized exactly like
-        # `outcome` BUT with no default — an absent/malformed phase stays None
-        # (unknown), never "live". Additive metadata; the outcome ladder above is
-        # untouched.
-        "phase": normalize_phase(obj.get("phase")),
         "nearMiss": outcome == "near_miss",
         # I1 reviewer-facing rationale (always present so the API response shape
         # is stable whether or not the model populated them).
@@ -730,6 +725,17 @@ def parse_decision(text: str) -> dict | None:
         "postTitle": _as_text(obj.get("postTitle")),
         "source": "gemma",
     }
+    # ADAAAA-8625: the footage phase is ADDITIVE metadata (ADAAAA-8325), so an
+    # UNKNOWN phase must add NO KEY at all. It used to land here as an explicit
+    # ``None``, which the wire then carried as ``"phase": null``: the live
+    # compact contract never asks for a phase, so EVERY live window emitted it,
+    # and the server's ``AnalysisResponseSchema.phase`` (``.optional()``) rejected
+    # the explicit null and dropped the whole window analysis from the decide
+    # note. Absent = unknown, never an inferred "live" (AC8 unchanged).
+    phase = normalize_phase(obj.get("phase"))
+    if phase is not None:
+        decision["phase"] = phase
+    return decision
 
 
 def _reaction_summary(evidence: dict) -> list[str]:
@@ -2608,14 +2614,12 @@ def _build_group_data_items(
 def _response_block(decision: dict) -> dict:
     """The full response fields retained from a decide decision, as a FLAT copy
     (never the decision dict itself, to avoid a self-referential analysis)."""
-    return {
+    block = {
         "isHighlight": decision.get("isHighlight"),
         "score": decision.get("score"),
         "eventType": decision.get("eventType"),
         "reason": decision.get("reason"),
         "outcome": decision.get("outcome"),
-        # ADAAAA-8325: the footage phase, so a replay can compare raw vs served.
-        "phase": decision.get("phase"),
         "nearMiss": decision.get("nearMiss"),
         "reasoning": decision.get("reasoning"),
         "verdict": decision.get("verdict"),
@@ -2627,6 +2631,13 @@ def _response_block(decision: dict) -> dict:
         "postTitle": decision.get("postTitle"),
         "source": decision.get("source"),
     }
+    # ADAAAA-8325: the footage phase, so a replay can compare raw vs served.
+    # ADAAAA-8625: spread so an UNKNOWN phase adds NO key — an explicit
+    # ``"phase": null`` here is what the server's AnalysisResponseSchema rejected
+    # (dropping the whole window analysis for every live window).
+    if decision.get("phase"):
+        block["phase"] = decision.get("phase")
+    return block
 
 
 def _window_analysis(
@@ -2657,6 +2668,7 @@ def _window_analysis(
             send_audio or bool(transcript), transcript, story_so_far,
             match_context, prior_game_state, perceive_window,
         )
+    asr_url = _asr_url()
     return {
         "prompt": prompt,
         "dataItems": data_items,
@@ -2667,7 +2679,12 @@ def _window_analysis(
             "sampleRate": audio_sample_rate,
             "path": "input_audio" if send_audio else ("asr_text" if transcript else "none"),
         },
-        "asr": {"transcript": transcript or "", "url": _asr_url()},
+        # ADAAAA-8625: the ASR endpoint is emitted ONLY when one is configured —
+        # the same "unknown/unset adds no key" rule as `phase`. Emitting
+        # ``"url": null`` here hit the consumer's ``AnalysisAsrSchema.url``
+        # (``.optional()``, which rejects an explicit null) and dropped the whole
+        # window analysis on any deploy without ASR_URL.
+        "asr": {"transcript": transcript or "", **({"url": asr_url} if asr_url else {})},
         # ADAAAA-8056 (AC-E1): the perceive-timeline coverage ledger for THIS
         # window (records rendered, chars, compaction mode, seeds aligned).
         "perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1],

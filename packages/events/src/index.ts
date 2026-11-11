@@ -2340,7 +2340,13 @@ export const AnalysisResponseSchema = z.object({
   reason: z.string().optional(),
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
   // ADAAAA-8325 (Inc 2): the footage phase retained with the raw decide reply.
-  phase: z.enum(["live", "replay"]).optional(),
+  // ADAAAA-8625: `nullish`, not `optional`. The live compact contract never
+  // asks the model for a phase, so a live reply carries NO phase at all, and a
+  // pre-8625 decide stamped the unknown as an explicit `null`. Both mean
+  // UNKNOWN — `optional()` accepted only the absent form and rejected the
+  // explicit null, which dropped the ENTIRE window analysis at the decide-note
+  // seam (`WindowAnalysisSchema.parse` in services/server/src/analyzer.ts).
+  phase: z.enum(["live", "replay"]).nullish(),
   nearMiss: z.boolean().optional(),
   reasoning: z.string().optional(),
   verdict: z.unknown().optional(),
