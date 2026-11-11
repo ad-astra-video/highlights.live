@@ -1954,6 +1954,14 @@ export const HighlightRecordSchema = z.object({
       preSamples: z.number().int().min(0).optional(),
       postSamples: z.number().int().min(0).optional(),
       need: z.number().int().min(0).optional(),
+      /** ADAAAA-8493: the score transition an ACCEPTED goal row credited
+       * (`"2-1>2-2"`), or null when another channel carried the accept.
+       * `liveGoalAttestationUsed()` and `attestationUsedForDeferredResolution()`
+       * already set it, but the contract did not declare it — so Zod stripped
+       * the key on every persist (`store.addHighlight` parses each row through
+       * this schema) and no stored GOAL row could name its transition. Additive
+       * optional: legacy rows parse exactly as before and carry no key. */
+      transitionKey: z.string().nullable().optional(),
       /** ADAAAA-8610: the ACCEPT lane measured a legible transition and REFUSED
        * it because its POST state lands below a score state this run already read
        * (a rewind: replayed overlay, stale/mis-OCR read, or a scoreboard that
