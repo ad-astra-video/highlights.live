@@ -416,6 +416,7 @@ export class Store {
       summary?: string;
       summaryGate?: string;
       summaryRaw?: string;
+      summaryCaptionOverlap?: number;
       summaryCalls?: number;
       summaryDropped?: number;
       summaryDroppedByReason?: Record<string, number>;

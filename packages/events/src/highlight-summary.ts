@@ -93,25 +93,18 @@ export function summaryBand(rail: SummaryRail): SummaryDepthBand {
   return rail === "vod" ? SUMMARY_VOD_BAND : SUMMARY_LIVE_BAND;
 }
 
-/** The spec's de-duplication bar: normalized token overlap with `caption`. It is
- *  the bar a caption can ANCHOR (see `SUMMARY_SHORT_CAPTION_TOKENS`). */
-export const SUMMARY_MAX_CAPTION_OVERLAP = 0.5;
-
-/** ADAAAA-8687: a caption shorter than this carries too few content tokens for
- *  ">= 50% of them reused" to mean restatement. The shipped caption shapes from
- *  a real live leg are 2-4 tokens ("Ball shoots in midfield", "Scoreboard changes
- *  to 2-2."), so a faithful 25-word elaboration of them necessarily reuses every
- *  token they have and the coverage bar refused 3/3 promoted rows. Below this
- *  length the bar is not coverage at all (see `SUMMARY_MIN_NEW_TOKEN_SHARE`). */
-export const SUMMARY_SHORT_CAPTION_TOKENS = 8;
-
-/** ADAAAA-8687: the share of the BODY's own content tokens that must be absent
- *  from the caption. Below this the body is a rewrite of the announcer line
- *  (same nouns, nothing new), not an elaboration — the copy-shaped refusal.
- *  Measured against the body (not the caption) on purpose: a longer body must not
- *  dilute its own new content into a pass, and a 3-token caption must not be
- *  able to refute a body that adds a dozen new tokens. */
-export const SUMMARY_MIN_NEW_TOKEN_SHARE = 0.4;
+/** R4 (rev 2, ADAAAA-8687): the caption-token coverage figure, kept ONLY as a
+ *  per-row OBSERVATION. Rev 1 gated on it (`>= 0.5` => refused) and that refused
+ *  100% of the promoted rows on the short-caption rail, so it is metered
+ *  (`summaryCaptionOverlap`) and never drops a row. */
+export function captionTokenOverlap(summary: string, caption?: string | null): number {
+  const cap = new Set(normalizeSummaryTokens(caption ?? ""));
+  if (cap.size === 0) return 0;
+  const sum = new Set(normalizeSummaryTokens(summary ?? ""));
+  let hit = 0;
+  for (const t of cap) if (sum.has(t)) hit++;
+  return hit / cap.size;
+}
 
 /**
  * Fee class. One summary call is metered as its own term and its ceiling is
@@ -206,69 +199,116 @@ export function normalizeSummaryTokens(text: string): string[] {
   return folded.split(" ").filter((t) => t.length > 1 && !STOPWORDS.has(t) && !/^\d+$/.test(t));
 }
 
-/** How much of `caption` the summary RE-STATES: the share of the caption's own
- *  normalized tokens that appear in the summary. Measured against the caption
- *  (the short lane), not the summary, because a longer summary would dilute a
- *  Jaccard score into always passing. >= 0.5 is the spec's refusal bar. */
-export function captionTokenOverlap(summary: string, caption?: string | null): number {
-  const cap = new Set(normalizeSummaryTokens(caption ?? ""));
-  if (cap.size === 0) return 0;
-  const sum = new Set(normalizeSummaryTokens(summary ?? ""));
-  let hit = 0;
-  for (const t of cap) if (sum.has(t)) hit++;
-  return hit / cap.size;
-}
 
-/** What `captionRestatesSummary` measured, for the audit token and for a test. */
-export interface CaptionRestatement {
-  /** Share of the CAPTION the body reuses (the spec's coverage figure). */
+/** R1 (rev 2): the novel-detail FLOOR — distinct content tokens in the body
+ *  that the caption does not carry. Below this the body adds only filler. */
+export const SUMMARY_MIN_NOVEL_TOKENS = 8;
+
+/** R2 (rev 2): the verbatim-echo CEILING — the longest contiguous WORD run (the
+ *  normalized word sequence, stopwords kept: an echo detector, not a content
+ *  measure) the body shares with the caption. */
+export const SUMMARY_MAX_SHARED_RUN_TOKENS = 5;
+
+/** Which rev-2 restatement clause a body failed (R1/R2/R3). */
+export type SummaryRestatementClause = "novel-detail" | "verbatim-echo" | "subset-echo";
+
+/** Everything R1-R3 measured, both for the gate and for the AC2 replay QA runs. */
+export interface SummaryRestatement {
+  /** R1: distinct body content tokens the caption does not carry. */
+  novelTokens: number;
+  /** R2: longest contiguous normalized-word run shared with the caption. */
+  longestSharedRun: number;
+  /** R3: every caption content token appears in the body. */
+  captionSubset: boolean;
+  /** R4 (observation only, never a gate): share of the caption's content tokens
+   *  the body reuses. Metered per row so drift stays visible. */
   overlap: number;
-  /** Distinct content tokens the caption carries. */
-  captionTokens: number;
-  /** Share of the BODY's distinct content tokens the caption does not carry. */
-  newTokenShare: number;
+  /** The clauses that failed, in R1 -> R2 -> R3 order. */
+  failed: SummaryRestatementClause[];
+  /** `failed.length > 0` — the body is a restatement and must not be served. */
   restates: boolean;
 }
 
+/** Lowercased, diacritic-folded word sequence (numbers and stopwords KEPT). R2's
+ *  echo detector works on words, not on content tokens: "ball shoots in" is the
+ *  same echo whether or not `in` is a stopword. */
+export function summaryWords(text: string): string[] {
+  const folded = (text ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return folded ? folded.split(" ").filter(Boolean) : [];
+}
+
+/** Longest contiguous run of words shared by `a` and `b` (classic DP, O(n*m)). */
+export function longestSharedWordRun(a: string[], b: string[]): number {
+  if (a.length === 0 || b.length === 0) return 0;
+  let best = 0;
+  let prev = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = new Array(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        cur[j] = prev[j - 1] + 1;
+        if (cur[j] > best) best = cur[j];
+      }
+    }
+    prev = cur;
+  }
+  return best;
+}
+
 /**
- * ADAAAA-8687: is the body a RESTATEMENT of the announcer line?
+ * ADAAAA-8687 / spec ADAAAA-8665 rev 2: is the body a RESTATEMENT of the
+ * announcer caption?
  *
- * Caption-token coverage alone is not a restatement test: it is a ratio over the
- * CAPTION's tokens, so a short caption ("Ball shoots in midfield" = 3 tokens)
- * makes any faithful elaboration score 1.0 and get refused, which is exactly what
- * refused 3/3 promoted rows on the served build. The rule is therefore
- * proportion- AND content-aware:
+ * Rev 1 graded this as `captionTokenOverlap < 0.5`, a ratio over the CAPTION's
+ * tokens. On the shipped short captions (2-5 content tokens) any faithful
+ * elaboration reuses all of them, so it refused 3/3 live and 4/4 VOD promoted
+ * rows. Rev 2 replaces it with three novelty clauses:
  *
- *  1. The copy-shaped refusal, which holds at every caption length: the body's
- *     own content must be mostly NEW. `newTokenShare` is measured over the body,
- *     so a longer body cannot dilute its way to a pass, and a short caption
- *     cannot refute a body that adds a dozen tokens.
- *  2. The spec's coverage bar, kept for captions long enough to anchor it (>= 8
- *     content tokens), where 50% reuse really does mean a paraphrase.
+ *  - R1 novel detail: >= SUMMARY_MIN_NOVEL_TOKENS distinct content tokens the
+ *    caption does not carry (the "adds detail" half of the rule).
+ *  - R2 no verbatim echo: no contiguous word run longer than
+ *    SUMMARY_MAX_SHARED_RUN_TOKENS shared with the caption (the "must not
+ *    restate" half).
+ *  - R3 no subset echo: the caption's content tokens are not ALL present in the
+ *    body. R3 is read together with R1, as its parenthetical states: a superset
+ *    that adds ONLY FILLER is the restatement at any length. A body that carries
+ *    every caption token and ALSO clears R1's novel-detail floor is not "only
+ *    filler", so it passes — otherwise R3 and AC1 are mutually unsatisfiable on
+ *    the short-caption rail (every 25-word elaboration of "Ball shoots in
+ *    midfield" mentions ball, shoots and midfield; refusing all of them is the
+ *    rev-1 failure in a new costume).
  *
- * Everything a restatement would otherwise smuggle in (thin word count, no fact
- * the headline lacks, no attested entity) is still held by the depth bars.
+ * `captionTokenOverlap` is still computed (R4) and is metered per row, but it is
+ * never a drop reason.
  */
-export function captionRestatement(summary: string, caption?: string | null): CaptionRestatement {
+export function summaryRestatement(summary: string, caption?: string | null): SummaryRestatement {
   const cap = new Set(normalizeSummaryTokens(caption ?? ""));
   const bodyTokens = [...new Set(normalizeSummaryTokens(summary ?? ""))];
   const overlap = captionTokenOverlap(summary, caption);
-  // No caption to restate (or nothing to restate it with): the depth/fact bars
-  // own that row, and a missing caption must never fail a row closed.
-  if (cap.size === 0 || bodyTokens.length === 0) {
-    return { overlap, captionTokens: cap.size, newTokenShare: 0, restates: false };
+  const novelTokens = bodyTokens.filter((t) => !cap.has(t)).length;
+  const longestSharedRun = longestSharedWordRun(summaryWords(summary), summaryWords(caption));
+  const captionSubset = cap.size > 0 && [...cap].every((t) => bodyTokens.includes(t));
+  const failed: SummaryRestatementClause[] = [];
+  // No caption to restate: the depth/fact bars own that row, and a missing
+  // caption must never fail a row closed.
+  if (cap.size > 0 && bodyTokens.length > 0) {
+    if (novelTokens < SUMMARY_MIN_NOVEL_TOKENS) failed.push("novel-detail");
+    if (longestSharedRun > SUMMARY_MAX_SHARED_RUN_TOKENS) failed.push("verbatim-echo");
+    // R3 = subset echo: every caption token present AND the novel floor unmet,
+    // i.e. the body adds only filler.
+    if (captionSubset && novelTokens < SUMMARY_MIN_NOVEL_TOKENS) failed.push("subset-echo");
   }
-  const fresh = bodyTokens.filter((t) => !cap.has(t)).length;
-  const newTokenShare = fresh / bodyTokens.length;
-  const restates =
-    newTokenShare < SUMMARY_MIN_NEW_TOKEN_SHARE ||
-    (cap.size >= SUMMARY_SHORT_CAPTION_TOKENS && overlap >= SUMMARY_MAX_CAPTION_OVERLAP);
-  return { overlap, captionTokens: cap.size, newTokenShare, restates };
+  return { novelTokens, longestSharedRun, captionSubset, overlap, failed, restates: failed.length > 0 };
 }
 
 /** The boolean form the gate uses. */
 export function captionRestatesSummary(summary: string, caption?: string | null): boolean {
-  return captionRestatement(summary, caption).restates;
+  return summaryRestatement(summary, caption).restates;
 }
 
 // --- facts -----------------------------------------------------------------
@@ -605,6 +645,9 @@ export interface SummaryGateDecision {
    *  persists it as `summaryRaw` on a refusal so the next QA can quote what the
    *  model wrote instead of only the violation token (QA-B: `not_captured`). */
   raw: string;
+  /** R4 (spec rev 2): caption-token coverage of the judged body. An OBSERVATION,
+   *  never a drop reason — the write seam meters it as `summaryCaptionOverlap`. */
+  captionOverlap: number;
 }
 
 /**
@@ -619,7 +662,7 @@ export interface SummaryGateDecision {
 export function gateSummaryDetail(raw: string | null | undefined, evidence: SummaryEvidence): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
-  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, raw: "" };
+  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, raw: "", captionOverlap: 0 };
   const clamped = clampSummaryDepth(stripped, evidence.rail);
   const candidates: { text: string; trimmed: boolean }[] =
     clamped && clamped !== stripped ? [{ text: stripped, trimmed: false }, { text: clamped, trimmed: true }] : [{ text: stripped, trimmed: false }];
@@ -635,12 +678,21 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
         words: summaryWordCount(candidate.text),
         sentences: summarySentenceCount(candidate.text),
         raw: stripped,
+        captionOverlap: captionTokenOverlap(candidate.text, evidence.caption),
       };
     }
     for (const v of violations) if (!refused.includes(v)) refused.push(v);
   }
   void band;
-  return { summary: null, gate: `refused:${refused.join(",")}`, violations: refused, words: summaryWordCount(stripped), sentences: summarySentenceCount(stripped), raw: stripped };
+  return {
+    summary: null,
+    gate: `refused:${refused.join(",")}`,
+    violations: refused,
+    words: summaryWordCount(stripped),
+    sentences: summarySentenceCount(stripped),
+    raw: stripped,
+    captionOverlap: captionTokenOverlap(stripped, evidence.caption),
+  };
 }
 
 // --- prompt contract -------------------------------------------------------
