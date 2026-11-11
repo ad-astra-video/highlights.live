@@ -10,7 +10,7 @@ Rules:
 - Include at least one fact the headline does not carry: the score line, the clock or spell, the competition or venue, or a named player's attested action.
 - A name is optional. If the evidence names nobody, carry the depth with clock and action facts.
 - Never claim a goal unless the evidence attests one; never invent a statistic.
-- Never invent a name, a team, a venue or a statistic.
+- Never invent a name, a team, a venue or a statistic. When the evidence names nobody, describe roles only ('the midfielder', 'the keeper') and do not capitalize a made-up name.
 - Do not restate the headline or the announcer line.
 - No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').
 Evidence:
@@ -37,7 +37,7 @@ Rules:
 - Include at least one fact the headline does not carry: the score line, the clock or spell, the competition or venue, or a named player's attested action.
 - A name is optional. If the evidence names nobody, carry the depth with clock and action facts.
 - Never claim a goal unless the evidence attests one; never invent a statistic.
-- Never invent a name, a team, a venue or a statistic.
+- Never invent a name, a team, a venue or a statistic. When the evidence names nobody, describe roles only ('the midfielder', 'the keeper') and do not capitalize a made-up name.
 - Do not restate the headline or the announcer line.
 - No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').
 Evidence:
