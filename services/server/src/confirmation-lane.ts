@@ -72,7 +72,10 @@ export interface WindowConfirmation {
 /** The candidate fields the derivation reads (a stored JobCandidate satisfies
  *  this shape; tests can pass a literal). */
 export interface ConfirmationInput {
-  status: "accepted" | "suppressed" | "rejected";
+  /** ADAAAA-8678: a HIGHLIGHT row's publish state (`pending` = not yet approved,
+   *  auto-publish off) is not an evidence verdict, so it derives a lane exactly
+   *  like an accepted row; it only changes the sentence a lane-less row states. */
+  status: "accepted" | "pending" | "suppressed" | "rejected";
   eventType?: string;
   outcome?: string;
   trigger?: HighlightTrigger;
@@ -90,6 +93,10 @@ const LANE_LABELS = {
   diveHeld: "Deep dive confirmed the goal — held: this window measured no score transition",
   noMeasurementNoDive: "Accepted without corroboration — no measurement and no dive",
   legacy: "Accepted — confirmation lane not recorded (legacy row)",
+  // ADAAAA-8678: an unapproved (`pending`) row states the approve queue, never
+  // "accepted" — that word is a claim only a settled row supports.
+  pendingNoMeasurementNoDive: "Awaiting approval — measured no goal signal and ran no dive",
+  pendingNoCapture: "Awaiting approval — no measurement and no dive recorded",
 } as const;
 
 /** Read the Stage-1 verdict's measured criteria (`verdict.criteria`) out of a
@@ -246,8 +253,11 @@ export function diveVerdictFromAttestation(
  *   4. accepted with neither → `unconfirmed`; the label says which of the two
  *      honest cases it is (no measurement at all vs a legacy row with no
  *      captures) and never claims corroboration.
- *   5. a non-accepted row with no dive → no block at all (the row is already
- *      rendered as rejected/suppressed; a lane label would be noise).
+ *   4b. ADAAAA-8678: a `pending` (unapproved) row with neither → `unconfirmed`
+ *      too, worded as the approve queue ("Awaiting approval — …"), so an
+ *      auto-publish-off card states its lane instead of serving no block at all.
+ *   5. a rejected/suppressed row with no dive → no block at all (the row is
+ *      already rendered as rejected/suppressed; a lane label would be noise).
  */
 export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation | undefined {
   const stage1 = criteriaFlags(input.analysis);
@@ -299,9 +309,22 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
     };
   }
 
-  if (input.status !== "accepted") return undefined;
+  // ADAAAA-8678: a `pending` row is NOT a non-accepted row in the reject sense —
+  // it is a served card waiting for the operator's Approve, so it states its lane
+  // instead of hiding it. It never uses the "Accepted …" sentences above: that
+  // word is a claim only a settled row supports.
+  if (input.status === "rejected" || input.status === "suppressed") return undefined;
 
   const hasCapture = Boolean(input.analysis || input.trigger);
+  if (input.status === "pending") {
+    return {
+      lane: "unconfirmed",
+      label: hasCapture ? LANE_LABELS.pendingNoMeasurementNoDive : LANE_LABELS.pendingNoCapture,
+      measurement: "none",
+      flags: stage1,
+      flagsSource: stage1 ? "stage1_verdict" : undefined,
+    };
+  }
   return {
     lane: "unconfirmed",
     label: hasCapture ? LANE_LABELS.noMeasurementNoDive : LANE_LABELS.legacy,
@@ -401,10 +424,12 @@ export function confirmationForHighlightRow(
     });
   }
   if (candidate) return servedConfirmation(deriveConfirmation(candidate));
-  // Highlight row status is pending|accepted|rejected; `pending` is not an
-  // accepted row, so it maps onto the non-accepted lane and only a stored
-  // measurement can give it a lane.
+  // ADAAAA-8678: highlight row status is pending|accepted|rejected and `pending`
+  // is a PUBLISH state (auto-publish off), not a rejection: it derives its lane
+  // like an accepted row, so a served GOAL card never carries an evidence-free
+  // claim with no lane at all. A row with no measurement and no dive states the
+  // approve queue ("Awaiting approval — …") and badges UNCONFIRMED.
   const status: ConfirmationInput["status"] =
-    row.status === "accepted" ? "accepted" : row.status === "rejected" ? "rejected" : "suppressed";
+    row.status === "accepted" ? "accepted" : row.status === "rejected" ? "rejected" : row.status === "pending" ? "pending" : "suppressed";
   return servedConfirmation(deriveConfirmation({ status, trigger: row.trigger }));
 }
