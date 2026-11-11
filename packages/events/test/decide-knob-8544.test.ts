@@ -1,11 +1,13 @@
-// ADAAAA-8544 (spec rev 3 §3/§6, parent ADAAAA-8527): the SHIPPED `est-v2`
+// ADAAAA-8544 (spec rev 3 §3/§6, parent ADAAAA-8527): the SHIPPED `est-v3`
 // estimate must reproduce the graded rows and the resolved table, so AC3 is
 // asserted on the same function the board prints from and QA grades.
 //
-// The 3 s rows are measured (jobs b55c5781 $2.893/h and 50b7aed6 $3.399/h); the
-// 5 s rows are the documented EXTRAPOLATION (`grown(5 s)`), which is exactly why
-// the estimate ships with a band and why the default is only ever printed as
-// point + band.
+// The 3 s rows are measured (jobs b55c5781 $2.893/h and 50b7aed6 $3.399/h).
+// The 5 s browser row was an EXTRAPOLATION in `est-v2` (50.3 = the 3 s band
+// midpoint x 0.64) and is MEASURED in `est-v3` (ADAAAA-8696): natural leg
+// `22ff6ca2` decided 261 windows over 1319.8 s of content = 59.3/300 s. The
+// estimate still ships as point + measured band, because one 5 s row is one
+// sample and AC6's cadence envelope is the spread that has been graded.
 import { describe, it, expect } from "vitest";
 import {
   DECIDE_ESTIMATE_VERSION,
@@ -27,16 +29,34 @@ const cents = (usd: number) => Number(usd.toFixed(2));
 const usdFor = (decidesPer300s: number) => decidesPer300s * DECIDE_USD_PER_DECIDE * 12;
 
 describe("est-v2 (ADAAAA-8544 AC3): the shipped estimate reproduces the resolved table", () => {
-  it("prices the DEFAULT posture (browser, 5 s, uncapped) at exactly $2.01/h with the measured band", () => {
+  it("prices the DEFAULT posture (browser, 5 s, uncapped) at exactly $2.37/h with the measured band", () => {
     const est = estimateDecideUsdPerHour({ cadenceSec: 5, rateCapPer300s: null, rail: "browser" });
-    // AC3 grades the shipped default as $2.01/h. The density is spec rev 3 §3's
-    // own printed row (50.3 decides / 300 s = the midpoint of the scaled measured
-    // band), not the 50.05 product `78.2 x 0.64`, which would print $2.00.
-    expect(cents(est.usdPerHour)).toBe(2.01);
-    expect(est.usdPerHour).toBeCloseTo(2.0114, 3);
-    expect(est.bandUsdPerHour.map(cents)).toEqual([1.86, 2.16]);
-    expect(est.opportunitiesPer300s).toBe(50.3);
+    // AC3 grades the shipped default at the MEASURED 5 s density (ADAAAA-8696):
+    // leg `22ff6ca2` decided 261 windows / 1319.8 s of content clock = 59.3
+    // charged decides per 300 s -> $2.3713/h. `est-v2` printed $2.01/h here from
+    // a 50.3 linear extrapolation of the 3 s band, which is the ~15 % undershoot
+    // that made ADAAAA-8672 rev 1's $2.16 AC8 bar unreachable.
+    expect(cents(est.usdPerHour)).toBe(2.37);
+    expect(est.usdPerHour).toBeCloseTo(2.3713, 3);
+    // The band is AC6 rev 2's pacing envelope (meanCadenceMs 4800..5600 ms), so
+    // it contains both the measured row and the nominal 5000 ms rate.
+    expect(est.bandUsdPerHour.map(cents)).toEqual([2.14, 2.5]);
+    expect(est.opportunitiesPer300s).toBe(59.3);
     expect(est.estimateVersion).toBe(DECIDE_ESTIMATE_VERSION);
+  });
+
+  it("prices a leg at NOMINAL 5 s cadence at <= $2.40/h (ADAAAA-8672 rev 2 AC8 / AC6)", () => {
+    // Nominal 5000 ms cadence = 300 / 5 = 60 charged decides per 300 s of content.
+    // AC8's rev 2 bar is that rate priced at DECIDE_USD_PER_DECIDE, and AC6's
+    // band is [53, 63]; the shipped default must never quote MORE than the bar
+    // while sitting inside the graded band.
+    expect(cents(usdFor(60))).toBe(2.4);
+    const est = estimateDecideUsdPerHour({ cadenceSec: 5, rateCapPer300s: null, rail: "browser" });
+    expect(est.usdPerHour).toBeLessThanOrEqual(2.4);
+    expect(est.opportunitiesPer300s).toBeGreaterThanOrEqual(53);
+    expect(est.opportunitiesPer300s).toBeLessThanOrEqual(63);
+    expect(est.bandUsdPerHour[0]).toBeLessThanOrEqual(est.usdPerHour);
+    expect(est.usdPerHour).toBeLessThanOrEqual(est.bandUsdPerHour[1]);
   });
 
   it("prices the 104-window rail at 5 s and both 3 s postures exactly as the table does", () => {
@@ -84,11 +104,16 @@ describe("est-v2 (ADAAAA-8544 AC3): the shipped estimate reproduces the resolved
     expect(cents(generous.usdPerHour)).toBe(2.5);
   });
 
-  it("scales the browser band by the cadence growth, not by a plain 3/5 ratio", () => {
-    expect(decideBandPer300s("browser", 5)).toEqual([
-      72.76 * 0.64,
-      84.51 * 0.64,
-    ]);
+  it("prints the 5 s band from the measured AC6 envelope, never a scaled 3 s band", () => {
+    // ADAAAA-8696: 50.3 came from scaling the 3 s band by the measured-interval
+    // ratio (0.64), which priced a real 5 s leg ~15 % low. The 5 s band is now
+    // its own measured-derived constant (AC6's cadence envelope), and the point
+    // sits inside it — the scaled 3 s band would put 59.3 ABOVE its own top.
+    expect(decideBandPer300s("browser", 5)).toEqual([53.6, 62.5]);
+    expect(decideBandPer300s("browser", 3)).toEqual([72.76, 84.51]);
+    const [low, high] = decideBandPer300s("browser", 5);
+    expect(decideOpportunitiesPer300s("browser", 5)).toBeGreaterThanOrEqual(low);
+    expect(decideOpportunitiesPer300s("browser", 5)).toBeLessThanOrEqual(high);
     expect(decideBandPer300s("analyzer", 5)).toEqual([
       decideOpportunitiesPer300s("analyzer", 5),
       decideOpportunitiesPer300s("analyzer", 5),
@@ -136,11 +161,11 @@ describe("resolveDecideKnob (ADAAAA-8544 AC1): the stamp is frozen with its prov
     expect(stamp.cadenceSec).toBe(5);
     expect(stamp.rateCapPer300s).toBeNull();
     expect(stamp.resolvedSource).toBe("default");
-    expect(stamp.opportunitiesPer300s).toBe(50.3);
+    expect(stamp.opportunitiesPer300s).toBe(59.3);
     expect(stamp.usdPerDecide).toBe(DECIDE_USD_PER_DECIDE);
-    expect(cents(stamp.predictedUsdPerHour)).toBe(2.01);
-    expect(stamp.predictedBandUsdPerHour.map(cents)).toEqual([1.86, 2.16]);
-    expect(stamp.estimateVersion).toBe("est-v2");
+    expect(cents(stamp.predictedUsdPerHour)).toBe(2.37);
+    expect(stamp.predictedBandUsdPerHour.map(cents)).toEqual([2.14, 2.5]);
+    expect(stamp.estimateVersion).toBe("est-v3");
     // The stamp round-trips through the persisted contract — an unparseable
     // stamp would be stripped by `JobSchema.parse` on write.
     expect(DecideKnobStampSchema.parse(stamp)).toEqual(stamp);
@@ -202,7 +227,7 @@ describe("the control copy (ADAAAA-8544 item 7)", () => {
     expect(label).toContain("measured band");
     expect(label).toContain("$2.91/h-$3.38/h");
     const economy = decideEstimateLabel({ cadenceSec: 5, rateCapPer300s: null, rail: "browser" });
-    expect(economy).toContain("approx $2.01/h");
-    expect(economy).toContain("$1.86/h-$2.16/h");
+    expect(economy).toContain("approx $2.37/h");
+    expect(economy).toContain("$2.14/h-$2.50/h");
   });
 });

@@ -113,7 +113,7 @@ describe("AC1 — the stamped knob is echoed by the window audit, never recomput
     });
     const same = estimateDecideUsdPerHour({ cadenceSec: 5, rateCapPer300s: null, rail: "browser" });
     expect(audit.decideKnob?.predictedUsdPerHour).toBe(same.usdPerHour);
-    expect(audit.decideKnob?.estimateVersion).toBe("est-v2");
+    expect(audit.decideKnob?.estimateVersion).toBe("est-v3");
     expect(audit.decideKnob?.resolvedSource).toBe("default");
   });
 });

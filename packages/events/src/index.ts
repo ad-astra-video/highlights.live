@@ -3,7 +3,7 @@
 // Python runners + frontend. Any new required field is a version bump.
 import { z } from "zod";
 // ADAAAA-8544: the decide-knob stamp schema is declared in its own module (the
-// pure `est-v2` estimate and the control copy live beside it) and referenced from
+// pure `est-v3` estimate and the control copy live beside it) and referenced from
 // `ObserveMetricsSnapshotSchema` and `JobSchema` below. Imported (not only
 // re-exported) because `export *` does not put the name in this module scope.
 import { DecideKnobStampSchema } from "./decide-knob";
@@ -2979,7 +2979,7 @@ export * from "./caption-grounding";
 // fallback. Shared by the server write seam/projection and the webapp card so
 // one title function serves both.
 export * from "./post-title";
-// ADAAAA-8544: the per-stream decide cost knob — the ONE pure `est-v2` estimate,
+// ADAAAA-8544: the per-stream decide cost knob — the ONE pure `est-v3` estimate,
 // the 63-decide coverage floor, the resolve-at-start stamp and the control copy.
 // Shared by the server route/observer, the window audit and the webapp start
 // control so the number the board prints is the number QA asserts.

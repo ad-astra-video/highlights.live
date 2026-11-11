@@ -485,7 +485,7 @@ export interface Job {
   // snapshot rather than the job-level `decideCalls`; the tile falls back to it.
   observeMetrics?: { decideCalls?: number };
   // ADAAAA-8544: the per-stream decide knob frozen on the record at start
-  // (`cadenceSec`, `rateCapPer300s`, the `est-v2` prediction and its band, and
+  // (`cadenceSec`, `rateCapPer300s`, the `est-v3` prediction and its band, and
   // which rule resolved it). Additive optional: absent on every row written
   // before the knob existed. The monitor readout states it verbatim — it is the
   // posture this job actually runs, never a re-estimate.
