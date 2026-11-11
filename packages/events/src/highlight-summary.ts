@@ -666,16 +666,27 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   const transition = input.scoreTransition
     ? `Score transition: ${input.scoreTransition.from ?? "?"} -> ${input.scoreTransition.to ?? "?"}`
     : "Score transition: (none measured)";
+  // ADAAAA-8687: the fact menu and the claim rule are VERDICT-aware. A card that
+  // does not attest a scoring play must never be steered towards the score line —
+  // the shared claim lexicon treats `score`/`goal`/`net` as a claim (fail-closed)
+  // and refused a celebration body that said "the current score remains
+  // unchanged". So a celebration row is offered the clock/venue/action facts only.
+  const attestsScoring = String(input.verdict ?? "") === "scoring_play";
+  const factMenu = attestsScoring
+    ? "the score line, the clock or spell, the competition or venue, or a named player's attested action"
+    : "the clock or spell, the competition or venue, or a named player's attested action";
   const lines = [
     "You write the BODY copy under a highlight clip's short headline.",
     "The headline is already on the card; your copy sits underneath it and must add detail.",
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the score line, the competition or venue, or an attested action from the evidence.`,
-    "- Include at least one fact the headline does not carry: the score line, the clock or spell, the competition or venue, or a named player's attested action.",
-    "- A name is optional. If the evidence names nobody, carry the depth with score, clock and action facts.",
-    "- Never claim a goal unless the verdict is a scoring play.",
+    `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the competition or venue, or an attested action from the evidence.`,
+    `- Include at least one fact the headline does not carry: ${factMenu}.`,
+    "- A name is optional. If the evidence names nobody, carry the depth with clock and action facts.",
+    attestsScoring
+      ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
+      : "- This is NOT a scoring play: never claim a goal, never name the net, and never state a score or that the score changed or did not change.",
     "- Never invent a name, a team, a venue or a statistic.",
     "- Do not restate the headline or the announcer line.",
     "- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').",

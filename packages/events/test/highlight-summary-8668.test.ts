@@ -426,6 +426,18 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
     }
   });
 
+  it("tells a celebration row not to touch the score, and offers it no score fact", () => {
+    // The served probe's second refusal was a celebration body that said "the
+    // current score remains unchanged" — the shared claim lexicon reads `score`
+    // as a claim, so the prompt must not steer a non-scoring row there.
+    const celebration = buildSummaryPrompt({ ...shipped[0].evidence, postTitle: null });
+    expect(celebration).toContain("This is NOT a scoring play");
+    expect(celebration).toContain("Include at least one fact the headline does not carry: the clock or spell");
+    const scoring = buildSummaryPrompt({ ...shipped[2].evidence, postTitle: "Midfielder scores" });
+    expect(scoring).toContain("the score line, the clock or spell");
+    expect(scoring).not.toContain("This is NOT a scoring play");
+  });
+
   it("still reports the refused reply verbatim in `decision.raw` (ADAAAA-8687 item 3)", () => {
     const row = shipped[2];
     const reply = `  T+160 s — ${row.caption} ${row.caption}  `;
