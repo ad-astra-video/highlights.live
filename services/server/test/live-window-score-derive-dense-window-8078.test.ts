@@ -475,14 +475,24 @@ describe("LiveRunShared.claimScoreTransition (ADAAAA-8078)", () => {
 
   it("stays bounded", () => {
     const run = new LiveRunShared();
-    for (let n = 0; n < CREDITED_SCORE_TRANSITIONS_MAX + 1; n++) {
-      const a = n % 100;
-      const b = Math.floor(n / 100) % 99;
-      expect(run.claimScoreTransition(deltaOf([a, b], [a, b + 1]))).toBe(true);
+    // Commit the top of the lane first (a legal last goal of the match), so the
+    // FIFO-bound probe can use EARLIER-instant transitions: ADAAAA-8588 refuses a
+    // backwards step that arrives AFTER the commit, but an out-of-order earlier
+    // boundary is still legitimately creditable (see the distinct-transition case
+    // above), so the bound stays reachable.
+    expect(run.claimScoreTransition(deltaOf([98, 99], [99, 99], 1_000))).toBe(true);
+    const ladder = (k: number) => {
+      const a = k % 98;
+      const b = Math.floor(k / 98) % 99;
+      return deltaOf([a, b], [a + 1, b], 1);
+    };
+    for (let k = 0; k < CREDITED_SCORE_TRANSITIONS_MAX; k++) {
+      expect(run.claimScoreTransition(ladder(k))).toBe(true);
     }
-    // The oldest entry is evicted under pressure (a re-claim is then possible).
+    // MAX+1 credits were accepted; the ledger keeps only MAX.
     expect(run.creditedScoreTransitionKeys()).toHaveLength(CREDITED_SCORE_TRANSITIONS_MAX);
-    expect(run.claimScoreTransition(deltaOf([0, 0], [0, 1]))).toBe(true);
+    // The oldest entry is evicted under pressure (a re-claim is then possible).
+    expect(run.claimScoreTransition(deltaOf([98, 99], [99, 99], 1_000))).toBe(true);
     expect(run.creditedScoreTransitionKeys()).toHaveLength(CREDITED_SCORE_TRANSITIONS_MAX);
   });
 });
