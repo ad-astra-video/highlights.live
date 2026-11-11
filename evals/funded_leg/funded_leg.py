@@ -79,7 +79,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 #: ADAAAA-8529 item 2: the four files a live leg is served from. A leg graded on
 #: an unrecorded build is a grade of an unknown artifact, so the harness records
@@ -214,6 +214,9 @@ class GateSample:
             "leases": self.leases,
             "cycByContainer": self.cyc_by_container,
             "serverHealth": self.server_health,
+            # ADAAAA-8644: the exception text behind a failed probe. Without it
+            # a `cannot prove quiet` refusal reads as a busy box.
+            "errors": list(self.errors),
             "problems": self.problems(),
         }
 
@@ -261,11 +264,32 @@ class RealRunner:
         self.shell_cwd = shell_cwd
         self.commands: List[str] = log if log is not None else []
 
-    def _run(self, command: str, prefix: str, timeout: float = 60.0) -> subprocess.CompletedProcess:
+    def _run(
+        self,
+        command: str,
+        prefix: str,
+        timeout: float = 60.0,
+        stdin_data: Optional[str] = None,
+    ) -> subprocess.CompletedProcess:
         cmd = f"{prefix} {shlex.quote(command)}" if prefix else command
         self.commands.append(cmd)
+        # Never inherit the launcher's stdin (ADAAAA-8644). A `screen`/pipe
+        # launcher leaves stdin open but silent, and a probe that reads stdin
+        # (`psql -f -`) then blocks until `timeout` instead of seeing EOF. Under
+        # `/dev/null` it sees EOF and exits 0 with no rows — a false zero. A
+        # caller that needs stdin must pass `stdin_data`; `subprocess` then wires
+        # a fresh pipe, and every other probe reads an explicit `/dev/null`.
+        stdin_kwargs: Dict[str, Any] = (
+            {"input": stdin_data} if stdin_data is not None else {"stdin": subprocess.DEVNULL}
+        )
         proc = subprocess.run(
-            cmd, shell=True, cwd=self.shell_cwd, text=True, capture_output=True, timeout=timeout
+            cmd,
+            shell=True,
+            cwd=self.shell_cwd,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            **stdin_kwargs,
         )
         # Remote shells append their own exit footer to stdout; it must not be
         # parsed as probe output (it glues onto the last line).
@@ -284,7 +308,12 @@ class RealRunner:
             # Remote: carry the SQL as base64 so no quoting layer can eat it.
             b64 = base64.b64encode(query.encode()).decode()
             inner = f"echo {b64} | base64 -d | {inner}"
-        proc = self._run(inner, self.box_cmd)
+            sql_stdin: Optional[str] = None
+        else:
+            # Local: psql reads the query from `-f -`, so it must be fed here.
+            # Leaving it to inherited stdin is the ADAAAA-8644 defect.
+            sql_stdin = query
+        proc = self._run(inner, self.box_cmd, stdin_data=sql_stdin)
         if proc.returncode != 0:
             raise RuntimeError(
                 f"psql failed rc={proc.returncode}: {proc.stderr.strip()[:300]}"
@@ -661,7 +690,11 @@ def sample_gate(runner: Any, cfg: Config, quiet_since: datetime) -> GateSample:
     )
     try:
         rows = runner.sql(NONTERMINAL_SQL)
-        sample.nonterminal_jobs = int(rows[0]) if rows else 0
+        # A count query always returns one row. No row means the query never ran
+        # (the ADAAAA-8644 `/dev/null` arm), not that the box is idle.
+        if not rows:
+            raise RuntimeError("jobs probe returned no rows")
+        sample.nonterminal_jobs = int(rows[0])
     except Exception as exc:  # probe failure must read as "cannot prove quiet"
         sample.errors.append(f"jobs: {exc}")
 
@@ -685,9 +718,9 @@ def sample_gate(runner: Any, cfg: Config, quiet_since: datetime) -> GateSample:
     except Exception as exc:
         sample.errors.append(f"cyc: {exc}")
 
-    if sample.errors:
-        # An unreadable probe is not "quiet"; fold it into problems() output.
-        sample.server_health = sample.server_health or f"probe errors: {sample.errors}"
+    # ADAAAA-8644: probe errors are carried in `errors` and folded into the
+    # refusal reason by preflight(), so `server_health` stays the server's own
+    # answer instead of being overwritten with an unrelated probe failure.
     return sample
 
 
@@ -704,7 +737,11 @@ def preflight(runner: Any, cfg: Config, log) -> List[GateSample]:
         samples.append(sample)
         problems = sample.problems()
         if problems:
-            raise GateClosed("; ".join(problems), sample)
+            reason = "; ".join(problems)
+            if sample.errors:
+                # Name the cause: a probe that failed to read is not a busy box.
+                reason = f"{reason} (probe errors: {'; '.join(sample.errors)})"
+            raise GateClosed(reason, sample)
         log(
             f"preflight {sample.at} quiet: jobs 0, activeSessions 0, leases 0, "
             f"cyc 0/{len(cfg.pool_containers)}"
@@ -738,6 +775,9 @@ def preflight_block(
         "sampleCount": len(samples),
         "quietSamples": len(quiet),
         "notQuietSamples": len(samples) - len(quiet),
+        # ADAAAA-8644: probe failures travel with the bundle, stamped with the
+        # sample they came from, so a refusal names its cause.
+        "errors": [f"{s.at}: {err}" for s in samples for err in s.errors],
         "windowFrom": samples[0].at if samples else None,
         "windowTo": samples[-1].at if samples else None,
         "samples": [s.as_dict() for s in samples],
