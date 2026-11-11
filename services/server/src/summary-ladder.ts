@@ -39,6 +39,7 @@ import {
   gateAbsenceClaims,
   gateUncorroboratedGoal,
   isQuietVerdict,
+  isCorroboratedHighlight,
   repairDanglingTail,
   servedShape,
   servedShapeViolations,
@@ -440,9 +441,15 @@ export function goalTimelineFrom(highlights: HighlightRecord[]): Array<SummaryCh
         // Round to 0.1 s so stored float noise (31.300000000000004) never leaks
         // into the rendered ladder.
         ts: Math.round(Number(anyH.start ?? 0) * 10) / 10,
-        // Corroborated only by a persisted measured attestation; a bare Stage-1
-        // accept with no confirm record stays `verified: false`.
-        verified: anyH.corroborated === true || anyH.goalConfirmed === "confirmed_goal",
+        // ADAAAA-8645: the banner's `verified` reads the SAME corroboration rule
+        // the card's CONFIRMED/HELD/UNCONFIRMED badge is derived from
+        // (`isCorroboratedHighlight`, which reads the row's own
+        // `attestationUsed` / `confirmAttestation` with the served lane's dive
+        // precedence). The old inline rule read only the LEGACY top-level
+        // `corroborated` / `goalConfirmed` pair, which the live write path never
+        // populates — so job `f02ec0bf` printed "2 accepted goals (0
+        // corroborated)" while both of its cards served CONFIRMED.
+        verified: isCorroboratedHighlight(anyH),
         highlightId: String(anyH.id ?? ""),
       };
     });

@@ -3359,8 +3359,31 @@ export interface CorroborationWindow {
    * right — it is exactly the second half of the ladder's own `verified` rule
    * (`corroborated === true || goalConfirmed === "confirmed_goal"`), so the
    * banner and the strings CANNOT disagree about which goals were corroborated.
+   * A `near_miss` / `not_goal` verdict is a REFUTATION whatever this flag says
+   * (the flag tracks frame evidence support, not the goal verdict).
    */
   goalConfirmed?: string | null;
+  /**
+   * ADAAAA-8645: the LIVE row's own attestation record. A live highlight stores
+   * its goal evidence HERE (`attestationUsed` = what the accept lane measured;
+   * `confirmAttestation` = the async Stage-2 dive verdict written after accept),
+   * and never in the legacy top-level `corroborated` / `goalConfirmed` fields.
+   * Reading only the legacy pair made every live goal read "never corroborated"
+   * in the MATCH SUMMARY while its card served CONFIRMED — the banner and the
+   * badge contradicting each other on the same page.
+   */
+  attestationUsed?: {
+    scoreBoardChanged?: boolean | null;
+    goalCrossed?: boolean | null;
+    ballOutcome?: string | null;
+    corroborated?: boolean | null;
+    goalConfirmed?: string | null;
+  } | null;
+  /** The Stage-2 dive verdict as it is written on a live highlight row. */
+  confirmAttestation?: {
+    corroborated?: boolean | null;
+    goalConfirmed?: string | null;
+  } | null;
 }
 
 /** Seconds of slack around a clip window / anchor when matching a window instant. */
@@ -3396,16 +3419,74 @@ export function windowCorroborated(
 }
 
 /**
- * §3.4: the banner's OWN corroboration rule, in one place —
- * `corroborated === true || goalConfirmed === "confirmed_goal"` (mirrors
- * `goalTimelineFrom`'s `verified`). A highlight that carries neither (the confirm
- * pass did not run, or it ran and did not corroborate) is NOT corroborated, which
- * is what the page counts as "not corroborated by frames".
+ * §3.4: the banner's OWN corroboration rule, in one place — the STORED evidence
+ * a live row carries, or the legacy top-level pair a VOD row carries.
+ *
+ * ADAAAA-8645 (measured on the served build, browser job `f02ec0bf`): the rule
+ * was `corroborated === true || goalConfirmed === "confirmed_goal"` on the
+ * TOP-LEVEL fields, which the live write path never populates. A live highlight
+ * stores its evidence in `attestationUsed` (accept lane) and its Stage-2 verdict
+ * in `confirmAttestation`, so on that job the MATCH SUMMARY read
+ * "2 accepted goals (0 corroborated)" / "2 of 2 accepted goals are not
+ * corroborated by frames" while BOTH cards served `CONFIRMED` (one measured
+ * 1-1 -> 2-1, one dive-confirmed). The banner and the badge are two surfaces of
+ * one claim, so they must read one authority.
+ *
+ * Precedence mirrors the served confirmation lane (`deriveConfirmation`), which
+ * is what the card's badge is derived from:
+ *
+ *   1. a stored Stage-2 verdict WINS — `confirmed_goal` certifies (unless it is
+ *      explicitly uncorroborated), `near_miss` / `not_goal` refute whatever the
+ *      frame flag says (ADAAAA-8647 follow-up, row `f48cdbfa`);
+ *   2. otherwise a MEASURED attestation on the row certifies: the accept lane's
+ *      own corroboration flag, a measured scoreboard change, the goal line, or a
+ *      measured ball-in-net outcome;
+ *   3. otherwise the legacy top-level pair (VOD rows, pre-attestation rows);
+ *   4. an attestation that measured NOTHING is not corroboration.
+ *
+ * This is a widening ONLY over evidence the row itself stores, and it is the
+ * same rule the badge applies; it never invents a corroboration a row lacks.
  */
 export function isCorroboratedHighlight(h: CorroborationWindow | undefined): boolean {
   if (!h) return false;
+  const dive = storedDiveVerdict(h);
+  if (dive) return dive.corroborated;
+  const measured = h.attestationUsed;
+  if (measured) {
+    if (measured.corroborated === true) return true;
+    if (measured.scoreBoardChanged === true) return true;
+    if (measured.goalCrossed === true) return true;
+    if (/^goal$/i.test((measured.ballOutcome ?? "").trim())) return true;
+    // The row carries a measured attestation that certified nothing.
+    if (measured.scoreBoardChanged === false || measured.goalCrossed === false) return false;
+  }
   if (h.corroborated === true) return true;
   return (h.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal";
+}
+
+/**
+ * The Stage-2 dive verdict a STORED row carries, in whichever shape the writer
+ * used: `confirmAttestation` (the async lane's own record) or `attestationUsed`
+ * (the accept lane's copy of the same verdict). `null` when no verdict exists —
+ * a dropped / passthrough dive produced none and can never refute a goal.
+ */
+function storedDiveVerdict(
+  h: CorroborationWindow
+): { goalConfirmed: string; corroborated: boolean } | null {
+  for (const attestation of [h.confirmAttestation, h.attestationUsed]) {
+    const goalConfirmed = (attestation?.goalConfirmed ?? "").trim().toLowerCase();
+    if (goalConfirmed !== "confirmed_goal" && goalConfirmed !== "near_miss" && goalConfirmed !== "not_goal") {
+      continue;
+    }
+    // Same read as `diveVerdictFromAttestation` (services/server): the stored
+    // `corroborated` flag tracks FRAME evidence, so it can never certify a goal
+    // on its own — only `confirmed_goal` does.
+    return {
+      goalConfirmed,
+      corroborated: goalConfirmed === "confirmed_goal" ? attestation?.corroborated !== false : false,
+    };
+  }
+  return null;
 }
 
 /** A ball-in-net shape, with or without the article, on the claim's own words. */
