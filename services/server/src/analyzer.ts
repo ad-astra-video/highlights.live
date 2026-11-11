@@ -4758,13 +4758,18 @@ export class LiveRunShared {
    * the run already read is not a new goal: fail closed, and the next forward
    * read from the new baseline attests normally. Deliberately not time-bounded
    * (that is the point); a run that switches to a lower-scoring source stays
-   * fail-closed at or below the old high-water until it reads past it.
+   * fail-closed at or below the old high-water until it reads past it — unless
+   * the new source is detected as a NEW MATCH, which re-baselines the high-water
+   * (ADAAAA-8604 R2, {@link noteScoreReadRun}).
    *
    * This is the narrow root-cause guard. The withdrawn "one transitionKey = one
    * GOAL for the whole run" rule is NOT landed: on this same leg the second clip
    * legitimately repeated `1-1 -> 2-1 -> 2-2`, so a run-wide key ledger would
    * have demoted the genuine `2-1 > 2-2` goal at 351.118 s. */
   private scoreHighWater: [number, number] | null = null;
+  /** ADAAAA-8604 (R2): how many times the kickoff rule re-baselined the run
+   * (read-only, audit/tests — a silently moving threshold is not auditable). */
+  private kickoffBaselineResets = 0;
   /** ADAAAA-8564 (Fix A): row accounting published on `observeMetrics`. The
    * three counters below are incremented at the accept seam and at the dedupe
    * guards; `persistedRows` and `servedCards` are read off the ledgers at
@@ -5145,6 +5150,10 @@ export class LiveRunShared {
       if (at && Math.abs(at.ts - r.ts) <= 1e-6) continue;
       this.scoreReadLedger.splice(lo, 0, r);
       added++;
+      // ADAAAA-8604 (R2): kickoff detection runs on DISTINCT, ts-adjacent reads
+      // only (the dedupe above drops a re-produced window's frames, which are not
+      // a second look at the scorebug).
+      this.noteScoreReadRun(lo);
     }
     if (added > 0) {
       const newest = this.scoreReadLedger[this.scoreReadLedger.length - 1].ts;
@@ -5173,15 +5182,66 @@ export class LiveRunShared {
   /** ADAAAA-8564 (Fix C): has this run already READ a state strictly ahead of
    * `score`? A transition that LANDS there is a rewind (a repeated broadcast
    * overlay, a stale/mis-OCR read, or a different source's scoreboard), never a
-   * new goal. Public for the deferred lane and for audit + tests. */
+   * new goal. Public for the deferred lane and for audit + tests.
+   *
+   * ADAAAA-8604 (R1): the comparison is PER TEAM, not by total. A football score
+   * is monotone per team, so `1-2` followed by a read of `2-1` is a rewind (the
+   * sides are mis-OCR'd, or the overlay is stale/replayed) even though both tally
+   * 3 — the old `total < total` test let it attest a second GOAL on the same
+   * client-visible shape the parent ticket was opened about, one split-order
+   * away. Either side below the corresponding side of the high-water refuses. */
   scoreStateAlreadyRead(score: [number, number] | undefined | null): boolean {
     if (!score || !Array.isArray(score) || score.length !== 2) return false;
     if (this.scoreHighWater === null) return false;
-    return score[0] + score[1] < this.scoreHighWater[0] + this.scoreHighWater[1];
+    return score[0] < this.scoreHighWater[0] || score[1] < this.scoreHighWater[1];
   }
   /** ADAAAA-8564 (Fix C): the run's score high-water (read-only, audit/tests). */
   scoreHighWaterState(): [number, number] | null {
     return this.scoreHighWater === null ? null : [this.scoreHighWater[0], this.scoreHighWater[1]];
+  }
+  /** ADAAAA-8604 (R2): how many kickoffs re-baselined the high-water this run
+   * (read-only, audit/tests). */
+  scoreKickoffBaselineResets(): number {
+    return this.kickoffBaselineResets;
+  }
+  /**
+   * ADAAAA-8604 (R2): fold ONE distinct read into the kickoff detector and
+   * re-baseline the score high-water on a detected kickoff.
+   *
+   * The run-wide high-water is what makes a rewind visible ({@link
+   * scoreStateAlreadyRead}), but it is run-wide and a live stream can run into a
+   * NEW MATCH: a second match starting `0-0` after a `3-2` first match is
+   * refused at or below `3-2` today, so every goal until the running total
+   * passes it ships as a celebration — silently. Measured on the served build:
+   * high-water `[3,2]`, kickoff `0-0` twice, deferred `0-0 -> 1-0` -> 0 upgrades.
+   *
+   * A kickoff is the run reading `0-0` twice CONTIGUOUSLY (two distinct
+   * parseable reads, {@link noteScoreReadings} dedupes per content frame, so a
+   * re-produced window is not a second read) after a non-zero high-water, with
+   * no non-zero read in between. Only then is the old baseline genuinely stale:
+   * the `54c03cfc` rewind read `1-1`, never `0-0`, so it still fails closed and
+   * the guard cannot re-open that shape.
+   *
+   * The `0-0` rule is the LIVE fallback: a VOD clip/segment boundary is a
+   * stronger signal when it is exposed on the run, and should be preferred there.
+   */
+  private noteScoreReadRun(index: number): void {
+    const cur = this.scoreReadLedger[index];
+    if (!cur || cur.score[0] !== 0 || cur.score[1] !== 0) return;
+    // Time-order adjacency, not insertion order: the ledger is ts-sorted, so the
+    // entry immediately BEFORE this one is the previous read — "contiguous" and
+    // "no non-zero read lands between them" are the same check, and an
+    // overlapping window that carries older frames cannot fabricate a pair.
+    const prev = this.scoreReadLedger[index - 1];
+    if (!prev || prev.score[0] !== 0 || prev.score[1] !== 0) return;
+    const hi = this.scoreHighWater;
+    if (hi === null || hi[0] + hi[1] === 0) return;
+    this.scoreHighWater = [0, 0];
+    this.kickoffBaselineResets++;
+    console.log(
+      `[live-score-baseline] kickoff detected: two contiguous 0-0 reads after reading ` +
+        `${hi.join("-")} — the score high-water re-baselines to 0-0 so the new match's goals attest`
+    );
   }
   /** ADAAAA-8564 (Fix A): one window's accept verdict was TRUE. */
   noteAcceptedWindow(): void {
