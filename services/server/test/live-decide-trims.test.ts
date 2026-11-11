@@ -119,7 +119,7 @@ describe("live decide trim knobs (ADAAAA-7777)", () => {
     expect((opts!.audioB64 as string).length).toBeGreaterThan(0);
   });
 
-  it("compose passes all three knobs through (4-image budget, clip on, confirm on)", () => {
+  it("compose passes all three knobs through (8-image budget, clip on, confirm on)", () => {
     const lines = compose.split("\n");
     const start = lines.findIndex((l) => l === "  server:");
     expect(start).toBeGreaterThanOrEqual(0);
@@ -132,8 +132,8 @@ describe("live decide trim knobs (ADAAAA-7777)", () => {
     }
     const server = lines.slice(start, end).join("\n");
     for (const decl of [
-      // ADAAAA-8074: the shipped default is the ruled 4-image cell.
-      "LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-4}",
+      // ADAAAA-8676: the shipped default is the 8-image cell.
+      "LIVE_OBSERVE_MAX_FRAMES=${LIVE_OBSERVE_MAX_FRAMES:-8}",
       "LIVE_DECIDE_AUDIO_CLIP=${LIVE_DECIDE_AUDIO_CLIP:-1}",
       "LIVE_DECIDE_CONFIRM=${LIVE_DECIDE_CONFIRM:-1}",
     ]) {

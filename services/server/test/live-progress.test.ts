@@ -158,17 +158,18 @@ describe("deriveLiveProgress terminal state (ADAAAA-7741 AC6)", () => {
     const job = liveJob({
       status: "done",
       finishedAt: new Date(T0 + 120_000).toISOString(),
-      // Windows 3 s apart for the first two (no gap) then 33 s apart: the gap
-      // heuristic alone would report 10 skips on this log.
+      // Windows 5 s apart for the first two (no gap) then 35 s apart: the gap
+      // heuristic alone would report 6 skips on this log (ADAAAA-8676: the live
+      // cell cuts at 5 s, so the legacy grid steps by 5).
       summaryLog: [
         { seq: 1, ts: "", windowTs: 0 },
-        { seq: 2, ts: "", windowTs: 3 },
-        { seq: 3, ts: "", windowTs: 36 },
+        { seq: 2, ts: "", windowTs: 5 },
+        { seq: 3, ts: "", windowTs: 40 },
       ],
       observeMetrics: { skippedStaleWindows: 0, supplySkippedWindows: 1 },
     });
     const p = deriveLiveProgress({ job, nowMs: T0 + 120_000 });
-    expect(skippedWindowsFromSummaryLog(job.summaryLog as any)).toBe(10);
+    expect(skippedWindowsFromSummaryLog(job.summaryLog as any)).toBe(6);
     expect(p.skippedWindows).toBe(1);
   });
 });
@@ -177,34 +178,34 @@ describe("skippedWindowsFromSummaryLog (ADAAAA-7741 AC4)", () => {
   const entries = (windows: number[]) => windows.map((windowTs, i) => ({ seq: i + 1, ts: "", windowTs }));
 
   it("counts each whole extra cadence between decided windows", () => {
-    // 3 s cadence: 3->6 and 12->15 are normal steps, 6->12 swallowed one,
-    // 15->24 swallowed two.
-    expect(skippedWindowsFromSummaryLog(entries([3, 6, 12, 15, 24]))).toBe(3);
+    // 5 s cadence (ADAAAA-8676): 5->10 and 20->25 are normal steps, 10->20
+    // swallowed one, 25->40 swallowed two.
+    expect(skippedWindowsFromSummaryLog(entries([5, 10, 20, 25, 40]))).toBe(3);
   });
 
   it("does not treat the first window's offset from 0 as a skip", () => {
     // The observer anchors on the first stale frame and counts 0 skips there —
     // startup content must never be reported as dropped.
-    expect(skippedWindowsFromSummaryLog(entries([9, 12, 15]))).toBe(0);
+    expect(skippedWindowsFromSummaryLog(entries([9, 14, 19]))).toBe(0);
   });
 
   it("does not count an off-grid (audio-anchored) window as a skip", () => {
-    expect(skippedWindowsFromSummaryLog(entries([3, 7.5, 10.5]))).toBe(0);
+    expect(skippedWindowsFromSummaryLog(entries([5, 9.5, 12.5]))).toBe(0);
   });
 
   it("tolerates fractional grid centres and ignores entries without windowTs", () => {
     const log = [
       { seq: 1, ts: "", windowTs: 11.666666666666666 },
       { seq: 2, ts: "", windowTs: undefined },
-      { seq: 3, ts: "", windowTs: 17.666666666666666 },
-      { seq: 4, ts: "", windowTs: 20.666666666666666 },
+      { seq: 3, ts: "", windowTs: 21.666666666666666 },
+      { seq: 4, ts: "", windowTs: 26.666666666666666 },
     ];
     expect(skippedWindowsFromSummaryLog(log as any)).toBe(1);
   });
 
   it("returns 0 for an empty / single-window log", () => {
     expect(skippedWindowsFromSummaryLog([])).toBe(0);
-    expect(skippedWindowsFromSummaryLog(entries([3]))).toBe(0);
+    expect(skippedWindowsFromSummaryLog(entries([5]))).toBe(0);
     expect(skippedWindowsFromSummaryLog(undefined)).toBe(0);
   });
 });
