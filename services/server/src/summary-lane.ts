@@ -174,6 +174,8 @@ export async function runSummaryForRow(
   };
   let calls = 0;
   let lastReason: SummaryDropReason | null = null;
+  /** The last refusal, so the drop path can keep its reply as `summaryRaw`. */
+  let lastGate: ReturnType<typeof gateSummaryDetail> | null = null;
   const started = now();
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
     calls++;
@@ -188,23 +190,22 @@ export async function runSummaryForRow(
     const decision = gateSummaryDetail(reply.text, evidence);
     const latencyMs = Math.max(0, Math.round(now() - started));
     if (!decision.summary) {
-      // ADAAAA-8687: a refusal keeps the model's own reply as `summaryRaw` (and
-      // an excerpt in the log), so the next QA can quote WHAT was refused instead
-      // of only the violation token. Still never a `summary`: the card renders on
-      // its headline exactly as before (AC6).
-      const raw = decision.raw.slice(0, SUMMARY_RAW_MAX_CHARS);
-      await store.patchHighlightSummary(descriptor.highlightId, {
-        summaryGate: `dropped:gate`,
-        summaryRaw: raw,
-        summaryCalls: calls,
-        summaryDropped: 1,
-        summaryDroppedByReason: { gate: 1 },
-        summaryP95Ms: latencyMs,
-      });
-      log(
-        `[summary:${descriptor.jobId}] dropped (gate) highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} raw=${JSON.stringify(raw.slice(0, 200))}`
-      );
-      return { outcome: "dropped", reason: "gate", gate: decision.gate, calls, latencyMs };
+      lastGate = decision;
+      lastReason = "gate";
+      // ADAAAA-8687: a refusal is retried ONCE, inside the contract's existing
+      // bound (`SUMMARY_MAX_CALLS_PER_ROW`, so a row still bills at most two
+      // calls, AC5) and inside the post-promotion p95 budget. A gate refusal is
+      // a property of ONE sampled reply, not of the row: the served probe
+      // measured 2/9 refusals spread across three repeats of the same three
+      // rows, so a second sample is the difference between 78% coverage and the
+      // 95% bar. A refused reply is still never stored as `summary`.
+      if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
+        log(
+          `[summary:${descriptor.jobId}] gate-retry highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+        );
+        continue;
+      }
+      break;
     }
     await store.patchHighlightSummary(descriptor.highlightId, {
       summary: decision.summary,
@@ -220,15 +221,23 @@ export async function runSummaryForRow(
   }
   const reason: SummaryDropReason = lastReason ?? "transport_failure";
   const latencyMs = Math.max(0, Math.round(now() - started));
+  // ADAAAA-8687: a refusal keeps the model's own reply as `summaryRaw` (and an
+  // excerpt in the log), so the next QA can quote WHAT was refused instead of
+  // only the violation token. Still never a `summary`: the card renders on its
+  // headline exactly as before (AC6).
+  const raw = lastGate ? lastGate.raw.slice(0, SUMMARY_RAW_MAX_CHARS) : undefined;
   await store.patchHighlightSummary(descriptor.highlightId, {
     summaryGate: `dropped:${reason}`,
+    ...(raw ? { summaryRaw: raw } : {}),
     summaryCalls: calls,
     summaryDropped: 1,
     summaryDroppedByReason: { [reason]: 1 },
     summaryP95Ms: latencyMs,
   });
-  log(`[summary:${descriptor.jobId}] dropped (${reason}) highlight=${descriptor.highlightId} calls=${calls}`);
-  return { outcome: "dropped", reason, calls, latencyMs };
+  log(
+    `[summary:${descriptor.jobId}] dropped (${reason}) highlight=${descriptor.highlightId} calls=${calls}${lastGate ? ` violations=${lastGate.violations.join(",")} raw=${JSON.stringify((raw ?? "").slice(0, 200))}` : ""}`
+  );
+  return { outcome: "dropped", reason, gate: lastGate?.gate, calls, latencyMs };
 }
 
 /**

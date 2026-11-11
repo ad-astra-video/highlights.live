@@ -687,7 +687,10 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     attestsScoring
       ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
       : "- This is NOT a scoring play: never claim a goal, never name the net, and never state a score or that the score changed or did not change.",
-    "- Never invent a name, a team, a venue or a statistic.",
+    "- Never invent a name, a team, a venue or a statistic. When the evidence names nobody, describe roles only ('the midfielder', 'the keeper') and do not capitalize a made-up name.",
+    ...(attestsScoring
+      ? []
+      : ["- Name the clock in your copy (the window label, e.g. `0:12`): with no score fact, the clock is the fact this card can carry."]),
     "- Do not restate the headline or the announcer line.",
     "- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').",
     "Evidence:",

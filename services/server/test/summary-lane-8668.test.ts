@@ -59,7 +59,9 @@ function stubFetch(answers: (Response | Error)[]) {
     const next = answers[Math.min(i, answers.length - 1)];
     i++;
     if (next instanceof Error) throw next;
-    return next;
+    // A Response body can be read once: hand each call its own copy so a retry
+    // sees the same reply instead of a "body used" failure.
+    return next.clone();
   }) as unknown as typeof fetch;
   return { fn, seen, calls: () => i };
 }
@@ -226,6 +228,40 @@ describe("runSummaryForRow — the promoted row's copy", () => {
       expect(stub.patches[0].patch.summary).toBe(c.body);
       expect(stub.patches[0].patch.summaryDropped).toBe(0);
     }
+  });
+
+  it("retries a GATE refusal once and stores the second reply (ADAAAA-8687)", async () => {
+    const { store, patches } = stubStore();
+    const f = stubFetch([ok("It is 2-2."), ok(GOOD_SUMMARY)]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
+      jobId: "j1",
+      highlightId: "h1",
+      evidence: evidence(),
+    });
+    expect(result.outcome).toBe("stored");
+    expect(result.calls).toBe(2);
+    expect(f.calls()).toBe(2);
+    expect(patches[0].patch.summary).toBe(GOOD_SUMMARY);
+    expect(patches[0].patch.summaryCalls).toBe(2);
+    expect(patches[0].patch.summaryDropped).toBe(0);
+  });
+
+  it("drops after TWO gate refusals and keeps the LAST refused reply as `summaryRaw` (ADAAAA-8687)", async () => {
+    const { store, patches } = stubStore();
+    const second = "The keeper claims the ball under pressure in midfield.";
+    const f = stubFetch([ok("It is 2-2."), ok(second)]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
+      jobId: "j1",
+      highlightId: "h1",
+      evidence: evidence(),
+    });
+    expect(result.outcome).toBe("dropped");
+    expect(result.reason).toBe("gate");
+    expect(result.calls).toBe(2);
+    expect(patches.length).toBe(1);
+    expect(patches[0].patch.summary).toBeUndefined();
+    expect(patches[0].patch.summaryRaw).toBe(second);
+    expect(patches[0].patch.summaryDroppedByReason).toEqual({ gate: 1 });
   });
 
   it("drops `pool_busy` when no decide service is configured (never fabricates)", async () => {
