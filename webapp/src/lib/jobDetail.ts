@@ -668,8 +668,15 @@ export interface LiveProgress {
   processedThroughTs: number;
   /** liveEdgeTs - processedThroughTs, clamped >= 0. */
   lagSec: number;
-  /** Cadence windows dropped past the lag budget on this run. */
-  skippedWindows: number;
+  /** SUPPLY skip count (stale + admission + backpressure; never the funded
+   * throttle — ADAAAA-7808). ADAAAA-8636: ABSENT while a share is in flight and
+   * the rail's supply counters are not in memory — the projection refuses to
+   * synthesize this from `summaryLog` caption gaps — so the chip renders no skip
+   * clause. Always present on a settled record. */
+  skippedWindows?: number;
+  /** ADAAAA-8636: `false` when an in-flight share has no rail supply evidence
+   * (`skippedWindows` absent). Omitted on a terminal record. */
+  skipData?: boolean;
   /** `unknown` before the first decided window and on a terminal job. */
   state: "caught_up" | "behind" | "unknown";
   updatedAt: string;

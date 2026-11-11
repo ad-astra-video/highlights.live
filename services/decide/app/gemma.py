@@ -700,7 +700,7 @@ def parse_decision(text: str) -> dict | None:
         # are rejected as scoring highlights regardless of the model's
         # isHighlight field (which is where the spurious GOALs came from).
         is_hl = outcome_is_highlight(outcome)
-    return {
+    decision = {
         "isHighlight": is_hl,
         "score": score,
         "eventType": event_type,
@@ -709,15 +709,10 @@ def parse_decision(text: str) -> dict | None:
         # defaults to not_highlight). near_miss is notable but NOT a scoring
         # play — surfaced at a lower score, labeled distinctly below.
         "outcome": outcome,
-        # ADAAAA-8325 (Inc 2): the footage phase, normalized exactly like
-        # `outcome` BUT with no default — an absent/malformed phase stays None
-        # (unknown), never "live". Additive metadata; the outcome ladder above is
-        # untouched.
-        "phase": normalize_phase(obj.get("phase")),
         "nearMiss": outcome == "near_miss",
-        # I1 reviewer-facing rationale (always present so the API response shape
-        # is stable whether or not the model populated them).
-        "reasoning": _as_text(obj.get("reasoning")),
+        # I1 reviewer-facing rationale: ADDITIVE, so it is stamped below only when
+        # the reply actually carried one (ADAAAA-8635) — see the `reasoning`
+        # block next to `phase` after this dict.
         "verdict": _normalize_verdict(obj.get("verdict")),
         "evidenceAttested": _as_str_list(obj.get("evidenceAttested")),
         # ADAAAA-7111 (Increment D): the running video summary the model updated
@@ -730,6 +725,32 @@ def parse_decision(text: str) -> dict | None:
         "postTitle": _as_text(obj.get("postTitle")),
         "source": "gemma",
     }
+    # ADAAAA-8635: the reviewer rationale is ADDITIVE (I1) exactly like `phase`,
+    # so a reply that omits it adds NO KEY — `""` and absent both mean "no
+    # rationale". It used to be stamped unconditionally, and the sibling
+    # producers that build a decision WITHOUT the key (the deterministic
+    # rule-fallback dict, a group verdict the model returned without it) then had
+    # `_response_block` turn the missing key into an explicit ``"reasoning": null``
+    # on the retained per-window analysis. The server's
+    # ``AnalysisResponseSchema.reasoning`` (``.optional()``) rejects an explicit
+    # null, so that ONE field dropped the WHOLE window analysis (prompt,
+    # dataItems, frames, response) from the decide note — measured on job
+    # 22ff6ca2-96c0-4b97-bcb3-d762c14e6b1a, where a prose (unparseable) gemma
+    # reply fell back to the rule and lost its analysis block (ADAAAA-8632).
+    reasoning = _as_text(obj.get("reasoning"))
+    if reasoning:
+        decision["reasoning"] = reasoning
+    # ADAAAA-8625: the footage phase is ADDITIVE metadata (ADAAAA-8325), so an
+    # UNKNOWN phase must add NO KEY at all. It used to land here as an explicit
+    # ``None``, which the wire then carried as ``"phase": null``: the live
+    # compact contract never asks for a phase, so EVERY live window emitted it,
+    # and the server's ``AnalysisResponseSchema.phase`` (``.optional()``) rejected
+    # the explicit null and dropped the whole window analysis from the decide
+    # note. Absent = unknown, never an inferred "live" (AC8 unchanged).
+    phase = normalize_phase(obj.get("phase"))
+    if phase is not None:
+        decision["phase"] = phase
+    return decision
 
 
 def _reaction_summary(evidence: dict) -> list[str]:
@@ -1561,18 +1582,33 @@ _OUTPUT_CONTRACT_COMPACT = (
     "Now answer with ONLY one JSON object, no markdown, no preamble, no "
     "leading/trailing prose, exactly of this shape (keep every free-text field "
     "to the stated word cap — shorter is better, do NOT restate the criteria):\n"
+    # ADAAAA-8603: the live rail is decode-bound (187 completion tokens at
+    # ~112 tok/s = ~1.67 s of a 2.2 s call), so the reply's PROSE is the
+    # latency. The four audit-only fields are capped to a mechanical HARD MAX
+    # and told that decoding costs wall time; postTitle / runningSummary keep
+    # their own rules untouched, and the outcome/criteria keys are unchanged so
+    # the /confirm Stage-2 read and the guard see the same wire. Measured on the
+    # 12-window replay (gemma-gpu0, c=1): completion 189 -> 145 tokens, p50
+    # 2224 -> 1826 ms, decision parity with the untrimmed contract on all 20
+    # windows.
+    "AUDIT FIELDS ARE THE LATENCY: reason, reasoning, independentlyObserved and "
+    "contradictedBy are decoded on the live rail, so count the words of each and "
+    "stay under its HARD MAX (a field over the HARD MAX is WRONG: delete words "
+    "until it fits). Write the JSON on ONE line with NO space after ':' or ',', "
+    "and never add a key the shape does not name. postTitle and runningSummary "
+    "keep their own rules exactly as stated below.\n"
     "{\"isHighlight\": true|false, \"score\": 0..100, \"eventType\": \"<type>\", "
     "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
-    "\"reason\": \"<max 20 words: the deciding evidence AND its timestamp "
+    "\"reason\": \"<max 14 words (HARD MAX 17): the deciding evidence AND its timestamp "
     "(timeline t=…, or the ASR/window clock)>\", "
-    "\"reasoning\": \"<ONE sentence, max 25 words: what you observed FIRST, then "
+    "\"reasoning\": \"<ONE sentence, max 12 words (HARD MAX 15): what you observed FIRST, then "
     "how that tests the hypothesis>\", "
     "\"verdict\": {\"hypothesis\": \"<the candidate type you were testing>\", "
-    "\"independentlyObserved\": \"<max 15 words: what the dossier's evidence "
+    "\"independentlyObserved\": \"<max 7 words (HARD MAX 9): what the dossier's evidence "
     "shows, stated before the hypothesis>\", "
     "\"criteria\": {\"ballCrossedLineBetweenPosts\": true|false|null, "
     "\"ballInNet\": true|false|null, \"scoreboardChanged\": true|false|null, "
-    "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<max 12 words, or "
+    "\"crowdErupted\": true|false|null}, \"contradictedBy\": \"<max 6 words (HARD MAX 8), or "
     "null when the hypothesis is not contradicted>\"}, "
     # ADAAAA-7935: the fast rail emits ONE play-by-play line per window with an
     # optional colour beat, not one unbounded announcer sentence. The budgets are
@@ -2593,16 +2629,13 @@ def _build_group_data_items(
 def _response_block(decision: dict) -> dict:
     """The full response fields retained from a decide decision, as a FLAT copy
     (never the decision dict itself, to avoid a self-referential analysis)."""
-    return {
+    block = {
         "isHighlight": decision.get("isHighlight"),
         "score": decision.get("score"),
         "eventType": decision.get("eventType"),
         "reason": decision.get("reason"),
         "outcome": decision.get("outcome"),
-        # ADAAAA-8325: the footage phase, so a replay can compare raw vs served.
-        "phase": decision.get("phase"),
         "nearMiss": decision.get("nearMiss"),
-        "reasoning": decision.get("reasoning"),
         "verdict": decision.get("verdict"),
         "evidenceAttested": decision.get("evidenceAttested") or [],
         "audioContext": decision.get("audioContext"),
@@ -2612,6 +2645,24 @@ def _response_block(decision: dict) -> dict:
         "postTitle": decision.get("postTitle"),
         "source": decision.get("source"),
     }
+    # ADAAAA-8325: the footage phase, so a replay can compare raw vs served.
+    # ADAAAA-8625: spread so an UNKNOWN phase adds NO key — an explicit
+    # ``"phase": null`` here is what the server's AnalysisResponseSchema rejected
+    # (dropping the whole window analysis for every live window).
+    if decision.get("phase"):
+        block["phase"] = decision.get("phase")
+    # ADAAAA-8635: the rationale is optional exactly like `phase`, and it is the
+    # one field that was still stamped unconditionally. `decision.get()` on a
+    # decision WITHOUT a rationale (the deterministic rule-fallback dict, a group
+    # verdict the model returned without the key, a pre-I1 reply) produced an
+    # explicit ``"reasoning": null``; the server's
+    # ``AnalysisResponseSchema.reasoning`` (``.optional()``) rejected the null and
+    # deleted the WHOLE per-window analysis block. Absent = no rationale, so the
+    # key is added only when there is one.
+    reasoning = decision.get("reasoning")
+    if reasoning:
+        block["reasoning"] = reasoning
+    return block
 
 
 def _window_analysis(
@@ -2642,6 +2693,7 @@ def _window_analysis(
             send_audio or bool(transcript), transcript, story_so_far,
             match_context, prior_game_state, perceive_window,
         )
+    asr_url = _asr_url()
     return {
         "prompt": prompt,
         "dataItems": data_items,
@@ -2652,7 +2704,12 @@ def _window_analysis(
             "sampleRate": audio_sample_rate,
             "path": "input_audio" if send_audio else ("asr_text" if transcript else "none"),
         },
-        "asr": {"transcript": transcript or "", "url": _asr_url()},
+        # ADAAAA-8625: the ASR endpoint is emitted ONLY when one is configured —
+        # the same "unknown/unset adds no key" rule as `phase`. Emitting
+        # ``"url": null`` here hit the consumer's ``AnalysisAsrSchema.url``
+        # (``.optional()``, which rejects an explicit null) and dropped the whole
+        # window analysis on any deploy without ASR_URL.
+        "asr": {"transcript": transcript or "", **({"url": asr_url} if asr_url else {})},
         # ADAAAA-8056 (AC-E1): the perceive-timeline coverage ledger for THIS
         # window (records rendered, chars, compaction mode, seeds aligned).
         "perceiveTimeline": render_perceive_timeline(evidence, perceive_window)[1],
@@ -3119,13 +3176,18 @@ def decide_with_gemma(
             # Increment F / ADAAAA-6465: the deterministic rule also emits the
             # outcome taxonomy so the response shape is identical on both paths.
             "outcome": _rule_outcome(d),
-            # ADAAAA-8325 (Inc 2): the deterministic fallback NEVER guesses a
-            # phase — a CPU-host rule path has no footage read, so the field is
-            # None (unknown), exactly like an absent model reply.
-            "phase": d.phase,
             "nearMiss": _rule_outcome(d) == "near_miss",
             "source": "rule-fallback",
         }
+        # ADAAAA-8325 (Inc 2): the deterministic fallback NEVER guesses a phase —
+        # a CPU-host rule path has no footage read, so the field is unknown.
+        # ADAAAA-8625: an UNKNOWN phase adds NO key here either. This is the
+        # SECOND producer on the same wire (the model reply is the first), and an
+        # explicit ``"phase": None`` in this dict is byte-identical on the wire to
+        # the null the server's ``AnalysisResponseSchema`` used to reject — which
+        # dropped the WHOLE per-window analysis, not just the phase.
+        if d.phase:
+            result["phase"] = d.phase
     # ADAAAA-7111 (Increment D): carry the running video summary (story-so-far).
     # Gemma's updated summary is returned bounded; on the rule-fallback path (or
     # when the model omitted it) synthesise a deterministic extension of the

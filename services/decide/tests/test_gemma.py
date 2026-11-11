@@ -648,11 +648,14 @@ def test_parse_decision_warmup_rejected_with_contradicting_reason():
 
 def test_parse_decision_legacy_reply_back_compat():
     # A pre-I1 / legacy-shaped reply (no rationale) still parses with empty
-    # rationale so the response shape stays stable.
+    # rationale so the response shape stays stable. ADAAAA-8635: "empty" is now
+    # an ABSENT key (not `""`) — the additive field adds no key when the reply
+    # carries none, which is what stops the analysis capture emitting a null.
     d = parse_decision('{"isHighlight":true,"score":82,"eventType":"GOAL","reason":"crowd erupts"}')
     assert d is not None
     assert d["isHighlight"] is True
-    assert d["reasoning"] == ""
+    assert d.get("reasoning", "") == ""
+    assert "reasoning" not in d
     assert d["verdict"] is None
     assert d["evidenceAttested"] == []
 
@@ -741,8 +744,10 @@ def test_highlight_response_model_includes_rationale(monkeypatch):
     body = r.json()
     # core verdict still present
     assert "isHighlight" in body
-    # I1 rationale fields are on the wire (empty on the rule path)
-    assert body.get("reasoning", None) is not None or "reasoning" in body
+    # I1 rationale fields are on the wire (the rule path has no rationale:
+    # ADAAAA-8635 means the key is ABSENT rather than empty, since an empty /
+    # null rationale is what the server's analysis schema used to reject)
+    assert "reasoning" not in body
     assert "verdict" in body
     assert isinstance(body["evidenceAttested"], list)
     # score is bounded [0,100] by the model (a >100 rule score must not 500)
@@ -1062,8 +1067,13 @@ def test_compact_contract_keeps_fields_the_server_consumes():
         assert field in p, field
     # the long-form-only field is dropped (nothing on the server reads it)
     assert "evidenceAttested" not in p
-    # prose is capped instead of free-form
-    assert "max 20 words" in p and "HARD MAX 140" in p
+    # prose is capped instead of free-form. ADAAAA-8603: the four audit-only
+    # fields carry a mechanical HARD MAX (the live reply is decode-bound); the
+    # caption's own budget is untouched.
+    assert "max 14 words (HARD MAX 17)" in p
+    assert "max 12 words (HARD MAX 15)" in p
+    assert "HARD MAX 140" in p
+    assert "AUDIT FIELDS ARE THE LATENCY" in p
 
 
 def test_compact_and_full_prompts_share_the_context_prefix():

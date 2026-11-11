@@ -191,6 +191,39 @@ The five stages sum to `deliveredLatencyMs` (plus `(centerTs - triggerTs)` when
 localization moved the trigger inside the window), so a replay can attribute the
 gap to one stage instead of guessing.
 
+**The ASR lane of a row** (ADAAAA-8611). `decideE2eMs` covers fire -> decide
+settle, which on the live rail includes the time the decide spends WAITING for
+the side lane's transcription (`asr-prefetch.ts`). That wait used to be readable
+only from `[live-asr:<job>] ... lane=waitmiss waitMs=6000`, and only for the
+windows whose decide row reached `decide_audit`. Every delivered row now carries
+three additive fields, so the tail is attributable from the stored record:
+
+```
+[live-deliver:<job>] row @385s delivered=11468ms fire=0ms decide=11460ms acceptWait=0ms accept=8ms persistAck=0ms localize=0ms asr=waitmiss/6000+0ms
+```
+
+- `asrLane` - `prefetched` (the transcript rode the decide), `miss` (the
+  prefetch settled without transcribing, decide transcribed inline),
+  `waitmiss` (the decide stopped waiting and went inline; the prefetch keeps
+  running) or `inline` (no prefetch existed).
+- `asrWaitMs` - wall ms the decide waited for the prefetch before the decide
+  call started (0 when it never waited).
+- `asrPrefetchMs` - the transcription's own measured cost when it landed.
+
+These are attribution INSIDE `decideE2eMs`, not extra stages: they are
+deliberately NOT part of the stage sum, which still reconstructs
+`deliveredLatencyMs` exactly (`services/server/src/live-delivery.ts`).
+
+**Headroom-aware wait** (`LIVE_DECIDE_ASR_HEADROOM_MS`, ADAAAA-8611, default 0 =
+inert). The deployed wait budget (`LIVE_DECIDE_ASR_WAIT_MS`, 6 000 ms) is larger
+than the AC-B p95 bar (5 000 ms), so a wait-miss row breaches p95 by
+construction. Setting this env to the bar clamps the effective wait to
+`min(budget, bar - (elapsed since the window fired))`: a row with headroom keeps
+the full budget, a row already heading past the bar stops waiting immediately.
+The prefetch is never aborted (same as a budget miss), and the clamped rows are
+counted separately as `observeMetrics.asrWaitTrims` beside
+`asrWaitHeadroomMs`, so `asrWaitMisses` stays comparable to a pre-8611 leg.
+
 **On the job record** (`GET /jobs/:id`, admin - it rides the internal
 `observeMetrics` block):
 
@@ -198,11 +231,17 @@ gap to one stage instead of guessing.
 - `observeMetrics.deliveredLatency.p50Ms` / `p95Ms` / `maxMs` - the gate-3
   number and its tail.
 - `observeMetrics.deliveredLatency.rows[]` - per-row `triggerTs`,
-  `deliveredLatencyMs` and the five stages above (bounded at 200 rows).
+  `deliveredLatencyMs` and the five stages above, plus `asrLane` / `asrWaitMs` /
+  `asrPrefetchMs` (bounded at 200 rows).
 
 Unit coverage: `services/server/test/live-delivery-latency.test.ts` (the
 arithmetic and its exact decomposition, a localized trigger counted against the
 row's own timestamp, negative-clock clamping, p50/p95/max, the tracker's
 pending -> ack handshake incl. a retried persist not double-counting, and the
 `LiveObserver -> observeMetrics.deliveredLatency` wiring for accepted vs rejected
-windows).
+windows), and `services/server/test/asr-headroom-8611.test.ts` (the ASR lane
+on the row and the stage identity staying exact, the lane stamped before and
+after the decide, the lane surviving `JobSchema.parse`, the headroom clamp's
+pure arithmetic, the inert default, a trimmed wait proceeding inline without
+aborting the prefetch, the `[live-deliver]` evidence line, and the config +
+compose posture).

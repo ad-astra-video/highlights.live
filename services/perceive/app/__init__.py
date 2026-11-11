@@ -222,6 +222,28 @@ _SCOREBOARD_ROI_RERESOLVE_MAX = 3
 _SCORE_FALLBACK_FRAMES_PER_READ = 2
 _SCORE_FALLBACK_HEADROOM = 24
 _SCORE_FALLBACK_MAX_READS = 200
+# ADAAAA-8641: a crop that parses a score is proof its box is a scoreboard region.
+# Measured on browser job `f02ec0bf` (session `0a59dabf`, media rail 640x360): the
+# TOP-BAND prior read `19:38 RMA 2-1 BAR` on the session's own stored frames while
+# the same frame's whole-frame read parses the same pair — so the crop was never
+# broken. The box was: `locate()` finally returned an ad-board box
+# `(0.433,0.050,0.654,0.486)` at seq 71, the session adopted it over the working
+# prior, and every later crop read `Aszende`. The prior must be ADOPTED once it
+# proves itself, not thrown away for a discovery guess. Two consecutive parsed
+# frames (not one) keep a single spurious read from promoting a region, and the
+# adoption costs no OCR — it reuses the crop that already parsed.
+_SCOREBOARD_ROI_LEARN_STREAK = 2
+# How many digit-less boxes a session remembers, so deterministic discovery
+# cannot re-adopt the box a bounded re-resolve already threw away (measured: the
+# same discovery box came back at seq 76 after the seq 75 re-resolve).
+_SCOREBOARD_ROI_REJECTED_MAX = 8
+# ADAAAA-8641: how long a box that parsed a score stays the incumbent. A FRESH
+# discovery box that reads no score on its own first frame cannot displace it
+# while it is this recent (measured: discovery pointed at an ad board while the
+# top band had just read `19:38 RMA 2-1 BAR`). The window also bounds the
+# stickiness, so a scoreboard that genuinely MOVED mid-session is still picked up
+# once the old box has not parsed for this many frames.
+_SCOREBOARD_ROI_PROVEN_FRESH_FRAMES = 60
 
 
 def _match_context_enabled() -> bool:
@@ -330,6 +352,22 @@ def _lines_have_digit(lines) -> bool:
         return False
 
 
+def _remember_rejected_roi(state, roi) -> None:
+    """Remember a box the session threw away as digit-less (ADAAAA-8641).
+
+    Bounded to ``_SCOREBOARD_ROI_REJECTED_MAX`` signatures; the identity is the
+    rounded normalized box, so a discovery pass that returns the same guess again
+    is recognised instead of re-adopted for another 5 frames.
+    """
+    sig = _roi_signature(roi)
+    if sig is None:
+        return
+    rejected = tuple(getattr(state, "scoreboard_roi_rejected", ()) or ())
+    if sig in rejected:
+        return
+    state.scoreboard_roi_rejected = (rejected + (sig,))[-_SCOREBOARD_ROI_REJECTED_MAX:]
+
+
 def _abandon_digitless_scoreboard_roi(state, seq, roi, lines, source: str) -> str:
     """Count a digit-less crop and re-resolve / abandon the session region.
 
@@ -348,15 +386,24 @@ def _abandon_digitless_scoreboard_roi(state, seq, roi, lines, source: str) -> st
     is absent evidence, not evidence the region is wrong, so it does not count.
 
     Never adds an OCR read — it only interprets lines the caller already spent.
-    Returns a short status for tests/logging: ``"pinned"``, ``"blank"``,
-    ``"digit"``, ``"counting"``, ``"re-resolve"``, ``"abandoned"`` or
-    ``"exhausted"``.
+    Returns a short status for tests/logging: ``"pinned"``, ``"uncached"``,
+    ``"blank"``, ``"digit"``, ``"counting"``, ``"re-resolve"``, ``"abandoned"``,
+    ``"restored"`` or ``"exhausted"``.
     """
     if source in ("explicit", "vision"):
         # An operator-pinned box is the operator's call, and the vision-LLM box
         # is re-localized every frame anyway — neither is a stale cache.
         state.scoreboard_roi_digitless = 0
         return "pinned"
+    if getattr(state, "scoreboard_roi", None) is None:
+        # ADAAAA-8641: a per-frame prior is not a session region — nothing was
+        # cached, so there is nothing to invalidate. Measured on browser session
+        # `0a59dabf`: after a re-resolve cleared the cache, this counted the
+        # digit-less frames of the TOP-BAND prior (the box that reads the score)
+        # as if it were the region, spent the re-resolve cycles and ended the
+        # session on the bottom prior that reads only the watermark.
+        state.scoreboard_roi_digitless = 0
+        return "uncached"
     if not lines:
         return "blank"
     if _lines_have_digit(lines):
@@ -375,7 +422,29 @@ def _abandon_digitless_scoreboard_roi(state, seq, roi, lines, source: str) -> st
         return "exhausted"
     state.scoreboard_roi_digitless = 0
     state.scoreboard_roi_reresolves = cycles + 1
+    # ADAAAA-8641: remember the box this re-resolve throws away, so the next
+    # (deterministic) discovery pass cannot re-adopt the same ad-board box —
+    # measured on session `0a59dabf`, discovery returned the identical box at
+    # seq 76 right after the seq 75 re-resolve threw it away.
+    _remember_rejected_roi(state, roi)
     if state.scoreboard_roi_reresolves >= _SCOREBOARD_ROI_RERESOLVE_MAX:
+        proven = getattr(state, "scoreboard_roi_proven", None)
+        if proven is not None:
+            # ADAAAA-8641: a session that once had a box PARSING a score must
+            # settle back on it, not on the bottom-centre prior (measured: the
+            # bottom prior read only the `Art Soccer` watermark).
+            _set_scoreboard_roi(state, ScoreboardRoi(*proven), "restored_proven_box", seq)
+            log.info(
+                "scoreboard ROI abandoned session=%s seq=%s from_source=%s from_box=%s digitless_frames=%d "
+                "action=restore_proven_box box=%s",
+                getattr(state, "session_id", "?"),
+                seq,
+                source,
+                _roi_box_label(roi),
+                misses,
+                _roi_box_label(state.scoreboard_roi),
+            )
+            return "restored"
         _set_scoreboard_roi(state, ScoreboardRoi(*_SCOREBOARD_BOTTOM_CENTRE_PRIOR), "abandoned_bottom_prior", seq)
         log.info(
             "scoreboard ROI abandoned session=%s seq=%s from_source=%s from_box=%s digitless_frames=%d "
@@ -415,6 +484,141 @@ def _note_score_fallback_exhausted(state, seq) -> None:
         seq,
         int(getattr(state, "score_fallback_reads", 0) or 0),
         _score_fallback_allowance(state),
+    )
+
+
+def _roi_signature(roi, ndigits: int = 3):
+    """Rounded normalized box identity for a region, or ``None`` (ADAAAA-8641).
+
+    Two different ``ScoreboardRoi`` objects for the same box compare equal here;
+    that is what lets the session remember which boxes already failed.
+    """
+    try:
+        return tuple(
+            round(float(getattr(roi, k)), ndigits) for k in ("x0", "y0", "x1", "y1")
+        )
+    except Exception:  # noqa: BLE001 - an odd region object is never fatal
+        return None
+
+
+def _learn_scoreboard_roi(state, seq, roi, source: str) -> bool:
+    """Adopt the crop box that ACTUALLY parsed a score (ADAAAA-8641).
+
+    Measured on browser job `f02ec0bf` (session `0a59dabf`): the shipped top-band
+    prior parsed the score on the session's own frames, but it was never cached,
+    so the first successful `locate()` (an ad-board box) replaced it and the crop
+    stopped parsing for the rest of the session — the bounded whole-frame
+    fallback carried every read until its allowance ran out and decided whether a
+    late score transition was visible. A parsed score is stronger evidence than a
+    region guess, so:
+
+    * ``scoreboard_roi_proven`` always records the box (restore target on abandon);
+    * the box is CACHED as the session region when nothing is cached yet, but only
+      after ``_SCOREBOARD_ROI_LEARN_STREAK`` consecutive frames parsed a score with
+      the same box (one spurious read can never promote a region);
+    * an operator-pinned (``explicit``) or per-frame vision (``vision``) box is
+      never adopted — the operator already chose, and the vision box re-localizes
+      every frame.
+
+    Costs nothing: it reuses the crop read that already parsed (no extra OCR).
+    """
+    if roi is None or source in ("explicit", "vision"):
+        return False
+    sig = _roi_signature(roi)
+    if sig is None:
+        return False
+    state.scoreboard_roi_proven = sig
+    state.scoreboard_roi_proven_seq = int(seq or 0)
+    prev = getattr(state, "scoreboard_roi_learn_candidate", None)
+    streak = (
+        int(getattr(state, "scoreboard_roi_learn_streak", 0) or 0) + 1
+        if prev == sig
+        else 1
+    )
+    state.scoreboard_roi_learn_candidate = sig
+    state.scoreboard_roi_learn_streak = streak
+    if getattr(state, "scoreboard_roi", None) is not None:
+        return False
+    if streak < _SCOREBOARD_ROI_LEARN_STREAK:
+        return False
+    _set_scoreboard_roi(state, roi, "learned_crop", seq)
+    log.info(
+        "scoreboard ROI learned session=%s seq=%s box=%s frames=%d "
+        "(crop parsed a score; adopted instead of a later discovery guess, ADAAAA-8641)",
+        getattr(state, "session_id", "?"),
+        seq,
+        _roi_box_label(roi),
+        streak,
+    )
+    return True
+
+
+def _keep_proven_roi_over_fresh_discovery(state, seq, score, source: str) -> bool:
+    """A fresh discovery box that read NO score cannot displace a proven box.
+
+    ADAAAA-8641: on the media rail `locate()` points at ad-board copy. Measured
+    on session `0a59dabf`: the top-band crop had just parsed `2-1`, discovery
+    returned `(0.433,0.050,0.654,0.486)`, and the session adopted it — every
+    later crop read `Aszende`. The incumbent's own first frame is the evidence:
+    if the discovered box cannot parse the score on that frame, the box that DID
+    keep the session. Costs no read (the crop was already paid); the
+    ``_SCOREBOARD_ROI_PROVEN_FRESH_FRAMES`` window keeps a scoreboard that really
+    moved mid-session recoverable.
+    """
+    if score is not None or source != "discovery":
+        return False
+    proven = getattr(state, "scoreboard_roi_proven", None)
+    if proven is None:
+        return False
+    proven_seq = getattr(state, "scoreboard_roi_proven_seq", None)
+    if proven_seq is None or int(proven_seq) < 0:
+        return False
+    if (int(seq or 0) - int(proven_seq)) > _SCOREBOARD_ROI_PROVEN_FRESH_FRAMES:
+        return False
+    _set_scoreboard_roi(state, ScoreboardRoi(*proven), "incumbent_proven_box", seq)
+    log.info(
+        "scoreboard ROI incumbent kept session=%s seq=%s box=%s "
+        "(fresh discovery box read no score on its first frame, ADAAAA-8641)",
+        getattr(state, "session_id", "?"),
+        seq,
+        _roi_box_label(state.scoreboard_roi),
+    )
+    return True
+
+
+def _note_score_crop_probe(
+    state, seq, roi, rgb, crop_lines, full_lines, whole_score
+) -> None:
+    """One INFO line per session: crop box/size/text next to the whole-frame text.
+
+    ADAAAA-8641: on the browser rail the crop parsed nothing while the whole
+    frame parsed a score on the SAME frame, and no shipped line said which box
+    and which pixel size read what — so the defect could not be attributed from
+    the log. This fires at the first frame that already paid both reads (the
+    whole-frame fallback), so it adds no OCR and no GPU work.
+    """
+    if getattr(state, "scoreboard_crop_probe_logged", False):
+        return
+    state.scoreboard_crop_probe_logged = True
+    size = "?"
+    try:
+        box = None
+        if roi is not None and rgb is not None:
+            box = roi.pixel_box(int(rgb.shape[1]), int(rgb.shape[0]))
+        if box is not None:
+            size = "%dx%d" % (max(0, box[2] - box[0]), max(0, box[3] - box[1]))
+    except Exception:  # noqa: BLE001 - logging only
+        size = "?"
+    log.info(
+        "scorebug crop probe session=%s seq=%s box=%s crop_px=%s crop_text=%r "
+        "whole_text=%r whole_score=%s (crop parsed no score; ADAAAA-8641)",
+        getattr(state, "session_id", "?"),
+        seq,
+        _roi_box_label(roi),
+        size,
+        list(crop_lines or []),
+        list(full_lines or []),
+        ("%d-%d" % whole_score) if whole_score else None,
     )
 
 
@@ -854,6 +1058,26 @@ def _scoreboard_roi(state, detector=None, seq=None) -> "ScoreboardRoi | None":
             except Exception:  # noqa: BLE001 - never crash the candidate path
                 located = None
             if located is not None:
+                # ADAAAA-8641: discovery is deterministic, so a box the session
+                # already threw away as digit-less comes back on the next
+                # attempt (measured: seq 76 re-adopted the seq 75 box exactly).
+                # Never adopt a rejected box again; use the documented prior for
+                # this frame and let the crop that actually parses the score be
+                # the thing that is learned.
+                rejected = tuple(getattr(state, "scoreboard_roi_rejected", ()) or ())
+                if _roi_signature(located) in rejected:
+                    state.scoreboard_miss_count = misses + 1
+                    state.scoreboard_visible = True
+                    prior = ScoreboardRoi.from_env()
+                    _note_scoreboard_roi_source(state, "discovery_rejected", prior, seq)
+                    log.info(
+                        "scoreboard ROI discovery rejected session=%s seq=%s box=%s reason=digitless_before "
+                        "(ADAAAA-8641)",
+                        getattr(state, "session_id", "?"),
+                        seq,
+                        _roi_box_label(located),
+                    )
+                    return prior
                 _set_scoreboard_roi(state, located, "discovery", seq)
                 return located
         # A region-capable detector ran but found no visible scoreboard. Count
@@ -1210,6 +1434,15 @@ def _scoreboard_ocr_fields(
             ocr_lines = [verdict.score_text]
     out["ocr"] = ocr_lines
     score = parse_ocr_score(ocr_lines, roi=roi)
+    # ADAAAA-8641: a crop that PARSED a score is proof its box is a scoreboard
+    # region, so adopt it (after two consecutive parsed frames) instead of
+    # letting a later discovery guess replace it. Measured on browser session
+    # `0a59dabf`: the top-band prior parsed the score for the first 70 frames,
+    # discovery then adopted an ad-board box and the crop never parsed again.
+    if score is not None and not _probe_frame:
+        _learn_scoreboard_roi(state, seq, roi, _roi_source)
+    if not _probe_frame:
+        _keep_proven_roi_over_fresh_discovery(state, seq, score, _roi_source)
     # ADAAAA-8548: a region that prints NO DIGIT for N consecutive frames is a
     # graphic, not a scoreboard — re-resolve it (bounded) or abandon it instead of
     # caching it for the session. Measured on browser job `50b7aed6`: 4648 `<OCR>`
@@ -1328,6 +1561,10 @@ def _scoreboard_ocr_fields(
             log.warning("scoreboard whole-frame OCR fallback skipped frame %s: %s", seq, e)
         else:
             if _need_score_fallback:
+                # ADAAAA-8641: this frame has already paid both reads (crop +
+                # whole frame), so compare them once per session: which box, how
+                # many crop pixels, and what each read actually printed.
+                _note_score_crop_probe(state, seq, roi, rgb, ocr_lines, full_ocr, alt)
                 # Charged as soon as it runs, success or not, so a source whose
                 # whole frame never prints a score cannot pay it forever.
                 state.score_fallback_reads = int(getattr(state, "score_fallback_reads", 0) or 0) + 1
