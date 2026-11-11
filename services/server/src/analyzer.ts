@@ -4884,6 +4884,11 @@ export class LiveRunShared {
    * (a genuine score correction leaves the frontier high) stays visible instead
    * of silently deleting a goal. */
   private scoreFrontierRefusalCount = 0;
+  /** ADAAAA-8588: the distinct refused transitions, so a counter that is read
+   * for over-suppression cannot be inflated by two lanes asking about the SAME
+   * read (the accept gate, then the claim, then a re-decide of that window).
+   * Bounded like the credit ledger: the count and this set move together. */
+  private scoreFrontierRefusedKeys = new Set<string>();
   /** ADAAAA-8610: the content instant of the READ that seated {@link
    * scoreHighWater}. The accept lane compares a window's measured POST against
    * the water, and a goal-shaped accept can legitimately land AFTER a higher
@@ -5282,8 +5287,21 @@ export class LiveRunShared {
     // genuine earlier boundary (pinned by the ADAAAA-8078 suite).
     const ts = (delta as ScoreboardDeltaEvidence).deltaTs;
     if (Number.isFinite(ts) && this.scoreFrontierTs !== null && ts < this.scoreFrontierTs) return true;
-    this.scoreFrontierRefusalCount++;
+    // AC4's counter is "regressive reads refused", not "lanes that asked": the
+    // accept gate, the claim and a re-decide of the same window all ask about one
+    // read, and counting each would inflate the over-suppression signal the
+    // counter exists to expose.
+    const key = `${(delta as ScoreboardDeltaEvidence).pre.join("-")}>${(delta as ScoreboardDeltaEvidence).post.join("-")}@${ts}`;
+    if (!this.scoreFrontierRefusedKeys.has(key)) {
+      this.scoreFrontierRefusedKeys.add(key);
+      if (this.scoreFrontierRefusedKeys.size > CREDITED_SCORE_TRANSITIONS_MAX) {
+        const oldest = this.scoreFrontierRefusedKeys.values().next();
+        if (!oldest.done) this.scoreFrontierRefusedKeys.delete(oldest.value);
+      }
+      this.scoreFrontierRefusalCount++;
+    }
     return false;
+
   }
   /** ADAAAA-8588: the committed score state (read-only, audit/tests). */
   committedScore(): [number, number] | null {

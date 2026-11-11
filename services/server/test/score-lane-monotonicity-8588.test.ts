@@ -269,5 +269,15 @@ describe("score-lane monotonicity (ADAAAA-8588)", () => {
     });
     const parsed = ObserveMetricsSnapshotSchema.shape.rowAccounting.parse(acct);
     expect(parsed?.scoreFrontierRefusals).toBe(1);
+
+    // One read, asked by two lanes, is ONE refusal: the counter must measure
+    // regressive reads, not lanes (an inflated counter would hide a real
+    // over-suppression behind a bigger denial number).
+    expect(run.scoreDeltaAdmitted(delta([1, 1], [2, 1], 474.982, 5))).toBe(false);
+    expect(run.scoreRewindRefusal(delta([1, 1], [2, 1], 474.982, 5))).not.toBeNull();
+    expect(run.scoreFrontierRefusals()).toBe(1);
+    // ...while a DIFFERENT behind-frontier read is its own refusal.
+    expect(run.scoreDeltaAdmitted(delta([0, 1], [1, 1], 500, 4))).toBe(false);
+    expect(run.scoreFrontierRefusals()).toBe(2);
   });
 });
