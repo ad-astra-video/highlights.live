@@ -686,7 +686,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- A name is optional. If the evidence names nobody, carry the depth with clock and action facts.",
     attestsScoring
       ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
-      : "- This is NOT a scoring play: never claim a goal, never name the net, and never state a score or that the score changed or did not change.",
+      : "- This is NOT a scoring play: the words 'goal', 'scoring', 'score' and 'net' are off limits. Do not describe a goal or a scoring chance, do not name the net, and do not state a score or whether it changed.",
     "- Never invent a name, a team, a venue or a statistic. When the evidence names nobody, describe roles only ('the midfielder', 'the keeper') and do not capitalize a made-up name.",
     ...(attestsScoring
       ? []

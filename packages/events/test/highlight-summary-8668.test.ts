@@ -428,11 +428,13 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
 
   it("tells a celebration row not to touch the score, and offers it no score fact", () => {
     // The served probe's second refusal was a celebration body that said "the
-    // current score remains unchanged" — the shared claim lexicon reads `score`
-    // as a claim, so the prompt must not steer a non-scoring row there.
+    // current score remains unchanged" — the shared claim lexicon reads
+    // `score`/`scoring` as a claim, so the prompt must not steer a non-scoring row
+    // there. Snapshot the branch so a prompt edit is a reviewed change.
     const celebration = buildSummaryPrompt({ ...shipped[0].evidence, postTitle: null });
     expect(celebration).toContain("This is NOT a scoring play");
     expect(celebration).toContain("Include at least one fact the headline does not carry: the clock or spell");
+    expect(celebration).toMatchSnapshot();
     const scoring = buildSummaryPrompt({ ...shipped[2].evidence, postTitle: "Midfielder scores" });
     expect(scoring).toContain("the score line, the clock or spell");
     expect(scoring).not.toContain("This is NOT a scoring play");
