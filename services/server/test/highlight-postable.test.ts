@@ -6,6 +6,7 @@ import {
   clipQuotaDelta,
   dedupedClipTotals,
   hasContradictingVerdict,
+  hasRefutingDiveAttestation,
   isGoalRefutingReason,
   isPostableHighlight,
   postableCountFields,
@@ -577,5 +578,92 @@ describe("buildPostableHighlights (ADAAAA-8155 covering accepted GOAL)", () => {
         out.counts.merged + out.counts.rejected + out.counts.notScoring + out.counts.contradicting
       );
     }
+  });
+});
+
+// ADAAAA-8647: a live Stage-2 dive refutation lives ONLY on the highlight row's
+// `confirmAttestation` (job_candidates stores no confirm record), so the
+// precision gate must read it. Measured defect: served build 449ee12 / job
+// f02ec0bf shipped row 85a89562 as a postable GOAL card with
+// `confirmAttestation{goalConfirmed:"not_goal", corroborated:false}`.
+describe("buildPostableHighlights (ADAAAA-8647 refuted dive)", () => {
+  const attestation = (over: Record<string, unknown> = {}) => ({
+    goalConfirmed: "not_goal",
+    corroborated: false,
+    corroborationSource: null,
+    diveAt: "2026-11-11T03:27:52.347Z",
+    diveLatencyMs: 2533,
+    contextDegraded: [],
+    ...over,
+  });
+
+  it("downgrades a scoring row its own stored dive refuted into the notable lane (0 false GOAL cards)", () => {
+    const kept = hl({ start: 13.332, outcome: "scoring_play", eventType: "GOAL", score: 100 });
+    const refuted = hl({ start: 93.533, outcome: "scoring_play", eventType: "GOAL", score: 100, confirmAttestation: attestation() });
+    const out = buildPostableHighlights([kept, refuted]);
+    expect(out.highlights.map((h) => h.id)).toEqual([kept.id]);
+    expect(out.notable.map((h) => h.id)).toEqual([refuted.id]);
+    // The downgrade is a READ projection: the row is delivered as a celebration.
+    expect(out.notable[0].outcome).toBe("big_play");
+    expect(out.counts).toMatchObject({ total: 2, postable: 1, notScoring: 1, contradicting: 0, merged: 0 });
+    // Row accounting still names it as served (no silent gap).
+    expect(out.rowAccounting.served).toContainEqual({ id: refuted.id, representation: "notable_card" });
+  });
+
+  it("the single-row gate refuses it too (hasContradictingVerdict / isPostableHighlight)", () => {
+    const refuted = hl({ start: 93.533, outcome: "scoring_play", confirmAttestation: attestation() });
+    expect(hasRefutingDiveAttestation(refuted)).toBe(true);
+    expect(hasContradictingVerdict(refuted)).toBe(true);
+    expect(isPostableHighlight(refuted)).toBe(false);
+  });
+
+  it("a corroborated dive promotion stays postable, and a dropped/passthrough dive never refutes", () => {
+    const promoted = hl({
+      start: 201.636,
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      confirmAttestation: attestation({ goalConfirmed: "confirmed_goal", corroborated: true, corroborationSource: "frame_attestation" }),
+    });
+    const dropped = hl({
+      start: 300,
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      confirmAttestation: attestation({ goalConfirmed: "dropped", dropReason: "pool_busy" }),
+    });
+    const passthrough = hl({
+      start: 400,
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      confirmAttestation: attestation({ goalConfirmed: "passthrough" }),
+    });
+    const out = buildPostableHighlights([promoted, dropped, passthrough]);
+    expect(out.highlights.map((h) => h.id).sort()).toEqual([promoted.id, dropped.id, passthrough.id].sort());
+    expect(out.notable).toEqual([]);
+    for (const row of [dropped, passthrough]) expect(hasRefutingDiveAttestation(row)).toBe(false);
+  });
+
+  it("is pure: the persisted row keeps outcome scoring_play", () => {
+    const refuted = hl({ start: 93.533, outcome: "scoring_play", confirmAttestation: attestation() });
+    buildPostableHighlights([refuted]);
+    expect(refuted.outcome).toBe("scoring_play");
+  });
+
+  it("the stored attestation keeps promotionBasis + scoreLane through a schema round-trip", () => {
+    const row = hl({
+      start: 201.636,
+      outcome: "scoring_play",
+      confirmAttestation: attestation({
+        goalConfirmed: "confirmed_goal",
+        corroborated: true,
+        corroborationSource: "frame_attestation",
+        promotionBasis: "frame_attestation_over_unread_score_lane",
+        scoreLane: { scoreReads: 0, preSamples: 0, postSamples: 0, need: 2 },
+      }),
+    });
+    // The fixture already ran HighlightRecordSchema.parse; a JSON round-trip is
+    // what persistence does. Before ADAAAA-8647 zod stripped both keys here.
+    const parsed = HighlightRecordSchema.parse(JSON.parse(JSON.stringify(row)));
+    expect(parsed.confirmAttestation?.promotionBasis).toBe("frame_attestation_over_unread_score_lane");
+    expect(parsed.confirmAttestation?.scoreLane).toEqual({ scoreReads: 0, preSamples: 0, postSamples: 0, need: 2 });
   });
 });
