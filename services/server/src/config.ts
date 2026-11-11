@@ -329,9 +329,9 @@ export interface ServerConfig {
    * `LIVE_OBSERVE_IN_FLIGHT`. */
   liveObserveInFlight: number;
   /** ADAAAA-7799 (lever C addendum): LIVE-only decide hop in content seconds
-   *  (`LIVE_OBSERVE_CADENCE_S`). Unset keeps the CEO-locked 3 s cadence; 5
-   *  produces the 5 s-hop row (~60 decides / 300 s) without touching the window
-   *  span, the audio trigger or VOD. */
+   *  (`LIVE_OBSERVE_CADENCE_S`). Unset now resolves to the live cell's standing
+   *  **5 s** cadence ({@link LIVE_OBSERVE_CADENCE_S}, ADAAAA-8676); a per-stream
+   *  knob may still choose 3 or 5. VOD keeps `OBSERVE_CADENCE_S` = 3 untouched. */
   liveObserveCadenceS?: number;
   /** ADAAAA-8065 (rev 7): LIVE-only decide WINDOW SPAN in content seconds
    *  (`LIVE_OBSERVE_WINDOW_S`). The live window is a rolling PAST window
@@ -348,7 +348,8 @@ export interface ServerConfig {
    * call's wall time is dominated by the verdict DECODE (~8 s fixed for the
    * ~1.3 KB JSON reply) with a smaller per-frame multimodal prefill term, so the
    * live rail caps at a narrower budget than VOD. ADAAAA-8074: the default is
-   * now {@link LIVE_DECIDE_IMAGE_BUDGET} (4 — the ruled AC-3 cell), clamped to
+   * now {@link LIVE_DECIDE_IMAGE_BUDGET} (8 images — the ADAAAA-8676 cell,
+   * priced against a decide p95 <= 4.5 s), clamped to
    * the {@link LIVE_DECIDE_IMAGE_CEILING} (30) hard ceiling. Both live rails
    * (analyzer live pass + media/RTC rail) read THIS value into the window's
    * selection step, and every decide payload records it on its audit row.
@@ -629,6 +630,15 @@ export interface ServerConfig {
   freeHighlights: number;
   /** Fixed fee per decide call (single shot, USD). Default $0.01. */
   decideFee: number;
+  /** ADAAAA-8668: the `summary` (body-copy) lane. Default ON when the decide
+   *  service is reachable; `SUMMARY_LANE=0` is the operator kill-switch (off =>
+   *  no call is ever issued and every promoted row keeps today's card exactly).
+   *  The lane is post-promotion and lowest priority, so it can never add detect
+   *  latency. */
+  summaryLaneEnabled: boolean;
+  /** ADAAAA-8668: per-call fee for the summary lane. Defaults to the AC5
+   *  ceiling (`1.5x DECIDE_FEE`) and is always clamped to it. */
+  summaryFee?: number;
   /** Stage-2 goal/near-miss confirmation pass (ADAAAA-6797). When true, the
    * pass runs the decide `/confirm` deep-frame-dive for un-attested goal-type
    * candidates and adopts the reconciled verdict. Wired from
@@ -1071,8 +1081,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // self-corrects instead of queueing unbounded. `LIVE_OBSERVE_IN_FLIGHT=1`
     // restores the old serial behaviour exactly.
     liveObserveInFlight: Number(env.LIVE_OBSERVE_IN_FLIGHT ?? 4),
-    // ADAAAA-7799 (lever C addendum): live-only decide hop. Unset keeps the 3 s
-    // cadence (byte-identical), so this cannot move the shipped rail by itself.
+    // ADAAAA-7799 (lever C addendum): live-only decide hop. Unset keeps the live
+    // cell's standing 5 s cadence (ADAAAA-8676, `LIVE_OBSERVE_CADENCE_S`); a
+    // per-stream knob may still choose 3 or 5. VOD's `OBSERVE_CADENCE_S` = 3 is
+    // a separate constant and is untouched.
     // ADAAAA-7808: compose passes an EMPTY string for the unset case, so parse
     // through the "empty means unset" guard — `Number("")` is 0, which pinned the
     // cadence to zero and fired on every consumed frame.
@@ -1243,6 +1255,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     publicBaseUrl: env.PUBLIC_BASE_URL ?? "http://127.0.0.1:3000",
     freeHighlights: Number(env.FREE_HIGHLIGHTS ?? 10),
     decideFee: Number(env.DECIDE_FEE ?? 0.01),
+    // ADAAAA-8668: the post-promotion body-copy lane (default ON; `SUMMARY_LANE=0`
+    // is the operator kill-switch) and its own fee class, clamped to 1.5x
+    // `DECIDE_FEE` (`resolveSummaryFee`).
+    summaryLaneEnabled: env.SUMMARY_LANE !== "0" && env.SUMMARY_LANE !== "false",
+    summaryFee: env.SUMMARY_FEE ? Number(env.SUMMARY_FEE) : undefined,
     // Stage-2 goal/near-miss confirmation pass config flag (ADAAAA-6797).
     // Default OFF; ADAAAA-7663 makes it gate BOTH the VOD and the live pass, so
     // a flag-off deploy keeps the Stage-1 path byte-identical on both.

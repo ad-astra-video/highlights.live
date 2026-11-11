@@ -1,0 +1,53 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`prompt contract (snapshot) > renders the VOD band and omits absent evidence without inventing any 1`] = `
+"You write the BODY copy under a highlight clip's short headline.
+The headline is already on the card; your copy sits underneath it and must add detail.
+Rail: vod. Write 3-5 sentences, 40-90 words.
+Rules:
+- State only what the evidence below supports.
+- Include at least one fact the headline does not carry: the score line, the clock or spell, the competition or venue, or a named player's attested action.
+- A name is optional. If the evidence names nobody, carry the depth with score, clock and action facts.
+- Never claim a goal unless the verdict is a scoring play.
+- Never invent a name, a team, a venue or a statistic.
+- Do not restate the headline or the announcer line.
+- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').
+Evidence:
+Verdict: scoring_play
+Reason: (none)
+Headline: (none)
+Announcer line: (none)
+Window: (unknown)
+Score transition: (none measured)
+Match context:
+(none)
+ASR transcript: (none)
+Adjacent scoring cue: (none)
+Body copy:"
+`;
+
+exports[`prompt contract (snapshot) > renders the summary prompt for a live row 1`] = `
+"You write the BODY copy under a highlight clip's short headline.
+The headline is already on the card; your copy sits underneath it and must add detail.
+Rail: live. Write 2-3 sentences, 25-55 words.
+Rules:
+- State only what the evidence below supports.
+- Include at least one fact the headline does not carry: the score line, the clock or spell, the competition or venue, or a named player's attested action.
+- A name is optional. If the evidence names nobody, carry the depth with score, clock and action facts.
+- Never claim a goal unless the verdict is a scoring play.
+- Never invent a name, a team, a venue or a statistic.
+- Do not restate the headline or the announcer line.
+- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').
+Evidence:
+Verdict: scoring_play
+Reason: Scoreboard changes to 2-2 and the ball enters the net.
+Headline: GOAL · 2:38
+Announcer line: Ball enters the net at the near post.
+Window: 2:38 (+12 s)
+Score transition: 1-2 -> 2-2
+Match context:
+Teams: Northbridge vs Riverside
+ASR transcript: the equaliser, and it is level again
+Adjacent scoring cue: Northbridge had scored the opener on 12:04.
+Body copy:"
+`;

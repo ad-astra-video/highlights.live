@@ -115,11 +115,17 @@ import { outcomeForMediaCloseReason, outcomeForStrandedJob, classifyVodFailure, 
 import {
   accruedSecondsSince,
   billableConfirmCalls,
+  billableSummaryCalls,
   buildTerminalAccountingPatch,
   computeCostUsd,
   liveCancelledSettlement,
   PERCEIVE_PER_HOUR_USD,
+  summaryCallsForRows,
 } from "./job-settlement";
+// ADAAAA-8668: the post-promotion body-copy lane (spec ADAAAA-8665 §3). Issued
+// from the SAME row-persistence seam both rails already use, so live and VOD get
+// one code path and neither promotion path ever waits on a model call.
+import { SummaryLane, summaryEvidenceForRow, summaryFeeFor, type SummaryMeterSnapshot } from "./summary-lane";
 import {
   accumulateAttemptTotals,
   closeOpenAttempt,
@@ -331,18 +337,51 @@ export function withDiveCostReadout<
     decideCalls?: number;
     confirmCalls?: number;
   },
->(metrics: T, feeUsd: number, streamSeconds: number): T & { costPerStreamHour?: number } {
+>(
+  metrics: T,
+  feeUsd: number,
+  streamSeconds: number,
+  /** ADAAAA-8668: the summary lane's own billed term, so `costPerStreamHour`
+   *  includes body-copy spend instead of reading as decide+perceive only. */
+  summary?: { calls: number; feeUsd: number }
+): T & { costPerStreamHour?: number } {
   const admission = metrics.diveAdmission;
-  if (!admission) return metrics;
   const billed = billableConfirmCalls(metrics as any);
   const diveCostUsd = Number((feeUsd * billed).toFixed(6));
   const hours = streamSeconds > 0 ? streamSeconds / 3600 : 0;
+  const summaryCostUsd = summary ? Number((summary.feeUsd * Math.max(0, summary.calls)).toFixed(6)) : 0;
   const totalUsd =
-    feeUsd * (metrics.decideCalls ?? 0) + diveCostUsd + hours * PERCEIVE_PER_HOUR_USD;
+    feeUsd * (metrics.decideCalls ?? 0) + diveCostUsd + summaryCostUsd + hours * PERCEIVE_PER_HOUR_USD;
+  if (!admission) return metrics;
   return {
     ...metrics,
     diveAdmission: { ...admission, divesBilled: billed, diveCostUsd },
     ...(hours > 0 ? { costPerStreamHour: Number((totalUsd / hours).toFixed(4)) } : {}),
+  };
+}
+
+/**
+ * ADAAAA-8668 (AC6): fold the summary lane's meter onto the job's observe block.
+ * Same convention as the confirm meter: every counter is a MEASURED number and
+ * an absent lane writes no key at all, so a run with the lane off is
+ * byte-identical to a pre-8668 record.
+ */
+export function withSummaryMeter<T extends object>(metrics: T, meter: SummaryMeterSnapshot | undefined): T {
+  if (!meter) return metrics;
+  const hasAny =
+    meter.summaryCalls > 0 ||
+    meter.summaryDropped > 0 ||
+    Object.keys(meter.summaryDroppedByReason).length > 0 ||
+    meter.summaryP95Ms > 0;
+  if (!hasAny) return metrics;
+  return {
+    ...metrics,
+    summaryCalls: meter.summaryCalls,
+    summaryDropped: meter.summaryDropped,
+    ...(Object.keys(meter.summaryDroppedByReason).length > 0
+      ? { summaryDroppedByReason: { ...meter.summaryDroppedByReason } }
+      : {}),
+    summaryP95Ms: meter.summaryP95Ms,
   };
 }
 
@@ -457,6 +496,66 @@ export interface LiveHighlightPersistence {
  * record never reaches it, and a failure is logged without stalling the live
  * frame loop. Keep db (highlight persist) <-> server (publish) <-> ui (feed
  * surface) contracts in sync when editing this. */
+/** ADAAAA-8668: one summary lane per job (both rails). A lane is cheap and
+ *  self-bounding; entries are dropped on job end (`dropSummaryLane`) so a long
+ *  lived server cannot accumulate lanes for finished streams. */
+const summaryLanes = new Map<string, SummaryLane>();
+
+/** The job's lane, created on first promoted row. `undefined` when the operator
+ *  kill-switch is off — the promotion path then does nothing at all. */
+export function summaryLaneFor(deps: LiveHighlightPersistence, jobId: string): SummaryLane | undefined {
+  if (!deps.cfg.summaryLaneEnabled) return undefined;
+  let lane = summaryLanes.get(jobId);
+  if (!lane) {
+    lane = new SummaryLane(jobId, deps.store, {
+      decideUrl: deps.cfg.decideUrl,
+      decideFee: deps.cfg.decideFee,
+      summaryFee: deps.cfg.summaryFee ?? null,
+    });
+    summaryLanes.set(jobId, lane);
+  }
+  return lane;
+}
+
+/** The job's summary METER, for a settle path that folds it into the record. */
+export function summaryMeterForJob(jobId: string) {
+  return summaryLanes.get(jobId)?.snapshot();
+}
+
+/** Release a finished job's lane (its rows already carry the counters). */
+export function dropSummaryLane(jobId: string): void {
+  summaryLanes.delete(jobId);
+}
+
+/**
+ * ADAAAA-8668: ask for BODY copy for a row that was just promoted.
+ *
+ * Fire-and-forget on purpose: the promotion seam must never await this (AC4:
+ * zero added detect latency), the card is already servable on `postTitle`, and
+ * the copy patches the stored row when it lands. A refuse/drop leaves the row's
+ * `summary` absent and writes only the meter, so the card never blanks and never
+ * shows a placeholder.
+ */
+export function requestHighlightSummary(
+  deps: LiveHighlightPersistence,
+  record: HighlightRecord,
+  rail: "live" | "vod",
+  adjacentScoreCue?: string | null
+): void {
+  try {
+    const lane = summaryLaneFor(deps, record.jobId);
+    if (!lane) return;
+    lane.enqueue({
+      jobId: record.jobId,
+      highlightId: record.id,
+      evidence: summaryEvidenceForRow(record as any, rail, adjacentScoreCue ?? null),
+    });
+  } catch (e: any) {
+    // A lane failure is never a card failure.
+    console.error(`[summary:${record.jobId}] enqueue failed:`, e?.message || e);
+  }
+}
+
 export async function persistLiveHighlight(
   deps: LiveHighlightPersistence,
   user: User,
@@ -468,7 +567,11 @@ export async function persistLiveHighlight(
    *  reported from HERE (one definition) rather than re-derived per caller.
    *  ADAAAA-8024: the third argument is the persisted row's id — the metric's
    *  dedupe key, so the re-attestation path cannot double-count this row. */
-  onDelivered?: (triggerTs: number, deliveredAtMs: number, highlightId: string) => void
+  onDelivered?: (triggerTs: number, deliveredAtMs: number, highlightId: string) => void,
+  /** ADAAAA-8668: which depth band the post-promotion copy lane uses. Defaults to
+   *  the live band, so every existing live caller is unchanged; the VOD rail
+   *  passes `"vod"`. */
+  rail: "live" | "vod" = "live"
 ): Promise<HighlightRecord> {
   // ADAAAA-7854: the quota is debited per POSTABLE MOMENT, not per persisted row.
   // Snapshot the job's rows BEFORE the insert so the decision below is
@@ -534,6 +637,12 @@ export async function persistLiveHighlight(
     // store addHighlight dedup + `created` gate is untouched.)
     const job = deps.store.getJob(record.jobId);
     if (job) await deps.store.patchJob(record.jobId, { highlightsFound: deps.store.highlightsForJob(record.jobId).length });
+    // ADAAAA-8668: BODY copy is requested for a row that was just PROMOTED, after
+    // the persist/billing work and never awaited — the card is already readable on
+    // its headline, and the copy patches the row when it lands. A duplicate
+    // (`created: false`) never spends a second call, and a rejected `pending` row
+    // is not promoted copy, so neither is queued.
+    if (record.status === "accepted") requestHighlightSummary(deps, record, rail);
   }
   return record;
 }
@@ -2925,8 +3034,23 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // the snapshot the settlement persists. The fee lives at THIS layer (the
       // analyzer prices nothing), and `diveCostUsd` reads the same billed count
       // the `costUsd` identity uses, so the two can never disagree.
+      // ADAAAA-8668: the body-copy lane's meter + its own billed term, read from
+      // the rows the lane wrote (`summaryCalls` per row) and from the lane itself.
+      const liveSummaryMeter = summaryMeterForJob(job.id);
+      const liveSummaryCalls = Math.max(
+        0,
+        liveSummaryMeter?.summaryCalls ?? 0,
+        summaryCallsForRows(store.highlightsForJob(job.id))
+      );
+      const liveSummaryBilling = {
+        calls: liveSummaryCalls,
+        feeUsd: summaryFeeFor({ decideFee: cfg.decideFee, summaryFee: cfg.summaryFee ?? null }),
+      };
       const storedObserveMetrics = finalObserveMetrics
-        ? withDiveCostReadout(finalObserveMetrics, cfg.decideFee, perceiveSessionS)
+        ? withSummaryMeter(
+            withDiveCostReadout(finalObserveMetrics, cfg.decideFee, perceiveSessionS, liveSummaryBilling),
+            liveSummaryMeter
+          )
         : undefined;
       const liveDecideCalls = storedObserveMetrics?.decideCalls ?? 0;
       // ADAAAA-8205: confirm dives are decide-service calls and are metered in
@@ -2936,7 +3060,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // `observeMetrics` does not carry (leg `0705e2b5`: cost 75 calls, meter
       // none). The snapshot wins; absent => the lane made no call.
       const liveConfirmCalls = billableConfirmCalls(storedObserveMetrics);
-      const liveCostUsd = computeCostUsd(liveDecideCalls, perceiveSessionS, cfg.decideFee, liveConfirmCalls);
+      const liveCostUsd = computeCostUsd(
+        liveDecideCalls,
+        perceiveSessionS,
+        cfg.decideFee,
+        liveConfirmCalls,
+        liveSummaryCalls,
+        summaryFeeFor({ decideFee: cfg.decideFee, summaryFee: cfg.summaryFee ?? null })
+      );
       // ADAAAA-8061: a pass stopped mid-stream settles as `cancelled` with the
       // spend it actually incurred. The stop path flips `slot.stopped` (and
       // stamps `stopRequestedAt`) so the frame loop unwinds HERE — the pass used
@@ -2966,6 +3097,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           progressLabel: "stopped",
           error: "stopped (cancelled via API)",
         });
+        // ADAAAA-8668: a stop that lands after copy was produced still bills the
+        // summary term — the calls happened, so the cancelled row must carry them
+        // (`costUsd = decide + confirm + summary + perceive`, same identity).
+        if (liveSummaryBilling.calls > 0) {
+          stoppedSettlement.costUsd = Number(
+            (Number(stoppedSettlement.costUsd ?? 0) + liveSummaryBilling.feeUsd * liveSummaryBilling.calls).toFixed(4)
+          );
+        }
         await store.patchJob(job.id, stoppedSettlement);
         console.log(
           `[live:${job.id}] stopped mid-pass: decideCalls=${stoppedDecideCalls} perceiveSessionS=${perceiveSessionS.toFixed(1)} costUsd=${stoppedSettlement.costUsd}`
@@ -3001,6 +3140,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches
       // `done` (fire-and-forget; fallback title on any failure; never blocks).
       void applyJobTitle(store, cfg, job.id);
+      // ADAAAA-8668: the body-copy meter is already folded into `observeMetrics`
+      // and `costUsd`; release the lane (an in-flight call still patches its row).
+      dropSummaryLane(job.id);
+      if (liveSummaryCalls > 0 || (liveSummaryMeter?.summaryDropped ?? 0) > 0) {
+        console.log(
+          `[summary:${job.id}] calls=${liveSummaryCalls} dropped=${liveSummaryMeter?.summaryDropped ?? 0} ` +
+            `p95Ms=${liveSummaryMeter?.summaryP95Ms ?? 0} feeUsd=${liveSummaryBilling.feeUsd.toFixed(4)} ` +
+            `byReason=${JSON.stringify(liveSummaryMeter?.summaryDroppedByReason ?? {})}`
+        );
+      }
       // ADAAAA-7670: if the media node was unreachable when the ingest started,
       // retry the attribution once now that the spend is settled. Idempotent —
       // an existing row keeps the node that carried the stream.
@@ -3821,7 +3970,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           return; // already persisted on an earlier attempt — no re-debit
         }
         existingHl.add(key);
-        persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight)
+        persistLiveHighlight({ store, cfg, billing, entitlements, db }, user, sub, ev.highlight, undefined, "vod")
           .then(() => persistProgress(store.getJob(jobId)?.framesAnalyzed ?? 0, true))
           .catch((e) => console.error(`[vod:${jobId}] persist highlight ${ev.highlight?.id} failed:`, e?.message || e));
         baseHook(ev);
@@ -4278,6 +4427,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // of attempt 2's share.
       { decideFee: cfg.decideFee }
     );
+    // ADAAAA-8668: the `summary` (body-copy) lane bills as its OWN term, exactly
+    // as the live settle does: `costUsd = decideFee*(decideCalls+confirmCalls) +
+    // summaryFee*summaryCalls + perceive`. The count is read off the ROWS the lane
+    // wrote (each carries `summaryCalls`), so the job price and the row meter can
+    // never disagree about the same call. Absent lane => the total is untouched.
+    const vodSummaryCalls = Math.max(
+      0,
+      summaryCallsForRows(store.highlightsForJob(jobId)),
+      summaryMeterForJob(jobId)?.summaryCalls ?? 0
+    );
+    if (vodSummaryCalls > 0) {
+      const vodSummaryFee = summaryFeeFor({ decideFee: cfg.decideFee, summaryFee: cfg.summaryFee ?? null });
+      totals.costUsd = Number((totals.costUsd + vodSummaryFee * vodSummaryCalls).toFixed(4));
+    }
     const vodMeter = buildVodMeter({
       wallClockS: totals.wallClockS,
       decideCalls: totals.decideCalls,
@@ -4382,6 +4545,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // ADAAAA-6798 Inc 1: generate the LLM job title once the job reaches `done`
     // (fire-and-forget; fallback title on any failure; never blocks the job).
     void applyJobTitle(store, cfg, jobId);
+    // ADAAAA-8668: the VOD lane's meter is already folded into `totals.costUsd`
+    // above; release the lane so a long-lived server holds no per-job state. Any
+    // call still in flight finishes and patches its own row.
+    dropSummaryLane(jobId);
     emitJobProgress(jobId, 100, "done");
     // ADAAAA-7821: fixed-prefix completion meter line — greppable in the server
     // log (`docker logs highlights-server | grep '\[vod-meter\]'`) and emitted

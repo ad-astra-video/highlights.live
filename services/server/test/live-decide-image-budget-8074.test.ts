@@ -8,7 +8,7 @@
 //
 // These tests pin the three clauses of the fix:
 //   1. ONE budget, consulted in the selection step (`assembleLiveWindow`), read
-//      by every live payload build, default 4, clamped to the 30-image ceiling.
+//      by every live payload build, default 8, clamped to the 30-image ceiling.
 //   2. Deterministic, TRIGGER-ANCHORED selection: the frame nearest the trigger
 //      onset is always carried and the rest are spread across the span (no
 //      first-N / last-N truncation), so the witness gap stays ~span/budget.
@@ -42,29 +42,30 @@ function fundedWindow(nowTs: number, fps = 2.8): { ts: number; imageB64: string 
 const jpeg = (i: number) => Buffer.from(`img-${i}`).toString("base64");
 
 describe("the live decide image budget (ADAAAA-8074 AC-CAP-1)", () => {
-  it("defaults to 4 and can never exceed the 30-image ceiling", () => {
-    expect(LIVE_DECIDE_IMAGE_BUDGET).toBe(4);
+  it("defaults to 8 and can never exceed the 30-image ceiling", () => {
+    expect(LIVE_DECIDE_IMAGE_BUDGET).toBe(8);
     expect(LIVE_DECIDE_IMAGE_CEILING).toBe(30);
     // Absent / empty / zero / garbage all fall back to the ruled cell instead of
     // turning the cap off (an empty env used to parse as 0).
-    expect(resolveDecideImageBudget(undefined)).toBe(4);
-    expect(resolveDecideImageBudget("")).toBe(4);
-    expect(resolveDecideImageBudget("0")).toBe(4);
-    expect(resolveDecideImageBudget("nope")).toBe(4);
-    expect(resolveDecideImageBudget("-3")).toBe(4);
+    expect(resolveDecideImageBudget(undefined)).toBe(8);
+    expect(resolveDecideImageBudget("")).toBe(8);
+    expect(resolveDecideImageBudget("0")).toBe(8);
+    expect(resolveDecideImageBudget("nope")).toBe(8);
+    expect(resolveDecideImageBudget("-3")).toBe(8);
     // An explicit budget is honoured, and never raised past the ceiling.
     expect(resolveDecideImageBudget("6")).toBe(6);
     expect(resolveDecideImageBudget(99)).toBe(30);
     expect(resolveDecideImageBudget(2.7)).toBe(2);
   });
 
-  it("loadConfig resolves 4 by default (the shipped posture) and honours the env", () => {
+  it("loadConfig resolves 8 by default (the shipped posture) and honours the env", () => {
     const base = { PERCEIVE_URL: "http://p", DECIDE_URL: "http://d" };
-    expect(loadConfig({ ...base }).liveObserveMaxFrames).toBe(4);
+    expect(loadConfig({ ...base }).liveObserveMaxFrames).toBe(8);
     expect(loadConfig({ ...base, LIVE_OBSERVE_MAX_FRAMES: "4" }).liveObserveMaxFrames).toBe(4);
     expect(loadConfig({ ...base, LIVE_OBSERVE_MAX_FRAMES: "6" }).liveObserveMaxFrames).toBe(6);
+    expect(loadConfig({ ...base, LIVE_OBSERVE_MAX_FRAMES: "8" }).liveObserveMaxFrames).toBe(8);
     // A typo cannot switch the cap off, and cannot raise it past the ceiling.
-    expect(loadConfig({ ...base, LIVE_OBSERVE_MAX_FRAMES: "" }).liveObserveMaxFrames).toBe(4);
+    expect(loadConfig({ ...base, LIVE_OBSERVE_MAX_FRAMES: "" }).liveObserveMaxFrames).toBe(8);
     expect(loadConfig({ ...base, LIVE_OBSERVE_MAX_FRAMES: "99" }).liveObserveMaxFrames).toBe(30);
   });
 

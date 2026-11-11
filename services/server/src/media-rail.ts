@@ -39,7 +39,7 @@ import {
   LIVE_OBSERVE_WINDOW_S,
   LIVE_OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_LAG_BUDGET_S,
-  OBSERVE_CADENCE_S,
+  LIVE_OBSERVE_CADENCE_S,
   OBSERVE_CONTENT_FPS,
   GOAL_OUTCOMES,
   percentile,
@@ -464,7 +464,7 @@ export class MediaRailObserver {
     // serial rail holds no extra slot, so counting it would starve the others).
     if (staged && inFlight > 1) liveDecideAdmission.registerLiveJob(this.jobId);
     this.live = new LiveObserver({
-      cadenceS: opts.cadenceS ?? OBSERVE_CADENCE_S,
+      cadenceS: opts.cadenceS ?? LIVE_OBSERVE_CADENCE_S,
       windowS: opts.windowS ?? LIVE_OBSERVE_WINDOW_S,
       maxFrames: opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES,
       // ADAAAA-8102: the window's image grid resolves onto the CONTENT consume
