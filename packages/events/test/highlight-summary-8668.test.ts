@@ -424,6 +424,43 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
     }
   });
 
+  // QA-C (ADAAAA-8683 comment on ADAAAA-8687) measured the same 0/4 refusal on the
+  // VOD rail. The band differs (floor 30 / target 40-90 / hard 120 words, 700
+  // chars) but R1-R3 must judge novelty identically, so a VOD-length elaboration
+  // of the same short captions has to pass — a fix that only relaxes the live bar
+  // would leave AC1-VOD at 0% coverage.
+  it("accepts a VOD-length faithful body for the same captions (AC1-VOD)", () => {
+    const vodBodies = [
+      "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
+        "A short burst of noise around 0:12 marks the move that briefly lifts the ground. " +
+        "Play resumes quickly with both sides still holding their shape through the next few passes.",
+      "The audio feed carries a loud call near 1:42 and the crowd answers it at once. " +
+        "Both benches are up and the near touchline fills with movement. " +
+        "No scoreboard read inside the window backs the moment up, so the clip stays a celebration.",
+      "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
+        "The keeper is beaten low and the crowd behind the net rises before the restart. " +
+        "The closing stages open up as both sides push forward again.",
+    ];
+    shipped.forEach((row, i) => {
+      const evidence: SummaryEvidence = { ...row.evidence, rail: "vod" };
+      const decision = gateSummaryDetail(vodBodies[i], evidence);
+      expect({ caption: row.caption, violations: decision.violations }).toEqual({ caption: row.caption, violations: [] });
+      expect(decision.summary).toBe(vodBodies[i]);
+      expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.targetMinWords);
+      expect(decision.words).toBeLessThanOrEqual(SUMMARY_VOD_BAND.targetMaxWords);
+      expect(decision.sentences).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.minSentences);
+      expect(decision.sentences).toBeLessThanOrEqual(SUMMARY_VOD_BAND.maxSentences);
+      expect(vodBodies[i].length).toBeLessThanOrEqual(SUMMARY_VOD_BAND.hardMaxChars);
+    });
+    // R4 on the VOD rail: the confirmed-GOAL body reuses the caption's own
+    // `scoreboard` / `2-2` tokens (coverage sits AT the retired 0.5 bar) and is
+    // still stored — overlap is an observation, never a drop reason.
+    const goalDecision = gateSummaryDetail(vodBodies[2], { ...shipped[2].evidence, rail: "vod" });
+    expect(goalDecision.captionOverlap).toBeGreaterThanOrEqual(0.5);
+    expect(goalDecision.violations).not.toContain("restates-caption");
+    expect(goalDecision.summary).not.toBeNull();
+  });
+
   it("keeps the enum-labels bar while letting the prose nouns through (ADAAAA-8687)", () => {
     // The reply the served build ACTUALLY refused on 6d6090a: `internal-token`
     // fired on the ordinary word `goal`.
