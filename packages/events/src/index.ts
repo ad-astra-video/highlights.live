@@ -1947,6 +1947,13 @@ export const HighlightRecordSchema = z.object({
       preSamples: z.number().int().min(0).optional(),
       postSamples: z.number().int().min(0).optional(),
       need: z.number().int().min(0).optional(),
+      /** ADAAAA-8610: the ACCEPT lane measured a legible transition and REFUSED
+       * it because its POST state lands below a score state this run already read
+       * (a rewind: replayed overlay, stale/mis-OCR read, or a scoreboard that
+       * reset on screen). Names the real refusal on the demoted row, so a grade
+       * can tell "no measurement" apart from "measured and refused". Additive
+       * optional — absent on every row the gate did not refuse. */
+      scoreRewindRefusal: z.string().optional(),
     })
     .optional(),
   /** ADAAAA-8139 (interim step, CEO ask 2026-11-06): a LIVE goal accept the
