@@ -34,6 +34,7 @@ import {
   isTaxonomyToken,
   placePhraseOf,
   stripInternalTokens,
+  taxonomyKey,
   type CaptionGroundingContext,
 } from "./caption-grounding.js";
 import { hasPlacePhrase } from "./caption-grounding.js";
@@ -522,6 +523,35 @@ export function summaryGroundingContext(evidence: SummaryEvidence): CaptionGroun
   };
 }
 
+/** ADAAAA-8687: the taxonomy table's entries that are ordinary prose in body
+ *  copy. The internal-token bar exists to keep the pipeline's OWN event labels
+ *  off the served surface (`scoring_play`, `BIG_PLAY`, `big play`, `near miss`),
+ *  not to ban the English nouns a highlight is described with. The served probe
+ *  on 6d6090a caught a faithful GOAL body ("This goal occurs at the 2:40 mark of
+ *  the match.") refused for the word `goal`, which alone would drop most GOAL
+ *  rows' copy. Claim safety is a SEPARATE bar (`hasGoalClaim` /
+ *  `gateGoalClaims`), so allowing the noun cannot smuggle a claim; the enum
+ *  SHAPE (`snake_case`) and the bracketed-marker strip are untouched. */
+const BODY_PROSE_TAXONOMY = new Set(["goal", "shot", "save", "corner", "penalty", "free kick", "highlight"]);
+
+/** ADAAAA-8687: the pipeline's OWN labels inside the body, scanned as 1-3 word
+ *  phrases (the enum form of the taxonomy table). The everyday prose nouns in
+ *  `BODY_PROSE_TAXONOMY` are exempt; the snake_case SHAPE is caught separately by
+ *  `summaryViolations` (and the bracketed/uppercase markers are stripped before
+ *  the gate ever sees the text). */
+export function internalLabelPhrases(text: string): string[] {
+  const words = taxonomyKey(text).split(" ").filter(Boolean);
+  const hits: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    for (const n of [3, 2, 1]) {
+      if (words.length - i < n) continue;
+      const phrase = words.slice(i, i + n).join(" ");
+      if (isTaxonomyToken(phrase) && !BODY_PROSE_TAXONOMY.has(phrase) && !hits.includes(phrase)) hits.push(phrase);
+    }
+  }
+  return hits;
+}
+
 /** Every bar THIS candidate fails. Shape first, then the composed grounding
  *  gates, then the two lane-specific bars (depth facts + caption overlap). */
 export function summaryViolations(summary: string, evidence: SummaryEvidence): SummaryViolation[] {
@@ -539,16 +569,12 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   if (stripInternalTokens(body) !== body) out.push("internal-token");
   // A taxonomy/enum token mid-sentence (`… after a scoring_play …`) survives the
   // strip above, so the served value is checked with the existing taxonomy table
-  // plus the snake_case enum SHAPE (no second token list).
+  // plus the snake_case enum SHAPE (no second token list). The table's everyday
+  // prose words are exempt (see BODY_PROSE_TAXONOMY): the bar is about the
+  // pipeline's OWN labels, not the nouns a highlight is described with.
   if (!out.includes("internal-token")) {
     if (/\b[a-z][a-z0-9]*_[a-z0-9_]+\b/.test(body)) out.push("internal-token");
-    else
-      for (const token of body.match(/[A-Za-z][A-Za-z_]{1,24}|[a-z]+(?:[- ][a-z]+){1,2}/g) ?? []) {
-        if (isTaxonomyToken(token)) {
-          out.push("internal-token");
-          break;
-        }
-      }
+    else if (internalLabelPhrases(body).length > 0) out.push("internal-token");
   }
   if (CLOCK_PREFIX_RE.test(body)) out.push("clock-prefix");
   if (EM_DASH_CHAIN_RE.test(body)) out.push("em-dash-chain");
@@ -646,6 +672,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
+    `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the score line, the competition or venue, or an attested action from the evidence.`,
     "- Include at least one fact the headline does not carry: the score line, the clock or spell, the competition or venue, or a named player's attested action.",
     "- A name is optional. If the evidence names nobody, carry the depth with score, clock and action facts.",
     "- Never claim a goal unless the verdict is a scoring play.",

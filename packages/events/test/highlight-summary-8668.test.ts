@@ -403,6 +403,29 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
     }
   });
 
+  it("keeps the enum-labels bar while letting the prose nouns through (ADAAAA-8687)", () => {
+    // The reply the served build ACTUALLY refused on 6d6090a: `internal-token`
+    // fired on the ordinary word `goal`.
+    const served = shipped[2].evidence;
+    const reply =
+      "The midfielder finds the back of the net to level the score at 2-2. " +
+      "This goal occurs at the 2:40 mark of the match.";
+    const decision = gateSummaryDetail(reply, served);
+    expect(decision.violations).toEqual([]);
+    expect(decision.summary).toBe(reply);
+    // The pipeline's snake_case enum shape is still refused outright …
+    const enumBody =
+      "The move ends as a scoring_play in the second half. The crowd answers it around 2:40 at the near post.";
+    expect(gateSummaryDetail(enumBody, live()).violations).toContain("internal-token");
+    // … and an uppercase / two-word label is STRIPPED (never served), never
+    // accepted into the stored copy.
+    for (const tokenText of ["BIG_PLAY", "big play", "near miss"]) {
+      const body = `The move ends as a ${tokenText} in the second half. The crowd answers it around 2:40 at the near post.`;
+      const out = gateSummaryDetail(body, live()).summary ?? "";
+      expect({ token: tokenText, served: out.includes(tokenText) }).toEqual({ token: tokenText, served: false });
+    }
+  });
+
   it("still reports the refused reply verbatim in `decision.raw` (ADAAAA-8687 item 3)", () => {
     const row = shipped[2];
     const reply = `  T+160 s — ${row.caption} ${row.caption}  `;
