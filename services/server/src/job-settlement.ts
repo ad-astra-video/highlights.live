@@ -17,6 +17,7 @@
 // Pure functions only: no store/db access, so the shape is unit-testable and
 // every caller (boot sweep, stop, failure) settles identically.
 import type { Job, StageAMetricsSnapshot } from "@highlights/events";
+import { resolveSummaryFee } from "@highlights/events";
 import { completedLiveCounterFields } from "./job-counters";
 
 /** Perceive persistent-session list price per hour (docker/runners.json
@@ -74,12 +75,52 @@ export function accruedSecondsSince(iso: string | undefined, nowMs: number): num
 
 /** List cost of `decideCalls` decide invocations plus `perceiveSessionS` of
  * paid perceive session, rounded to the 4dp the record stores. */
-export function computeCostUsd(decideCalls: number, perceiveSessionS: number, decideFee: number, confirmCalls = 0): number {
+export function computeCostUsd(
+  decideCalls: number,
+  perceiveSessionS: number,
+  decideFee: number,
+  confirmCalls = 0,
+  /** ADAAAA-8668: the `summary` lane's own fee TERM. Additive positional arg, so
+   *  every pre-change caller keeps its exact price. */
+  summaryCalls = 0,
+  /** Per-call summary fee. Defaults to the AC5 ceiling (`1.5x DECIDE_FEE`). */
+  summaryFee?: number
+): number {
   // ADAAAA-8205: confirm dives are decide-service calls, so they are metered in
   // the same term: `decideFee * (decideCalls + confirmCalls) + perceive`.
+  // ADAAAA-8668: the body-copy lane is its OWN fee class, never folded into the
+  // decide term: `+ summaryFee * summaryCalls`, with the fee clamped to 1.5x
+  // `DECIDE_FEE` so a misconfigured override cannot breach the cost model.
   const billableCalls = Math.max(0, decideCalls) + Math.max(0, confirmCalls);
-  const cost = decideFee * billableCalls + (Math.max(0, perceiveSessionS) / 3600) * PERCEIVE_PER_HOUR_USD;
+  const summaryTerm = Math.max(0, summaryCalls) * resolveSummaryFee(decideFee, summaryFee ?? null);
+  const cost = decideFee * billableCalls + summaryTerm + (Math.max(0, perceiveSessionS) / 3600) * PERCEIVE_PER_HOUR_USD;
   return Number(cost.toFixed(4));
+}
+
+/** ADAAAA-8668 (AC5): the ONE source of the summary term's call count. Same rule
+ *  as `billableConfirmCalls`: when a stored `observeMetrics` snapshot carries the
+ *  meter it is AUTHORITATIVE (it is the field a stored-row read grades), and only
+ *  a caller with no snapshot passes a measured count derived from the rows. */
+export function billableSummaryCalls(
+  observeMetrics: Job["observeMetrics"] | undefined,
+  explicit?: number
+): number {
+  const fromSnapshot = observeMetrics?.summaryCalls;
+  if (typeof fromSnapshot === "number" && Number.isFinite(fromSnapshot)) return Math.max(0, Math.trunc(fromSnapshot));
+  if (typeof explicit === "number" && Number.isFinite(explicit)) return Math.max(0, Math.trunc(explicit));
+  return 0;
+}
+
+/** ADAAAA-8668: the summary calls a job actually billed, summed off its stored
+ *  rows. `patchHighlightSummary` writes `summaryCalls` on every row that was
+ *  attempted, so a row-granular read and the job meter cannot disagree about the
+ *  same call. */
+export function summaryCallsForRows(rows: { summaryCalls?: number | undefined }[] | undefined): number {
+  let total = 0;
+  for (const row of rows ?? []) {
+    if (typeof row.summaryCalls === "number" && Number.isFinite(row.summaryCalls)) total += Math.max(0, Math.trunc(row.summaryCalls));
+  }
+  return total;
 }
 
 /**
