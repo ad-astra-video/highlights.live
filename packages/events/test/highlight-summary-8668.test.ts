@@ -19,6 +19,7 @@ import {
   clampSummaryDepth,
   gateSummaryDetail,
   hasAttestedEntity,
+  internalLabelPhrases,
   newSummaryFacts,
   normalizeSummaryTokens,
   resolveSummaryFee,
@@ -475,13 +476,40 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
     const enumBody =
       "The move ends as a scoring_play in the second half. The crowd answers it around 2:40 at the near post.";
     expect(gateSummaryDetail(enumBody, live()).violations).toContain("internal-token");
-    // … and an uppercase / two-word label is STRIPPED (never served), never
+    // … and an uppercase / snake_case marker is STRIPPED (never served), never
     // accepted into the stored copy.
-    for (const tokenText of ["BIG_PLAY", "big play", "near miss"]) {
+    for (const tokenText of ["BIG_PLAY", "scoring_play"]) {
       const body = `The move ends as a ${tokenText} in the second half. The crowd answers it around 2:40 at the near post.`;
       const out = gateSummaryDetail(body, live()).summary ?? "";
       expect({ token: tokenText, served: out.includes(tokenText) }).toEqual({ token: tokenText, served: false });
     }
+  });
+
+  it("refuses a label in a LABEL POSITION and serves the same words as prose (ADAAAA-8691)", () => {
+    // QA-E's bounded VOD job `572f1ec7` on `c76ab91` refused a grounded GOAL
+    // body for the ordinary phrase `scoring play`: the window scan below ran
+    // over the whole body, so `This scoring play follows a period of intense
+    // competition …` read as the pipeline's `scoring_play`. 1 of the 2 promotable
+    // VOD rows went unserved on that alone.
+    expect(internalLabelPhrases("Real Madrid takes the lead as the scoreboard updates to 2-1.")).toEqual([]);
+    for (const prose of [
+      "This scoring play follows a period of intense competition between the two sides.",
+      "The move ends as a big play in the second half and the crowd answers it at the near post.",
+      "The keeper is beaten by a near miss off the far post and the ball runs wide.",
+    ]) {
+      expect({ prose, hits: internalLabelPhrases(prose) }).toEqual({ prose, hits: [] });
+    }
+    // The label POSITIONS are still refused: the body IS the label, and a
+    // delimited chunk that IS the label (`label: …`, `verdict — label`).
+    expect(internalLabelPhrases("scoring_play")).toEqual(["scoring play"]);
+    expect(internalLabelPhrases("big play: The ball shoots in midfield.")).toEqual(["big play"]);
+    expect(internalLabelPhrases("The row reads near miss — the ball goes wide of the post.")).toEqual(["near miss"]);
+    // … and the enum SHAPE is refused wherever it sits, prose or not.
+    const enumBody =
+      "The move ends as a scoring_play in the second half. The crowd answers it around 2:40 at the near post.";
+    expect(gateSummaryDetail(enumBody, live()).violations).toContain("internal-token");
+    const labelFirstBody = "big play: The move ends in the second half and the crowd answers it at the near post.";
+    expect(gateSummaryDetail(labelFirstBody, live()).violations).toContain("internal-token");
   });
 
   it("tells a celebration row not to touch the score, and offers it no score fact", () => {

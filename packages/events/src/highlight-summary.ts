@@ -574,19 +574,63 @@ export function summaryGroundingContext(evidence: SummaryEvidence): CaptionGroun
  *  SHAPE (`snake_case`) and the bracketed-marker strip are untouched. */
 const BODY_PROSE_TAXONOMY = new Set(["goal", "shot", "save", "corner", "penalty", "free kick", "highlight"]);
 
-/** ADAAAA-8687: the pipeline's OWN labels inside the body, scanned as 1-3 word
- *  phrases (the enum form of the taxonomy table). The everyday prose nouns in
- *  `BODY_PROSE_TAXONOMY` are exempt; the snake_case SHAPE is caught separately by
- *  `summaryViolations` (and the bracketed/uppercase markers are stripped before
- *  the gate ever sees the text). */
+/** ADAAAA-8691: what makes a taxonomy phrase a LABEL rather than prose. Body
+ *  copy delimits the pipeline's own label — `big play: …`, `verdict — near
+ *  miss`, `(scoring_play)` — while a plain space is the shape of running
+ *  English. */
+const LABEL_CHUNK_SEP = /\s*[:—–=|()[\]{}\n]\s*/;
+const LABEL_MARK = "\u0000";
+
+/** ADAAAA-8691: the pipeline's OWN labels inside the body, scanned as 1-3 word
+ *  phrases (the enum form of the taxonomy table) but ONLY in a label position:
+ *  the body IS the label, or the phrase sits alone in a delimited chunk.
+ *
+ *  QA-E's bounded VOD job `572f1ec7` (served build `c76ab91`) refused a
+ *  grounded, depth-compliant GOAL body — *"This scoring play follows a period of
+ *  intense competition between the two sides."* — as `internal-token`, because a
+ *  window scan over the whole body cannot tell that English phrase from the
+ *  pipeline's `scoring_play`. `stripInternalTokens(raw) === raw` on that row, so
+ *  it was this scan alone, and it starved VOD coverage (1 of 2 promotable rows).
+ *
+ *  Nothing that catches a REAL label is widened: the snake_case enum SHAPE is
+ *  refused by `summaryViolations` wherever it appears, the bracketed / ALL-CAPS /
+ *  `key=value` / clock markers are stripped by `stripInternalTokens` before this
+ *  gate sees the text, a bare label body is refused here, and a delimited label
+ *  chunk is refused here. The everyday prose nouns in `BODY_PROSE_TAXONOMY` stay
+ *  exempt. */
 export function internalLabelPhrases(text: string): string[] {
-  const words = taxonomyKey(text).split(" ").filter(Boolean);
+  const body = (text ?? "").trim();
+  if (!body) return [];
   const hits: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    for (const n of [3, 2, 1]) {
-      if (words.length - i < n) continue;
-      const phrase = words.slice(i, i + n).join(" ");
-      if (isTaxonomyToken(phrase) && !BODY_PROSE_TAXONOMY.has(phrase) && !hits.includes(phrase)) hits.push(phrase);
+  const consider = (words: string[]): void => {
+    const key = taxonomyKey(words.join(" "));
+    if (!key || !isTaxonomyToken(key) || BODY_PROSE_TAXONOMY.has(key) || hits.includes(key)) return;
+    hits.push(key);
+  };
+  // Tokenise with every separator kept as a boundary marker, then walk the runs
+  // of ordinary words between markers. A run that IS a label, or a 1-3 word
+  // phrase that TOUCHES a marker, is in a label position; a phrase inside a run
+  // is English.
+  const tokens = body.replace(LABEL_CHUNK_SEP, ` ${LABEL_MARK} `).split(/\s+/).filter(Boolean);
+  const runs: { words: string[]; afterMarker: boolean; beforeMarker: boolean }[] = [];
+  let afterMarker = false;
+  for (const token of tokens) {
+    if (token === LABEL_MARK) {
+      if (runs.length) runs[runs.length - 1].beforeMarker = true;
+      afterMarker = true;
+      continue;
+    }
+    const last = runs[runs.length - 1];
+    if (afterMarker || !last) {
+      runs.push({ words: [token], afterMarker, beforeMarker: false });
+      afterMarker = false;
+    } else last.words.push(token);
+  }
+  for (const run of runs) {
+    consider(run.words);
+    for (let n = 1; n <= 3 && n <= run.words.length; n++) {
+      if (run.afterMarker) consider(run.words.slice(0, n));
+      if (run.beforeMarker) consider(run.words.slice(-n));
     }
   }
   return hits;
@@ -610,8 +654,10 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   // A taxonomy/enum token mid-sentence (`… after a scoring_play …`) survives the
   // strip above, so the served value is checked with the existing taxonomy table
   // plus the snake_case enum SHAPE (no second token list). The table's everyday
-  // prose words are exempt (see BODY_PROSE_TAXONOMY): the bar is about the
-  // pipeline's OWN labels, not the nouns a highlight is described with.
+  // prose words are exempt (see BODY_PROSE_TAXONOMY) and a taxonomy phrase only
+  // counts as a label in a label position (see `internalLabelPhrases`): the bar
+  // is about the pipeline's OWN labels, not the English a highlight is described
+  // with.
   if (!out.includes("internal-token")) {
     if (/\b[a-z][a-z0-9]*_[a-z0-9_]+\b/.test(body)) out.push("internal-token");
     else if (internalLabelPhrases(body).length > 0) out.push("internal-token");
