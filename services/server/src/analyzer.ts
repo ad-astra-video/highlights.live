@@ -318,6 +318,11 @@ export interface CandidateSignal {
   /** ADAAAA-8134: on the live rail, the pooled score-read counts behind a window
    * the read-side attestation could not carry (disclosed on the demoted row). */
   scoreReads?: ScoreReadDiagnostics;
+  /** ADAAAA-8610: the measured transition the accept lane REFUSED because its
+   * POST state lands below a state this run already read (`"2-2>2-1 at 147.667s
+   * lands below the score state this run already read (2-2)"`). Carried so the
+   * demoted row's copy names the rewind; absent when nothing was refused. */
+  scoreRewindRefusal?: string;
 }
 
 /**
@@ -889,6 +894,16 @@ export function liveUnattestedGoalRefusal(used: LiveGoalAttestationUsed): string
   const post = used.postSamples ?? 0;
   const pre = used.preSamples ?? 0;
   const need = used.need ?? SCOREBOARD_MIN_CONSISTENT_READS;
+  // ADAAAA-8610: the accept lane measured a legible transition and REFUSED it
+  // because it lands below a state the run already read. Name that, not the
+  // generic "already credited" sentence — this window's transition was never
+  // credited to anyone.
+  if (used.scoreRewindRefusal) {
+    return (
+      `the window's measured score transition ${used.scoreRewindRefusal} — ` +
+      "a rewind cannot attest a new GOAL"
+    );
+  }
   if (used.scoreBoardChanged) {
     // ATTEST-4 (ADAAAA-8492): dead through the demote seam — a hint with scoreReads=0 attests and no stored live row has ever had the shape; kept for a direct copy caller.
     if (reads === 0) {
@@ -1904,16 +1919,31 @@ export function deriveWindowAttestation(
      */
     claimScoreTransition?: (delta: ScoreboardDeltaEvidence) => boolean;
     /**
-     * ADAAAA-8588: may the run ACT on the hint-carried delta at all? The hint lane
-     * does not claim (claiming would demote the genuine second clip's repeated
-     * `2-1 > 2-2`, the withdrawn ADAAAA-8564 B1 canary), so this is the only guard
-     * a replayed/montage segment's hint delta meets. Absent => pure derivation
-     * (unit tests, VOD).
+     * ADAAAA-8610: admit the measured transition against the run's own read
+     * high-water (the ACCEPT lane's rewind gate). Returns `false` when this
+     * window's POST state lands below a state the run already read — a replayed
+     * overlay, a stale/mis-OCR read, or a scoreboard that reset on screen — in
+     * which case the window carries no score attestation at all (fail closed: it
+     * ships as a celebration, not a GOAL). Absent => pure derivation (unit tests,
+     * VOD), byte-identical to the pre-8610 fold.
+     *
+     * Deliberately NOT the same hook as `claimScoreTransition`: the claim is the
+     * run-wide one-transition-per-run ledger and closing the HINT lane through it
+     * demotes the genuine second clip's repeated `2-1 > 2-2` (the withdrawn B1
+     * rule, pinned by `goal-transition-dedup-8564.test.ts`). Admission is a
+     * MEASUREMENT check, so it applies to the hint delta and to the derived delta
+     * alike without consuming a transition key.
+     *
+     * ADAAAA-8588 reconcile: admission is the ONE gate both guards run through
+     * (`LiveRunShared.admitScoreDelta` -> `scoreRewindRefusal`): the read-water
+     * (8610) before the run has committed a state, and the credit-seated frontier
+     * after it, so the two cannot disagree about the same delta.
      */
     admitScoreDelta?: (delta: ScoreboardDeltaEvidence) => boolean;
   } = {}
 ): WindowAttestation {
   const out: WindowAttestation = { ...foldWindowAttestation(payload.biasHints as ReadonlyArray<ObserveBiasHint>) };
+  const admit = opts.admitScoreDelta ?? (() => true);
   if (payload.biasHints.some((h) => h.scoreBoardChanged === true)) out.scoreAttestationSource = "perceive_hint";
   // Live payload only: `observations` is the pre-image-cap perceive frame set,
   // exactly what the decide timeline renders. A payload without it (VOD symmetric
@@ -1928,7 +1958,8 @@ export function deriveWindowAttestation(
     // legible, forward single-goal step (its pre/post ARE accepted reads), and
     // drop the bare boolean otherwise.
     const hintDelta = scoreboardDeltaLegible(out.scoreBoardDelta) ? out.scoreBoardDelta : undefined;
-    if (hintDelta && scoreboardDeltaSingleGoalStep(hintDelta) && (opts.admitScoreDelta ? opts.admitScoreDelta(hintDelta) : true)) {
+    if (hintDelta && scoreboardDeltaSingleGoalStep(hintDelta) && admit(hintDelta as ScoreboardDeltaEvidence)) {
+
       out.scoreBoardDelta = hintDelta;
       out.scoreTransitionTs = hintDelta.deltaTs;
     } else {
@@ -1956,7 +1987,7 @@ export function deriveWindowAttestation(
       // covering the boundary would otherwise derive the same delta — and the
       // accept path reads a legible delta as independent transition evidence
       // (ADAAAA-7865), which would mint one GOAL per window.
-      const credit = derived ? (opts.claimScoreTransition ? opts.claimScoreTransition(derived) : true) : false;
+      const credit = derived && admit(derived) ? (opts.claimScoreTransition ? opts.claimScoreTransition(derived) : true) : false;
       if (derived && credit) {
         out.scoreBoardChanged = true;
         out.scoreBoardDelta = derived;
@@ -1995,6 +2026,12 @@ export interface LiveGoalAttestationUsed {
    * Disclosed on ACCEPTED goal rows too, so "a GOAL row appeared" can be told
    * apart from a blind accept. */
   transitionKey?: string | null;
+  /** ADAAAA-8610: the accept lane's own measured transition was REFUSED because
+   * its POST state lands below a score state this run already read (a rewind:
+   * replayed overlay, stale/mis-OCR read, or a scoreboard that reset on screen).
+   * Disclosed on the demoted row so the copy names the real refusal; absent when
+   * nothing was refused. */
+  scoreRewindRefusal?: string;
 }
 
 /**
@@ -2014,6 +2051,9 @@ export function liveGoalAttestationUsed(input: {
   /** ADAAAA-8140: the credited transition (`"pre>post"`) when a measured delta
    * carried the accept, so an accepted GOAL row names what certified it. */
   transitionKey?: string | null;
+  /** ADAAAA-8610: the accept lane refused this window's measured transition as a
+   * rewind (POST below the run's read high-water). */
+  scoreRewindRefusal?: string | null;
 }): LiveGoalAttestationUsed {
   return {
     scoreBoardChanged: input.attribution.scoreBoardChanged === true,
@@ -2024,6 +2064,7 @@ export function liveGoalAttestationUsed(input: {
     // Only spread when a transition was actually credited: a row that carries no
     // measured delta keeps the legacy payload shape byte-identical.
     ...(input.transitionKey ? { transitionKey: input.transitionKey } : {}),
+    ...(input.scoreRewindRefusal ? { scoreRewindRefusal: input.scoreRewindRefusal } : {}),
     ...(input.scoreReads
       ? {
           scoreReads: input.scoreReads.scoreReads,
@@ -4800,7 +4841,9 @@ export class LiveRunShared {
    * the run already read is not a new goal: fail closed, and the next forward
    * read from the new baseline attests normally. Deliberately not time-bounded
    * (that is the point); a run that switches to a lower-scoring source stays
-   * fail-closed at or below the old high-water until it reads past it.
+   * fail-closed at or below the old high-water until it reads past it — unless
+   * the new source is detected as a NEW MATCH, which re-baselines the high-water
+   * (ADAAAA-8604 R2, {@link noteScoreReadRun}).
    *
    * This is the narrow root-cause guard. The withdrawn "one transitionKey = one
    * GOAL for the whole run" rule is NOT landed: on this same leg the second clip
@@ -4833,6 +4876,21 @@ export class LiveRunShared {
    * (a genuine score correction leaves the frontier high) stays visible instead
    * of silently deleting a goal. */
   private scoreFrontierRefusalCount = 0;
+  /** ADAAAA-8610: the content instant of the READ that seated {@link
+   * scoreHighWater}. The accept lane compares a window's measured POST against
+   * the water, and a goal-shaped accept can legitimately land AFTER a higher
+   * state was read only in one direction: an EARLIER transition delivered out of
+   * order (the offload path completes accepts out of order, ADAAAA-8078). A
+   * transition whose `deltaTs` is earlier than the instant the water was read is
+   * not a replay of a state the run had already passed — it is the run catching
+   * up on a moment it had not yet judged — so the gate fails open on it. Without
+   * the instant, the frontier is undated and every below-water post fails
+   * closed. */
+  private scoreHighWaterReadTs: number | null = null;
+  /** ADAAAA-8604 (R2): how many times the kickoff rule re-baselined the run
+   * (read-only, audit/tests — a silently moving threshold is not auditable). */
+  private kickoffBaselineResets = 0;
+
   /** ADAAAA-8564 (Fix A): row accounting published on `observeMetrics`. The
    * three counters below are incremented at the accept seam and at the dedupe
    * guards; `persistedRows` and `servedCards` are read off the ledgers at
@@ -5248,7 +5306,7 @@ export class LiveRunShared {
     // ADAAAA-8564 (Fix C): every parseable read raises the run's high-water, even
     // when the ledger drops it later for age — the high-water is what makes a
     // rewind visible after the 120 s retention window has forgotten the state.
-    for (const r of readings) this.noteScoreHighWater(r.score);
+    for (const r of readings) this.noteScoreHighWater(r.score, r.ts);
     let added = 0;
     for (const r of readings) {
       let lo = 0;
@@ -5262,6 +5320,10 @@ export class LiveRunShared {
       if (at && Math.abs(at.ts - r.ts) <= 1e-6) continue;
       this.scoreReadLedger.splice(lo, 0, r);
       added++;
+      // ADAAAA-8604 (R2): kickoff detection runs on DISTINCT, ts-adjacent reads
+      // only (the dedupe above drops a re-produced window's frames, which are not
+      // a second look at the scorebug).
+      this.noteScoreReadRun(lo);
     }
     if (added > 0) {
       const newest = this.scoreReadLedger[this.scoreReadLedger.length - 1].ts;
@@ -5280,25 +5342,166 @@ export class LiveRunShared {
    * wins; a tie keeps the state first read, so a later `2-2` re-read does not
    * replace the `2-2` that was already credited. Fed from
    * {@link noteScoreReadings} only: this is READ evidence, never an inference. */
-  private noteScoreHighWater(score: [number, number]): void {
+  private noteScoreHighWater(score: [number, number], ts?: number): void {
     if (!Array.isArray(score) || score.length !== 2) return;
     const total = score[0] + score[1];
     if (this.scoreHighWater === null || total > this.scoreHighWater[0] + this.scoreHighWater[1]) {
       this.scoreHighWater = [score[0], score[1]];
+      // ADAAAA-8610: the frontier is dated — the instant of the FIRST read that
+      // seated this state is what tells a late-delivered earlier transition
+      // apart from a replay (see `scoreStateAlreadyRead`).
+      if (typeof ts === "number" && Number.isFinite(ts)) this.scoreHighWaterReadTs = ts;
     }
   }
   /** ADAAAA-8564 (Fix C): has this run already READ a state strictly ahead of
    * `score`? A transition that LANDS there is a rewind (a repeated broadcast
    * overlay, a stale/mis-OCR read, or a different source's scoreboard), never a
-   * new goal. Public for the deferred lane and for audit + tests. */
-  scoreStateAlreadyRead(score: [number, number] | undefined | null): boolean {
+   * new goal. Public for the deferred lane and for audit + tests.
+   *
+   * ADAAAA-8604 (R1): the comparison is PER TEAM, not by total. A football score
+   * is monotone per team, so `1-2` followed by a read of `2-1` is a rewind (the
+   * sides are mis-OCR'd, or the overlay is stale/replayed) even though both tally
+   * 3 — the old `total < total` test let it attest a second GOAL on the same
+   * client-visible shape the parent ticket was opened about, one split-order
+   * away. Either side below the corresponding side of the high-water refuses.
+   *
+   * ADAAAA-8610: the optional `deltaTs` dates the transition. A post behind the
+   * water is a replay only when it lands at or after the instant the water was
+   * READ; a transition whose instant is EARLIER was delivered late (accepts
+   * complete out of order on the offload path) and still credits. Omit it and
+   * the compare is strictly positional (the deferred lane's original posture). */
+  scoreStateAlreadyRead(score: [number, number] | undefined | null, deltaTs?: number): boolean {
     if (!score || !Array.isArray(score) || score.length !== 2) return false;
     if (this.scoreHighWater === null) return false;
-    return score[0] + score[1] < this.scoreHighWater[0] + this.scoreHighWater[1];
+    const below = score[0] < this.scoreHighWater[0] || score[1] < this.scoreHighWater[1];
+    if (!below) return false;
+    // ADAAAA-8610: an EARLIER transition delivered late is the run catching up on
+    // a moment it had not judged yet (the offload path completes accepts out of
+    // order), not a replay of a state it had already passed. Fail open on it: the
+    // water is a frontier in CONTENT time, so nothing before it can be a rewind.
+    if (
+      typeof deltaTs === "number" &&
+      Number.isFinite(deltaTs) &&
+      this.scoreHighWaterReadTs !== null &&
+      deltaTs < this.scoreHighWaterReadTs
+    ) {
+      return false;
+    }
+    return true;
+  }
+  /**
+   * ADAAAA-8610: the ACCEPT lane's rewind gate. A window's own (or pooled) read
+   * can measure a legible, forward single-goal step that still LANDS BELOW a
+   * state this run already read — a replayed broadcast overlay, a stale/mis-OCR
+   * read, or a scoreboard that reset on screen (the looping fixture on
+   * `0cade089`). The deferred re-attestation lane has refused that shape since
+   * ADAAAA-8564 (Fix C) via {@link scoreStateAlreadyRead}; the accept lane never
+   * consulted it, so a rewind read arriving with its own in-window delta still
+   * shipped as GOAL (four rows on `0cade089`: POST `0-1`, `1-1`, `2-1`, `1-1`
+   * against the `2-2` the same run read at 116 s).
+   *
+   * Returns the refusal sentence (for the log + the row's `attestationUsed`) or
+   * `null` when the transition may attest. Pure — logging is the caller's job.
+   */
+  scoreRewindRefusal(delta: ScoreboardDeltaEvidence | undefined | null): string | null {
+    if (!scoreboardDeltaLegible(delta)) return null;
+    const d = delta as ScoreboardDeltaEvidence;
+    // ADAAAA-8588: the credit-seated frontier is the authority once this run has
+    // committed a state. A single-goal step whose POST sits behind that state is
+    // the replay/montage re-read this ticket measures, and it is refused here —
+    // at the same gate the read-water uses — so the accept, deferred and promote
+    // lanes cannot disagree about one delta. Only a CREDITED step seats the
+    // frontier, so a phantom `+2` misread cannot freeze the leg (falsifier T4).
+    if (scoreboardDeltaSingleGoalStep(d) && !this.scoreDeltaAdmitted(d)) {
+      const f = this.scoreFrontier ?? d.post;
+      return (
+        `${d.pre.join("-")}>${d.post.join("-")} at ${d.deltaTs}s sits behind the score state ` +
+        `this run has already identified (${f.join("-")})`
+      );
+    }
+    if (!this.scoreStateAlreadyRead(d.post, d.deltaTs)) return null;
+    return (
+      `${d.pre.join("-")}>${d.post.join("-")} at ${d.deltaTs}s lands below the score state ` +
+      `this run already read (${(this.scoreHighWater ?? []).join("-")})`
+    );
+  }
+
+  /**
+   * ADAAAA-8610: may the ACCEPT lane credit this measured transition? Fails
+   * closed on a rewind (below-water POST) and logs the refusal once, with the
+   * lane that hit it, so a leg can be graded from its own log like the deferred
+   * lane's `[live-goal-gate-upgrade] refused:` line.
+   */
+  admitScoreDelta(
+    delta: ScoreboardDeltaEvidence | undefined | null,
+    ctx: { jobId?: string; lane?: string; onRefuse?: (reason: string) => void } = {}
+  ): boolean {
+    const refusal = this.scoreRewindRefusal(delta);
+    if (!refusal) return true;
+    console.error(
+      `[live-score-rewind:${ctx.jobId ?? "-"}] refused the ${ctx.lane ?? "accept"} read: ${refusal} — ` +
+        `a rewind cannot attest a new GOAL`
+    );
+    ctx.onRefuse?.(refusal);
+    return false;
   }
   /** ADAAAA-8564 (Fix C): the run's score high-water (read-only, audit/tests). */
   scoreHighWaterState(): [number, number] | null {
     return this.scoreHighWater === null ? null : [this.scoreHighWater[0], this.scoreHighWater[1]];
+  }
+  /** ADAAAA-8610: the content instant of the read that seated the high-water
+   * (read-only, audit/tests). */
+  scoreHighWaterReadAt(): number | null {
+    return this.scoreHighWaterReadTs;
+  }
+  /** ADAAAA-8604 (R2): how many kickoffs re-baselined the high-water this run
+   * (read-only, audit/tests). */
+  scoreKickoffBaselineResets(): number {
+    return this.kickoffBaselineResets;
+  }
+  /**
+   * ADAAAA-8604 (R2): fold ONE distinct read into the kickoff detector and
+   * re-baseline the score high-water on a detected kickoff.
+   *
+   * The run-wide high-water is what makes a rewind visible ({@link
+   * scoreStateAlreadyRead}), but it is run-wide and a live stream can run into a
+   * NEW MATCH: a second match starting `0-0` after a `3-2` first match is
+   * refused at or below `3-2` today, so every goal until the running total
+   * passes it ships as a celebration — silently. Measured on the served build:
+   * high-water `[3,2]`, kickoff `0-0` twice, deferred `0-0 -> 1-0` -> 0 upgrades.
+   *
+   * A kickoff is the run reading `0-0` twice CONTIGUOUSLY (two distinct
+   * parseable reads, {@link noteScoreReadings} dedupes per content frame, so a
+   * re-produced window is not a second read) after a non-zero high-water, with
+   * no non-zero read in between. Only then is the old baseline genuinely stale:
+   * the `54c03cfc` rewind read `1-1`, never `0-0`, so it still fails closed and
+   * the guard cannot re-open that shape.
+   *
+   * The `0-0` rule is the LIVE fallback: a VOD clip/segment boundary is a
+   * stronger signal when it is exposed on the run, and should be preferred there.
+   */
+  private noteScoreReadRun(index: number): void {
+    const cur = this.scoreReadLedger[index];
+    if (!cur || cur.score[0] !== 0 || cur.score[1] !== 0) return;
+    // Time-order adjacency, not insertion order: the ledger is ts-sorted, so the
+    // entry immediately BEFORE this one is the previous read — "contiguous" and
+    // "no non-zero read lands between them" are the same check, and an
+    // overlapping window that carries older frames cannot fabricate a pair.
+    const prev = this.scoreReadLedger[index - 1];
+    if (!prev || prev.score[0] !== 0 || prev.score[1] !== 0) return;
+    const hi = this.scoreHighWater;
+    if (hi === null || hi[0] + hi[1] === 0) return;
+    this.scoreHighWater = [0, 0];
+    // ADAAAA-8610: the re-baseline is dated by the read that triggered it, so a
+    // transition AFTER the kickoff attests and a replay of the FIRST match's
+    // overlay (an earlier instant) is still not treated as a rewind of the new
+    // baseline.
+    if (Number.isFinite(cur.ts)) this.scoreHighWaterReadTs = cur.ts;
+    this.kickoffBaselineResets++;
+    console.log(
+      `[live-score-baseline] kickoff detected: two contiguous 0-0 reads after reading ` +
+        `${hi.join("-")} — the score high-water re-baselines to 0-0 so the new match's goals attest`
+    );
   }
   /** ADAAAA-8564 (Fix A): one window's accept verdict was TRUE. */
   noteAcceptedWindow(): void {
@@ -5567,16 +5770,16 @@ export class LiveRunShared {
     // at 479.081 s reported `1-1 -> 2-1` and promoted the celebration to a second
     // GOAL row. Fail closed and CONSUME the entry (an already-answered window must
     // not be re-asked): the next forward read from the new baseline attests.
-    //
     // ADAAAA-8588 reconciliation: once this run has COMMITTED a state (the
     // credit-seated frontier), that frontier is the authority and this read-water
-    // is not consulted — the water is total-based, so a phantom `2-2 -> 4-2`
-    // misread raises it permanently and would then refuse the genuine
-    // `2-2 -> 3-2` at this very seam. The water keeps its job where the frontier
-    // knows nothing: before the first credit, a rewind against a merely-READ
-    // state still fails closed (fail-open only on a run with no earlier state at
-    // all, which the falsifier suite pins).
-    if (this.scoreFrontier === null && this.scoreStateAlreadyRead(d.post)) {
+    // is not consulted — the water is seated by every parseable read, so a
+    // phantom `2-2 -> 4-2` misread raises it permanently and would then refuse
+    // the genuine `2-2 -> 3-2` at this very seam (`scoreDeltaAdmitted` above has
+    // already refused a behind-frontier step, and has counted it). The water keeps
+    // its job where the frontier knows nothing yet: before the first credit, a
+    // rewind against a merely-READ state still fails closed.
+    if (this.scoreFrontier === null && this.scoreStateAlreadyRead(d.post, d.deltaTs)) {
+
       this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
       console.error(
         `[live-goal-gate-upgrade:${entry.jobId}] refused: the transition read at ${d.deltaTs}s ` +
@@ -6968,6 +7171,9 @@ export async function acceptVideoDecision(
     // what certified the row instead of guessing from a bare `GOAL`.
     scoreReads: candidate.scoreReads,
     transitionKey: candidateTransitionKey,
+    // ADAAAA-8610: a refused rewind is named on the row, so a grader can tell
+    // "no measurement" apart from "measured and refused".
+    scoreRewindRefusal: candidate.scoreRewindRefusal,
   });
   // ADAAAA-8442: the SAME predicate the live scoring-lane gate applies
   // (`liveGoalHasMeasuredEvidence`), so "attested enough to win the burst owner"
@@ -9337,14 +9543,31 @@ export async function observeAcceptOnly(
   // the pooled re-read sees every read the rail has paid for (this window's own
   // set included) and a PRE side that lives in the window that just closed.
   const newScoreReads = liveRail ? run.noteScoreReadings(payload.observations) : 0;
+  // ADAAAA-8610: the run's READ high-water gates the accept lane. A window whose
+  // own reads (or the pooled re-read) measure a forward single-goal step that
+  // still LANDS BELOW a state this run already read is a rewind, not a new goal —
+  // fail closed, so the row ships as a celebration. Refused BEFORE the run-wide
+  // transition claim, so a rewind read never burns a transition key the genuine
+  // forward step would need.
+  const refusal: { reason: string | null } = { reason: null };
+  const admitScoreDelta = (delta: ScoreboardDeltaEvidence, lane: "window" | "pooled") =>
+    run.admitScoreDelta(delta, {
+      jobId: cfg.jobId,
+      lane,
+      onRefuse: (reason) => {
+        refusal.reason = refusal.reason ?? reason;
+      },
+    });
   const windowAttestation = deriveWindowAttestation(payload, {
     claimScoreTransition: (delta) => run.claimScoreTransition(delta),
-    // ADAAAA-8588: the hint lane adopts a legible single-goal hint delta without
-    // claiming it (claiming would demote the genuine repeated transition of a
-    // second clip), so admission is what stops a replay/montage segment's hint
-    // from attesting a goal the run already committed.
-    admitScoreDelta: (delta) => run.scoreDeltaAdmitted(delta),
+    // ADAAAA-8610 + ADAAAA-8588: one admission gate for the accept lane. The
+    // hint lane adopts a legible single-goal hint delta WITHOUT claiming it
+    // (claiming would demote the genuine repeated transition of a second clip),
+    // so admission is what stops a replay/montage segment from attesting a goal
+    // the run already committed or already read past.
+    admitScoreDelta: (delta) => admitScoreDelta(delta, "window"),
   });
+
   // ADAAAA-8134: pooled re-read fallback. The window's own timeline is the
   // cheapest evidence and stays first (ADAAAA-8071); when it carries no legible
   // transition, the run ledger is re-read over a span 6 s wider on each side with
@@ -9358,7 +9581,7 @@ export async function observeAcceptOnly(
         readings: run.scoreReadBuffer(),
         window: liveWindow,
       });
-      if (pooled && run.claimScoreTransition(pooled)) {
+      if (pooled && admitScoreDelta(pooled, "pooled") && run.claimScoreTransition(pooled)) {
         windowAttestation.scoreBoardChanged = true;
         windowAttestation.scoreBoardDelta = pooled;
         windowAttestation.scoreAttestationSource = "perceive_timeline";
@@ -9395,6 +9618,10 @@ export async function observeAcceptOnly(
     // ADAAAA-8134: the read counts behind a window the pooled re-read could not
     // attest, so the demoted row discloses them (AC-R4).
     scoreReads: pooledScoreReads,
+    // ADAAAA-8610: the measured transition this window was refused on (a
+    // below-high-water rewind), so the demoted row NAMES the real refusal instead
+    // of reporting the generic "already credited / no change measured" copy.
+    scoreRewindRefusal: refusal.reason ?? undefined,
   };
   // ADAAAA-8152 (ACC-2, second pass): name the anchor decision on the leg's own
   // log, so the placement is provable without re-reading pixels: the delta the

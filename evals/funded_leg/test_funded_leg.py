@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from typing import Any
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -828,6 +829,194 @@ class Leg8516ReplayTest(unittest.TestCase):
         )
         self.assertEqual(block["verdict"], "unreadable")
         self.assertNotEqual(block["verdict"], "verified")
+
+
+class PostgresHarnessStdinTest(unittest.TestCase):
+    """ADAAAA-8644: `psql -f -` must be fed the query, never inherited stdin.
+
+    Two failure arms on the old `RealRunner.sql()` (`subprocess.run` with no
+    `input=`):
+      * an open-but-silent inherited stdin blocks psql until the 60 s timeout;
+      * an inherited `/dev/null` gives EOF, so psql runs nothing and exits 0
+        with no rows — a false "nonterminal jobs = 0".
+    The fake `docker` below stands in for psql: it accepts the query only on
+    stdin and prints the job count, so a probe that reads nothing cannot pass.
+    """
+
+    BUSY = "1"
+    IDLE = "0"
+
+    FAKE_DOCKER = """#!/bin/sh
+# Fake `docker exec -i ... psql -At -f -`: the SQL must arrive on stdin.
+query=$(cat)
+case "$query" in
+  *"from jobs"*) ;;
+  *) echo "fake-psql: no query on stdin" >&2; exit 2 ;;
+esac
+printf '%s\\n' "${FAKE_JOBS:-0}"
+"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmpdir = self._tmp.name
+        docker = os.path.join(self.tmpdir, "docker")
+        with open(docker, "w", encoding="utf-8") as fh:
+            fh.write(self.FAKE_DOCKER)
+        os.chmod(docker, 0o755)
+        self.env = dict(os.environ)
+        self.env["PATH"] = self.tmpdir + os.pathsep + self.env.get("PATH", "")
+        self.evals_dir = os.path.dirname(os.path.abspath(__file__))
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _probe_in_child(self, stdin, jobs):
+        """Run `RealRunner.sql(NONTERMINAL_SQL)` in a child with the given stdin."""
+        script = (
+            "import sys\n"
+            f"sys.path.insert(0, {self.evals_dir!r})\n"
+            "import funded_leg\n"
+            "rows = funded_leg.RealRunner().sql(funded_leg.NONTERMINAL_SQL)\n"
+            "print('ROWS:' + '|'.join(rows))\n"
+        )
+        env = dict(self.env)
+        env["FAKE_JOBS"] = jobs
+        proc = subprocess.Popen(
+            [sys.executable, "-c", script],
+            stdin=stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+        try:
+            # `wait` leaves `proc.stdin` open (communicate() would close it), so
+            # the child keeps the launcher-style open pipe for the whole probe.
+            proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+            self.fail("sql() hung on an inherited open stdin (the 60 s timeout arm)")
+        assert proc.stdout is not None and proc.stderr is not None
+        out = proc.stdout.read()
+        err = proc.stderr.read()
+        proc.stdout.close()
+        proc.stderr.close()
+        if proc.stdin is not None:
+            proc.stdin.close()
+        return proc.returncode, out, err
+
+    def test_unclosed_inherited_stdin_still_reads_the_jobs_count(self):
+        # The `screen`/pipe launcher shape: stdin is a pipe nobody writes or
+        # closes. The old code blocked here until its 60 s timeout.
+        code, out, err = self._probe_in_child(subprocess.PIPE, self.BUSY)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "ROWS:1")
+
+    def test_busy_box_reads_one_and_idle_box_reads_zero(self):
+        # The false-zero arm: with inherited /dev/null, psql used to run nothing
+        # and exit 0 with empty output, so a busy box read 0.
+        code, out, err = self._probe_in_child(subprocess.DEVNULL, self.BUSY)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "ROWS:1")
+        code, out, err = self._probe_in_child(subprocess.DEVNULL, self.IDLE)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), "ROWS:0")
+
+    def test_local_sql_passes_the_query_as_input_not_inherited_stdin(self):
+        calls = {}
+
+        def fake_run(cmd, **kwargs):
+            calls.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, "1\n", "")
+
+        with mock.patch.object(funded_leg.subprocess, "run", fake_run):
+            rows = funded_leg.RealRunner().sql(funded_leg.NONTERMINAL_SQL)
+        self.assertEqual(rows, ["1"])
+        self.assertEqual(calls["input"], funded_leg.NONTERMINAL_SQL)
+        self.assertNotIn("stdin", calls)  # input= already owns the pipe
+
+    def test_box_cmd_mode_does_not_add_a_second_stdin_source(self):
+        # Remote mode already pipes the base64 SQL in; feeding `input` as well
+        # would be a second stdin source.
+        calls = {}
+
+        def fake_run(cmd, **kwargs):
+            calls.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, "0\n", "")
+
+        runner = funded_leg.RealRunner(box_cmd="komodo livepeer-ai-x99 --")
+        with mock.patch.object(funded_leg.subprocess, "run", fake_run):
+            rows = runner.sql(funded_leg.NONTERMINAL_SQL)
+        self.assertEqual(rows, ["0"])
+        self.assertNotIn("input", calls)
+        self.assertEqual(calls["stdin"], subprocess.DEVNULL)
+        self.assertIn("base64 -d", runner.commands[-1])
+
+    def test_other_probes_do_not_inherit_stdin(self):
+        calls = {}
+
+        def fake_run(cmd, **kwargs):
+            calls.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with mock.patch.object(funded_leg.subprocess, "run", fake_run):
+            funded_leg.RealRunner().shell("true")
+        self.assertEqual(calls["stdin"], subprocess.DEVNULL)
+
+    def test_empty_probe_output_is_not_a_false_zero(self):
+        class EmptySqlRunner:
+            def sql(self, query):
+                return []
+
+        sample = funded_leg.sample_gate(
+            EmptySqlRunner(), make_config(), funded_leg._now()
+        )
+        self.assertIsNone(sample.nonterminal_jobs)
+        self.assertTrue(any("no rows" in err for err in sample.errors))
+        self.assertIn("jobs probe failed", sample.problems())
+
+    def test_evidence_bundle_names_a_probe_failure(self):
+        class FailingSqlRunner:
+            def sql(self, query):
+                raise subprocess.TimeoutExpired("psql", 60)
+
+            def http(self, method, url, body=None, headers=None, timeout=15.0):
+                return funded_leg.HttpResult(
+                    status=200,
+                    body={"capacity": {"activeSessions": 0}, "leases": {"total": 0}},
+                )
+
+            def cyc_counts(self, since_iso, containers):
+                return {c: 0 for c in containers}
+
+        cfg = make_config(quiet_window_s=1.0)
+        with self.assertRaises(funded_leg.GateClosed) as ctx:
+            funded_leg.preflight(FailingSqlRunner(), cfg, lambda _m: None)
+        reason = ctx.exception.reason
+        self.assertIn("jobs probe failed", reason)
+        self.assertIn("probe errors", reason)
+        self.assertIn("timed out", reason)
+
+        block = funded_leg.preflight_block(
+            [ctx.exception.sample], cfg.quiet_window_s, "closed", reason=reason
+        )
+        self.assertEqual(block["verdict"], "closed")
+        self.assertTrue(block["errors"])
+        self.assertIn("timed out", " ".join(block["errors"]))
+        self.assertTrue(block["samples"][0]["errors"])
+
+    def test_a_quiet_window_bundle_carries_no_errors(self):
+        sample = funded_leg.GateSample(
+            at="t",
+            nonterminal_jobs=0,
+            active_sessions=0,
+            leases={"active": 0, "total": 0},
+            cyc_by_container={"decide-gpu0": 0},
+        )
+        block = funded_leg.preflight_block([sample], 600.0, "open")
+        self.assertEqual(block["errors"], [])
+        self.assertEqual(block["samples"][0]["errors"], [])
 
 
 if __name__ == "__main__":
