@@ -96,10 +96,12 @@ describe("buildDecideKnobSubmission / decideKnobRequestBody", () => {
 });
 
 describe("the estimate line (AC3: point BESIDE the measured band)", () => {
-  it("prints the shipped default at $2.01/h with the band $1.86-$2.16", () => {
+  it("prints the shipped default at $2.37/h with the band $2.14-$2.50", () => {
+    // ADAAAA-8696: the 5 s browser cell is the MEASURED 59.3/300 s (the est-v2
+    // 50.3 extrapolation printed $2.01/h and undershot a real leg by ~15 %).
     const label = decideKnobEstimateLabel({ source: "screenshare", cadenceSec: 5, rateCapInput: "" });
-    expect(label).toContain("approx $2.01/h");
-    expect(label).toContain("measured band $1.86/h-$2.16/h");
+    expect(label).toContain("approx $2.37/h");
+    expect(label).toContain("measured band $2.14/h-$2.50/h");
   });
 
   it("uses the rail the user is on, not the 104-window cell for everything", () => {
@@ -122,7 +124,7 @@ describe("the estimate line (AC3: point BESIDE the measured band)", () => {
     // A refused cap is priced as uncapped — the control shows the error, not a
     // price for a posture the job cannot run in.
     expect(decideKnobEstimateLabel({ source: "browser", cadenceSec: 5, rateCapInput: "62" })).toContain(
-      "approx $2.01/h"
+      "approx $2.37/h"
     );
   });
 });
@@ -147,13 +149,13 @@ describe("decideKnobReadout — the monitor side reads the FROZEN stamp", () => 
       decideKnobReadout({
         cadenceSec: 5,
         rateCapPer300s: null,
-        predictedUsdPerHour: 2.0114,
-        predictedBandUsdPerHour: [1.8621, 2.1629],
-        estimateVersion: "est-v2",
+        predictedUsdPerHour: 2.3713,
+        predictedBandUsdPerHour: [2.1434, 2.4993],
+        estimateVersion: "est-v3",
         resolvedSource: "default",
       })
     ).toBe(
-      `5 s cadence · ${DECIDE_KNOB_UNCAPPED_LABEL.toLowerCase()} · approx $2.01/h (measured band $1.86/h-$2.16/h) · est-v2`
+      `5 s cadence · ${DECIDE_KNOB_UNCAPPED_LABEL.toLowerCase()} · approx $2.37/h (measured band $2.14/h-$2.50/h) · est-v3`
     );
   });
 

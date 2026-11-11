@@ -161,7 +161,7 @@ export function decideKnobCadenceOptions(): Array<{ cadenceSec: DecideCadenceSec
  * included — `env` means the row predates the knob) instead of guessing from the
  * current form state.
  *
- * Format: `5 s cadence · uncapped · approx $2.01/h (measured band $1.86/h-$2.16/h) · est-v2`
+ * Format: `5 s cadence · uncapped · approx $2.37/h (measured band $2.14/h-$2.50/h) · est-v3`
  */
 export function decideKnobReadout(stamp: {
   cadenceSec: number;

@@ -12,10 +12,11 @@
 // clock. That is what lets AC3 be asserted on the SHIPPED function (the same
 // numbers QA grades) and AC2 be asserted as "the knob resolves nothing else".
 //
-// Estimate version: `est-v2` (spec rev 3 §3). A change to the bundle shape, the
-// per-decide price or the rail table moves the estimate, so it must bump this
-// version rather than silently edit a constant — old job rows carry the version
-// they were stamped with.
+// Estimate version: `est-v3` (spec rev 3 §3; the 5 s browser cell was corrected
+// in ADAAAA-8696 — `est-v2` rows still carry the old prediction). A change to
+// the bundle shape, the per-decide price or the rail table moves the estimate,
+// so it must bump this version rather than silently edit a constant — old job
+// rows carry the version they were stamped with.
 import { z } from "zod";
 
 /** The coverage floor ratified in ADAAAA-8427. A cap below it trades a spend
@@ -28,7 +29,7 @@ export const DECIDE_RATE_FLOOR_PER_300S = 63;
 export const DECIDE_USD_PER_DECIDE = 0.0033324;
 
 /** The estimate model version stamped beside the numbers. */
-export const DECIDE_ESTIMATE_VERSION = "est-v2";
+export const DECIDE_ESTIMATE_VERSION = "est-v3";
 
 /** The cadence values the knob accepts. 5 s is the shipped default (CEO ruling
  *  2026-11-10T03:36:16Z, card `b9bb9fa4`, option `economy`); 3 s stays
@@ -52,34 +53,43 @@ export const DECIDE_OPPORTUNITIES_3S_PER_300S = {
 export const DECIDE_BROWSER_BAND_3S_PER_300S = { low: 72.76, high: 84.51 } as const;
 
 /**
- * Opportunity density at the 5 s cadence — the ONLY row in `est-v2` with no
- * measured stream behind it (spec rev 3 §3, §9).
+ * Opportunity density at the 5 s cadence.
  *
- * `browser: 50.3` is the number spec rev 3 publishes for the shipped default:
- * the midpoint of the measured 3 s band scaled by the measured-interval ratio
- * (`(72.76 + 84.51) / 2 x 0.64 = 50.33`). It is 0.5 % above the plain
- * `78.2 x 0.64 = 50.05` product, because the printed row and the printed band
- * edges are derived from the same scaled pair. Use it verbatim: AC3 grades the
- * default at **$2.01/h** (band $1.86-$2.16) and 50.05 would print $2.00.
+ * `browser: 59.3` is MEASURED, not extrapolated (ADAAAA-8696): natural live leg
+ * `22ff6ca2` (02:27Z, 2026-11-11) decided 261 windows over 1319.8 s of content
+ * clock — 5.06 s per window, i.e. 59.3 charged decides / 300 s = $2.3713/h at
+ * `DECIDE_USD_PER_DECIDE`. `est-v2` published **50.3** here, the midpoint of the
+ * measured 3 s band scaled by the measured-interval ratio
+ * (`(72.76 + 84.51) / 2 x 0.64`). That linear extrapolation is wrong on this
+ * rail: a 10 s span keeps offering content, so a 5 s cut is still ~1 call per
+ * cadence and the density tracks the nominal 60 (300 / 5) rather than the 3 s
+ * density minus 36 %. The resulting ~15 % undershoot is what made ADAAAA-8672
+ * rev 1's `<= $2.16/h` AC8 bar unreachable while a nominal-cadence leg really
+ * cost $2.40/h (spec rev 2 §2 and §4). A future 3 s -> 5 s change must be
+ * re-measured, never rescaled.
  *
  * `analyzer: 62.4` is exact — on the RTMP/file rail the cadence IS the limiter,
  * so 3 s -> 5 s scales the rate by 3/5 (`104 x 0.6`), which prices to $2.50/h.
  */
 export const DECIDE_OPPORTUNITIES_5S_PER_300S = {
-  browser: 50.3,
+  browser: 59.3,
   analyzer: 62.4,
 } as const;
 
 /**
- * How the MEASURED browser band scales when the cadence leaves 3 s.
+ * The measured browser band at the 5 s cadence — the AC6 rev 2 pacing envelope:
+ * `meanCadenceMs` in [4800, 5600] implies 300 / 5.6 = 53.6 and 300 / 4.8 = 62.5
+ * charged decides / 300 s.
  *
- * `0.64` = the measured 3 s interval (`3.553 s`, 8526 `meanCadenceMs`) divided
- * by the interval a 5 s cadence forces (`5.553 s`) — the cadence adds 2 s to
- * whatever the stream already offers, so it is NOT a plain 3/5. The band edges
- * are what keep the printed estimate honest: $1.86-$2.16 at 5 s, $2.91-$3.38
- * at 3 s.
+ * Only ONE natural leg has been graded at 5 s (59.3), so building the band out
+ * of measured rows — the 3 s construction — would be a single point pretending
+ * to be a range. The cadence envelope is the honest spread until a second row
+ * lands: it contains the measured row (59.3 = $2.37/h) and the nominal 5000 ms
+ * rate (60 = $2.40/h, AC8's bar), and its top (62.5 = $2.50/h) is AC6's own
+ * top, so the printed band can never claim a cost the AC table calls out of
+ * bounds.
  */
-export const DECIDE_BROWSER_BAND_SCALE_5S = 0.64;
+export const DECIDE_BROWSER_BAND_5S_PER_300S = { low: 53.6, high: 62.5 } as const;
 
 /** Which rail a job's source resolves onto: a browser/screen capture is the
  *  browser rail, every server-side ingest (RTMP / file-sim / file) is the
@@ -102,22 +112,21 @@ export function decideOpportunitiesPer300s(rail: DecideRail, cadenceSec: number)
     : DECIDE_OPPORTUNITIES_5S_PER_300S[rail];
 }
 
-/** The MEASURED band for the browser rail scaled to this cadence. The analyzer
- *  rail has no measured band (it is a single ratified cell), so its band is the
+/** The MEASURED band for the browser rail at this cadence. The analyzer rail
+ *  has no measured band (it is a single ratified cell), so its band is the
  *  point. */
 export function decideBandPer300s(rail: DecideRail, cadenceSec: number): [number, number] {
   const cadence = normaliseCadence(cadenceSec);
-  const point = decideOpportunitiesPer300s(rail, cadence);
-  if (rail !== "browser") return [point, point];
-  const scale = cadence === 3 ? 1 : DECIDE_BROWSER_BAND_SCALE_5S;
-  return [
-    DECIDE_BROWSER_BAND_3S_PER_300S.low * scale,
-    DECIDE_BROWSER_BAND_3S_PER_300S.high * scale,
-  ];
+  if (rail !== "browser") {
+    const point = decideOpportunitiesPer300s(rail, cadence);
+    return [point, point];
+  }
+  const band = cadence === 3 ? DECIDE_BROWSER_BAND_3S_PER_300S : DECIDE_BROWSER_BAND_5S_PER_300S;
+  return [band.low, band.high];
 }
 
 /**
- * `est-v2` (spec rev 3 §3):
+ * `est-v3` (spec rev 3 §3, corrected in ADAAAA-8696):
  *
  *   usdPerHour = min(rateCapPer300s ?? N, N) × usdPerDecide × 12
  *
