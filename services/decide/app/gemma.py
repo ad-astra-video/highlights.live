@@ -3151,13 +3151,18 @@ def decide_with_gemma(
             # Increment F / ADAAAA-6465: the deterministic rule also emits the
             # outcome taxonomy so the response shape is identical on both paths.
             "outcome": _rule_outcome(d),
-            # ADAAAA-8325 (Inc 2): the deterministic fallback NEVER guesses a
-            # phase — a CPU-host rule path has no footage read, so the field is
-            # None (unknown), exactly like an absent model reply.
-            "phase": d.phase,
             "nearMiss": _rule_outcome(d) == "near_miss",
             "source": "rule-fallback",
         }
+        # ADAAAA-8325 (Inc 2): the deterministic fallback NEVER guesses a phase —
+        # a CPU-host rule path has no footage read, so the field is unknown.
+        # ADAAAA-8625: an UNKNOWN phase adds NO key here either. This is the
+        # SECOND producer on the same wire (the model reply is the first), and an
+        # explicit ``"phase": None`` in this dict is byte-identical on the wire to
+        # the null the server's ``AnalysisResponseSchema`` used to reject — which
+        # dropped the WHOLE per-window analysis, not just the phase.
+        if d.phase:
+            result["phase"] = d.phase
     # ADAAAA-7111 (Increment D): carry the running video summary (story-so-far).
     # Gemma's updated summary is returned bounded; on the rule-fallback path (or
     # when the model omitted it) synthesise a deterministic extension of the
