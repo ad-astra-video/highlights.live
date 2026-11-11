@@ -206,7 +206,9 @@ export function diveVerdict(confirm?: ConfirmRecord): DiveVerdict | undefined {
  * to the candidate's measured attestation, so a dive-refuted row served the same
  * CONFIRMED badge as an attested one. Only a real verdict counts here: a dropped
  * dive (`goalConfirmed:"dropped"` + `dropReason`) or a passthrough produced no
- * verdict, and a stored `corroborated:true` is never a refutation.
+ * verdict, and a stored `corroborated:true` never certifies a goal on its own
+ * (it tracks frame evidence, so `near_miss` + `corroborated:true` is still a
+ * dive that did not confirm).
  */
 export function diveVerdictFromAttestation(
   attestation?: { goalConfirmed?: string | null; corroborated?: boolean | null } | null
@@ -220,7 +222,14 @@ export function diveVerdictFromAttestation(
     confidence: null,
     stage1Disagreed: null,
     outcome: null,
-    corroborated: attestation?.corroborated === true,
+    // ADAAAA-8647 follow-up (measured on `ec6008cd` row `f48cdbfa`): the stored
+    // `corroborated` flag means "frame evidence supported SOMETHING", not "the
+    // dive confirmed the goal". Two live rows carry `goalConfirmed:"near_miss"`
+    // WITH `corroborated:true`, and trusting the flag alone served them lane
+    // `dive` — "Confirmed by deep dive (Stage-2)" on a row whose own note says
+    // "The deep dive did not confirm this goal". So a verdict certifies a goal
+    // only when it IS `confirmed_goal` AND was not explicitly uncorroborated.
+    corroborated: goalConfirmed === "confirmed_goal" ? attestation?.corroborated !== false : false,
   };
 }
 

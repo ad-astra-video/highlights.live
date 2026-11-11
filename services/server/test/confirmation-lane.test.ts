@@ -365,6 +365,34 @@ describe("confirmationForHighlightRow — the row's own stored dive (ADAAAA-8647
     expect(served?.label).toBe("Confirmed by deep dive (Stage-2)");
   });
 
+  it("a `near_miss` dive that corroborated FRAMES still serves dive_disagreed (never lane 2)", () => {
+    // Measured on the served build: `ec6008cd` rows `f48cdbfa` + its twin store
+    // `goalConfirmed:"near_miss", corroborated:true` and were served lane `dive`
+    // ("Confirmed by deep dive (Stage-2)") beside their own note saying the dive
+    // did NOT confirm the goal. `corroborated` tracks frame evidence, not the
+    // goal verdict, so it must never certify a goal on its own.
+    for (const legacy of [true, false, undefined]) {
+      const served = confirmationForHighlightRow(
+        {
+          status: "accepted",
+          provisionalGoal: { held: false, refuted: true },
+          confirmAttestation: { goalConfirmed: "near_miss", corroborated: legacy },
+        },
+        measuredCandidate()
+      );
+      expect(served?.lane).toBe("dive_disagreed");
+      expect(served?.label).toBe("dive did not corroborate");
+    }
+    expect(diveVerdictFromAttestation({ goalConfirmed: "near_miss", corroborated: true })?.corroborated).toBe(
+      false
+    );
+    // `not_goal` likewise, and a `confirmed_goal` keeps lane 2 on the same flag.
+    expect(diveVerdictFromAttestation({ goalConfirmed: "not_goal", corroborated: true })?.corroborated).toBe(false);
+    expect(diveVerdictFromAttestation({ goalConfirmed: "confirmed_goal", corroborated: true })?.corroborated).toBe(
+      true
+    );
+  });
+
   it("a DROPPED dive (no verdict) does not refute: the measured lane stands", () => {
     for (const goalConfirmed of ["dropped", "passthrough"]) {
       const served = confirmationForHighlightRow(
