@@ -226,6 +226,13 @@ export interface LiveLegGrade {
   anchors?: AnchorAccounting;
   p50Ms: number;
   p95Ms: number;
+  /** AC-B estimator disclosure: the nearest-rank p95 (`sorted[ceil(0.95n)-1]`),
+   * which at n < 20 IS the max row. `p95Ms` stays the metric of record — the
+   * product's `deliveredLatencySummary` interpolates between the two nearest
+   * ranks — but a single over-bar tail row must be visible on the verdict, not
+   * averaged away by that interpolation (ADAAAA-8487 leg a7d61806: p95 4,583 ms
+   * PASS vs nearest-rank 5,630 ms). */
+  p95NearestRankMs: number;
   maxMs: number;
   /** Wall duration (s) when known; null when neither durationS nor timestamps
    * were supplied. */
@@ -238,7 +245,7 @@ export interface LiveLegGrade {
   /** Metered seconds / wall seconds: 8483 read 1.815x because of container
    * startup/teardown. Absent when either input is missing. */
   meteredToWallRatio?: number;
-  acB: AcGrade & { p50Ms: number; p95Ms: number; p50Bars: P50BarRead };
+  acB: AcGrade & { p50Ms: number; p95Ms: number; p95NearestRankMs: number; p50Bars: P50BarRead };
   acC?: AcGrade & {
     accepted: number;
     candidates?: number;
@@ -390,6 +397,10 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
   const totals = rows.map((r) => r.deliveredLatencyMs).sort((a, b) => a - b);
   const p50Ms = totals.length ? roundMs(percentile(totals, 50)) : 0;
   const p95Ms = totals.length ? roundMs(percentile(totals, 95)) : 0;
+  // The metric of record interpolates, so at n = 12 the p95 sits between the
+  // 11th and 12th value and one 5.6 s row reads 4.58 s. Both reads are published
+  // so an in-bar p95 is never quoted without the tail row beside it.
+  const p95NearestRankMs = totals.length ? totals[Math.max(0, Math.ceil(0.95 * totals.length) - 1)] : 0;
   const maxMs = totals.length ? totals[totals.length - 1] : 0;
 
   const resolved = resolveDuration(input);
@@ -478,6 +489,7 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     reasons: [...shapeReasons],
     p50Ms,
     p95Ms,
+    p95NearestRankMs,
     p50Bars,
   };
   if (!shapeBlocked) {
@@ -495,6 +507,15 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     // absorbed by the PASS.
     if (input.decideP50Ms === undefined) {
       acB.reasons.push("decide_p50_not_evaluated: no decide p50 supplied (delivery bar not proven decide-independent)");
+    }
+    // A PASS on the metric of record must not hide a row that busts the bar on
+    // its own: at n = 12 the interpolated p95 can sit 45 % of the way between the
+    // 11th value and a single tail row, so the tail is named on the verdict.
+    if (acB.status === "PASS" && p95NearestRankMs > LIVE_LEG_BARS.p95Ms) {
+      acB.reasons.push(
+        `tail_over_bar: nearest-rank p95 ${p95NearestRankMs} ms > ${LIVE_LEG_BARS.p95Ms} ms on ${totals.length} rows` +
+          ` (interpolated p95 ${p95Ms} ms is the metric of record; max ${maxMs} ms) — one row, stated not discounted`,
+      );
     }
   }
   if (!anchorAccounting && nRows > 0) {
@@ -604,6 +625,7 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     ...(anchorAccounting ? { anchors: anchorAccounting } : {}),
     p50Ms,
     p95Ms,
+    p95NearestRankMs,
     maxMs,
     durationS,
     durationSource,

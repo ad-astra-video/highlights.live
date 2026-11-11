@@ -658,3 +658,79 @@ describe("AC-C goal false positives (ADAAAA-8487)", () => {
     expect(g.reasons.join(" ")).toContain("delivered_goal_rows: 10 > 0");
   });
 });
+
+// ADAAAA-8487 leg a7d61806 (the shape-2 leg of record, 410 s, n=12 of N=12).
+// Its deliveredLatencyMs, verbatim from the attached bundle. Eleven rows sit
+// between 2,458 and 3,727 ms; the last window of the stream paid 5,630 ms.
+const LEG_A7D61806_ROWS = [
+  3_147, 3_709, 3_727, 2_458, 2_778, 3_095, 2_858, 2_814, 2_682, 2_834, 2_555, 5_630,
+];
+
+describe("AC-B estimator disclosure (ADAAAA-8487 leg a7d61806)", () => {
+  const grade = () =>
+    gradeLiveLeg({
+      mode: "funded",
+      rows: LEG_A7D61806_ROWS.map((deliveredLatencyMs, i) => ({
+        triggerTs: i * 30,
+        deliveredLatencyMs,
+        fireLagMs: 0,
+        decideE2eMs: 2_400,
+        acceptWaitMs: 0,
+        acceptMs: 10,
+        persistAckMs: 0,
+      })),
+      startedAt: "2026-11-11T04:11:42Z",
+      finishedAt: "2026-11-11T04:18:32Z",
+      authorizedDurationS: 410,
+      perceiveSessionS: 413.6,
+      decideP50Ms: 1_959,
+      accepted: 25,
+      deliveredGoalRows: 10,
+      goalFalsePositiveRows: 0,
+    });
+
+  it("keeps p95 on the metric of record — the product's interpolated percentile", () => {
+    const g = grade();
+
+    // rank 10.45 of a 12-row sample: 3727 + 0.45 * (5630 - 3727) = 4583.
+    expect(g.p95Ms).toBe(4_583);
+    expect(g.p95Ms).toBe(deliveredLatencySummary(LEG_A7D61806_ROWS.map((ms) => ({ deliveredLatencyMs: ms })) as never).p95Ms);
+    expect(g.acB.status).toBe("PASS");
+  });
+
+  it("publishes the nearest-rank p95 so the one over-bar row is not averaged away", () => {
+    const g = grade();
+
+    expect(g.maxMs).toBe(5_630);
+    // n=12 -> ceil(0.95 * 12) - 1 = 11, i.e. the last row: nearest-rank p95 IS the max.
+    expect(g.p95NearestRankMs).toBe(5_630);
+    expect(g.acB.p95NearestRankMs).toBe(5_630);
+    expect(g.p95NearestRankMs).toBeGreaterThan(LIVE_LEG_BARS.p95Ms);
+  });
+
+  it("names the tail row in the PASS reasons instead of leaving the in-bar p95 bare", () => {
+    const g = grade();
+    const reason = g.acB.reasons.find((r) => r.startsWith("tail_over_bar:"));
+
+    expect(g.acB.status).toBe("PASS");
+    expect(reason).toContain("nearest-rank p95 5630 ms > 5000 ms on 12 rows");
+    expect(reason).toContain("interpolated p95 4583 ms is the metric of record");
+    expect(reason).toContain("stated not discounted");
+  });
+
+  it("stays silent when the whole sample is inside the bar", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: QUIET_ROWS,
+      startedAt: "2026-11-09T12:54:53.957Z",
+      finishedAt: "2026-11-09T13:03:59.284Z",
+      perceiveSessionS: 544.5,
+      decideP50Ms: 1_389,
+      accepted: 9,
+      deliveredGoalRows: 0,
+      goalFalsePositiveRows: 0,
+    });
+
+    expect(g.acB.reasons.some((r) => r.startsWith("tail_over_bar:"))).toBe(false);
+  });
+});
