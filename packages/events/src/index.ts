@@ -1962,6 +1962,18 @@ export const HighlightRecordSchema = z.object({
        * this schema) and no stored GOAL row could name its transition. Additive
        * optional: legacy rows parse exactly as before and carry no key. */
       transitionKey: z.string().nullable().optional(),
+      /** ADAAAA-8663: the credited transition's own `{pre, post}` score states,
+       * disclosed flat beside `transitionKey` so a delivered GOAL row is gradable
+       * from the stored record alone (the key names the transition, the pair
+       * names the states it moved between) instead of only from the leg's
+       * stderr. Populated from the SAME delta the key comes from; rows that never
+       * claimed a transition carry neither. Additive optional. */
+      transitionScore: z
+        .object({
+          pre: z.tuple([z.number().int().min(0), z.number().int().min(0)]),
+          post: z.tuple([z.number().int().min(0), z.number().int().min(0)]),
+        })
+        .optional(),
       /** ADAAAA-8610: the ACCEPT lane measured a legible transition and REFUSED
        * it because its POST state lands below a score state this run already read
        * (a rewind: replayed overlay, stale/mis-OCR read, or a scoreboard that

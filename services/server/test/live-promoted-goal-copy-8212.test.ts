@@ -271,6 +271,9 @@ describe("deferred-lane resolution attestation (ADAAAA-8212)", () => {
       postSamples: 2,
       need: 2,
       transitionKey: "2-1>2-2",
+      // ADAAAA-8663: the credited transition's own states ride beside the key, so
+      // the promoted row is gradable from the stored record alone.
+      transitionScore: { pre: [2, 1], post: [2, 2] },
     });
     // The measured side is the delta's; nothing about a ball line or the Stage-2
     // confirm dive is claimed.

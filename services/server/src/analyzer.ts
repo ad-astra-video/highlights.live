@@ -2026,6 +2026,15 @@ export interface LiveGoalAttestationUsed {
    * Disclosed on ACCEPTED goal rows too, so "a GOAL row appeared" can be told
    * apart from a blind accept. */
   transitionKey?: string | null;
+  /** ADAAAA-8663: the CREDITED transition's own `{pre, post}` score states, so a
+   * delivered GOAL row answers "what did this row's attestation actually
+   * measure" from `highlights` alone (the key names the transition, the pair
+   * names the states). Present only when a transition was CLAIMED by this run
+   * (`transitionKey` non-null) and the delta behind it is the same one the key
+   * describes — never fabricated from a merely-read span. Absent on rows that
+   * claimed nothing (celebration / refused) so their payload stays
+   * byte-identical. */
+  transitionScore?: { pre: [number, number]; post: [number, number] };
   /** ADAAAA-8610: the accept lane's own measured transition was REFUSED because
    * its POST state lands below a score state this run already read (a rewind:
    * replayed overlay, stale/mis-OCR read, or a scoreboard that reset on screen).
@@ -2051,10 +2060,30 @@ export function liveGoalAttestationUsed(input: {
   /** ADAAAA-8140: the credited transition (`"pre>post"`) when a measured delta
    * carried the accept, so an accepted GOAL row names what certified it. */
   transitionKey?: string | null;
+  /** ADAAAA-8663: the credited delta itself. When it is the SAME transition the
+   * key names (legible single-goal step, key match), its `{pre, post}` states are
+   * disclosed flat on the row. A delta that does not match the key discloses
+   * nothing — the key is the contract, the pair only annotates it. */
+  transitionDelta?: ScoreboardDeltaEvidence | null;
   /** ADAAAA-8610: the accept lane refused this window's measured transition as a
    * rewind (POST below the run's read high-water). */
   scoreRewindRefusal?: string | null;
 }): LiveGoalAttestationUsed {
+  // ADAAAA-8663: the pre/post pair rides ONLY the credited transition the key
+  // already names — a mismatch (different instant/step than the claimed key)
+  // fails closed and discloses nothing rather than pairing a key with a delta
+  // that does not describe it.
+  const creditedDelta =
+    input.transitionKey && input.transitionDelta && scoreboardDeltaLegible(input.transitionDelta)
+      ? input.transitionDelta
+      : undefined;
+  const transitionScore =
+    creditedDelta && scoreTransitionKey(creditedDelta) === input.transitionKey
+      ? {
+          pre: [creditedDelta.pre[0], creditedDelta.pre[1]] as [number, number],
+          post: [creditedDelta.post[0], creditedDelta.post[1]] as [number, number],
+        }
+      : undefined;
   return {
     scoreBoardChanged: input.attribution.scoreBoardChanged === true,
     goalCrossed: input.attribution.goalCrossed === true,
@@ -2064,6 +2093,7 @@ export function liveGoalAttestationUsed(input: {
     // Only spread when a transition was actually credited: a row that carries no
     // measured delta keeps the legacy payload shape byte-identical.
     ...(input.transitionKey ? { transitionKey: input.transitionKey } : {}),
+    ...(transitionScore ? { transitionScore } : {}),
     ...(input.scoreRewindRefusal ? { scoreRewindRefusal: input.scoreRewindRefusal } : {}),
     ...(input.scoreReads
       ? {
@@ -7201,6 +7231,9 @@ export async function acceptVideoDecision(
     // what certified the row instead of guessing from a bare `GOAL`.
     scoreReads: candidate.scoreReads,
     transitionKey: candidateTransitionKey,
+    // ADAAAA-8663: the credited delta itself, so the row discloses the {pre, post}
+    // states behind the key (not only the key) once it is persisted.
+    transitionDelta: candidate.scoreBoardDelta,
     // ADAAAA-8610: a refused rewind is named on the row, so a grader can tell
     // "no measurement" apart from "measured and refused".
     scoreRewindRefusal: candidate.scoreRewindRefusal,
@@ -9413,6 +9446,13 @@ export function attestationUsedForDeferredResolution(
     postSamples: d.postSamples,
     need,
     transitionKey: `${d.pre.join("-")}>${d.post.join("-")}`,
+    // ADAAAA-8663: the same pair, stated as score states, so the promoted row is
+    // gradable from `highlights` alone (the key names the transition, this pair
+    // names what was credited).
+    transitionScore: {
+      pre: [d.pre[0], d.pre[1]],
+      post: [d.post[0], d.post[1]],
+    },
   };
 }
 
