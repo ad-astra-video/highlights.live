@@ -575,6 +575,13 @@ export const ObserveMetricsSnapshotSchema = z.object({
        *  ADAAAA-7865 repeat-goal downgrade). They ship; the legacy counter
        *  refuses them, which is half of the accepted-vs-delivered gap. */
       demotedCelebrations: z.number().int().min(0),
+      /** ADAAAA-8588 (AC4): score transitions refused because their POST state
+       *  sat behind the state this run had already committed (a replay/montage
+       *  re-read). Additive optional: absent when none was refused, so a run
+       *  that admitted every read keeps the pre-8588 row shape. Declared here
+       *  because a zod object STRIPS undeclared keys — without it the counter
+       *  would be computed and then dropped when the job record is persisted. */
+      scoreFrontierRefusals: z.number().int().min(0).optional(),
     })
     .optional(),
   // Max frames in a single decide payload (<= the 30-frame cap).
