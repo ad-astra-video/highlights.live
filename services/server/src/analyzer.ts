@@ -1903,6 +1903,14 @@ export function deriveWindowAttestation(
      * {@link scoreTransitionKey}). Absent => pure derivation (unit tests, VOD).
      */
     claimScoreTransition?: (delta: ScoreboardDeltaEvidence) => boolean;
+    /**
+     * ADAAAA-8588: may the run ACT on the hint-carried delta at all? The hint lane
+     * does not claim (claiming would demote the genuine second clip's repeated
+     * `2-1 > 2-2`, the withdrawn ADAAAA-8564 B1 canary), so this is the only guard
+     * a replayed/montage segment's hint delta meets. Absent => pure derivation
+     * (unit tests, VOD).
+     */
+    admitScoreDelta?: (delta: ScoreboardDeltaEvidence) => boolean;
   } = {}
 ): WindowAttestation {
   const out: WindowAttestation = { ...foldWindowAttestation(payload.biasHints as ReadonlyArray<ObserveBiasHint>) };
@@ -1920,7 +1928,7 @@ export function deriveWindowAttestation(
     // legible, forward single-goal step (its pre/post ARE accepted reads), and
     // drop the bare boolean otherwise.
     const hintDelta = scoreboardDeltaLegible(out.scoreBoardDelta) ? out.scoreBoardDelta : undefined;
-    if (hintDelta && scoreboardDeltaSingleGoalStep(hintDelta)) {
+    if (hintDelta && scoreboardDeltaSingleGoalStep(hintDelta) && (opts.admitScoreDelta ? opts.admitScoreDelta(hintDelta) : true)) {
       out.scoreBoardDelta = hintDelta;
       out.scoreTransitionTs = hintDelta.deltaTs;
     } else {
@@ -4799,6 +4807,32 @@ export class LiveRunShared {
    * legitimately repeated `1-1 -> 2-1 -> 2-2`, so a run-wide key ledger would
    * have demoted the genuine `2-1 > 2-2` goal at 351.118 s. */
   private scoreHighWater: [number, number] | null = null;
+  /**
+   * ADAAAA-8588: the score state this run has COMMITTED — the component-wise max
+   * of every CREDITED single-goal step's post side. A leg is one match, so the
+   * score never decreases; a read that does is a replay/montage segment of the
+   * stream (measured on job `54c03cfc`: the fixture's third cut rewinds the
+   * broadcast clock 28:19 -> 17:54, so the plate genuinely reads `1-1` and then
+   * `2-1` again 368 s after that boundary was credited). Such a read must not
+   * mint a second goal.
+   *
+   * Deliberately distinct from {@link scoreHighWater} (Fix C): the read-water is
+   * seated by ANY parseable read, so a phantom `2-2 -> 4-2` misread raises it
+   * permanently and would then refuse the genuine `2-2 -> 3-2`; this frontier is
+   * seated ONLY by a credited single-goal step, so it cannot be poisoned.
+   */
+  private scoreFrontier: [number, number] | null = null;
+  /** ADAAAA-8588: the latest instant at which a credit COMMITTED the frontier.
+   * A backwards step is only a replay when it arrives AFTER that commit; a window
+   * delivered out of order (a retried consume / a re-decide of an older window)
+   * carries its own earlier instant and is a genuine earlier boundary — the
+   * one-transition ledger (ADAAAA-8078) already dedupes it if it was credited. */
+  private scoreFrontierTs: number | null = null;
+  /** ADAAAA-8588: transitions refused because their post side sat behind the
+   * committed frontier. A metric, not state: the card's over-suppression risk
+   * (a genuine score correction leaves the frontier high) stays visible instead
+   * of silently deleting a goal. */
+  private scoreFrontierRefusalCount = 0;
   /** ADAAAA-8564 (Fix A): row accounting published on `observeMetrics`. The
    * three counters below are incremented at the accept seam and at the dedupe
    * guards; `persistedRows` and `servedCards` are read off the ledgers at
@@ -5131,9 +5165,25 @@ export class LiveRunShared {
    */
   claimScoreTransition(delta: ScoreboardDeltaEvidence | undefined | null): boolean {
     if (!scoreboardDeltaLegible(delta)) return false;
+    // ADAAAA-8588: the score is monotonic within a leg, so a delta whose POST
+    // side sits BEHIND the committed frontier is a backwards re-read (a replay or
+    // montage segment), never a new goal. Only a credited single-goal step seats
+    // the frontier, so a phantom `+2` read cannot freeze the leg (falsifier T4).
+    if (!this.scoreDeltaAdmitted(delta)) return false;
     const key = scoreTransitionKey(delta as ScoreboardDeltaEvidence);
     if (this.creditedScoreTransitions.has(key)) return false;
     this.creditedScoreTransitions.add(key);
+    // ADAAAA-8588: the credit commits the frontier (component-wise max, so a
+    // source that scores on the other side never rewrites the committed state).
+    const post = (delta as ScoreboardDeltaEvidence).post;
+    const f = this.scoreFrontier;
+    const next: [number, number] = f ? [Math.max(f[0], post[0]), Math.max(f[1], post[1])] : [post[0], post[1]];
+    if (!f || next[0] !== f[0] || next[1] !== f[1]) {
+      const ts = (delta as ScoreboardDeltaEvidence).deltaTs;
+      const prevTs = this.scoreFrontierTs;
+      this.scoreFrontierTs = Number.isFinite(ts) ? Math.max(prevTs ?? ts, ts) : prevTs;
+    }
+    this.scoreFrontier = next;
     if (this.creditedScoreTransitions.size > CREDITED_SCORE_TRANSITIONS_MAX) {
       const oldest = this.creditedScoreTransitions.values().next();
       if (!oldest.done) this.creditedScoreTransitions.delete(oldest.value);
@@ -5143,6 +5193,39 @@ export class LiveRunShared {
   /** ADAAAA-8078: the transitions credited in this run (read-only, audit/tests). */
   creditedScoreTransitionKeys(): string[] {
     return [...this.creditedScoreTransitions];
+  }
+  /**
+   * ADAAAA-8588: may this run act on `delta` at all? Legible, a single goal step,
+   * and not behind the committed frontier. Pure w.r.t. the credit ledger (no
+   * credit, no key), so the credit path, the deferred-resolution path and the
+   * in-place promotion path can all ask the same question without consuming the
+   * transition. Only the refusal COUNTER moves, so the card's over-suppression
+   * risk stays measurable. Fails OPEN when the run has committed nothing yet: a
+   * replay before the first credit is unguarded, and refusing there would delete
+   * a real goal on a leg whose first boundary is the only evidence.
+   */
+  scoreDeltaAdmitted(delta: ScoreboardDeltaEvidence | undefined | null): boolean {
+    if (!scoreboardDeltaLegible(delta)) return false;
+    if (!scoreboardDeltaSingleGoalStep(delta)) return false;
+    const frontier = this.scoreFrontier;
+    if (!frontier) return true;
+    const post = (delta as ScoreboardDeltaEvidence).post;
+    if (post[0] >= frontier[0] && post[1] >= frontier[1]) return true;
+    // Behind the frontier. That is a replay/montage re-read only when it arrives
+    // AFTER the commit; an out-of-order window carries an earlier instant and is a
+    // genuine earlier boundary (pinned by the ADAAAA-8078 suite).
+    const ts = (delta as ScoreboardDeltaEvidence).deltaTs;
+    if (Number.isFinite(ts) && this.scoreFrontierTs !== null && ts < this.scoreFrontierTs) return true;
+    this.scoreFrontierRefusalCount++;
+    return false;
+  }
+  /** ADAAAA-8588: the committed score state (read-only, audit/tests). */
+  committedScore(): [number, number] | null {
+    return this.scoreFrontier ? [this.scoreFrontier[0], this.scoreFrontier[1]] : null;
+  }
+  /** ADAAAA-8588: transitions refused behind the committed frontier (AC4 read). */
+  scoreFrontierRefusals(): number {
+    return this.scoreFrontierRefusalCount;
   }
   /**
    * ADAAAA-8134: fold one window's perceived observations into the run's score
@@ -5451,6 +5534,13 @@ export class LiveRunShared {
   }): ScoreDeltaGoalAttestationUpgrade[] {
     const delta = input.delta;
     if (!scoreboardDeltaLegible(delta)) return [];
+    // ADAAAA-8588: the deferred seam used to resolve a demoted row from ANY
+    // legible delta, including one that steps BACKWARDS against the state this
+    // run already committed (job `54c03cfc`: `1-1 > 2-1` re-read at 474.982 s
+    // promoted `4788ae8e` 368 s after that boundary was credited). Fail closed
+    // WITHOUT consuming the entry: the window is still genuinely demoted, and the
+    // next forward read for it can still resolve it.
+    if (!this.scoreDeltaAdmitted(delta)) return [];
     const d = delta as ScoreboardDeltaEvidence;
     const maxLookaheadS = input.maxLookaheadS ?? LIVE_DEFERRED_ATTESTATION_LOOKAHEAD_S;
     const matches = this.deferredGoalAttestations.filter((e) =>
@@ -5477,7 +5567,16 @@ export class LiveRunShared {
     // at 479.081 s reported `1-1 -> 2-1` and promoted the celebration to a second
     // GOAL row. Fail closed and CONSUME the entry (an already-answered window must
     // not be re-asked): the next forward read from the new baseline attests.
-    if (this.scoreStateAlreadyRead(d.post)) {
+    //
+    // ADAAAA-8588 reconciliation: once this run has COMMITTED a state (the
+    // credit-seated frontier), that frontier is the authority and this read-water
+    // is not consulted — the water is total-based, so a phantom `2-2 -> 4-2`
+    // misread raises it permanently and would then refuse the genuine
+    // `2-2 -> 3-2` at this very seam. The water keeps its job where the frontier
+    // knows nothing: before the first credit, a rewind against a merely-READ
+    // state still fails closed (fail-open only on a run with no earlier state at
+    // all, which the falsifier suite pins).
+    if (this.scoreFrontier === null && this.scoreStateAlreadyRead(d.post)) {
       this.deferredGoalAttestations = this.deferredGoalAttestations.filter((e) => e !== entry);
       console.error(
         `[live-goal-gate-upgrade:${entry.jobId}] refused: the transition read at ${d.deltaTs}s ` +
@@ -5534,6 +5633,10 @@ export class LiveRunShared {
   }): ScoreDeltaGoalAttestationUpgrade | undefined {
     const delta = input.delta;
     if (!scoreboardDeltaLegible(delta)) return undefined;
+    // ADAAAA-8588: same monotonicity bar as the credit and deferred lanes — the
+    // in-place promotion must not mint the second GOAL card for a boundary the run
+    // already committed.
+    if (!this.scoreDeltaAdmitted(delta)) return undefined;
     const d = delta as ScoreboardDeltaEvidence;
     if (!scoreboardDeltaSingleGoalStep(d)) return undefined;
     if (!Number.isFinite(d.deltaTs) || !Number.isFinite(input.readAt)) return undefined;
@@ -9236,6 +9339,11 @@ export async function observeAcceptOnly(
   const newScoreReads = liveRail ? run.noteScoreReadings(payload.observations) : 0;
   const windowAttestation = deriveWindowAttestation(payload, {
     claimScoreTransition: (delta) => run.claimScoreTransition(delta),
+    // ADAAAA-8588: the hint lane adopts a legible single-goal hint delta without
+    // claiming it (claiming would demote the genuine repeated transition of a
+    // second clip), so admission is what stops a replay/montage segment's hint
+    // from attesting a goal the run already committed.
+    admitScoreDelta: (delta) => run.scoreDeltaAdmitted(delta),
   });
   // ADAAAA-8134: pooled re-read fallback. The window's own timeline is the
   // cheapest evidence and stays first (ADAAAA-8071); when it carries no legible
