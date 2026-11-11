@@ -15,6 +15,7 @@ import {
   summaryP95,
   type SummaryLaneStore,
 } from "../src/summary-lane.js";
+import { SUMMARY_RAW_MAX_CHARS } from "@highlights/events";
 import {
   billableSummaryCalls,
   computeCostUsd,
@@ -169,6 +170,64 @@ describe("runSummaryForRow — the promoted row's copy", () => {
     expect(patches[0].patch.summaryDroppedByReason).toEqual({ gate: 1 });
   });
 
+  it("keeps the refused reply as `summaryRaw` on a gate drop (ADAAAA-8687)", async () => {
+    const { store, patches } = stubStore();
+    const reply = "It is 2-2.";
+    const f = stubFetch([ok(reply)]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
+      jobId: "j1",
+      highlightId: "h1",
+      evidence: evidence(),
+    });
+    expect(result.reason).toBe("gate");
+    // The model's own words are persisted (never served), so a QA can quote what
+    // was refused instead of only the violation token.
+    expect(patches[0].patch.summaryRaw).toBe(reply);
+    expect(patches[0].patch.summary).toBeUndefined();
+  });
+
+  it("clips a runaway refused reply instead of storing it unbounded (ADAAAA-8687)", async () => {
+    const { store, patches } = stubStore();
+    const f = stubFetch([ok("It is 2-2. ".repeat(400))]);
+    await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), { jobId: "j1", highlightId: "h1", evidence: evidence() });
+    expect(typeof patches[0].patch.summaryRaw).toBe("string");
+    expect((patches[0].patch.summaryRaw as string).length).toBeLessThanOrEqual(SUMMARY_RAW_MAX_CHARS);
+  });
+
+  it("stores copy for a shipped one-line caption shape instead of refusing it (ADAAAA-8687)", async () => {
+    // The QA-B live-leg shapes: a 3-token announcer line, and a 2-token one.
+    const cases: { caption: string; body: string }[] = [
+      {
+        caption: "Ball shoots in midfield",
+        body:
+          "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
+          "A burst of noise and motion around 0:12 marks the move that briefly lifts the ground.",
+      },
+      {
+        caption: "Scoreboard changes to 2-2.",
+        body:
+          "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
+          "The keeper is beaten low and the crowd behind the net is up before the restart.",
+      },
+    ];
+    for (const c of cases) {
+      const stub = stubStore();
+      const f = stubFetch([ok(c.body)]);
+      const result = await runSummaryForRow(
+        stub.store,
+        cfg({ fetchImpl: f.fn }),
+        {
+          jobId: "j1",
+          highlightId: "h1",
+          evidence: { ...evidence(), caption: c.caption, reason: c.caption },
+        }
+      );
+      expect({ caption: c.caption, outcome: result.outcome }).toEqual({ caption: c.caption, outcome: "stored" });
+      expect(stub.patches[0].patch.summary).toBe(c.body);
+      expect(stub.patches[0].patch.summaryDropped).toBe(0);
+    }
+  });
+
   it("drops `pool_busy` when no decide service is configured (never fabricates)", async () => {
     const { store, patches } = stubStore();
     const result = await runSummaryForRow(store, cfg({ decideUrl: undefined }), {
@@ -193,6 +252,47 @@ describe("runSummaryForRow — the promoted row's copy", () => {
     // Two sentences clear the live band (2-3) and fail the VOD band (3-5).
     expect(result.reason).toBe("gate");
     expect(f.seen[0].maxWords).toBe(120);
+  });
+});
+
+describe("Store.patchHighlightSummary — the `summaryRaw` contract (ADAAAA-8687)", () => {
+  it("round-trips the refused reply through the row schema without touching `summary`", async () => {
+    const { Store } = await import("../src/store.js");
+    const { HighlightRecordSchema } = await import("@highlights/events");
+    const row = HighlightRecordSchema.parse({
+      id: "h-8687",
+      jobId: "j-8687",
+      clipUri: "/clips/shot.mp4",
+      start: 8,
+      end: 23,
+      localizedTs: 15,
+      localizeSignal: "peak_frame",
+      clipWindowBeforeS: 7,
+      clipWindowAfterS: 8,
+      clipWindowSec: 15,
+      eventType: "BIG_PLAY",
+      score: 85,
+      outcome: "big_play",
+      corroborated: false,
+      status: "accepted",
+      caption: "Ball shoots in midfield",
+      createdAt: "2026-11-11T15:04:26.000Z",
+    });
+    const store = new Store(null);
+    await store.addHighlight(row);
+    const next = await store.patchHighlightSummary("h-8687", {
+      summaryGate: "dropped:gate",
+      summaryRaw: "Ball shoots in midfield and the crowd reacts around 0:12 at the ground.",
+      summaryCalls: 1,
+      summaryDropped: 1,
+      summaryDroppedByReason: { gate: 1 },
+      summaryP95Ms: 309,
+    });
+    expect(next.summaryRaw).toBe("Ball shoots in midfield and the crowd reacts around 0:12 at the ground.");
+    expect(next.summary).toBeUndefined();
+    expect(next.summaryGate).toBe("dropped:gate");
+    // The row is still a valid record after the write (schema parse is the seam's guard).
+    expect(HighlightRecordSchema.parse(next).summaryRaw).toBe(next.summaryRaw);
   });
 });
 
