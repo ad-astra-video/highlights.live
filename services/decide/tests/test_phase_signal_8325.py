@@ -33,6 +33,7 @@ from app.gemma import (
     _OUTPUT_CONTRACT_COMPACT,
     _OUTPUT_CONTRACT_FULL,
     _response_block,
+    _rule_outcome,
     _window_analysis,
     build_prompt,
     decide_with_gemma,
@@ -202,6 +203,43 @@ def test_rule_fallback_returns_none_rather_than_a_guess():
     d = rule_decide(event_type="GOAL", track_count=3, max_velocity=9.0, ocr_hits=1,
                     reaction={"crowdEnergy": 0.9}, score_board_changed=True)
     assert d.phase is None
+
+
+def test_rule_fallback_dict_omits_an_unknown_phase(monkeypatch):
+    """ADAAAA-8625 — the SECOND producer on the same wire is the rule-fallback dict.
+
+    When the model call yields nothing (`ask` returns None) `decide_with_gemma`
+    assembles the response from the deterministic rule, which has no footage
+    read. That dict must carry NO `phase` key: an explicit ``"phase": None``
+    there is the same ``response.phase: null`` shape that made the server drop
+    the WHOLE per-window analysis. Fixing only `parse_decision` leaves this path
+    non-conformant.
+    """
+    monkeypatch.setattr("app.gemma.ask", lambda *a, **k: None)
+    evidence = {
+        "trackCount": 3,
+        "maxVelocity": 9.0,
+        "ocrHits": 1,
+        "reaction": {"crowdEnergy": 0.9},
+        "scoreBoardChanged": True,
+    }
+    d = decide_with_gemma("GOAL", evidence, game_hint="soccer", score_board_changed=True)
+    assert d["source"] == "rule-fallback"
+    assert "phase" not in d
+    assert "phase" not in d["analysis"]["response"]
+    # AC3: the omission never moves the ladder — the verdict is the rule's own
+    expected = _rule_outcome(
+        rule_decide(
+            event_type="GOAL",
+            track_count=3,
+            max_velocity=9.0,
+            ocr_hits=1,
+            reaction={"crowdEnergy": 0.9},
+            score_board_changed=True,
+        )
+    )
+    assert d["outcome"] == expected
+    assert d["analysis"]["response"]["outcome"] == expected
 
 
 def test_response_model_declares_the_phase_field():
