@@ -2176,6 +2176,11 @@ export const HighlightRecordSchema = z.object({
   // model's body copy — `accepted` / `trimmed` / `refused:<violations>` /
   // `absent`, the same audit-token convention `postTitleGate` established.
   summaryGate: z.string().optional(),
+  // ADAAAA-8687: the REPLY the gate refused (internal-token and clock-prefix
+  // stripped, clipped at SUMMARY_RAW_MAX_CHARS). Debug evidence only — never a
+  // served value: the card renders `summary`, and a refused row has none. Lets a
+  // QA quote what the model wrote instead of only the violation token.
+  summaryRaw: z.string().optional(),
   // ADAAAA-8668 (AC5/AC6): the row's own meter. `summaryCalls` counts the
   // summary-service calls actually billed for this row (0 when the lane never
   // ran, at most 2 with the single retry), `summaryDropped` is 1 when the row

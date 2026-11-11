@@ -9,8 +9,13 @@ import {
   SUMMARY_LIVE_BAND,
   SUMMARY_MAX_CALLS_PER_ROW,
   SUMMARY_MAX_CAPTION_OVERLAP,
+  SUMMARY_MIN_NEW_TOKEN_SHARE,
+  SUMMARY_RAW_MAX_CHARS,
+  SUMMARY_SHORT_CAPTION_TOKENS,
   SUMMARY_VOD_BAND,
   buildSummaryPrompt,
+  captionRestatement,
+  captionRestatesSummary,
   captionTokenOverlap,
   clampSummaryDepth,
   gateSummaryDetail,
@@ -272,6 +277,140 @@ describe("gateSummaryDetail", () => {
       "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box beats the keeper at the near post. " +
       "The visitors restart from the centre with the clock running down.";
     expect(gateSummaryDetail(three, vod).summary).not.toBeNull();
+  });
+});
+
+describe("captionRestatement (ADAAAA-8687)", () => {
+  it("does not call a short caption's faithful elaboration a restatement", () => {
+    const caption = "Ball shoots in midfield"; // 3 content tokens, the shipped shape
+    const body =
+      "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
+      "A burst of noise and motion around 0:12 marks the move that briefly lifts the ground.";
+    const r = captionRestatement(body, caption);
+    expect(r.captionTokens).toBe(3);
+    expect(r.overlap).toBeGreaterThanOrEqual(SUMMARY_MAX_CAPTION_OVERLAP); // would have refused
+    expect(r.newTokenShare).toBeGreaterThanOrEqual(SUMMARY_MIN_NEW_TOKEN_SHARE);
+    expect(r.restates).toBe(false);
+  });
+
+  it("still calls a body that only re-words the caption a restatement", () => {
+    const caption = "Ball shoots in midfield";
+    expect(captionRestatesSummary("Ball shoots in midfield.", caption)).toBe(true);
+    // Re-worded with connective filler and nothing new: still a copy.
+    expect(captionRestatesSummary("The ball shoots in midfield, ball and midfield.", caption)).toBe(true);
+  });
+
+  it("keeps the spec's coverage bar for a caption long enough to anchor it", () => {
+    const caption = "Ball enters the net at the near post after the low drive from the left.";
+    const body =
+      "Ball enters the net at the near post after the low drive from the left. It is level again.";
+    const r = captionRestatement(body, caption);
+    expect(r.captionTokens).toBeGreaterThanOrEqual(SUMMARY_SHORT_CAPTION_TOKENS);
+    expect(r.overlap).toBeGreaterThanOrEqual(SUMMARY_MAX_CAPTION_OVERLAP);
+    expect(r.restates).toBe(true);
+  });
+
+  it("never fails closed on a missing caption or an empty body", () => {
+    expect(captionRestatesSummary("A faithful line with facts in it.", null).valueOf()).toBe(false);
+    expect(captionRestatesSummary("", "Ball shoots in midfield")).toBe(false);
+    expect(captionRestatement("Ball shoots in midfield", "").captionTokens).toBe(0);
+  });
+});
+
+// ADAAAA-8687: QA-B (ADAAAA-8683) measured AC1-live coverage at 0/3 on the served
+// build `9cc66b4` — every promoted row was refused `restates-caption`, because the
+// bar was the share of the CAPTION's tokens the body reuses and the shipped live
+// captions are 2-5 content tokens. These are that leg's own three captions, with
+// the row's own verdict/headline/score transition.
+describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
+  const shipped: { caption: string; body: string; evidence: SummaryEvidence }[] = [
+    {
+      // job 357a927d row fa7ac224 — BIG_PLAY delivered as a celebration
+      caption: "Ball shoots in midfield",
+      evidence: live({
+        verdict: "big_play",
+        eventType: "BIG_PLAY",
+        caption: "Ball shoots in midfield",
+        postTitle: null,
+        reason: "Ball shoots in midfield",
+        windowTs: 12,
+        scoreTransition: null,
+        matchContext: null,
+        transcript: "",
+      }),
+      body:
+        "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
+        "A burst of noise and motion around 0:12 marks the move that briefly lifts the ground.",
+    },
+    {
+      // row f647c078 — provisional celebration, caption is the absence line
+      caption: "No measured scoreboard change yet.",
+      evidence: live({
+        verdict: "big_play",
+        eventType: "BIG_PLAY",
+        caption: "No measured scoreboard change yet.",
+        postTitle: null,
+        reason: "No measured scoreboard change yet.",
+        windowTs: 102,
+        scoreTransition: null,
+        matchContext: null,
+        transcript: "",
+      }),
+      body:
+        "The audio feed carries a loud call near 1:42 and the crowd answers it at once. " +
+        "No scoreboard read inside the window backs the moment up, so the replay stays a celebration.",
+    },
+    {
+      // row 1b43c21c — the confirmed GOAL, headline `Midfielder scores`
+      caption: "Scoreboard changes to 2-2.",
+      evidence: live({
+        verdict: "scoring_play",
+        eventType: "GOAL",
+        caption: "Scoreboard changes to 2-2.",
+        postTitle: "Midfielder scores",
+        reason: "Scoreboard changes to 2-2.",
+        windowTs: 160,
+        scoreTransition: { from: "2-1", to: "2-2" },
+        matchContext: null,
+        transcript: "",
+      }),
+      body:
+        "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
+        "The keeper is beaten low and the crowd behind the net is up before the restart.",
+    },
+  ];
+
+  it("accepts a faithful deeper body for every one of them", () => {
+    for (const row of shipped) {
+      const decision = gateSummaryDetail(row.body, row.evidence);
+      expect({ caption: row.caption, violations: decision.violations }).toEqual({ caption: row.caption, violations: [] });
+      expect(decision.summary).toBe(row.body);
+      expect(decision.gate).toBe("accepted");
+      expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.targetMinWords);
+      expect(decision.words).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.hardMaxWords);
+      expect(decision.sentences).toBe(SUMMARY_LIVE_BAND.minSentences);
+    }
+  });
+
+  it("still refuses a body that answers each caption with a copy", () => {
+    for (const row of shipped) {
+      const decision = gateSummaryDetail(`${row.caption} ${row.caption}`, row.evidence);
+      expect({ caption: row.caption, restates: decision.violations.includes("restates-caption") }).toEqual({
+        caption: row.caption,
+        restates: true,
+      });
+      expect(decision.summary).toBeNull();
+    }
+  });
+
+  it("still reports the refused reply verbatim in `decision.raw` (ADAAAA-8687 item 3)", () => {
+    const row = shipped[2];
+    const reply = `  T+160 s — ${row.caption} ${row.caption}  `;
+    const decision = gateSummaryDetail(reply, row.evidence);
+    expect(decision.summary).toBeNull();
+    // The clock prefix and the surrounding whitespace are stripped; the body is kept.
+    expect(decision.raw).toBe(`${row.caption} ${row.caption}`);
+    expect(decision.raw.length).toBeLessThanOrEqual(SUMMARY_RAW_MAX_CHARS);
   });
 });
 

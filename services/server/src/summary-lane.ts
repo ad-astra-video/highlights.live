@@ -25,6 +25,7 @@ import {
   SUMMARY_CALL_TIMEOUT_MS,
   SUMMARY_FEE_RATIO,
   SUMMARY_MAX_CALLS_PER_ROW,
+  SUMMARY_RAW_MAX_CHARS,
   buildSummaryPrompt,
   gateSummaryDetail,
   resolveSummaryFee,
@@ -41,6 +42,7 @@ export interface SummaryLaneStore {
     patch: {
       summary?: string;
       summaryGate?: string;
+      summaryRaw?: string;
       summaryCalls?: number;
       summaryDropped?: number;
       summaryDroppedByReason?: Record<string, number>;
@@ -186,15 +188,21 @@ export async function runSummaryForRow(
     const decision = gateSummaryDetail(reply.text, evidence);
     const latencyMs = Math.max(0, Math.round(now() - started));
     if (!decision.summary) {
+      // ADAAAA-8687: a refusal keeps the model's own reply as `summaryRaw` (and
+      // an excerpt in the log), so the next QA can quote WHAT was refused instead
+      // of only the violation token. Still never a `summary`: the card renders on
+      // its headline exactly as before (AC6).
+      const raw = decision.raw.slice(0, SUMMARY_RAW_MAX_CHARS);
       await store.patchHighlightSummary(descriptor.highlightId, {
         summaryGate: `dropped:gate`,
+        summaryRaw: raw,
         summaryCalls: calls,
         summaryDropped: 1,
         summaryDroppedByReason: { gate: 1 },
         summaryP95Ms: latencyMs,
       });
       log(
-        `[summary:${descriptor.jobId}] dropped (gate) highlight=${descriptor.highlightId} violations=${decision.violations.join(",")}`
+        `[summary:${descriptor.jobId}] dropped (gate) highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} raw=${JSON.stringify(raw.slice(0, 200))}`
       );
       return { outcome: "dropped", reason: "gate", gate: decision.gate, calls, latencyMs };
     }

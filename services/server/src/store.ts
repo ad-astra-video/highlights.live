@@ -403,17 +403,19 @@ export class Store {
     return next;
   }
 
-  /** ADAAAA-8668: the `summary` lane's ONE write seam. It touches only the six
-   * `summary*` fields (copy, its audit token and the row's meter) — never a
-   * verdict, caption, title, clip or price field, so a copy pass can never move a
-   * row's lane or re-bill it. Called from the post-promotion lane asynchronously;
-   * a dropped generation writes the meter and leaves `summary` absent, so the card
-   * still renders on its headline exactly as before the lane existed. */
+  /** ADAAAA-8668: the `summary` lane's ONE write seam. It touches only the
+   * `summary*` fields (copy, its audit token, the refused reply and the row's
+   * meter) — never a verdict, caption, title, clip or price field, so a copy pass
+   * can never move a row's lane or re-bill it. Called from the post-promotion lane
+   * asynchronously; a dropped generation writes the meter and leaves `summary`
+   * absent, so the card still renders on its headline exactly as before the lane
+   * existed. */
   async patchHighlightSummary(
     id: string,
     patch: {
       summary?: string;
       summaryGate?: string;
+      summaryRaw?: string;
       summaryCalls?: number;
       summaryDropped?: number;
       summaryDroppedByReason?: Record<string, number>;
