@@ -412,6 +412,12 @@ export interface JobDetailHighlight {
    * payloads from a server that predates it, where the card derives the same
    * deterministic title from this row's stored facts. No `T+` prefix. */
   postTitle?: string;
+  /** ADAAAA-8669 (caption depth contract §3): the card's BODY copy, served by
+   * the post-promotion `summary` lane (live 2-3 sentences, VOD 3-5) alongside
+   * `postTitle`/`caption`. Additive optional: a payload from a server that
+   * predates the lane, or a row whose summary call has not landed, carries no
+   * key and the card renders exactly as it did before — no placeholder. */
+  summary?: string;
   createdAt: string;
   // ADAAAA-7622: the deterministic localized highlight instant (seconds from
   // stream start) the delivered clip is centered on, plus the signal that

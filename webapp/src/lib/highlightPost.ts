@@ -346,6 +346,71 @@ export function postTitleOf(
   return projectPostTitle({ ...h, reasonRaw: h.reason_raw ?? null });
 }
 
+/**
+ * Internal markers that must never reach a user surface: a bracket verdict
+ * (`[near_miss]`), a `T+69s` clock, a `key=value` internal (`outcome=…`) and the
+ * `| live scoring lane:` tail. Deliberately NARROWER than `stripInternalTokens`:
+ * that pass also rewrites a LEADING all-caps word, which would turn a summary
+ * opening "USA took the lead" into "took the lead". The write seam's gate owns
+ * the full rule set (contract §3, AC2) — this is only the last-mile guard.
+ */
+const SUMMARY_INTERNAL_TOKENS = [
+  /\[[^\]\n]{1,40}\]/g,
+  /\bT\+\s*\d+(?:\.\d+)?\s*s\b/gi,
+  /\b(?:outcome|verdict|event[_ ]?type|decision|confidence)\s*[:=]\s*[A-Za-z0-9_.%+-]+/gi,
+  /\|\s*live scoring lane:[^\n]*/gi,
+];
+
+/** Strip the unambiguous internal markers above. Text with none stays
+ * byte-identical (no re-casing, no re-punctuation) — a served sentence is copy. */
+function scrubSummary(text: string): string {
+  let out = text;
+  for (const re of SUMMARY_INTERNAL_TOKENS) out = out.replace(re, " ");
+  if (out === text) return text;
+  return out
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+}
+
+/**
+ * ADAAAA-8669 (caption depth contract §3): the card's BODY copy — the additive
+ * third copy surface the `summary` lane serves, rendered under the `postTitle`
+ * headline.
+ *
+ * The ratified split is unchanged: `postTitle` stays the headline AND the copy
+ * target (ADAAAA-8318), and the announcer `caption` stays the collapsed "What
+ * happened" detail. The summary never replaces either.
+ *
+ * Absence is meaningful: an absent/blank value returns "" so the card renders
+ * exactly as it did before the lane existed — no placeholder box, no
+ * "generating…" text, no layout shift until the block arrives once.
+ */
+export function summaryOf(h: Pick<Partial<JobDetailHighlight>, "summary">): string {
+  const raw = typeof h.summary === "string" ? h.summary.trim() : "";
+  if (!raw) return "";
+  return scrubSummary(raw).trim();
+}
+
+/** ADAAAA-8669: the collapsed line budget for the body copy. A live card clamps
+ * at 3 lines, a VOD card at 4 (its band is 3-5 sentences), so ADAAAA-8302's
+ * card-size fix holds: the block is bounded and never re-inflates the list view. */
+export const SUMMARY_LINES_LIVE = 3;
+export const SUMMARY_LINES_VOD = 4;
+
+/** The clamp budget for this card: live rail 3 lines, VOD 4. */
+export function summaryLineBudget(fastRail: boolean): number {
+  return fastRail ? SUMMARY_LINES_LIVE : SUMMARY_LINES_VOD;
+}
+
+/** The clamp utility for the body copy: collapsed keeps a fixed line clamp (the
+ * expand affordance is the escape hatch, so there is never a silent mid-word
+ * cut); expanded drops the clamp entirely. Pure, so the SSR card tests pin it. */
+export function summaryClampClass(lines: number, expanded: boolean): string {
+  if (expanded) return "";
+  return lines <= SUMMARY_LINES_LIVE ? "line-clamp-3" : "line-clamp-4";
+}
+
 /** Longest post title the card will suggest. Retained for `captionFromTitle`
  * callers; card OPTIONS are now whole gated sentences (v8 §3b.1) capped at the
  * stored card-option ceiling so a served option is the stored string itself. */

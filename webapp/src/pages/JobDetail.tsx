@@ -25,7 +25,7 @@ import { CostTimePanel, CostTimeToggle } from "../components/CostTimePanel";
 // ADAAAA-8425: the admin window audit (five skip causes + the decide ceiling).
 import { WindowSkipAuditPanel } from "../components/WindowSkipAuditPanel";
 import { SummaryLadderView } from "../components/SummaryLadder";
-import { batchManifest, clipFileName, copyExportLink, copyText, exportUrl, highlightGrounding, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitleOf, postTitles, saveBlob, suggestCaption, type BatchItem } from "../lib/highlightPost";
+import { batchManifest, clipFileName, copyExportLink, copyText, exportUrl, highlightGrounding, markExportIntent, markExportIntentBatch, momentRangeLabel, postTitleOf, postTitles, saveBlob, suggestCaption, summaryClampClass, summaryLineBudget, summaryOf, type BatchItem } from "../lib/highlightPost";
 import { buildZip, type ZipFile } from "../lib/zip";
 import { groundSummaryItems } from "@highlights/events";
 import { asrSummary, asrSummaryLine } from "../lib/windowAsr";
@@ -1337,6 +1337,72 @@ function ClipRail({
 }
 
 /**
+ * ADAAAA-8669 (caption depth contract §3): the card's BODY copy — the `summary`
+ * lane's additive third copy surface, rendered under the `postTitle` headline.
+ *
+ * It is deliberately NOT a replacement for either ratified shape:
+ *   - `postTitle` stays the headline and the "Suggested caption" copy target
+ *     (ADAAAA-8318);
+ *   - the announcer `caption` stays the collapsed "What happened" detail.
+ *
+ * Size (ADAAAA-8302): the block is line-clamped to a fixed budget (live 3 lines,
+ * VOD 4) with an expand affordance, so a long summary cannot re-inflate a card
+ * in list view. The clamp is only a VISUAL truncation — the text stays in the
+ * DOM, selectable and copyable, and one click reveals all of it, so there is
+ * never a silent mid-word cut.
+ *
+ * Fail-open measurement: `clipped` starts `true`, so the affordance is present
+ * on first paint (and in the SSR card tests) until the browser proves the text
+ * fits. Hiding it early would be exactly the silent cut the contract forbids.
+ */
+export function SummaryBody({
+  text,
+  lines,
+  initialExpanded = false,
+}: {
+  text: string;
+  /** Collapsed line budget for this lane (live 3 / VOD 4). */
+  lines: number;
+  /** Test seam: render the expanded state without a click. Production always
+   *  starts collapsed (the webapp suite runs in the node environment, no DOM). */
+  initialExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(initialExpanded);
+  const [clipped, setClipped] = useState(true);
+  const bodyRef = useRef<HTMLParagraphElement | null>(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    // Measure only while clamped: an expanded paragraph always fits itself, so
+    // measuring it would drop the "Less" affordance.
+    if (!el || expanded) return;
+    setClipped(el.scrollHeight - el.clientHeight > 1);
+  }, [text, lines, expanded]);
+  return (
+    <div className="mt-2 min-w-0" data-detail-summary>
+      <p
+        ref={bodyRef}
+        className={`break-words whitespace-pre-wrap text-xs leading-relaxed text-slate-ink ${summaryClampClass(lines, expanded)}`}
+        data-detail-summary-body
+        {...(expanded ? { "data-detail-summary-expanded": "true" } : {})}
+      >
+        {text}
+      </p>
+      {clipped && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="mt-1 text-xs font-bold uppercase tracking-wide text-neon"
+          data-detail-summary-toggle
+        >
+          {expanded ? "Less" : "More"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
  * One identified/accepted highlight on the per-job detail surface. Renders the
  * clip player (VideoClip) so the highlight shows its video, plus the metadata
  * and the single action row (HighlightActionRow: Download / Copy Link /
@@ -1430,6 +1496,11 @@ export function HighlightCard({
   // the deterministic `LABEL · m:ss · subject`) and never carries a `T+` prefix.
   const copyTarget = postTitleOf(h);
   const announcer = suggestCaption(h, summaryLog, grounding);
+  // ADAAAA-8669 (caption depth contract §3): the body copy is the ADDITIVE third
+  // lane — headline and copy target stay `postTitle` above, the announcer line
+  // stays collapsed below. Absent => "" => no block, no placeholder.
+  const summaryText = summaryOf(h);
+  const summaryLines = summaryLineBudget(fastRail);
   const shownCaption = localCaption ?? (caption || copyTarget);
   // ADAAAA-8530 (D1 = A, confirmation state): the card's ONE badge states
   // whether a pipeline lane actually confirmed this window. Fail-closed: a row
@@ -1564,6 +1635,16 @@ export function HighlightCard({
             data-detail-copy-target
           />
         </label>
+        {/* ADAAAA-8669 (caption depth contract §3): BODY COPY. The summary lane's
+            2-3 sentence (live) / 3-5 sentence (VOD) description sits under the
+            `postTitle` headline, line-clamped with an expand affordance so
+            ADAAAA-8302's card size holds. Nothing renders when the lane has not
+            landed (or a pre-lane payload carries no field): the card is then
+            byte-identical to today's. A summary that only repeats the headline
+            is dropped rather than printed twice. */}
+        {summaryText && summaryText !== copyTarget && (
+          <SummaryBody text={summaryText} lines={summaryLines} />
+        )}
         {/* ADAAAA-8318: the announcer play-by-play line (ADAAAA-7933, unchanged
             contract) is kept as collapsed DETAIL on EVERY card, so the short copy
             target never hides what actually happened. */}

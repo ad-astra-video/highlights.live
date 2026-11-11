@@ -90,9 +90,10 @@ function livePayloadOf(records: TimelineRecord[], centerTs: number) {
 
 const cut = async (t: number) => ({ clipId: `clip-${t}`, clipUri: "" });
 
-/** The stored row's `attestationUsed` (the persisted shape is the events schema's,
- *  which does not yet declare `transitionKey`; read it through a widening cast so
- *  this file adds no new diagnostics to the already-red typecheck). */
+/** The stored row's `attestationUsed`. ADAAAA-8663 declared `transitionKey` (and
+ *  `transitionScore`) in the events schema, so the persisted shape carries it;
+ *  the widening cast is kept so this file stays readable from the run ledger too
+ *  (which holds the analyzer's richer payload, not the parsed row). */
 const used = (row: { attestationUsed?: unknown }) =>
   (row.attestationUsed ?? {}) as Record<string, unknown>;
 const client = { decide: async () => goalDecision(), confirm: async () => ({ enabled: false }) } as any;
