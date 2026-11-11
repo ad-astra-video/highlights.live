@@ -94,7 +94,7 @@ import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./cele
 import { attachReplayWindows, partitionAttachedReplays, replayAlternativeFrom } from "./replay-alternatives";
 import { clipChoiceFor, servedClipUri } from "./clip-choice";
 // ADAAAA-8530: the read-side confirmation lane a served highlight card states.
-import { confirmationForHighlightRow } from "./confirmation-lane";
+import { confirmationForHighlightRow, laneConfirmsGoal } from "./confirmation-lane";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
@@ -6116,6 +6116,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-7958: corroboration propagation + emission dedupe are FAST-rail
       // only (`file` is the long-form VOD path, graded byte-identical, AC8).
       fastRail: job.source !== "file",
+      // ADAAAA-8645: the banner's corroboration count is the card's own badge
+      // rule, derived from the SAME per-row lane the cards above carry — so the
+      // "N accepted goals (M corroborated)" line can never contradict a
+      // CONFIRMED badge on the same page.
+      corroborated: (h) => laneConfirmsGoal(confirmationFor(h)?.lane),
     });
 
     // ADAAAA-7727: the embedded job record is filtered for a non-admin caller
@@ -6272,12 +6277,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             }
           : {}),
       }));
+      // ADAAAA-8645: the delta refresh carries the same badge predicate as the
+      // composite read, so an appended ladder cannot re-introduce a banner that
+      // disagrees with the cards.
+      const deltaCandidatesById = new Map(candidates.map((c) => [c.id, c]));
+      const deltaConfirmationFor = (h: HighlightRecord) =>
+        confirmationForHighlightRow(h, h.candidateId ? deltaCandidatesById.get(h.candidateId) : undefined);
       const summaryLadder = buildSummaryLadder({
         summaryLog: job.summaryLog,
         highlights: postable.highlights,
         gameHint: job.gameHint,
         // ADAAAA-7958: corroboration propagation + emission dedupe, fast rail only.
         fastRail: job.source !== "file",
+        corroborated: (h) => laneConfirmsGoal(deltaConfirmationFor(h)?.lane),
       });
 
       return {

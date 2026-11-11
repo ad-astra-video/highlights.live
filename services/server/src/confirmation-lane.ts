@@ -321,6 +321,21 @@ export function servedConfirmation(derived: WindowConfirmation | undefined): Hig
 }
 
 /**
+ * ADAAAA-8645: the card BADGE rule, server-side — the one predicate the webapp's
+ * `confirmationBadge` implements (`measured` / `dive` are CONFIRMED; `dive_held`
+ * is HELD; `dive_disagreed` / `unconfirmed` are UNCONFIRMED).
+ *
+ * The MATCH SUMMARY counts corroboration on the same page, so it must not carry
+ * its own opinion: a row counts as corroborated exactly when its card's badge
+ * says CONFIRMED. `dive_held` deliberately does NOT count — the dive confirmed
+ * the goal but the window measured nothing, and the badge says HELD, not
+ * CONFIRMED.
+ */
+export function laneConfirmsGoal(lane?: ConfirmationLane | null): boolean {
+  return lane === "measured" || lane === "dive";
+}
+
+/**
  * ADAAAA-8530: derive the confirmation of a stored HIGHLIGHT row from its own
  * window.
  *
