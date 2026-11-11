@@ -26,8 +26,10 @@ import {
   gradeLiveLeg,
   LIVE_LEG_BARS,
   type DurationSource,
+  type FixtureAnchorLike,
   type LiveLegMode,
   type LiveLegRowLike,
+  type RowAnchorLike,
 } from "../services/server/src/live-leg-grade";
 
 interface CliArgs {
@@ -41,6 +43,19 @@ interface CliArgs {
   accepted?: number;
   candidates?: number;
   deliveredGoalRows?: number;
+  /** AC-C's real bar on a goal-dense fixture: delivered GOAL rows whose
+   * attestation measured NO scoreboard change. Auto-derived from the stored
+   * highlights when `--goal-fp` is not given. */
+  goalFalsePositiveRows?: number;
+  /** ADAAAA-8487 AC-B shape amendment: the fixture's census anchors, so `n` is
+   * anchors owned once instead of a row count. */
+  anchors?: string;
+  /** The delivered rows' localizations (stored highlights), matched to anchors. */
+  rowAnchors?: string;
+  /** The cap record's authorized window (s). Overrides the default 480 s funded /
+   * 600 s natural floor so a leg that ran its authorized shape is not read as
+   * `duration_below_floor` (cap-record-2 authorized 410 s). */
+  authorizedDurationS?: number;
   json: boolean;
 }
 
@@ -60,6 +75,10 @@ function parseArgs(argv: string[]): CliArgs {
     else if (a === "--accepted") args.accepted = Number(next());
     else if (a === "--candidates") args.candidates = Number(next());
     else if (a === "--delivered-goal") args.deliveredGoalRows = Number(next());
+    else if (a === "--anchors") args.anchors = next();
+    else if (a === "--row-anchors") args.rowAnchors = next();
+    else if (a === "--authorized-s") args.authorizedDurationS = Number(next());
+    else if (a === "--goal-fp") args.goalFalsePositiveRows = Number(next());
     else if (a === "--json") args.json = true;
     else throw new Error(`unknown argument: ${a}`);
   }
@@ -72,6 +91,10 @@ function parseArgs(argv: string[]): CliArgs {
 
 interface StoredHighlightLike {
   eventType?: string;
+  /** ADAAAA-8487 AC-C: the GOAL row's own attestation, so a false positive (a
+   * GOAL whose attestation measured no scoreboard change) is computed from the
+   * row rather than asserted by hand. */
+  attestationUsed?: { scoreBoardChanged?: boolean };
 }
 
 interface StoredJobLike {
@@ -150,6 +173,65 @@ function loadHarness(path: string | undefined): HarnessEvidenceLike | undefined 
   return harness;
 }
 
+/** The fixture's census anchors — `N`, committed BEFORE the leg runs.
+ *
+ * Two shapes are accepted, so the pre-run record can be the input:
+ *   - `{anchors: [{id, atS, transition}]}` — already resolved content seconds;
+ *   - `{window_s, windows: [{id, transition, pre_s}]}` — the fixture window plan,
+ *     where `atS` = the window's cumulative content start + its `pre_s`.
+ * Anchors are NEVER derived from the leg's own delivered rows: `N` is a
+ * pre-commitment (ADAAAA-8570 `cap-record-2`), and deriving it from the output
+ * would let the leg grade itself. */
+function loadAnchors(path: string): FixtureAnchorLike[] {
+  const raw = JSON.parse(readFileSync(path, "utf8")) as {
+    anchors?: { id: string; atS: number; transition: number }[];
+    window_s?: number;
+    windows?: { id: string; transition: number; pre_s?: number }[];
+  };
+  if (Array.isArray(raw.anchors) && raw.anchors.length) {
+    return raw.anchors.map((a) => ({ id: a.id, atS: a.atS, transition: a.transition }));
+  }
+  if (Array.isArray(raw.windows) && raw.windows.length) {
+    const windowS = Number(raw.window_s);
+    if (!Number.isFinite(windowS) || windowS <= 0) {
+      throw new Error(`${path}: a window plan needs window_s`);
+    }
+    return raw.windows.map((w, i) => ({
+      id: w.id,
+      atS: i * windowS + (Number.isFinite(w.pre_s) ? (w.pre_s as number) : windowS / 2),
+      transition: w.transition,
+    }));
+  }
+  throw new Error(`${path}: no anchors array and no window plan — cannot pre-commit N`);
+}
+
+/** Per-row localizations for the delivered rows: either the stored highlights
+ * (`localizedTs`, `trigger.timestamp`) or an explicit `{rowAnchors: [...]}`. */
+function loadRowAnchors(path: string): RowAnchorLike[] {
+  const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  const list = Array.isArray(raw)
+    ? raw
+    : ((raw as { rowAnchors?: unknown[]; highlights?: unknown[] }).rowAnchors ??
+      (raw as { highlights?: unknown[] }).highlights ??
+      []);
+  if (!Array.isArray(list) || !list.length) {
+    throw new Error(`${path}: no row anchors (expected an array of highlights or {rowAnchors})`);
+  }
+  return loadRowAnchorsFromList(list);
+}
+
+function loadRowAnchorsFromList(list: unknown[]): RowAnchorLike[] {
+  return (list as Record<string, unknown>[]).map((r) => {
+    const trigger = r.trigger as { timestamp?: number } | undefined;
+    return {
+      highlightId: (r.highlightId as string | undefined) ?? (r.id as string | undefined),
+      triggerTs: Number(r.triggerTs ?? trigger?.timestamp ?? NaN),
+      localizedTs:
+        r.localizedTs === undefined || r.localizedTs === null ? undefined : Number(r.localizedTs),
+    };
+  });
+}
+
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const loaded = loadEvidence(args.job as string);
@@ -169,6 +251,18 @@ function main(): void {
   const deliveredGoalRows =
     args.deliveredGoalRows ??
     (highlights.length ? highlights.filter((h) => h.eventType === "GOAL").length : undefined);
+  // AC-C's FP read: a delivered GOAL whose own attestation measured no scoreboard
+  // change. Derived from the stored highlights when they carry `attestationUsed`;
+  // `--goal-fp` overrides for bundles that carry the count only.
+  const goalFalsePositiveRows =
+    args.goalFalsePositiveRows ??
+    (highlights.some((h) => (h as StoredHighlightLike).attestationUsed !== undefined)
+      ? highlights.filter(
+          (h) =>
+            h.eventType === "GOAL" &&
+            (h as StoredHighlightLike).attestationUsed?.scoreBoardChanged !== true
+        ).length
+      : undefined);
 
   // ADAAAA-8529 item 3: the record is the weakest clock on a live leg — it
   // carries no timestamps at all. An explicit duration wins, then the harness's
@@ -185,6 +279,16 @@ function main(): void {
         ? "harness_evidence"
         : undefined;
 
+  // ADAAAA-8487 AC-B shape amendment: `N` comes from the pre-run census, and the
+  // rows' localizations come from the stored highlights — never from the record's
+  // row order, so a leg cannot grade its own shape.
+  const fixtureAnchors = args.anchors ? loadAnchors(args.anchors) : undefined;
+  const rowAnchors = args.rowAnchors
+    ? loadRowAnchors(args.rowAnchors)
+    : highlights.length && "localizedTs" in (highlights[0] as object)
+      ? loadRowAnchorsFromList(highlights as unknown[])
+      : undefined;
+
   const grade = gradeLiveLeg({
     mode: args.mode,
     rows,
@@ -197,6 +301,9 @@ function main(): void {
     accepted,
     candidates,
     deliveredGoalRows,
+    ...(goalFalsePositiveRows !== undefined ? { goalFalsePositiveRows } : {}),
+    ...(args.authorizedDurationS !== undefined ? { authorizedDurationS: args.authorizedDurationS } : {}),
+    ...(fixtureAnchors && rowAnchors ? { fixtureAnchors, rowAnchors } : {}),
   });
 
   if (args.json) {
@@ -237,7 +344,29 @@ function main(): void {
           ? ` / ${grade.perceiveSessionS.toFixed(1)} s metered (ratio ${grade.meteredToWallRatio?.toFixed(3) ?? "?"}x)`
           : "");
   lines.push(`  duration   ${dur}  (floor ${grade.floorS} s)`);
-  lines.push(`  delivered  n=${grade.n}  p50=${grade.p50Ms} ms  p95=${grade.p95Ms} ms  max=${grade.maxMs} ms`);
+  lines.push(
+    `  delivered  n=${grade.n}${grade.anchors ? ` anchored of N=${grade.anchors.anchors}` : ""}  rows=${grade.nRows}` +
+      `  p50=${grade.p50Ms} ms  p95=${grade.p95Ms} ms  max=${grade.maxMs} ms`
+  );
+  if (grade.anchors) {
+    // The AC-B shape amendment asks for these on EVERY leg (ADAAAA-8487): `n`,
+    // anchors, distinctMoments and physicalTransitions, so a row count is never
+    // read as content coverage.
+    const a = grade.anchors;
+    lines.push(
+      `  anchors    N=${a.anchors}  n=${a.nAnchored}  resolved=${a.resolvedRows}/${grade.nRows}` +
+        `  distinctMoments=${a.distinctMoments}  physicalTransitions=${a.physicalTransitions}`
+    );
+    if (a.duplicateAnchors.length) {
+      lines.push(
+        `  dup anchor ${a.duplicateAnchors.map((d) => `${d.id}(t${d.transition})x${d.rows.length}`).join(", ")}`
+      );
+    }
+    if (a.uncoveredAnchors.length) lines.push(`  uncovered  ${a.uncoveredAnchors.join(", ")}`);
+    if (a.unresolvedRows.length) lines.push(`  unresolved ${a.unresolvedRows.join(", ")}`);
+  } else {
+    lines.push("  anchors    not supplied (n is a row count, not anchored coverage)");
+  }
   // ADAAAA-8487 AC-B: both bars on the same line, so the amendment's delta is
   // readable without a second grade pass.
   const bars = grade.acB.p50Bars;
