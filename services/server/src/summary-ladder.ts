@@ -444,6 +444,26 @@ function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
  */
 export type CorroboratedOf = (h: HighlightRecord) => boolean;
 
+/**
+ * ADAAAA-8679 (ADAAAA-8645 AC6): the pre-8645 banner rule, kept for the rail that
+ * has no card to agree with — the LEGACY top-level `corroborated` /
+ * `goalConfirmed` pair a stored VOD row carries. The `file` (long-form VOD) rail
+ * derives its ladder without candidate records, so it has no `confirmation` lane
+ * (and therefore no CONFIRMED badge) to be the second surface of this claim; its
+ * ladder is graded byte-identical to the pre-change output (ADAAAA-7958 AC8).
+ *
+ * Widening this rail to `isCorroboratedHighlight` changed two already-done VOD
+ * jobs (`e24bc0e4`, `fb571425`) from "(0 corroborated)" to "(1/2 corroborated)"
+ * on rows whose only evidence is `attestationUsed.scoreBoardChanged = true`. That
+ * is a real measured transition, but it is not what this rail's parity contract
+ * promises, so the widening stays on the FAST rail where the lane predicate is
+ * supplied. Exact comparison, not normalised: this is the pre-change expression.
+ */
+export function legacyPairCorroborated(h: HighlightRecord): boolean {
+  const anyH = h as any;
+  return anyH.corroborated === true || anyH.goalConfirmed === "confirmed_goal";
+}
+
 /** Accepted GOAL highlights, in time order, with a monotonic 1-based index. */
 export function goalTimelineFrom(
   highlights: HighlightRecord[],
@@ -451,7 +471,12 @@ export function goalTimelineFrom(
    * ADAAAA-8645: how the CALLER decides a row is corroborated. The served detail
    * route passes the card's own confirmation lane (`laneConfirmsGoal`), so the
    * banner's count and the card's badge are the same predicate. Absent -> the
-   * row-only rule (a caller without candidate records, e.g. a VOD ladder read).
+   * row-only rule (`isCorroboratedHighlight`), which reads the row's own
+   * `attestationUsed` / `confirmAttestation`.
+   *
+   * ADAAAA-8679 (AC6): the VOD ladder is NOT a predicate-less caller — it passes
+   * `legacyPairCorroborated` explicitly, so its output stays byte-identical to
+   * the pre-8645 ladder instead of picking up the row-only widening.
    */
   corroboratedOf?: CorroboratedOf
 ): Array<SummaryChapterGoal & { highlightId: string }> {
@@ -470,13 +495,16 @@ export function goalTimelineFrom(
         // supplies — on the served routes that is the card's own confirmation
         // lane (`laneConfirmsGoal(confirmationFor(h).lane)`), so the MATCH
         // SUMMARY count and the CONFIRMED badge are one predicate. Without a
-        // caller rule (a VOD ladder read has no candidates) it falls back to
-        // `isCorroboratedHighlight`, the row-only rule, which reads the row's
-        // own `attestationUsed` / `confirmAttestation` with the dive precedence.
+        // caller rule it falls back to `isCorroboratedHighlight`, the row-only
+        // rule, which reads the row's own `attestationUsed` /
+        // `confirmAttestation` with the dive precedence.
         // The old inline rule read only the LEGACY top-level `corroborated` /
         // `goalConfirmed` pair, which the live write path never populates — so
         // job `f02ec0bf` printed "2 accepted goals (0 corroborated)" while both
         // of its cards served CONFIRMED.
+        // ADAAAA-8679 (AC6): the VOD ladder passes `legacyPairCorroborated` as
+        // its caller rule, so that rail keeps reading exactly that legacy pair
+        // and its output stays byte-identical to the pre-change ladder.
         verified: corroboratedOf ? corroboratedOf(h) : isCorroboratedHighlight(anyH),
         highlightId: String(anyH.id ?? ""),
       };
@@ -713,11 +741,18 @@ export function buildSummaryLadder(input: {
   const rawEntries = normalizeLog(input.summaryLog ?? []);
   const accepted = (input.highlights ?? []).filter((h) => (h as any).status === "accepted");
   const fastRail = input.fastRail === true;
-  const corroboratedOf = fastRail ? input.corroborated : undefined;
+  /**
+   * ADAAAA-8679 (AC6): the VOD rail keeps the pre-change banner rule as its
+   * caller rule instead of falling through to the row-only widening, so a
+   * `file` job's `verifiedGoalCount` / "(N corroborated)" line is byte-identical
+   * to the ladder built before ADAAAA-8645. Only the FAST rail has a card whose
+   * confirmation lane the count has to agree with.
+   */
+  const corroboratedOf = fastRail ? input.corroborated : legacyPairCorroborated;
   // ADAAAA-8014 (§2) applies to the FAST rail, the surface the §2 acceptance is
   // graded on. The long-form VOD ladder is graded byte-identical (AC8), so its
   // stored items are not re-shaped here.
-  const gated = propagateCorroboration(rawEntries, accepted, fastRail, corroboratedOf);
+  const gated = propagateCorroboration(rawEntries, accepted, fastRail, fastRail ? input.corroborated : undefined);
   const entries = fastRail ? finalizeServedShapes(gated) : gated;
   const timeline = goalTimelineFrom(input.highlights ?? [], corroboratedOf);
 

@@ -292,9 +292,14 @@ describe("summary ladder edge cases (ADAAAA-7623)", () => {
   // evidence in `attestationUsed` / `confirmAttestation`, never in the legacy
   // top-level pair. The banner read "2 accepted goals (0 corroborated)" while
   // both cards served CONFIRMED (one measured 1-1 -> 2-1, one dive-confirmed).
+  // ADAAAA-8679: state the rail explicitly. `f02ec0bf` is a LIVE job, so the
+  // served read passes `fastRail: true`; the default rail is the `file` (VOD) one
+  // and now reads the pre-8645 legacy pair (that rail's ladder is byte-identical,
+  // AC6/AC8), so relying on the default here would grade the wrong surface.
   it("counts a LIVE row's own attestation as corroborated (measured and dive)", () => {
     const out = buildSummaryLadder({
       summaryLog: [{ seq: 1, ts: "t", windowTs: 13, text: "The scoreboard moves to 2-1." }],
+      fastRail: true,
       highlights: [
         {
           id: "a6e7bebf",
