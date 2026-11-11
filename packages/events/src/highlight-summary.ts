@@ -232,7 +232,7 @@ export interface SummaryRestatement {
 /** Lowercased, diacritic-folded word sequence (numbers and stopwords KEPT). R2's
  *  echo detector works on words, not on content tokens: "ball shoots in" is the
  *  same echo whether or not `in` is a stopword. */
-export function summaryWords(text: string): string[] {
+export function summaryWords(text?: string | null): string[] {
   const folded = (text ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
