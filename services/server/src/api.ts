@@ -118,6 +118,7 @@ import {
   billableSummaryCalls,
   buildTerminalAccountingPatch,
   computeCostUsd,
+  costPerStreamHour,
   liveCancelledSettlement,
   PERCEIVE_PER_HOUR_USD,
   summaryCallsForRows,
@@ -328,8 +329,11 @@ export function resolveControlSessionId(args: {
  * `billableConfirmCalls` bills (the row's `confirmCalls`), so the job `costUsd`
  * identity `decideFee x (decideCalls + dives) + perceive` holds by construction.
  * `costPerStreamHour` normalises that same cost to one hour of stream, which is
- * the observable the CEO chose INSTEAD of a cap. Absent on a row whose confirm
- * lane never ran (no `diveAdmission`) — same convention as `decideCapacity`.
+ * the observable the CEO chose INSTEAD of a cap. ADAAAA-8692: it is stamped
+ * whenever the stream clock is known — the `diveAdmission` block stays absent on
+ * a row whose confirm lane never ran (no `diveAdmission`), but the COST READOUT
+ * is not a dive field and must not disappear with it (QA-D measured `null` on a
+ * `cancelled` leg that had no dives at all).
  */
 export function withDiveCostReadout<
   T extends {
@@ -352,11 +356,15 @@ export function withDiveCostReadout<
   const summaryCostUsd = summary ? Number((summary.feeUsd * Math.max(0, summary.calls)).toFixed(6)) : 0;
   const totalUsd =
     feeUsd * (metrics.decideCalls ?? 0) + diveCostUsd + summaryCostUsd + hours * PERCEIVE_PER_HOUR_USD;
-  if (!admission) return metrics;
+  // ADAAAA-8692: the readout is priced from ONE expression and survives a
+  // missing admission block (see the doc above).
+  const perStreamHour = costPerStreamHour(totalUsd, streamSeconds);
+  const readout = perStreamHour !== undefined ? { costPerStreamHour: perStreamHour } : {};
+  if (!admission) return { ...metrics, ...readout };
   return {
     ...metrics,
     diveAdmission: { ...admission, divesBilled: billed, diveCostUsd },
-    ...(hours > 0 ? { costPerStreamHour: Number((totalUsd / hours).toFixed(4)) } : {}),
+    ...readout,
   };
 }
 
@@ -383,6 +391,70 @@ export function withSummaryMeter<T extends object>(metrics: T, meter: SummaryMet
       : {}),
     summaryP95Ms: meter.summaryP95Ms,
   };
+}
+
+/**
+ * ADAAAA-8692: the JOB-LEVEL summary rollup as TOP-LEVEL record fields.
+ *
+ * `withSummaryMeter` folds the same counters into `observeMetrics`, which is an
+ * inspector-only block (`job-visibility.ts` strips it from a customer payload)
+ * and is written by no VOD/file completion path at all. AC6 asks "does a job
+ * record carry the job-level summary meters", and the QA read is the job record
+ * itself (`record::jsonb->>'summaryCalls'`), so the rollup is also published at
+ * the job level. Same convention as `withSummaryMeter`: an absent lane or an
+ * all-zero meter writes NO key, so a pre-change / lane-off record is unchanged.
+ */
+export interface JobSummaryMeterFields {
+  summaryCalls?: number;
+  summaryDropped?: number;
+  summaryDroppedByReason?: Record<string, number>;
+  summaryP95Ms?: number;
+}
+
+export function jobSummaryMeterFields(meter: Partial<SummaryMeterSnapshot> | undefined | null): JobSummaryMeterFields {
+  if (!meter) return {};
+  const calls = typeof meter.summaryCalls === "number" && Number.isFinite(meter.summaryCalls)
+    ? Math.max(0, Math.trunc(meter.summaryCalls))
+    : 0;
+  const dropped = typeof meter.summaryDropped === "number" && Number.isFinite(meter.summaryDropped)
+    ? Math.max(0, Math.trunc(meter.summaryDropped))
+    : 0;
+  const byReason: Record<string, number> = {};
+  for (const [reason, count] of Object.entries(meter.summaryDroppedByReason ?? {})) {
+    if (typeof count === "number" && Number.isFinite(count) && count > 0) byReason[reason] = Math.trunc(count);
+  }
+  const p95 = typeof meter.summaryP95Ms === "number" && Number.isFinite(meter.summaryP95Ms) ? Math.max(0, meter.summaryP95Ms) : 0;
+  if (calls === 0 && dropped === 0 && Object.keys(byReason).length === 0 && p95 === 0) return {};
+  return {
+    summaryCalls: calls,
+    summaryDropped: dropped,
+    ...(Object.keys(byReason).length > 0 ? { summaryDroppedByReason: byReason } : {}),
+    ...(p95 > 0 ? { summaryP95Ms: p95 } : {}),
+  };
+}
+
+/**
+ * ADAAAA-8692: the same rollup derived from the STORED ROWS, for a settle path
+ * whose in-memory lane is gone (a restart dropped it; the rows outlive it).
+ * The three counters are exact sums of what `patchHighlightSummary` wrote. The
+ * p95 is deliberately ABSENT here: a row's `summaryP95Ms` is that row's own
+ * measured latency, not a sample distribution, so a job-level percentile cannot
+ * be reconstructed from it — absent is honest, a synthesized number is not.
+ */
+export function summaryMeterFromRows(
+  rows: { summaryCalls?: number; summaryDropped?: number; summaryDroppedByReason?: Record<string, number> }[] | undefined
+): JobSummaryMeterFields {
+  let calls = 0;
+  let dropped = 0;
+  const byReason: Record<string, number> = {};
+  for (const row of rows ?? []) {
+    if (typeof row.summaryCalls === "number" && Number.isFinite(row.summaryCalls)) calls += Math.max(0, Math.trunc(row.summaryCalls));
+    if (typeof row.summaryDropped === "number" && Number.isFinite(row.summaryDropped)) dropped += Math.max(0, Math.trunc(row.summaryDropped));
+    for (const [reason, count] of Object.entries(row.summaryDroppedByReason ?? {})) {
+      if (typeof count === "number" && Number.isFinite(count)) byReason[reason] = (byReason[reason] ?? 0) + Math.trunc(count);
+    }
+  }
+  return jobSummaryMeterFields({ summaryCalls: calls, summaryDropped: dropped, summaryDroppedByReason: byReason });
 }
 
 /** ADAAAA-6625: thrown inside a VOD pass once `POST /jobs/:id/stop` has
@@ -1896,6 +1968,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               `cap=${cfg.liveConfirmMaxDivesPer300S == null ? "unlimited" : cfg.liveConfirmMaxDivesPer300S}`
           );
         }
+        // ADAAAA-8692: the share's billed cost as ONE value, so the top-level
+        // `costPerStreamHour` below is a projection of it and not a second
+        // expression (the AC5 clause is graded on the stored record).
+        const railCostUsd = Number(
+          (
+            // ADAAAA-8242: bill the confirm count the SAME snapshot persists,
+            // so the share's row reconciles (one source, like the live pass).
+            cfg.decideFee * (railMetrics.decideCalls + billableConfirmCalls(railMetrics)) +
+            (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD
+          ).toFixed(4)
+        );
+        const railCostPerStreamHour = costPerStreamHour(railCostUsd, railStats.sessionSeconds);
         await store
           .patchJob(jobId, {
             // Mirror a live RTMP job's record: the observer owns the decide
@@ -1921,14 +2005,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // media node's own session clock, the same seconds the share is
             // billed on. Feeds the month-to-date ceiling basis.
             liveWatchMinutes: Number((railStats.sessionSeconds / 60).toFixed(3)),
-            costUsd: Number(
-              (
-                // ADAAAA-8242: bill the confirm count the SAME snapshot persists,
-                // so the share's row reconciles (one source, like the live pass).
-                cfg.decideFee * (railMetrics.decideCalls + billableConfirmCalls(railMetrics)) +
-                (railStats.sessionSeconds / 3600) * PERCEIVE_PER_HOUR_USD
-              ).toFixed(4)
-            ),
+            costUsd: railCostUsd,
+            // ADAAAA-8692: the job-level cost readout, beside the cost it prices.
+            ...(railCostPerStreamHour !== undefined ? { costPerStreamHour: railCostPerStreamHour } : {}),
           })
           .catch((e: any) => console.error(`[media-rail:${jobId}] metrics persist failed:`, e?.message || e));
       } else if (bj.rail) {
@@ -3091,26 +3170,35 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           perceiveSessionS,
           observeMetrics: storedObserveMetrics,
           decideRows: store.candidatesForJob(job.id).length,
+          // ADAAAA-8692: bill the copy calls INSIDE the settlement (one price,
+          // one `costPerStreamHour`), instead of adding a term to the cost after
+          // the readout was already computed from the smaller number.
+          summaryCalls: liveSummaryBilling.calls,
+          summaryFee: liveSummaryBilling.feeUsd,
           stageA,
           persistedHighlights: store.highlightsForJob(job.id).length,
           perceiveSessionId: outcome.sessionId,
           progressLabel: "stopped",
           error: "stopped (cancelled via API)",
         });
-        // ADAAAA-8668: a stop that lands after copy was produced still bills the
-        // summary term — the calls happened, so the cancelled row must carry them
-        // (`costUsd = decide + confirm + summary + perceive`, same identity).
-        if (liveSummaryBilling.calls > 0) {
-          stoppedSettlement.costUsd = Number(
-            (Number(stoppedSettlement.costUsd ?? 0) + liveSummaryBilling.feeUsd * liveSummaryBilling.calls).toFixed(4)
-          );
-        }
-        await store.patchJob(job.id, stoppedSettlement);
+        await store.patchJob(job.id, {
+          ...stoppedSettlement,
+          // ADAAAA-8692: the job-level summary rollup beside the billed cost, so
+          // a cancelled leg carries the AC6 meters a completed leg carries.
+          ...jobSummaryMeterFields(liveSummaryMeter ?? summaryMeterFromRows(store.highlightsForJob(job.id))),
+        });
         console.log(
           `[live:${job.id}] stopped mid-pass: decideCalls=${stoppedDecideCalls} perceiveSessionS=${perceiveSessionS.toFixed(1)} costUsd=${stoppedSettlement.costUsd}`
         );
         return;
       }
+      // ADAAAA-8692: the job-level cost readout + summary rollup that ride
+      // beside `costUsd` on the terminal live patch. Computed once, from the
+      // same `liveCostUsd` and the same lane meter the patch bills.
+      const liveCostPerStreamHour = costPerStreamHour(Number(liveCostUsd.toFixed(4)), perceiveSessionS);
+      const liveSummaryFields = jobSummaryMeterFields(
+        liveSummaryMeter ?? summaryMeterFromRows(store.highlightsForJob(job.id))
+      );
       await store.patchJob(job.id, {
         status: "done",
         perceiveSessionId: outcome.sessionId,
@@ -3120,6 +3208,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // read as a measurement instead of a continuous-attachment assumption.
         liveWatchMinutes: Number((perceiveSessionS / 60).toFixed(3)),
         costUsd: Number(liveCostUsd.toFixed(4)),
+        // ADAAAA-8692: the job-level cost readout + summary rollup, published
+        // OUTSIDE the inspector-only `observeMetrics` block so `GET /jobs/:id` ->
+        // `.job.costPerStreamHour` and the stored record both answer the AC5
+        // clause. Priced from the same `liveCostUsd` this patch bills.
+        ...(liveCostPerStreamHour !== undefined ? { costPerStreamHour: liveCostPerStreamHour } : {}),
+        ...liveSummaryFields,
         // ADAAAA-8061: every terminal transition stamps the end of accrual, so
         // a completed row is never distinguishable from a never-ran row either.
         endedAt: new Date().toISOString(),
@@ -3498,6 +3592,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // `partialCostUsd` rather than a false `costUsd: 0`.
       const decideRows = store.candidatesForJob(jobId).length;
       const perceiveS = accruedSecondsSince(cur.startedAt ?? cur.scheduledAt ?? cur.createdAt, Date.now());
+      // ADAAAA-8692: the copy calls this job actually billed, read off the rows
+      // (the route-timeout writer has no lane snapshot), so a `cancelled` leg
+      // prices + publishes the summary term the pass-path writer does.
+      const cancelSummaryCalls = summaryCallsForRows(store.highlightsForJob(jobId));
+      const cancelSummaryFee = summaryFeeFor({ decideFee: cfg.decideFee, summaryFee: cfg.summaryFee ?? null });
       // ADAAAA-8310: a live session settles through the SAME builder the pass
       // itself uses, so the record carries the observe fields + the watch clock
       // no matter which writer won the stop race. Non-live sources keep the
@@ -3509,6 +3608,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             perceiveSessionS: perceiveS,
             observeMetrics: live?.observeMetrics,
             decideRows,
+            summaryCalls: cancelSummaryCalls,
+            summaryFee: cancelSummaryFee,
             stageA: live?.stageA,
             persistedHighlights: store.highlightsForJob(jobId).length,
             perceiveSessionId: live?.perceiveSessionId,
@@ -3520,12 +3621,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             decideFee: cfg.decideFee,
             decideCalls: decideRows > 0 ? decideRows : null,
             perceiveSessionS: perceiveS,
+            summaryCalls: cancelSummaryCalls,
+            summaryFee: cancelSummaryFee,
             error: cur.error ?? "stopped (cancelled via API)",
             costUnavailableReason: "decide-count-not-persisted",
             extra: { stage: "cancelled", progressLabel },
           });
       await store.patchJob(jobId, {
         ...liveSettlement,
+        // ADAAAA-8692: the job-level summary rollup, same shape a completed row
+        // carries (lane meter when one is alive, else the row sums).
+        ...jobSummaryMeterFields(
+          summaryMeterForJob(jobId) ?? summaryMeterFromRows(store.highlightsForJob(jobId))
+        ),
         // ADAAAA-7906: an operator stop WINS over an armed resume retry — clear
         // the schedule so the drain filter never reclaims a cancelled row.
         resume: cur.resume ? mergeResumeCheckpoint(cur.resume, { nextAttemptAt: null }) : undefined,
@@ -4472,6 +4580,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // invariant 3 still holds on a resumed job.
       priorAttemptsMs: Math.round((attemptStats.accumBase?.wallClockS ?? 0) * 1000),
     });
+    // ADAAAA-8692: the job-level COST READOUT and the summary-meter ROLLUP for
+    // this completed VOD run. Priced from the SAME `totals.costUsd` the record
+    // bills (never a second expression) over the source clip's probed runtime —
+    // the VOD "stream clock". QA read `costPerStreamHour: null` on three
+    // consecutive file jobs (`ec068bcd`, `5cc78c08`, `572f1ec7`) because this
+    // path wrote no such field at all. `summaryMeterForJob` is the in-memory lane
+    // (still alive here — it is dropped after this patch); the row-derived
+    // fallback covers a resumed attempt whose lane a restart erased.
+    const vodCostPerStreamHour = costPerStreamHour(totals.costUsd, durationS);
+    const vodSummaryFields = jobSummaryMeterFields(
+      summaryMeterForJob(jobId) ?? summaryMeterFromRows(store.highlightsForJob(jobId))
+    );
     await store.patchJob(jobId, {
       status: "done",
       stage: "done",
@@ -4536,6 +4656,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       progressLabel: "done",
       durationMs: durationS ? Math.round(durationS * 1000) : undefined,
       vodMeter,
+      // ADAAAA-8692: `costUsd` normalised to one hour of SOURCE video, and the
+      // job-level summary rollup (AC5 "the fee appears in both `costUsd` and
+      // `costPerStreamHour`" / AC6 "a job record carries the job-level meters").
+      ...(vodCostPerStreamHour !== undefined ? { costPerStreamHour: vodCostPerStreamHour } : {}),
+      ...vodSummaryFields,
       // ADAAAA-7928 (spec §4.1): per-stage timings for this completed VOD run.
       stageTimings,
       // ADAAAA-6870 (Increment 3 T1): persist the full decision trail on the

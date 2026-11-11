@@ -42,6 +42,19 @@ export interface TerminalAccountingInput {
   /** MEASURED decide invocations, or `null` when the count was never recorded.
    * Never pass 0 to mean "unknown". */
   decideCalls: number | null;
+  /** ADAAAA-8692: MEASURED summary (body-copy) calls to bill in this settlement.
+   *  Default 0 keeps every pre-8692 caller byte-identical; a stopped stream that
+   *  already produced copy bills it here, so `costUsd` and `costPerStreamHour`
+   *  are two projections of ONE price instead of two additions. */
+  summaryCalls?: number;
+  /** ADAAAA-8692: the per-call summary fee (`SUMMARY_FEE`, clamped to 1.5x
+   *  `DECIDE_FEE` by {@link computeCostUsd}). Absent => the clamped ceiling. */
+  summaryFee?: number;
+  /** ADAAAA-8692: the STREAM clock in seconds — live: the perceived session
+   *  length; VOD/file: the probed source duration. `costPerStreamHour` is priced
+   *  from it, so a caller that does not know the denominator passes nothing and
+   *  the field stays absent (never inferred from the other clock). */
+  streamSeconds?: number | null;
   /** ADAAAA-8205: MEASURED confirm dives (decide-service calls), metered in the
    * same term. Default 0 keeps every existing caller byte-identical.
    *
@@ -95,6 +108,25 @@ export function computeCostUsd(
   const summaryTerm = Math.max(0, summaryCalls) * resolveSummaryFee(decideFee, summaryFee ?? null);
   const cost = decideFee * billableCalls + summaryTerm + (Math.max(0, perceiveSessionS) / 3600) * PERCEIVE_PER_HOUR_USD;
   return Number(cost.toFixed(4));
+}
+
+/**
+ * ADAAAA-8692: `costUsd` normalised to ONE HOUR OF STREAM — the observable the
+ * CEO chose instead of a dive cap (ADAAAA-8518 AC5) and an AC5 clause of the
+ * caption-depth spec ("the fee appears in both `costUsd` and `costPerStreamHour`").
+ *
+ * Two jobs in a row stored `null` here for a structural reason, not a pricing
+ * one: the readout only existed INSIDE `observeMetrics`, and the VOD/file
+ * completion path writes no `observeMetrics` at all, so the field had no writer.
+ * The denominator is the STREAM clock the caller passes (live: perceived session
+ * seconds; VOD/file: probed source duration) — never inferred — and `null`/
+ * zero means the denominator is unknown, in which case the field stays absent
+ * rather than dividing by nothing.
+ */
+export function costPerStreamHour(costUsd: number, streamSeconds: number | null | undefined): number | undefined {
+  if (typeof costUsd !== "number" || !Number.isFinite(costUsd) || costUsd < 0) return undefined;
+  if (typeof streamSeconds !== "number" || !Number.isFinite(streamSeconds) || streamSeconds <= 0) return undefined;
+  return Number((costUsd / (streamSeconds / 3600)).toFixed(4));
 }
 
 /** ADAAAA-8668 (AC5): the ONE source of the summary term's call count. Same rule
@@ -183,10 +215,23 @@ export function buildTerminalAccountingPatch(input: TerminalAccountingInput): Pa
   const perceiveS = input.perceiveSessionS ?? null;
   if (input.decideCalls !== null && Number.isFinite(input.decideCalls)) {
     const decideCalls = Math.max(0, Math.trunc(input.decideCalls));
-    const cost = computeCostUsd(decideCalls, perceiveS ?? 0, input.decideFee, confirmCalls);
+    const cost = computeCostUsd(
+      decideCalls,
+      perceiveS ?? 0,
+      input.decideFee,
+      confirmCalls,
+      input.summaryCalls ?? 0,
+      input.summaryFee
+    );
     patch.decideCalls = decideCalls;
     if (perceiveS !== null) patch.perceiveSessionS = Number(perceiveS.toFixed(1));
     patch.costUsd = cost;
+    // ADAAAA-8692: the terminal settlement is the ONLY writer some rows ever get
+    // (a stop, a decide-runner death, a boot sweep). Stamp the per-stream-hour
+    // readout from the SAME `cost` it bills, so a cancelled/failed row carries
+    // what a completed row carries and the AC5 clause is not a per-path lottery.
+    const perStreamHour = costPerStreamHour(cost, input.streamSeconds);
+    if (perStreamHour !== undefined) patch.costPerStreamHour = perStreamHour;
     // A measured record never carries a stale "unavailable" marker.
     patch.costUnavailable = undefined;
     patch.partialCostUsd = undefined;
@@ -250,6 +295,12 @@ export interface LiveCancelledSettlementInput {
   observeMetrics?: Job["observeMetrics"];
   /** Durable per-decide rows, the measured fallback when no snapshot exists. */
   decideRows: number;
+  /** ADAAAA-8692: MEASURED summary (body-copy) calls this stream billed. The
+   *  same count the caller folds into `observeMetrics.summaryCalls`, so the
+   *  settlement's `costUsd` and its `costPerStreamHour` price one bill. */
+  summaryCalls?: number;
+  /** Per-call summary fee (`SUMMARY_FEE`; clamped to 1.5x `DECIDE_FEE`). */
+  summaryFee?: number;
   /** Stage-A audio-gate snapshot (for `completedLiveCounterFields`). */
   stageA?: StageAMetricsSnapshot;
   /** Store's DEDUPED highlight count for the job. */
@@ -273,6 +324,13 @@ export function liveCancelledSettlement(input: LiveCancelledSettlementInput): Pa
     decideFee: input.decideFee,
     decideCalls,
     perceiveSessionS,
+    // ADAAAA-8692: bill the stop's own copy calls in the settlement and price
+    // `costPerStreamHour` off the LIVE stream clock (the perceived session), so a
+    // `cancelled` leg carries the AC5 readout a completed leg carries — QA-D
+    // measured `null` on `5cc78c08` for exactly this reason.
+    summaryCalls: input.summaryCalls,
+    summaryFee: input.summaryFee,
+    streamSeconds: perceiveSessionS,
     nowMs: input.nowMs,
     observeMetrics,
     error: input.error ?? "stopped (cancelled via API)",
