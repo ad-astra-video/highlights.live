@@ -43,6 +43,7 @@ export interface SummaryLaneStore {
       summary?: string;
       summaryGate?: string;
       summaryRaw?: string;
+      summaryCaptionOverlap?: number;
       summaryCalls?: number;
       summaryDropped?: number;
       summaryDroppedByReason?: Record<string, number>;
@@ -210,6 +211,7 @@ export async function runSummaryForRow(
     await store.patchHighlightSummary(descriptor.highlightId, {
       summary: decision.summary,
       summaryGate: decision.gate,
+      summaryCaptionOverlap: decision.captionOverlap,
       summaryCalls: calls,
       summaryDropped: 0,
       summaryP95Ms: latencyMs,
@@ -229,6 +231,7 @@ export async function runSummaryForRow(
   await store.patchHighlightSummary(descriptor.highlightId, {
     summaryGate: `dropped:${reason}`,
     ...(raw ? { summaryRaw: raw } : {}),
+    ...(lastGate ? { summaryCaptionOverlap: lastGate.captionOverlap } : {}),
     summaryCalls: calls,
     summaryDropped: 1,
     summaryDroppedByReason: { [reason]: 1 },

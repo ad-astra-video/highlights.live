@@ -2181,6 +2181,10 @@ export const HighlightRecordSchema = z.object({
   // served value: the card renders `summary`, and a refused row has none. Lets a
   // QA quote what the model wrote instead of only the violation token.
   summaryRaw: z.string().optional(),
+  // ADAAAA-8687 / spec rev 2 (R4): the caption-token coverage of the stored copy,
+  // metered per row as an OBSERVATION. It never drops a row; QA reads p50/p95 off
+  // these values to watch drift.
+  summaryCaptionOverlap: z.number().min(0).max(1).optional(),
   // ADAAAA-8668 (AC5/AC6): the row's own meter. `summaryCalls` counts the
   // summary-service calls actually billed for this row (0 when the lane never
   // ran, at most 2 with the single retry), `summaryDropped` is 1 when the row

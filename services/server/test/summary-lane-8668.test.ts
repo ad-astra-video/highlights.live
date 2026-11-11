@@ -242,6 +242,8 @@ describe("runSummaryForRow — the promoted row's copy", () => {
     expect(result.calls).toBe(2);
     expect(f.calls()).toBe(2);
     expect(patches[0].patch.summary).toBe(GOOD_SUMMARY);
+    // R4 (spec rev 2) is metered on the stored row and never gates.
+    expect(typeof patches[0].patch.summaryCaptionOverlap).toBe("number");
     expect(patches[0].patch.summaryCalls).toBe(2);
     expect(patches[0].patch.summaryDropped).toBe(0);
   });
@@ -318,6 +320,7 @@ describe("Store.patchHighlightSummary — the `summaryRaw` contract (ADAAAA-8687
     await store.addHighlight(row);
     const next = await store.patchHighlightSummary("h-8687", {
       summaryGate: "dropped:gate",
+      summaryCaptionOverlap: 0.67,
       summaryRaw: "Ball shoots in midfield and the crowd reacts around 0:12 at the ground.",
       summaryCalls: 1,
       summaryDropped: 1,
@@ -327,6 +330,7 @@ describe("Store.patchHighlightSummary — the `summaryRaw` contract (ADAAAA-8687
     expect(next.summaryRaw).toBe("Ball shoots in midfield and the crowd reacts around 0:12 at the ground.");
     expect(next.summary).toBeUndefined();
     expect(next.summaryGate).toBe("dropped:gate");
+    expect(next.summaryCaptionOverlap).toBe(0.67);
     // The row is still a valid record after the write (schema parse is the seam's guard).
     expect(HighlightRecordSchema.parse(next).summaryRaw).toBe(next.summaryRaw);
   });

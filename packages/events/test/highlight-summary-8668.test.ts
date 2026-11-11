@@ -9,12 +9,11 @@ import {
   SUMMARY_LIVE_BAND,
   SUMMARY_MAX_CALLS_PER_ROW,
   SUMMARY_MAX_CAPTION_OVERLAP,
-  SUMMARY_MIN_NEW_TOKEN_SHARE,
+  SUMMARY_MAX_SHARED_RUN_TOKENS,
+  SUMMARY_MIN_NOVEL_TOKENS,
   SUMMARY_RAW_MAX_CHARS,
-  SUMMARY_SHORT_CAPTION_TOKENS,
   SUMMARY_VOD_BAND,
   buildSummaryPrompt,
-  captionRestatement,
   captionRestatesSummary,
   captionTokenOverlap,
   clampSummaryDepth,
@@ -26,6 +25,7 @@ import {
   summaryFacts,
   summarySentenceCount,
   summaryViolations,
+  summaryRestatement,
   summaryWordCount,
   type SummaryEvidence,
 } from "../src/highlight-summary.js";
@@ -67,7 +67,9 @@ describe("depth band constants", () => {
       hardMaxWords: 120,
       hardMaxChars: 700,
     });
-    expect(SUMMARY_MAX_CAPTION_OVERLAP).toBe(0.5);
+    // Spec rev 2 (ADAAAA-8687): restatement is R1-R3, not a coverage bar.
+    expect(SUMMARY_MIN_NOVEL_TOKENS).toBe(8);
+    expect(SUMMARY_MAX_SHARED_RUN_TOKENS).toBe(5);
     // One retry, so at most two billed calls per row; the p95 budget is the
     // post-promotion bound and one call fits inside it twice.
     expect(SUMMARY_MAX_CALLS_PER_ROW).toBe(2);
@@ -159,7 +161,7 @@ describe("caption overlap bar", () => {
     expect(captionTokenOverlap("A different sentence entirely about the clock", caption)).toBeLessThan(0.5);
   });
 
-  it("refuses a summary that restates the announcer line at >= 0.5", () => {
+  it("refuses a summary that restates the announcer line (rev 2: R1 novel-detail)", () => {
     const ev = live({
       caption: "Ball enters the net at the near post.",
       postTitle: "GOAL · 2:38",
@@ -169,6 +171,8 @@ describe("caption overlap bar", () => {
     });
     const restated = "Ball enters the net at the near post. It is 2-2 in the second half now.";
     expect(summaryViolations(restated, ev)).toContain("restates-caption");
+    // The rev-1 coverage figure is still high here; it is an observation now.
+    expect(captionTokenOverlap(restated, ev.caption)).toBeGreaterThan(0.5);
   });
 
   it("normalizes tokens (case, diacritics, punctuation, stopwords)", () => {
@@ -280,40 +284,57 @@ describe("gateSummaryDetail", () => {
   });
 });
 
-describe("captionRestatement (ADAAAA-8687)", () => {
-  it("does not call a short caption's faithful elaboration a restatement", () => {
-    const caption = "Ball shoots in midfield"; // 3 content tokens, the shipped shape
+describe("summaryRestatement — spec rev 2 R1/R2/R3 (ADAAAA-8687)", () => {
+  it("R1: counts the novel content tokens a body adds", () => {
+    const caption = "Ball shoots in midfield";
     const body =
       "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
       "A burst of noise and motion around 0:12 marks the move that briefly lifts the ground.";
-    const r = captionRestatement(body, caption);
-    expect(r.captionTokens).toBe(3);
-    expect(r.overlap).toBeGreaterThanOrEqual(SUMMARY_MAX_CAPTION_OVERLAP); // would have refused
-    expect(r.newTokenShare).toBeGreaterThanOrEqual(SUMMARY_MIN_NEW_TOKEN_SHARE);
+    const r = summaryRestatement(body, caption);
+    expect(r.novelTokens).toBeGreaterThanOrEqual(SUMMARY_MIN_NOVEL_TOKENS);
+    expect(r.failed).toEqual([]);
     expect(r.restates).toBe(false);
+    // R4 is still measured, and is still free to be high — it is no longer a gate.
+    expect(r.overlap).toBeGreaterThan(0.5);
   });
 
-  it("still calls a body that only re-words the caption a restatement", () => {
-    const caption = "Ball shoots in midfield";
-    expect(captionRestatesSummary("Ball shoots in midfield.", caption)).toBe(true);
-    // Re-worded with connective filler and nothing new: still a copy.
-    expect(captionRestatesSummary("The ball shoots in midfield, ball and midfield.", caption)).toBe(true);
-  });
-
-  it("keeps the spec's coverage bar for a caption long enough to anchor it", () => {
-    const caption = "Ball enters the net at the near post after the low drive from the left.";
-    const body =
-      "Ball enters the net at the near post after the low drive from the left. It is level again.";
-    const r = captionRestatement(body, caption);
-    expect(r.captionTokens).toBeGreaterThanOrEqual(SUMMARY_SHORT_CAPTION_TOKENS);
-    expect(r.overlap).toBeGreaterThanOrEqual(SUMMARY_MAX_CAPTION_OVERLAP);
+  it("R2: refuses a body that echoes a >5-word run of the caption verbatim", () => {
+    const caption = "Ball enters the net at the near post after the low drive";
+    const echo =
+      "Ball enters the net at the near post after the low drive from the left. " +
+      "The crowd is up and the bench is on its feet as the visitors press again.";
+    const r = summaryRestatement(echo, caption);
+    expect(r.longestSharedRun).toBeGreaterThan(SUMMARY_MAX_SHARED_RUN_TOKENS);
+    expect(r.failed).toContain("verbatim-echo");
     expect(r.restates).toBe(true);
   });
 
+  it("R3: a caption superset that adds only filler is still a restatement", () => {
+    const caption = "Ball shoots in midfield";
+    const filler = "The ball, in midfield, shoots in midfield, ball, midfield.";
+    const r = summaryRestatement(filler, caption);
+    expect(r.captionSubset).toBe(true);
+    expect(r.novelTokens).toBeLessThan(SUMMARY_MIN_NOVEL_TOKENS);
+    expect(r.failed).toContain("subset-echo");
+    expect(r.restates).toBe(true);
+  });
+
+  it("R3 does not refuse a superset that clears R1's novel-detail floor", () => {
+    // The whole point of rev 2: an elaboration that still names ball/midfield but
+    // carries >= 8 new content tokens is detail, not a restatement.
+    const caption = "Ball shoots in midfield";
+    const body =
+      "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
+      "A burst of noise and motion around 0:12 marks the move that briefly lifts the ground.";
+    const r = summaryRestatement(body, caption);
+    expect(r.captionSubset).toBe(false); // "shoots" is not repeated here
+    expect(r.restates).toBe(false);
+  });
+
   it("never fails closed on a missing caption or an empty body", () => {
-    expect(captionRestatesSummary("A faithful line with facts in it.", null).valueOf()).toBe(false);
+    expect(captionRestatesSummary("A faithful line with facts in it.", null)).toBe(false);
     expect(captionRestatesSummary("", "Ball shoots in midfield")).toBe(false);
-    expect(captionRestatement("Ball shoots in midfield", "").captionTokens).toBe(0);
+    expect(summaryRestatement("A line.", "").failed).toEqual([]);
   });
 });
 
