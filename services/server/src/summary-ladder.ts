@@ -444,7 +444,19 @@ function finalizeServedShapes(entries: NormalizedEntry[]): NormalizedEntry[] {
  */
 export type CorroboratedOf = (h: HighlightRecord) => boolean;
 
-/** Accepted GOAL highlights, in time order, with a monotonic 1-based index. */
+/**
+ * GOAL highlights, in time order, with a monotonic 1-based index.
+ *
+ * ADAAAA-8678: the timeline is derived from the POPULATION THE CALLER SERVES —
+ * the served routes pass `postable.highlights`, i.e. exactly the rows the page
+ * renders as cards. It used to re-filter `status === "accepted"` internally,
+ * which made the banner count a DIFFERENT row set than the page: job
+ * `bc2d3460` served 2 GOAL cards whose stored rows were `pending` while the
+ * banner read `0 goals`. `status` is a PUBLISH state, not an evidence verdict —
+ * a `pending` row is a served card (auto-publish off ⇒ the card's Approve
+ * control, `verdictAction`), so it is counted. Only `rejected` is excluded here,
+ * and only as a fail-safe for a caller that hands over raw (un-gated) rows.
+ */
 export function goalTimelineFrom(
   highlights: HighlightRecord[],
   /**
@@ -456,7 +468,7 @@ export function goalTimelineFrom(
   corroboratedOf?: CorroboratedOf
 ): Array<SummaryChapterGoal & { highlightId: string }> {
   return (highlights ?? [])
-    .filter((h) => (h as any).eventType === "GOAL" && (h as any).status === "accepted")
+    .filter((h) => (h as any).eventType === "GOAL" && (h as any).status !== "rejected")
     .slice()
     .sort((a, b) => Number((a as any).start ?? 0) - Number((b as any).start ?? 0))
     .map((h, i) => {
@@ -620,8 +632,28 @@ function nearestEntryIndex(entries: NormalizedEntry[], ts: number): number {
  * ADAAAA-7995 (§2/§3): the goal-count suffix a chapter digest carries
  * (` 3 accepted goals (0 corroborated).`). It is a WHOLE sentence, so the rollup
  * may never cut inside it — the served page shipped `… 3 accepted goals (0…`.
+ *
+ * ADAAAA-8678: the note has a second shape when the chapter contains a
+ * `pending` (unapproved) GOAL row — ` 2 goals (0 corroborated, 2 awaiting
+ * approval).` — because such a row IS counted (it ships as a card) but must not
+ * be called "accepted". Both shapes are whole sentences and both end the line.
  */
-const GOAL_NOTE_TAIL = /\s+(\d+ accepted goals? \(\d+ corroborated\)\.)$/;
+const GOAL_NOTE_TAIL = /\s+(\d+ (?:accepted )?goals? \(\d+ corroborated(?:, \d+ awaiting approval)?\)\.)$/;
+
+/**
+ * ADAAAA-8678: the served goal-count phrase, in ONE place so the banner, the
+ * chapter digests and the footer cannot word the same count differently.
+ *
+ * A `pending` row is counted (it ships as a card) and is named as awaiting
+ * approval; it is never called "accepted", which is a claim only a settled
+ * (`accepted`) row supports. With no pending goals the phrase is byte-identical
+ * to the pre-8678 text, so an all-accepted job's ladder is unchanged.
+ */
+function goalCountPhrase(count: number, verified: number, pending: number): string {
+  const noun = `goal${count === 1 ? "" : "s"}`;
+  if (pending > 0) return `${count} ${noun} (${verified} corroborated, ${pending} awaiting approval)`;
+  return `${count} accepted ${noun} (${verified} corroborated)`;
+}
 
 /** Compose the match rollup, then enforce the 1500-char cap by dropping chapter
  * bullets from the END (the header and the goal timeline always survive). */
@@ -629,11 +661,13 @@ function composeMatchSummary(
   gameHint: string,
   chapters: SummaryChapter[],
   goals: SummaryChapterGoal[],
-  logEntries: number
+  logEntries: number,
+  /** ADAAAA-8678: of `goals`, how many are `pending` (unapproved) rows. */
+  pendingGoals = 0
 ): string {
   const duration = chapters.length > 0 ? chapters[chapters.length - 1].endS : 0;
   const verified = goals.filter((g) => g.verified).length;
-  const header = `${gameHint || "Video"} · ${formatClock(duration)} · ${chapters.length} chapter${chapters.length === 1 ? "" : "s"} · ${goals.length} accepted goal${goals.length === 1 ? "" : "s"} (${verified} corroborated)`;
+  const header = `${gameHint || "Video"} · ${formatClock(duration)} · ${chapters.length} chapter${chapters.length === 1 ? "" : "s"} · ${goalCountPhrase(goals.length, verified, pendingGoals)}`;
   // ADAAAA-8014 (§2): a bullet carries the chapter's FIRST WHOLE SENTENCE plus the
   // goal-count sentence, or no narrative at all — a character excerpt cuts the
   // chapter digest mid-phrase and truncates the goal count (`… (0…`), so the
@@ -660,7 +694,13 @@ function composeMatchSummary(
       : `Goals in order: ${goals
           .map((g) => `#${g.index} ${formatClock(g.ts)}${g.verified ? "" : " (never corroborated)"}`)
           .join(", ")}`;
-  const footer = `Derived from ${logEntries} stored window narratives + ${goals.length} accepted highlights; no extra inference.`;
+  // ADAAAA-8678: unchanged wording for an all-accepted job (`N accepted
+  // highlights`); a counted-but-unapproved goal is named as such instead of
+  // being folded into "accepted".
+  const footer =
+    pendingGoals > 0
+      ? `Derived from ${logEntries} stored window narratives + ${goalCountPhrase(goals.length, verified, pendingGoals)}; no extra inference.`
+      : `Derived from ${logEntries} stored window narratives + ${goals.length} accepted highlights; no extra inference.`;
 
   const build = (narrativeCount: number, keep: number): string =>
     [
@@ -720,6 +760,16 @@ export function buildSummaryLadder(input: {
   const gated = propagateCorroboration(rawEntries, accepted, fastRail, corroboratedOf);
   const entries = fastRail ? finalizeServedShapes(gated) : gated;
   const timeline = goalTimelineFrom(input.highlights ?? [], corroboratedOf);
+  // ADAAAA-8678: of the GOAL rows the page serves as cards, which are still
+  // `pending` (auto-publish off ⇒ unapproved). They are counted — the banner and
+  // the cards are one population — but the served text names them as awaiting
+  // approval instead of calling them "accepted".
+  const pendingGoalIds = new Set(
+    (input.highlights ?? [])
+      .filter((h) => (h as any).eventType === "GOAL" && (h as any).status === "pending")
+      .map((h) => String((h as any).id ?? ""))
+  );
+  const pendingGoalCount = timeline.filter((g) => pendingGoalIds.has(g.highlightId)).length;
 
   // The audit list is what the WRITE seam refused: a score string `text_raw` still
   // carries that the stored `text` does not (ADAAAA-8059: the read path no longer
@@ -732,7 +782,7 @@ export function buildSummaryLadder(input: {
 
   if (entries.length === 0) {
     const goals = timeline.map(({ highlightId: _id, ...g }) => g);
-    const text = composeMatchSummary(input.gameHint ?? "", [], goals, 0);
+    const text = composeMatchSummary(input.gameHint ?? "", [], goals, 0, pendingGoalCount);
     return {
       chapters: [],
       matchSummary: {
@@ -758,9 +808,11 @@ export function buildSummaryLadder(input: {
     const from = cursor;
     const to = cursor + run.entries.length - 1;
     cursor = to + 1;
-    const goals = timeline
-      .filter((_g, gi) => goalEntryIdx[gi] >= from && goalEntryIdx[gi] <= to)
-      .map(({ highlightId: _id, ...g }) => g);
+    const chapterTimeline = timeline.filter((_g, gi) => goalEntryIdx[gi] >= from && goalEntryIdx[gi] <= to);
+    const goals = chapterTimeline.map(({ highlightId: _id, ...g }) => g);
+    // ADAAAA-8678: the same wording rule as the banner — a chapter that holds a
+    // pending GOAL row names it as awaiting approval.
+    const pendingInChapter = chapterTimeline.filter((g) => pendingGoalIds.has(g.highlightId)).length;
     const startS = run.entries[0].windowTs;
     const endS = run.entries[run.entries.length - 1].windowTs + DEFAULT_WINDOW_S;
     const kind = chapterKindOf(run.entries, goals);
@@ -768,7 +820,7 @@ export function buildSummaryLadder(input: {
     const goalNote =
       goals.length === 0
         ? ""
-        : ` ${goals.length} accepted goal${goals.length === 1 ? "" : "s"} (${goals.filter((g) => g.verified).length} corroborated).`;
+        : ` ${goalCountPhrase(goals.length, goals.filter((g) => g.verified).length, pendingInChapter)}.`;
     // ADAAAA-7961: the goal count is its own sentence. A lead that carries no
     // terminal period must not run into it (`… in center field 2 accepted goals
     // (0 corroborated).`), so the separator is added before the note.
@@ -809,7 +861,7 @@ export function buildSummaryLadder(input: {
     .sort((a, b) => a.ts - b.ts)
     .map((g, i) => ({ ...g, index: i + 1 }));
 
-  const text = composeMatchSummary(input.gameHint ?? "", chapters, goals, entries.length);
+  const text = composeMatchSummary(input.gameHint ?? "", chapters, goals, entries.length, pendingGoalCount);
   const matchSummary: MatchSummary = {
     text,
     charCount: text.length,
