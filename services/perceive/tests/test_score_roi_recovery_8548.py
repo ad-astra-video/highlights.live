@@ -289,13 +289,21 @@ class DiscoveryScoreDet(DiscoveryDet):
         return [SCORE_LINE]
 
 
-def test_discovered_hashtag_region_is_reresolved_then_abandoned(client, monkeypatch, caplog):
+def test_discovered_hashtag_region_is_reresolved_then_rejected(client, monkeypatch, caplog):
     """A DISCOVERED region (not just the prior) that prints only a hashtag is dropped.
 
     The ticket's measured defect was a discovered/selected box pointing at the
     hashtag graphic; the shipped top-band test only covers the fallback prior, so
     this pins the discovered-source path through the real `POST /app/analyze` frame
-    path: the region is attributed, re-resolved, and finally abandoned.
+    path.
+
+    ADAAAA-8641: the bounded re-resolve is not enough on its own — discovery is
+    deterministic, so on browser session `0a59dabf` the SAME box came back at
+    seq 76 right after the seq 75 re-resolve threw it away, and after three
+    cycles the session settled on the bottom prior that reads only the
+    watermark. The box a re-resolve throws away is now REMEMBERED and never
+    re-adopted, so the session settles on the per-frame prior instead of
+    churning onto a region that cannot read the score.
     """
     det = DiscoveryDet()
     frames = (
@@ -310,9 +318,15 @@ def test_discovered_hashtag_region_is_reresolved_then_abandoned(client, monkeypa
     assert det.discover_calls > 0, "discovery never ran, so the source was not discovery"
     assert any("source=discovery" in m for m in messages), "the discovered box was not attributed"
     assert any("scoreboard ROI re-resolve" in m and "from_source=discovery" in m for m in messages)
-    assert state.scoreboard_roi_reresolves == _SCOREBOARD_ROI_RERESOLVE_MAX
-    assert state.scoreboard_roi_source == "abandoned_bottom_prior"
-    assert _app._same_roi(state.scoreboard_roi, BOTTOM)
+    # The re-adoption of the SAME box is refused, once, and the box never becomes
+    # the session region again.
+    assert any("scoreboard ROI discovery rejected" in m for m in messages)
+    assert state.scoreboard_roi_reresolves == 1
+    # After the rejection the session settles on the per-frame top-band prior
+    # (the discovery pass only runs on its backoff), never on the bad box.
+    assert state.scoreboard_roi_source in ("discovery_rejected", "default_top_band_miss")
+    assert state.scoreboard_roi is None
+    assert state.scoreboard_roi_rejected[0] == (0.0, 0.0, 1.0, 0.29)
 
 
 def test_discovered_legible_score_pays_no_extra_read_per_frame(client, monkeypatch):

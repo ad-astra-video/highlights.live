@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DecideNoteSchema, JobCandidateSchema, type ConfirmRecord, type JobCandidate, type WindowAnalysis } from "@highlights/events";
-import { deriveConfirmation, scoreTransitionDetail } from "../src/confirmation-lane";
+import { deriveConfirmation, confirmationForHighlightRow, diveVerdictFromAttestation, scoreTransitionDetail } from "../src/confirmation-lane";
 import { buildSections, stripWindowInspection, type Section } from "../src/job-detail";
 
 // ADAAAA-8287: the row must state WHICH lane confirmed a highlight — a measured
@@ -299,5 +299,85 @@ describe("buildSections + stripWindowInspection (AC1 / AC3 / AC4)", () => {
     const parsed: Section["decideNotes"][number] = DecideNoteSchema.parse(notes[0]);
     expect(parsed.confirmation?.lane).toBe("measured");
     expect(parsed.confirmation?.label).toBe(notes[0].confirmation?.label);
+  });
+});
+
+// ADAAAA-8647: the dive verdict is stamped on the HIGHLIGHT row
+// (`confirmAttestation`) while `job_candidates` stores NO confirm record
+// (`has_confirm=false` on the graded job f02ec0bf). The served derivation must
+// read the row's own attestation, or a dive-refuted row falls through to the
+// candidate's measured lane and serves the same CONFIRMED badge as an attested
+// row — the measured defect on row 85a89562.
+describe("confirmationForHighlightRow — the row's own stored dive (ADAAAA-8647)", () => {
+  /** The candidate of the refuted row: accepted, with a measured score
+   *  attestation but NO confirm record (the real stored shape). */
+  const measuredCandidate = () =>
+    cand({
+      timestamp: 100.533,
+      trigger: { kind: "score_change", timestamp: 100.533, eventType: "GOAL", scoreBoardChanged: true },
+      analysis: analysisWith({ scoreboardChanged: true, crowdErupted: true }, ["Scoreboard change 1-1 to 2-1 at 01:40"]),
+    });
+
+  it("serves dive_disagreed on a scoring row whose stored dive refuted it (the pre-fix lane was measured)", () => {
+    const candidate = measuredCandidate();
+    // Pre-fix read: the candidate alone has no dive, so lane 1 wins.
+    expect(deriveConfirmation(candidate)?.lane).toBe("measured");
+    const served = confirmationForHighlightRow(
+      {
+        status: "accepted",
+        confirmAttestation: { goalConfirmed: "not_goal", corroborated: false },
+      },
+      candidate
+    );
+    expect(served?.lane).toBe("dive_disagreed");
+    expect(served?.label).toBe("dive did not corroborate");
+    // The projection carries lane + label only (no inspector half).
+    expect(Object.keys(served ?? {}).sort()).toEqual(["label", "lane"]);
+  });
+
+  it("serves dive_disagreed for a `confirmed_goal` the dive could NOT corroborate", () => {
+    expect(
+      confirmationForHighlightRow(
+        { status: "accepted", confirmAttestation: { goalConfirmed: "confirmed_goal", corroborated: false } },
+        measuredCandidate()
+      )?.lane
+    ).toBe("dive_disagreed");
+  });
+
+  it("a HELD row still serves dive_held even when its attestation corroborated", () => {
+    const held = confirmationForHighlightRow(
+      {
+        status: "accepted",
+        provisionalGoal: { held: true, refuted: false },
+        confirmAttestation: { goalConfirmed: "confirmed_goal", corroborated: true },
+      },
+      undefined
+    );
+    expect(held?.lane).toBe("dive_held");
+  });
+
+  it("a corroborated dive serves lane 2 (dive), never lane 1", () => {
+    const served = confirmationForHighlightRow(
+      { status: "accepted", confirmAttestation: { goalConfirmed: "confirmed_goal", corroborated: true } },
+      measuredCandidate()
+    );
+    expect(served?.lane).toBe("dive");
+    expect(served?.label).toBe("Confirmed by deep dive (Stage-2)");
+  });
+
+  it("a DROPPED dive (no verdict) does not refute: the measured lane stands", () => {
+    for (const goalConfirmed of ["dropped", "passthrough"]) {
+      const served = confirmationForHighlightRow(
+        { status: "accepted", confirmAttestation: { goalConfirmed, corroborated: false } },
+        measuredCandidate()
+      );
+      expect(served?.lane).toBe("measured");
+    }
+    expect(diveVerdictFromAttestation({ goalConfirmed: "dropped", corroborated: false })).toBeUndefined();
+    expect(diveVerdictFromAttestation(null)).toBeUndefined();
+  });
+
+  it("a row with no stored dive keeps its candidate-derived lane (no regression)", () => {
+    expect(confirmationForHighlightRow({ status: "accepted" }, measuredCandidate())?.lane).toBe("measured");
   });
 });

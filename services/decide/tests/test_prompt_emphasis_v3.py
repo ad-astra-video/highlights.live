@@ -62,7 +62,7 @@ MAX_STATIC_PREAMBLE_CHARS = 9400
 # untouched — the caption contract itself did not grow a character.
 # ADAAAA-8405 moves it once more (+571 to the contract, 15 872 here): the Phase C
 # residuals needed the headline's place/claim/name rules stated as closed sets.
-MAX_STATIC_BLOCK_CHARS = 16881
+MAX_STATIC_BLOCK_CHARS = 17353  # +472: ADAAAA-8603 audit-field reply trim
 
 EV = {
     "trackCount": 3,
@@ -210,7 +210,10 @@ def test_static_block_budget():
     # pre-8318 contract) — bounded at 1200 so another field cannot ride along.
     # ADAAAA-8405 raises it once more (+571, the headline rule rewrite): live
     # prefill ~+140 tokens, output unchanged (the rail is decode-bound).
-    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 2675
+    # ADAAAA-8603 raises it once for the reply trim (+472): it buys ~120 extra
+    # prefill tokens (~+11 ms measured on gemma-gpu0) with ~44 fewer output
+    # tokens (~-430 ms on the same replay), which is the trade the ticket is for.
+    assert len(_OUTPUT_CONTRACT_COMPACT) - V2_COMPACT_CONTRACT_CHARS <= 3147
     # ADAAAA-8325 (Inc 2): the VOD (FULL) contract gained the `phase` field and
     # its rule (+486 chars with the REPLAY cues); bounded so a later edit cannot inflate every VOD
     # window's prefill any further. The COMPACT bound above is untouched — the

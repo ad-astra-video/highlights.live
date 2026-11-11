@@ -155,6 +155,21 @@ class SessionState:
     scoreboard_roi_digitless: int = 0
     scoreboard_roi_reresolves: int = 0
     score_fallback_reads: int = 0
+    # ADAAAA-8641: a crop that PARSED a score is proof its box is a scoreboard
+    # region, so the box is adopted for the session (`learned_crop`) instead of
+    # letting a later discovery guess replace it. `proven` remembers the last box
+    # that parsed a score (the restore target when a cached region is abandoned);
+    # `rejected` remembers the boxes a bounded re-resolve already threw away as
+    # digit-less, so deterministic discovery cannot re-adopt the same ad-board
+    # box forever. `learn_candidate`/`learn_streak` require two consecutive
+    # parsed-score frames before a box is adopted (a single spurious parse can
+    # never promote a region). All of it is bookkeeping — no extra OCR.
+    scoreboard_roi_proven: Optional[tuple] = None
+    scoreboard_roi_proven_seq: int = -1
+    scoreboard_roi_rejected: tuple = ()
+    scoreboard_roi_learn_candidate: Optional[tuple] = None
+    scoreboard_roi_learn_streak: int = 0
+    scoreboard_crop_probe_logged: bool = False
     # LLM TrackingPlan (ADAAAA-6463, child of ADAAAA-6441): the closed detection
     # roster + zones + anchor + maxTracks the decide brain emitted for this
     # session. Plan-first: when present, detect/seeding vocabulary, zone set and

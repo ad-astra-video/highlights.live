@@ -158,7 +158,9 @@ describe("deriveLiveProgress analyse position (ADAAAA-8121)", () => {
         "lagSec",
         "liveEdgeTs",
         "processedThroughTs",
-        "skippedWindows",
+        // ADAAAA-8636: an in-flight job with no rail supply evidence omits the
+        // count (never the summary-gap artifact) and says `skipData: false`.
+        "skipData",
         "state",
         "strideAnalysisFps",
         "strideData",

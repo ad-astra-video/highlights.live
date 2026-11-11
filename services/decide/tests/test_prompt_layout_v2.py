@@ -70,9 +70,13 @@ GOLDEN_V3_FULL = (
 # paragraph was rewritten for the Phase C residuals (place phrases 7/255, goal
 # claims on non-scoring windows 5/255, invented names 6/255). The FULL rows
 # below are byte-identical to 8356, which is the VOD-parity proof.
+# ADAAAA-8603 re-pins the COMPACT prompt only: the four audit-only prose fields
+# got a mechanical HARD MAX and a one-line/no-space instruction (+472 chars in
+# the static block) so the decode-bound live reply drops ~44 tokens. The FULL
+# rows below are byte-identical, which is the VOD-parity proof.
 GOLDEN_V3_COMPACT = (
-    17453,
-    "10bf93cd7449666cba6147cd91c089c9a0577f042b83d10ce13f9d704b0b5218",
+    17925,
+    "e351be08c0095dd3f8ef4fba82a55a62cf5a2604c64a40fdb0a6d3a034702a16",
 )
 GOLDEN_V3_FULL_MC_PG = (
     13404,
@@ -373,7 +377,7 @@ def test_compact_golden_hash_pinned():
     paragraph: 4785 -> 5678 -> 5782 chars, and the key now precedes
     the caption; ADAAAA-8405 rewrote that paragraph for the Phase C copy
     residuals: 5782 -> 6353 chars)."""
-    assert len(_OUTPUT_CONTRACT_COMPACT) == 7162
+    assert len(_OUTPUT_CONTRACT_COMPACT) == 7634
     assert _sha(_OUTPUT_CONTRACT_COMPACT) == _sha(_OUTPUT_CONTRACT_COMPACT)
     # the compact flat prompt is the pinned v3 golden
     compact = build_prompt(

@@ -26,6 +26,14 @@ Exit codes: `0` within, `2` over, `3` gate closed (nothing metered), `4` stop
 unconfirmed or overshoot beyond slack, `5` setup refused/failed (including "no
 readable cost source").
 
+Gate probes never inherit the launcher's stdin (ADAAAA-8644). The SQL is passed
+to `psql -f -` as input and every other probe reads `/dev/null`, so a
+`screen`/pipe launcher cannot stall a probe until its timeout and an EOF cannot
+read as a false "0 nonterminal jobs". A failed probe's exception text travels in
+`preflight.errors` (and in each sample's `errors`) and is appended to the
+refusal reason, so a `cannot prove quiet` refusal names its cause instead of
+reading as a busy box.
+
 The harness owns **stop + preflight + metered abort**. It does not grade a leg:
 PASS/FAIL/UNMEASURED belongs to the offline grader on `origin/master` 123da6b
 (`services/server/src/live-leg-grade.ts`, `scripts/live-leg-grade.ts`).

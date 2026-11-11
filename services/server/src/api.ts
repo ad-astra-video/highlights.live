@@ -812,6 +812,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   // accessor returns null when the rail runs no stride (content rate unset), so
   // the chip keeps degrading to "no stride data" honestly.
   const liveConsumeEvidence = (jobId: string) => browserJobs.get(jobId)?.rail?.liveConsumeEvidence() ?? null;
+  // ADAAAA-8636: the rail's in-flight SUPPLY counters (stale + admission +
+  // backpressure), read mid-share so the chip's `skippedWindows` is a measured
+  // counter instead of summary-log gap arithmetic. Counter-only, no decide call,
+  // no GPU; null when no rail is in memory, which makes the projection omit the
+  // count (never a synthesized 33).
+  const liveSupplyEvidence = (jobId: string) => browserJobs.get(jobId)?.rail?.liveSupplyEvidence() ?? null;
   // ADAAAA-6561: per live-ingest job, the CURRENT perceive session held by that
   // job plus whether the job has been stopped. The stop path uses this to
   // release the perceive slot SYNCHRONOUSLY (independent of the in-flight GPU
@@ -5870,6 +5876,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         job.status === "done" || job.status === "failed" || job.status === "cancelled"
           ? null
           : liveConsumeEvidence(job.id),
+      // ADAAAA-8636: the rail's live SUPPLY counters — the only in-flight
+      // source for `skippedWindows`. Terminal jobs pass nothing (the settled
+      // record's `supplySkippedWindows` wins verbatim).
+      liveSupply:
+        job.status === "done" || job.status === "failed" || job.status === "cancelled"
+          ? null
+          : liveSupplyEvidence(job.id),
     });
     return {
       // ADAAAA-7854: `postableHighlights` / `mergedHighlights` / `rawHighlights`
@@ -6157,6 +6170,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // ADAAAA-8250: same live stride counters as `GET /jobs/:id` — the two
           // surfaces must never disagree about the count either.
           liveConsume: liveConsumeEvidence(job.id),
+          // ADAAAA-8636: same live supply counters as `GET /jobs/:id` — the two
+          // surfaces must never disagree about the skip count either. Ignored on
+          // a terminal job by the projection itself (the record wins).
+          liveSupply: liveSupplyEvidence(job.id),
         }),
         // ADAAAA-7750: WHY the window list is empty, when it is. Derived from
         // stored counters only (no decide, no GPU): a dead capture surface, a
@@ -8076,7 +8093,11 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // timeout. 0/unset = inert; a per-run counter object carries `asrWaitMisses`
     // into the persisted observe snapshot (see `buildLiveObserveMetrics`).
     decideAsrWaitMs: cfg.liveDecideAsrWaitMs,
-    decideAsrWaitStats: { misses: 0 },
+    decideAsrWaitStats: { misses: 0, trims: 0 },
+    // ADAAAA-8611: the headroom-aware wait guard, inert at the shipped default
+    // (0). Set, the wait is clamped to the remaining delivered-latency-bar
+    // headroom so a wait-miss row cannot spend the whole bar before its decide.
+    decideAsrHeadroomMs: cfg.liveDecideAsrHeadroomMs,
     // ADAAAA-7781: the COMPACT verdict contract on the live rail only. The live
     // pass is decode-bound, so the per-call output-token count IS its throughput
     // ceiling; VOD keeps the full long-form contract.

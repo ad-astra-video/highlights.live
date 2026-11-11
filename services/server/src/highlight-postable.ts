@@ -21,8 +21,9 @@
 //      "notable, not a goal" and ride a separate lane; `not_highlight` and a
 //      legacy verdict with no outcome are not postable.
 //   3. A verdict that contradicts itself is not postable, whatever its
-//      `eventType` says: a structured Stage-2 `near_miss` / `not_goal`, or a
-//      reason whose own text refutes the goal ("...does not enter the net").
+//      `eventType` says: a structured Stage-2 `near_miss` / `not_goal`, a stored
+//      Stage-2 dive attestation that did not corroborate the goal (ADAAAA-8647),
+//      or a reason whose own text refutes the goal ("...does not enter the net").
 //   4. Overlapping clip windows collapse into ONE moment: the best-scoring (then
 //      best-corroborated) clip wins, the rest are marked `duplicateOf` the
 //      winner and reported with the winner's `duplicateCount` / `mergedIds`.
@@ -71,10 +72,36 @@ export function isGoalRefutingReason(reason?: string): boolean {
 }
 
 /** True when the record's own verdict contradicts an accepted goal: a
- * structured Stage-2 verdict of near_miss/not_goal, or refuting reason text. */
-export function hasContradictingVerdict(h: Pick<HighlightRecord, "reason" | "goalConfirmed">): boolean {
+ * structured Stage-2 verdict of near_miss/not_goal, a refuting Stage-2 dive
+ * attestation, or refuting reason text. */
+export function hasContradictingVerdict(
+  h: Pick<HighlightRecord, "reason" | "goalConfirmed" | "confirmAttestation">
+): boolean {
   if (h.goalConfirmed === "near_miss" || h.goalConfirmed === "not_goal") return true;
+  if (hasRefutingDiveAttestation(h)) return true;
   return isGoalRefutingReason(h.reason);
+}
+
+/** The dive verdicts that argue about a goal. `dropped` / `passthrough` are
+ * settled attempts that produced NO verdict, so they never refute. */
+const GOAL_VERDICTS = ["confirmed_goal", "near_miss", "not_goal"] as const;
+
+/**
+ * ADAAAA-8647: did the row's OWN stored Stage-2 dive argue against the goal?
+ *
+ * The live async confirm lane stamps `confirmAttestation` on the HIGHLIGHT row
+ * while `job_candidates` stores no confirm record, so this row-level field is
+ * the only evidence a served read has about the dive. A `corroborated:true`
+ * verdict confirmed the moment (it never refutes); a real verdict with
+ * `corroborated:false` — including a `confirmed_goal` the dive could not
+ * corroborate — is a refutation and the row must not ship as a GOAL card.
+ */
+export function hasRefutingDiveAttestation(
+  h: Pick<HighlightRecord, "confirmAttestation">
+): boolean {
+  const att = h.confirmAttestation;
+  if (!att || att.corroborated === true) return false;
+  return (GOAL_VERDICTS as readonly string[]).includes(att.goalConfirmed);
 }
 
 /** A postable moment. `duplicateCount` / `mergedIds` / `duplicateOf` are set on
@@ -279,6 +306,18 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
       // "Notable, not a goal": a near miss / big play a human may still want to
       // see, but it must never be postable as a GOAL.
       if (h.outcome === "near_miss" || h.outcome === "big_play") notable.push(h);
+      continue;
+    }
+    // ADAAAA-8647: a scoring row whose OWN stored Stage-2 dive refuted the goal
+    // is not a GOAL card. job_candidates stores no confirm record, so rule 3
+    // below could not see the dive and the row shipped as a postable GOAL while
+    // its badge read CONFIRMED. Downgrade it into the notable lane (its clip
+    // exists) so 0 false GOAL cards ship; the persisted row is NOT rewritten —
+    // `outcome` is projected here exactly like the celebration absorb below, and
+    // the card's badge is `dive_disagreed` from `confirmationForHighlightRow`.
+    if (hasRefutingDiveAttestation(h)) {
+      counts.notScoring += 1;
+      notable.push({ ...h, outcome: "big_play" });
       continue;
     }
     if (hasContradictingVerdict(h)) {

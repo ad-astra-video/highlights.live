@@ -384,6 +384,14 @@ export interface ServerConfig {
    * own inline ASR — the prefetch is NOT aborted, so a slow call still completes
    * and caches instead of being abandoned and re-paid on the next window. */
   liveDecideAsrWaitMs: number;
+  /** ADAAAA-8611: `LIVE_DECIDE_ASR_HEADROOM_MS`, default 0 = INERT (the wait is
+   * the budget, exactly as 8351 shipped it). When set, it is the
+   * delivered-latency bar this rail is graded against (AC-B p95 = 5 000 ms) and
+   * the effective wait becomes `min(budget, headroom - elapsed since fire)`, so a
+   * wait-miss row cannot spend more than the bar before its decide starts. The
+   * 6 000 ms budget itself is unchanged: the budget-vs-bar trade is a PO/CEO
+   * ruling, not a code default. */
+  liveDecideAsrHeadroomMs: number;
   /** ADAAAA-7777 (lever B, trim 3): run the Stage-2 `/confirm` dive on the LIVE
    * pass. `DECIDE_CONFIRM_ENABLED` stays the master gate; this is the live-rail
    * opt-out, so VOD keeps its confirmation pass when the live rail skips it.
@@ -1097,6 +1105,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // timeout above. Default 0 = inert (today's behaviour: await the whole
     // prefetch), so the knob cannot move a cell by accident.
     liveDecideAsrWaitMs: positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_WAIT_MS) ?? 0,
+    // ADAAAA-8611: the headroom-aware wait guard. Default 0 = inert, so the
+    // budget above behaves exactly as shipped; a leg/PO ruling sets it to the
+    // delivered-latency bar (5 000 = AC-B p95) to stop a wait-miss row spending
+    // more than the bar before its decide starts. `0`/unparseable = inert.
+    liveDecideAsrHeadroomMs: positiveNumberOrUndefined(env.LIVE_DECIDE_ASR_HEADROOM_MS) ?? 0,
     // ADAAAA-7777 (lever B, trim 3): the Stage-2 /confirm dive on the live rail.
     // `DECIDE_CONFIRM_ENABLED` remains the master gate.
     liveDecideConfirm: env.LIVE_DECIDE_CONFIRM !== "0",

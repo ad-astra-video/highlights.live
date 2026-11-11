@@ -51,6 +51,13 @@ export interface LiveLegRowLike {
   localizeOffsetMs?: number;
   /** ADAAAA-8495 additive optional: the row id (the metric's dedupe key). */
   highlightId?: string;
+  /** ADAAAA-8611 additive optional: which ASR road the row's decide took and what
+   *  the wait cost (`prefetched` | `miss` | `waitmiss` | `inline`). Attribution
+   *  INSIDE `decideE2eMs` — never a term of the stage sum. Absent on rows written
+   *  before this field existed, which is why it is optional here. */
+  asrLane?: "prefetched" | "miss" | "waitmiss" | "inline";
+  asrWaitMs?: number;
+  asrPrefetchMs?: number;
 }
 
 /** The bars this ticket is graded against. One place, so the grader, the leg
@@ -113,7 +120,78 @@ export interface LiveLegInput {
   /** Delivered rows whose `eventType` is GOAL (a suppressed GOAL is delivered
    * under its demoted type, so this counts delivered GOALs, not candidates). */
   deliveredGoalRows?: number;
+  /** AC-C's actual bar on the goal-dense shape-2 fixture: delivered GOAL rows
+   * whose own attestation did NOT measure a scoreboard change (and are therefore
+   * false positives). `deliveredGoalRows` alone cannot carry the verdict there —
+   * the fixture re-presents 4 real score transitions, so delivering GOALs is
+   * correct and the 8483 "0 delivered GOAL" count is the wrong instrument. When
+   * supplied, this is the bar and `deliveredGoalRows` is reported as context. */
+  goalFalsePositiveRows?: number;
+  /** ADAAAA-8487 AC-B shape amendment: the fixture's `N` anchors, pre-committed
+   * by the `$0` OCR census BEFORE the leg runs (`N >= 9` required). Supplying
+   * this WITH `rowAnchors` makes `n` an anchor count instead of a row count —
+   * the amendment's whole point, because a row count can be inflated by a
+   * second row at an anchor that was already delivered. */
+  fixtureAnchors?: FixtureAnchorLike[];
+  /** Where each delivered row localized in content time, so the row can be
+   * attributed to an anchor. Same order does not matter: rows are matched by
+   * the fields they carry. */
+  rowAnchors?: RowAnchorLike[];
+  /** How far (content seconds) a row may sit from an anchor and still own it.
+   * Defaults to half the smallest gap the census would produce; a row outside
+   * it is reported as unresolved rather than snapped to a neighbour. */
+  anchorMaxGapS?: number;
+  /** The leg's AUTHORIZED window in seconds, from its cap record. The default
+   * floors are the 480 s funded / 600 s natural shapes, but `cap-record-2`
+   * authorized a 410 s shape-2 leg — grading that leg against 480 s would read
+   * `duration_below_floor` on a leg that ran its authorized shape exactly. The
+   * value comes from the cap record, never from the leg. */
+  authorizedDurationS?: number;
 }
+
+/** One fixture anchor: the census window the leg's content re-presents. `atS` is
+ * the content second the window's score transition sits at, `transition` the
+ * physical transition it re-presents (the fixture cannot exceed the content
+ * ceiling — 4 on the 8154 reel). */
+export interface FixtureAnchorLike {
+  id: string;
+  atS: number;
+  transition: number;
+}
+
+/** A delivered row's localization, as the stored highlight carries it. */
+export interface RowAnchorLike {
+  highlightId?: string;
+  triggerTs: number;
+  /** `localizedTs` on the stored highlight. Preferred over `triggerTs` because
+   * the trigger is a candidate timestamp and the localization is where the
+   * moment actually was. */
+  localizedTs?: number;
+}
+
+/** AC-B shape amendment readout: `n` anchored rows over `N` anchors, with the
+ * duplicate and uncovered anchors named so "fixture re-presents a transition"
+ * and "coverage regressed" stay separable. */
+export interface AnchorAccounting {
+  /** `N` — anchors in the fixture, from the pre-run census. */
+  anchors: number;
+  /** Rows that resolved to an anchor (<= delivered rows). */
+  resolvedRows: number;
+  /** `n` — anchors owned by exactly one counted row. This is AC-B's `n`. */
+  nAnchored: number;
+  /** Anchors that received more than one row, with those rows' ids. */
+  duplicateAnchors: { id: string; transition: number; rows: string[] }[];
+  /** Anchors in the fixture that no row covered. */
+  uncoveredAnchors: string[];
+  /** Distinct physical transitions covered (<= `physicalTransitions`). */
+  distinctMoments: number;
+  /** Physical transitions the fixture holds (4 on the ADAAAA-8154 reel). */
+  physicalTransitions: number;
+  /** Rows that never resolved to an anchor. Reported, never silently dropped:
+   * a row outside every anchor's gap is a localization problem, not coverage. */
+  unresolvedRows: string[];
+}
+
 
 export interface AcGrade {
   status: LegVerdict;
@@ -137,9 +215,24 @@ export interface LiveLegGrade {
   mode: LiveLegMode;
   verdict: LegVerdict;
   reasons: string[];
+  /** AC-B's `n` when anchor accounting is supplied (anchors owned by exactly one
+   * row), else the delivered-row count. */
   n: number;
+  /** Delivered rows on the leg, always. Published beside `n` so a row count is
+   * never read as anchored coverage (ADAAAA-8487 AC-B shape amendment). */
+  nRows: number;
+  /** Present only when `fixtureAnchors` + `rowAnchors` were supplied. Absent
+   * means `n` is a row count and the leg says so in its reasons. */
+  anchors?: AnchorAccounting;
   p50Ms: number;
   p95Ms: number;
+  /** AC-B estimator disclosure: the nearest-rank p95 (`sorted[ceil(0.95n)-1]`),
+   * which at n < 20 IS the max row. `p95Ms` stays the metric of record — the
+   * product's `deliveredLatencySummary` interpolates between the two nearest
+   * ranks — but a single over-bar tail row must be visible on the verdict, not
+   * averaged away by that interpolation (ADAAAA-8487 leg a7d61806: p95 4,583 ms
+   * PASS vs nearest-rank 5,630 ms). */
+  p95NearestRankMs: number;
   maxMs: number;
   /** Wall duration (s) when known; null when neither durationS nor timestamps
    * were supplied. */
@@ -152,11 +245,13 @@ export interface LiveLegGrade {
   /** Metered seconds / wall seconds: 8483 read 1.815x because of container
    * startup/teardown. Absent when either input is missing. */
   meteredToWallRatio?: number;
-  acB: AcGrade & { p50Ms: number; p95Ms: number; p50Bars: P50BarRead };
+  acB: AcGrade & { p50Ms: number; p95Ms: number; p95NearestRankMs: number; p50Bars: P50BarRead };
   acC?: AcGrade & {
     accepted: number;
     candidates?: number;
     deliveredGoalRows: number;
+    /** AC-C's bar when the caller measured false positives explicitly. */
+    goalFalsePositiveRows?: number;
     acceptedRatio?: number;
     baselineAcceptedRatio: number;
     ratioAtLeastBaseline?: boolean;
@@ -201,6 +296,86 @@ function stageSum(row: LiveLegRowLike): number {
   );
 }
 
+/** A row's content second: its localization when it has one, else its trigger. */
+function rowContentTs(row: RowAnchorLike): number {
+  return Number.isFinite(row.localizedTs) ? (row.localizedTs as number) : row.triggerTs;
+}
+
+/**
+ * Attribute delivered rows to the fixture's census anchors (ADAAAA-8487 AC-B
+ * shape amendment). Pure, like the grader: no clock, no store.
+ *
+ * `n` is the number of anchors owned by a row — an anchor delivered twice counts
+ * once, which is exactly the `merged_duplicate` / re-measured-twin case the
+ * amendment exists for. `unresolvedRows` carries rows that sat outside every
+ * anchor's gap instead of snapping them onto a neighbouring anchor, because a
+ * silent snap would manufacture coverage.
+ */
+export function accountAnchors(
+  fixtureAnchors: FixtureAnchorLike[],
+  rowAnchors: RowAnchorLike[],
+  anchorMaxGapS?: number
+): AnchorAccounting {
+  const gap =
+    Number.isFinite(anchorMaxGapS) && (anchorMaxGapS as number) > 0
+      ? (anchorMaxGapS as number)
+      : defaultAnchorGapS(fixtureAnchors);
+  const byAnchor = new Map<string, { anchor: FixtureAnchorLike; rows: string[] }>();
+  const unresolvedRows: string[] = [];
+
+  rowAnchors.forEach((row, index) => {
+    const at = rowContentTs(row);
+    const label = row.highlightId ?? `row#${index}@${row.triggerTs}s`;
+    if (!Number.isFinite(at)) {
+      unresolvedRows.push(label);
+      return;
+    }
+    let best: FixtureAnchorLike | undefined;
+    let bestDistance = Infinity;
+    for (const anchor of fixtureAnchors) {
+      const distance = Math.abs(anchor.atS - at);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = anchor;
+      }
+    }
+    if (!best || bestDistance > gap) {
+      unresolvedRows.push(label);
+      return;
+    }
+    const slot = byAnchor.get(best.id) ?? { anchor: best, rows: [] };
+    slot.rows.push(label);
+    byAnchor.set(best.id, slot);
+  });
+
+  const duplicates = [...byAnchor.values()]
+    .filter((slot) => slot.rows.length > 1)
+    .map((slot) => ({ id: slot.anchor.id, transition: slot.anchor.transition, rows: slot.rows }));
+
+  return {
+    anchors: fixtureAnchors.length,
+    resolvedRows: rowAnchors.length - unresolvedRows.length,
+    nAnchored: byAnchor.size,
+    duplicateAnchors: duplicates,
+    uncoveredAnchors: fixtureAnchors.filter((anchor) => !byAnchor.has(anchor.id)).map((a) => a.id),
+    distinctMoments: new Set([...byAnchor.values()].map((slot) => slot.anchor.transition)).size,
+    physicalTransitions: new Set(fixtureAnchors.map((anchor) => anchor.transition)).size,
+    unresolvedRows,
+  };
+}
+
+/** Half the closest anchor spacing: a row is attributed to an anchor only inside
+ * its own window, never across a boundary into a neighbour's. */
+function defaultAnchorGapS(fixtureAnchors: FixtureAnchorLike[]): number {
+  const sorted = fixtureAnchors.map((a) => a.atS).sort((a, b) => a - b);
+  let closest = Infinity;
+  for (let i = 1; i < sorted.length; i += 1) {
+    closest = Math.min(closest, sorted[i] - sorted[i - 1]);
+  }
+  return Number.isFinite(closest) ? closest / 2 : 17;
+}
+
+
 /**
  * Grade one finished leg. Pure: no clock, no network, no store.
  *
@@ -211,16 +386,32 @@ function stageSum(row: LiveLegRowLike): number {
  */
 export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
   const rows = input.rows;
-  const n = rows.length;
+  const nRows = rows.length;
+  // ADAAAA-8487 AC-B shape amendment: when the fixture's census anchors and the
+  // rows' localizations are supplied, `n` is anchors-owned-once, not rows.
+  const anchorAccounting =
+    input.fixtureAnchors && input.rowAnchors
+      ? accountAnchors(input.fixtureAnchors, input.rowAnchors, input.anchorMaxGapS)
+      : undefined;
+  const n = anchorAccounting ? anchorAccounting.nAnchored : nRows;
   const totals = rows.map((r) => r.deliveredLatencyMs).sort((a, b) => a - b);
   const p50Ms = totals.length ? roundMs(percentile(totals, 50)) : 0;
   const p95Ms = totals.length ? roundMs(percentile(totals, 95)) : 0;
+  // The metric of record interpolates, so at n = 12 the p95 sits between the
+  // 11th and 12th value and one 5.6 s row reads 4.58 s. Both reads are published
+  // so an in-bar p95 is never quoted without the tail row beside it.
+  const p95NearestRankMs = totals.length ? totals[Math.max(0, Math.ceil(0.95 * totals.length) - 1)] : 0;
   const maxMs = totals.length ? totals[totals.length - 1] : 0;
 
   const resolved = resolveDuration(input);
   const durationS = resolved.durationS;
   const durationSource = resolved.source;
-  const floorS = input.mode === "natural" ? LIVE_LEG_BARS.naturalFloorS : LIVE_LEG_BARS.fundedFloorS;
+  const floorS =
+    Number.isFinite(input.authorizedDurationS) && (input.authorizedDurationS as number) > 0
+      ? (input.authorizedDurationS as number)
+      : input.mode === "natural"
+        ? LIVE_LEG_BARS.naturalFloorS
+        : LIVE_LEG_BARS.fundedFloorS;
   const meteredToWallRatio =
     Number.isFinite(input.perceiveSessionS) && durationS !== null && durationS > 0
       ? (input.perceiveSessionS as number) / durationS
@@ -229,9 +420,22 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
   const shapeReasons: string[] = [];
   let shapeBlocked = false;
 
-  if (n === 0) {
+  if (nRows === 0) {
     // An empty window is a re-arm, never a FAIL: there was nothing to deliver.
     shapeReasons.push("empty_window: 0 delivered rows (re-arm, never FAIL)");
+    shapeBlocked = true;
+  }
+  if (
+    anchorAccounting &&
+    anchorAccounting.anchors > 0 &&
+    anchorAccounting.anchors < LIVE_LEG_BARS.minDeliveredRows
+  ) {
+    // The census is a pre-commitment: a fixture under `N >= 9` cannot answer the
+    // bar at all, so the leg must not run and AC-B closes `N of N` with the
+    // content ceiling named (ADAAAA-8570 `cap-record-2`).
+    shapeReasons.push(
+      `fixture_below_9_anchors: N=${anchorAccounting.anchors} < ${LIVE_LEG_BARS.minDeliveredRows} — AC-B closes N of N on the content ceiling; the leg cannot answer the bar`
+    );
     shapeBlocked = true;
   }
   if (input.decideP50Ms === undefined) {
@@ -253,8 +457,12 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     );
     shapeBlocked = true;
   }
-  if (n > 0 && n < LIVE_LEG_BARS.minDeliveredRows) {
-    shapeReasons.push(`n_below_9: ${n} delivered rows < ${LIVE_LEG_BARS.minDeliveredRows}`);
+  if (nRows > 0 && n < LIVE_LEG_BARS.minDeliveredRows) {
+    shapeReasons.push(
+      anchorAccounting
+        ? `n_below_9: ${n} anchored rows < ${LIVE_LEG_BARS.minDeliveredRows} (${nRows} delivered rows, one row per anchor)`
+        : `n_below_9: ${n} delivered rows < ${LIVE_LEG_BARS.minDeliveredRows}`
+    );
     shapeBlocked = true;
   }
 
@@ -281,6 +489,7 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     reasons: [...shapeReasons],
     p50Ms,
     p95Ms,
+    p95NearestRankMs,
     p50Bars,
   };
   if (!shapeBlocked) {
@@ -291,7 +500,7 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     acB.reasons = over.length
       ? ["over_bar: " + over.join(" ; ")]
       : [
-          `within_bar: ${p50BarLabel} = within (legacy read: ${p50Bars.delta === "both" ? "PASS" : "FAIL"}) and p95 ${p95Ms} ms <= ${LIVE_LEG_BARS.p95Ms} ms on n=${n}`,
+          `within_bar: ${p50BarLabel} = within (legacy read: ${p50Bars.delta === "both" ? "PASS" : "FAIL"}) and p95 ${p95Ms} ms <= ${LIVE_LEG_BARS.p95Ms} ms on n=${n}${anchorAccounting ? ` anchored rows over N=${anchorAccounting.anchors}` : ""}`,
         ];
     // A PASS on n rows does not prove the delivery bar decide-independent: the
     // missing decide p50 stays visible on the graded verdict instead of being
@@ -299,6 +508,23 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     if (input.decideP50Ms === undefined) {
       acB.reasons.push("decide_p50_not_evaluated: no decide p50 supplied (delivery bar not proven decide-independent)");
     }
+    // A PASS on the metric of record must not hide a row that busts the bar on
+    // its own: at n = 12 the interpolated p95 can sit 45 % of the way between the
+    // 11th value and a single tail row, so the tail is named on the verdict.
+    if (acB.status === "PASS" && p95NearestRankMs > LIVE_LEG_BARS.p95Ms) {
+      acB.reasons.push(
+        `tail_over_bar: nearest-rank p95 ${p95NearestRankMs} ms > ${LIVE_LEG_BARS.p95Ms} ms on ${totals.length} rows` +
+          ` (interpolated p95 ${p95Ms} ms is the metric of record; max ${maxMs} ms) — one row, stated not discounted`,
+      );
+    }
+  }
+  if (!anchorAccounting && nRows > 0) {
+    // A row count is not anchored coverage (ADAAAA-8487 AC-B shape amendment).
+    // Say it on the verdict itself so a leg graded without the census cannot be
+    // read as having satisfied the shape.
+    acB.reasons.push(
+      "anchor_accounting_absent: n is a delivered-row count, not anchored coverage — supply fixtureAnchors + rowAnchors to grade the AC-B shape amendment"
+    );
   }
 
   let acC: LiveLegGrade["acC"];
@@ -321,7 +547,20 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     if (accepted < LIVE_LEG_BARS.minAcceptedRows) {
       reasons.push(`accepted_below_9: ${accepted} < ${LIVE_LEG_BARS.minAcceptedRows}`);
     }
-    if (deliveredGoalRows > LIVE_LEG_BARS.maxDeliveredGoalRows) {
+    const goalFp = input.goalFalsePositiveRows;
+    if (goalFp !== undefined) {
+      // ADAAAA-8487 AC-C on the shape-2 fixture: the bar is goal FALSE POSITIVES
+      // (a delivered GOAL whose attestation measured no scoreboard change), not
+      // the raw GOAL count — the fixture re-presents 4 real transitions, so 10
+      // delivered GOAL rows with 0 FP is the correct reading and `> 0` would
+      // fail a leg for having content.
+      reasons.push(
+        `delivered_goal_rows: ${deliveredGoalRows} (context — a goal-dense fixture delivers real GOALs, not the bar)`
+      );
+      if (goalFp > LIVE_LEG_BARS.maxDeliveredGoalRows) {
+        reasons.push(`goal_false_positives: ${goalFp} > ${LIVE_LEG_BARS.maxDeliveredGoalRows}`);
+      }
+    } else if (deliveredGoalRows > LIVE_LEG_BARS.maxDeliveredGoalRows) {
       reasons.push(`delivered_goal_rows: ${deliveredGoalRows} > ${LIVE_LEG_BARS.maxDeliveredGoalRows}`);
     }
     if (acceptedRatio !== undefined) {
@@ -329,13 +568,19 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
         `accepted_ratio: ${(acceptedRatio * 100).toFixed(2)} % vs baseline ${(LIVE_LEG_BARS.baselineAcceptedRatio * 100).toFixed(2)} % (secondary read, not a bar)`
       );
     }
-    const acCFailed = reasons.some((r) => r.startsWith("accepted_below_9") || r.startsWith("delivered_goal_rows"));
+    const acCFailed = reasons.some(
+      (r) =>
+        r.startsWith("accepted_below_9") ||
+        r.startsWith("goal_false_positives") ||
+        (goalFp === undefined && r.startsWith("delivered_goal_rows"))
+    );
     acC = {
       status: shapeBlocked ? "UNMEASURED" : acCFailed ? "FAIL" : "PASS",
       reasons,
       accepted,
       candidates: input.candidates,
       deliveredGoalRows,
+      ...(goalFp !== undefined ? { goalFalsePositiveRows: goalFp } : {}),
       acceptedRatio,
       baselineAcceptedRatio: LIVE_LEG_BARS.baselineAcceptedRatio,
       ratioAtLeastBaseline,
@@ -359,7 +604,16 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
   if (verdict === "UNMEASURED") reasons.push(...acB.reasons.filter((r) => !r.startsWith("within_bar")));
   if (verdict === "FAIL") {
     if (acB.status === "FAIL") reasons.push(...acB.reasons);
-    if (acC?.status === "FAIL") reasons.push(...acC.reasons.filter((r) => !r.startsWith("accepted_ratio")));
+    if (acC?.status === "FAIL")
+      reasons.push(
+        ...acC.reasons.filter(
+          (r) =>
+            !r.startsWith("accepted_ratio") &&
+            // A context line is not a failure: only drop the GOAL-count wording
+            // when the caller supplied the FP read that actually decided AC-C.
+            !(input.goalFalsePositiveRows !== undefined && r.startsWith("delivered_goal_rows"))
+        )
+      );
   }
 
   return {
@@ -367,8 +621,11 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     verdict,
     reasons,
     n,
+    nRows,
+    ...(anchorAccounting ? { anchors: anchorAccounting } : {}),
     p50Ms,
     p95Ms,
+    p95NearestRankMs,
     maxMs,
     durationS,
     durationSource,

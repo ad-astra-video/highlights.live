@@ -1,0 +1,62 @@
+{
+ "provenance": {
+  "source": "decide_audit row on livepeer-ai-x99 (deployed build 032078a, highlights-live-decide:8603)",
+  "jobId": "a6d4380e-e5f0-42b4-a8ca-5a6583499aed",
+  "createdAt": "2026-11-11T00:38:01.010Z",
+  "maxTokens": "400",
+  "note": "probe-free: the reply is a stored live-rail row, not a probe response",
+  "builtWith": "services/decide/app/gemma.py::_response_block(parse_decision(raw_reply)) + _window_analysis",
+  "mode": "base",
+  "environment": "ASR_URL=http://asr:8082 (the deployed decide env), so analysis.asr.url matches production",
+  "promptNote": "analysis.prompt is the first 400 chars of the row's real prompt_text (trimmed; the schema only requires a string)"
+ },
+ "raw_reply": "{\"isHighlight\":false,\"score\":0,\"eventType\":\"AUDIO_BURST\",\"outcome\":\"not_highlight\",\"reason\":\"The ball remains in play and does not enter the net at t=0.0s\",\"reasoning\":\"The timeline and frames show a ball in play without a goal, contradicting the audio burst hypothesis.\",\"verdict\":{\"hypothesis\":\"AUDIO_BURST\",\"independentlyObserved\":\"The ball is in play and the score remains 1-1\",\"criteria\":{\"ballCrossedLineBetweenPosts\":false,\"ballInNet\":false,\"scoreboardChanged\":false,\"crowdErupted\":false},\"contradictedBy\":\"The ball did not enter the net\"},\"postTitle\":\"Defender contests ball\",\"runningSummary\":\"The defender contests the ball in the penalty area.\"}",
+ "analysis": {
+  "prompt": "You are a video highlight review agent in a sports broadcast pipeline. You will be given a candidate event and a sequence of frames (and possibly audio context). Follow the user's instructions exactly and respond ONLY with the requested strict JSON. Do not add commentary, markdown fences, or any text outside the JSON object.You are a sports/esports highlight judge. Each window is a DOSSIER: a few \u2026[trimmed: real prompt_text of this row, 20213 chars]",
+  "dataItems": [],
+  "frames": [],
+  "images": [],
+  "audio": {
+   "uri": "",
+   "sampleRate": 16000,
+   "path": "none"
+  },
+  "asr": {
+   "transcript": "",
+   "url": "http://asr:8082"
+  },
+  "perceiveTimeline": {
+   "records": 0,
+   "chars": 0,
+   "compacted": "none",
+   "seeds": 0,
+   "withFindings": 0
+  },
+  "response": {
+   "isHighlight": false,
+   "score": 0.0,
+   "eventType": "AUDIO_BURST",
+   "reason": "The ball remains in play and does not enter the net at t=0.0s",
+   "outcome": "not_highlight",
+   "phase": null,
+   "nearMiss": false,
+   "reasoning": "The timeline and frames show a ball in play without a goal, contradicting the audio burst hypothesis.",
+   "verdict": {
+    "hypothesis": "AUDIO_BURST",
+    "independentlyObserved": "The ball is in play and the score remains 1-1",
+    "criteria": {
+     "ballCrossedLineBetweenPosts": false,
+     "ballInNet": false,
+     "scoreboardChanged": false,
+     "crowdErupted": false
+    },
+    "contradictedBy": "The ball did not enter the net"
+   },
+   "evidenceAttested": [],
+   "audioContext": null,
+   "runningSummary": "The defender contests the ball in the penalty area.",
+   "postTitle": "Defender contests ball",
+   "source": "gemma"
+  }
+ }
+}

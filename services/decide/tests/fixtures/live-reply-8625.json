@@ -1,0 +1,13 @@
+{
+ "provenance": {
+  "source": "decide_audit row, livepeer-ai-x99, deployed build 032078a (highlights-live-decide:8603)",
+  "jobId": "a6d4380e-e5f0-42b4-a8ca-5a6583499aed",
+  "createdAt": "2026-11-11T00:38:01.010Z",
+  "params": {
+   "max_tokens": "400"
+  },
+  "note": "VERBATIM raw_reply of a real live-rail window. probe-free: stored row, no engine call.",
+  "contract": "_OUTPUT_CONTRACT_COMPACT (the live rail never asks for `phase`)"
+ },
+ "raw_reply": "{\"isHighlight\":false,\"score\":0,\"eventType\":\"AUDIO_BURST\",\"outcome\":\"not_highlight\",\"reason\":\"The ball remains in play and does not enter the net at t=0.0s\",\"reasoning\":\"The timeline and frames show a ball in play without a goal, contradicting the audio burst hypothesis.\",\"verdict\":{\"hypothesis\":\"AUDIO_BURST\",\"independentlyObserved\":\"The ball is in play and the score remains 1-1\",\"criteria\":{\"ballCrossedLineBetweenPosts\":false,\"ballInNet\":false,\"scoreboardChanged\":false,\"crowdErupted\":false},\"contradictedBy\":\"The ball did not enter the net\"},\"postTitle\":\"Defender contests ball\",\"runningSummary\":\"The defender contests the ball in the penalty area.\"}"
+}

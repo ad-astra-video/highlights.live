@@ -441,3 +441,296 @@ describe("AC-B dual p50 bars (ADAAAA-8528 ruling A)", () => {
     expect(g.acB.p50Bars.delta).toBe("both");
   });
 });
+
+// ADAAAA-8487 AC-B shape amendment: a delivered row only counts toward `n` if it
+// OWNS its anchor. The deployed-build leg `d251ceaa` is the case that forced
+// this: it read 9 delivered rows (p95 4,414 ms, inside the bar) but two of them
+// localized to the same fixture anchor (w01), so the row count was 9 and the
+// anchored count was 8 — UNMEASURED, not a pass.
+const SHAPE2_ANCHORS = [
+  // 12 windows of 34 s, round-robin over the 4 physical transitions (ADAAAA-8571).
+  { id: "w01", atS: 17, transition: 117 },
+  { id: "w02", atS: 51, transition: 149 },
+  { id: "w03", atS: 85, transition: 340 },
+  { id: "w04", atS: 119, transition: 399 },
+  { id: "w05", atS: 155, transition: 117 },
+  { id: "w06", atS: 189, transition: 149 },
+  { id: "w07", atS: 223, transition: 340 },
+  { id: "w08", atS: 257, transition: 399 },
+  { id: "w09", atS: 287, transition: 117 },
+  { id: "w10", atS: 321, transition: 149 },
+  { id: "w11", atS: 355, transition: 340 },
+  { id: "w12", atS: 389, transition: 399 },
+];
+
+const anchored = (localizedTs: number[], triggerTs?: number[]) =>
+  localizedTs.map((ts, i) => ({
+    highlightId: `h${i + 1}`,
+    triggerTs: triggerTs?.[i] ?? ts,
+    localizedTs: ts,
+  }));
+
+describe("AC-B anchor accounting (ADAAAA-8487 shape amendment)", () => {
+  const flatRows = (ms: number, n = 9) =>
+    Array.from({ length: n }, (_, i) => ({
+      triggerTs: 100 + i * 40,
+      deliveredLatencyMs: ms,
+      fireLagMs: 0,
+      decideE2eMs: 0,
+      acceptWaitMs: 0,
+      acceptMs: 0,
+      persistAckMs: ms,
+    }));
+
+  it("counts an anchor once when two rows land on it, and names the duplicate", () => {
+    const rows = anchored([15.7, 30, 48.67, 82.4, 149.67, 181.67, 214.67, 250, 313.67]);
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: flatRows(2_000, rows.length),
+      durationS: 410,
+      authorizedDurationS: 410,
+      decideP50Ms: 1_982,
+      fixtureAnchors: SHAPE2_ANCHORS,
+      rowAnchors: rows,
+    });
+
+    // The `d251ceaa` shape: 9 delivered rows, w01 delivered twice.
+    expect(g.nRows).toBe(9);
+    expect(g.n).toBe(8);
+    expect(g.anchors?.nAnchored).toBe(8);
+    expect(g.anchors?.duplicateAnchors).toEqual([{ id: "w01", transition: 117, rows: ["h1", "h2"] }]);
+    expect(g.anchors?.uncoveredAnchors).toEqual(["w04", "w09", "w11", "w12"]);
+    expect(g.verdict).toBe("UNMEASURED");
+    expect(g.acB.reasons.some((r) => r.startsWith("n_below_9: 8 anchored rows"))).toBe(true);
+  });
+
+  it("keeps a row count from being read as anchored coverage", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: flatRows(2_000, 9),
+      durationS: 410,
+      authorizedDurationS: 410,
+      decideP50Ms: 1_982,
+    });
+
+    expect(g.nRows).toBe(9);
+    expect(g.n).toBe(9);
+    expect(g.anchors).toBeUndefined();
+    expect(
+      g.acB.reasons.some((r) => r.startsWith("anchor_accounting_absent"))
+    ).toBe(true);
+  });
+
+  it("PASSes at n >= 9 anchored rows and reports N, distinctMoments and the content ceiling", () => {
+    const rows = anchored([17, 51, 85, 119, 155, 189, 223, 257, 287]);
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: flatRows(2_000, rows.length),
+      durationS: 410,
+      authorizedDurationS: 410,
+      decideP50Ms: 1_982,
+      fixtureAnchors: SHAPE2_ANCHORS,
+      rowAnchors: rows,
+    });
+
+    expect(g.n).toBe(9);
+    expect(g.anchors?.anchors).toBe(12);
+    expect(g.anchors?.distinctMoments).toBe(4);
+    expect(g.anchors?.physicalTransitions).toBe(4);
+    expect(g.anchors?.duplicateAnchors).toEqual([]);
+    expect(g.acB.status).toBe("PASS");
+    expect(g.acB.reasons.join(" ")).toContain("anchored rows over N=12");
+  });
+
+  it("closes N of N when the census itself is under 9 anchors — the leg cannot answer the bar", () => {
+    const rows = anchored([17, 51, 85, 119]);
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: flatRows(2_000, rows.length),
+      durationS: 410,
+      authorizedDurationS: 410,
+      decideP50Ms: 1_982,
+      fixtureAnchors: SHAPE2_ANCHORS.slice(0, 4),
+      rowAnchors: rows,
+    });
+
+    expect(g.verdict).toBe("UNMEASURED");
+    expect(g.acB.reasons.some((r) => r.startsWith("fixture_below_9_anchors: N=4"))).toBe(true);
+  });
+
+  it("grades a 410 s shape-2 leg against its own authorized window, not the 480 s default", () => {
+    const rows = anchored([17, 51, 85, 119, 155, 189, 223, 257, 287]);
+    const base = {
+      mode: "funded" as const,
+      rows: flatRows(2_000, rows.length),
+      decideP50Ms: 1_982,
+      fixtureAnchors: SHAPE2_ANCHORS,
+      rowAnchors: rows,
+    };
+
+    // `cap-record-2` authorized 410 s: without the cap record's own window the
+    // leg reads duration_below_floor on a leg that ran its shape exactly.
+    const withoutCap = gradeLiveLeg({ ...base, durationS: 410 });
+    expect(withoutCap.acB.reasons.some((r) => r.startsWith("duration_below_floor"))).toBe(true);
+    expect(withoutCap.floorS).toBe(LIVE_LEG_BARS.fundedFloorS);
+
+    const withCap = gradeLiveLeg({ ...base, durationS: 410, authorizedDurationS: 410 });
+    expect(withCap.floorS).toBe(410);
+    expect(withCap.acB.reasons.some((r) => r.startsWith("duration_below_floor"))).toBe(false);
+    expect(withCap.acB.status).toBe("PASS");
+  });
+
+  it("reports a row that sits outside every anchor instead of snapping it on", () => {
+    // 420 s is past w12's anchor (389 s) by 31 s: outside the 17 s half-window, so
+    // the row is reported rather than snapped onto w12.
+    const rows = anchored([17, 420]);
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: flatRows(2_000, rows.length),
+      durationS: 410,
+      authorizedDurationS: 410,
+      decideP50Ms: 1_982,
+      fixtureAnchors: SHAPE2_ANCHORS,
+      rowAnchors: rows,
+    });
+
+    expect(g.anchors?.resolvedRows).toBe(1);
+    expect(g.anchors?.unresolvedRows).toEqual(["h2"]);
+    expect(g.anchors?.nAnchored).toBe(1);
+  });
+});
+
+// ADAAAA-8487 AC-C on the goal-dense shape-2 fixture: the fixture re-presents 4
+// REAL score transitions, so delivering GOAL rows is correct and the 8483
+// "0 delivered GOAL" count is the wrong instrument. The bar is goal FALSE
+// POSITIVES — a delivered GOAL whose own attestation measured no scoreboard
+// change. `0cade089` delivered 10 GOAL / 0 FP and the PO graded AC-C PASS; the
+// grader has to read that the same way instead of failing a leg for content.
+describe("AC-C goal false positives (ADAAAA-8487)", () => {
+  const gradeAcC = (goalFalsePositiveRows?: number) =>
+    gradeLiveLeg({
+      mode: "funded",
+      rows: flatRowsForAcC(2_000, 9),
+      durationS: 410,
+      authorizedDurationS: 410,
+      decideP50Ms: 2_386,
+      accepted: 12,
+      candidates: 130,
+      deliveredGoalRows: 10,
+      ...(goalFalsePositiveRows !== undefined ? { goalFalsePositiveRows } : {}),
+    });
+
+  const flatRowsForAcC = (ms: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      triggerTs: 100 + i * 40,
+      deliveredLatencyMs: ms,
+      fireLagMs: 0,
+      decideE2eMs: 0,
+      acceptWaitMs: 0,
+      acceptMs: 0,
+      persistAckMs: ms,
+    }));
+
+  it("PASSes a goal-dense leg with 0 false positives and reports the GOAL count as context", () => {
+    const g = gradeAcC(0);
+
+    expect(g.acC?.status).toBe("PASS");
+    expect(g.acC?.goalFalsePositiveRows).toBe(0);
+    expect(g.acC?.deliveredGoalRows).toBe(10);
+    const reason = g.acC?.reasons.join(" ") ?? "";
+    expect(reason).toContain("delivered_goal_rows: 10 (context");
+    expect(reason).not.toContain("goal_false_positives:");
+  });
+
+  it("FAILs on false positives when the attestation did not measure a change", () => {
+    const g = gradeAcC(3);
+
+    expect(g.acC?.status).toBe("FAIL");
+    expect(g.acC?.reasons.some((r) => r.startsWith("goal_false_positives: 3"))).toBe(true);
+    expect(g.reasons.join(" ")).not.toContain("delivered_goal_rows: 10 (context");
+  });
+
+  it("keeps the 8483 behaviour when no FP read is supplied", () => {
+    const g = gradeAcC(undefined);
+
+    expect(g.acC?.status).toBe("FAIL");
+    expect(g.acC?.reasons.some((r) => r.startsWith("delivered_goal_rows: 10 > 0"))).toBe(true);
+    expect(g.reasons.join(" ")).toContain("delivered_goal_rows: 10 > 0");
+  });
+});
+
+// ADAAAA-8487 leg a7d61806 (the shape-2 leg of record, 410 s, n=12 of N=12).
+// Its deliveredLatencyMs, verbatim from the attached bundle. Eleven rows sit
+// between 2,458 and 3,727 ms; the last window of the stream paid 5,630 ms.
+const LEG_A7D61806_ROWS = [
+  3_147, 3_709, 3_727, 2_458, 2_778, 3_095, 2_858, 2_814, 2_682, 2_834, 2_555, 5_630,
+];
+
+describe("AC-B estimator disclosure (ADAAAA-8487 leg a7d61806)", () => {
+  const grade = () =>
+    gradeLiveLeg({
+      mode: "funded",
+      rows: LEG_A7D61806_ROWS.map((deliveredLatencyMs, i) => ({
+        triggerTs: i * 30,
+        deliveredLatencyMs,
+        fireLagMs: 0,
+        decideE2eMs: 2_400,
+        acceptWaitMs: 0,
+        acceptMs: 10,
+        persistAckMs: 0,
+      })),
+      startedAt: "2026-11-11T04:11:42Z",
+      finishedAt: "2026-11-11T04:18:32Z",
+      authorizedDurationS: 410,
+      perceiveSessionS: 413.6,
+      decideP50Ms: 1_959,
+      accepted: 25,
+      deliveredGoalRows: 10,
+      goalFalsePositiveRows: 0,
+    });
+
+  it("keeps p95 on the metric of record — the product's interpolated percentile", () => {
+    const g = grade();
+
+    // rank 10.45 of a 12-row sample: 3727 + 0.45 * (5630 - 3727) = 4583.
+    expect(g.p95Ms).toBe(4_583);
+    expect(g.p95Ms).toBe(deliveredLatencySummary(LEG_A7D61806_ROWS.map((ms) => ({ deliveredLatencyMs: ms })) as never).p95Ms);
+    expect(g.acB.status).toBe("PASS");
+  });
+
+  it("publishes the nearest-rank p95 so the one over-bar row is not averaged away", () => {
+    const g = grade();
+
+    expect(g.maxMs).toBe(5_630);
+    // n=12 -> ceil(0.95 * 12) - 1 = 11, i.e. the last row: nearest-rank p95 IS the max.
+    expect(g.p95NearestRankMs).toBe(5_630);
+    expect(g.acB.p95NearestRankMs).toBe(5_630);
+    expect(g.p95NearestRankMs).toBeGreaterThan(LIVE_LEG_BARS.p95Ms);
+  });
+
+  it("names the tail row in the PASS reasons instead of leaving the in-bar p95 bare", () => {
+    const g = grade();
+    const reason = g.acB.reasons.find((r) => r.startsWith("tail_over_bar:"));
+
+    expect(g.acB.status).toBe("PASS");
+    expect(reason).toContain("nearest-rank p95 5630 ms > 5000 ms on 12 rows");
+    expect(reason).toContain("interpolated p95 4583 ms is the metric of record");
+    expect(reason).toContain("stated not discounted");
+  });
+
+  it("stays silent when the whole sample is inside the bar", () => {
+    const g = gradeLiveLeg({
+      mode: "funded",
+      rows: QUIET_ROWS,
+      startedAt: "2026-11-09T12:54:53.957Z",
+      finishedAt: "2026-11-09T13:03:59.284Z",
+      perceiveSessionS: 544.5,
+      decideP50Ms: 1_389,
+      accepted: 9,
+      deliveredGoalRows: 0,
+      goalFalsePositiveRows: 0,
+    });
+
+    expect(g.acB.reasons.some((r) => r.startsWith("tail_over_bar:"))).toBe(false);
+  });
+});

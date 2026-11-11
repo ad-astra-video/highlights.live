@@ -48,6 +48,37 @@ export const DELIVERED_LATENCY_DEFINITION =
   "accepts the row, so a feed read returns it that tick); " +
   "trigger->delivered = persistAck - (contentOrigin + triggerTs)";
 
+/** ADAAAA-8611: which ASR road this window's decide took, and what it cost.
+ *
+ *  The vocabulary is the one `observeDecideOnly` already logs
+ *  (`[live-asr:<job>] decide @Ts lane=...`), kept identical here so the metric
+ *  and the log line can never disagree about a row:
+ *
+ *  - `prefetched` - the side lane's transcription was ready in time and rode the
+ *    decide payload (no inline ASR inside the decide call),
+ *  - `miss`       - the prefetch SETTLED but did not transcribe (`ran:false`:
+ *    transport / timeout / disabled), so the decide transcribed inline,
+ *  - `waitmiss`   - the decide stopped waiting for the prefetch (wait budget or
+ *    the ADAAAA-8611 headroom clamp) and proceeded with inline ASR; the
+ *    prefetch is never aborted,
+ *  - `inline`     - no prefetch existed for this window at all (`asrWaitMs: 0`).
+ */
+export type LiveAsrLane = "prefetched" | "miss" | "waitmiss" | "inline";
+
+/** ADAAAA-8611: the ASR stage of ONE decided window. `waitMs` is the wall time
+ *  the decide spent waiting for the side lane before it started (0 on the inert
+ *  path); `prefetchMs` is the transcription's own measured cost when it landed.
+ *
+ *  These are attribution INSIDE `decideE2eMs`, not extra stages: the wait
+ *  happens between fire and the decide call, so it is already counted there.
+ *  `deliveredStageSum` deliberately does NOT add them (adding would double-count
+ *  the tail on every wait-miss row). */
+export interface LiveAsrStage {
+  lane: LiveAsrLane;
+  waitMs: number;
+  prefetchMs: number;
+}
+
 /** One emitted, delivered row (the AC's per-row reading). */
 export interface LiveDeliveredLatencyRow {
   /** The row's `trigger.timestamp` (content seconds). */
@@ -75,6 +106,18 @@ export interface LiveDeliveredLatencyRow {
    *  delivered reading per delivered highlight ROW, no matter which delivery
    *  path (accept-time persist or deferred re-attestation) reported it. */
   highlightId?: string;
+  /** ADAAAA-8611: the row's ASR lane (`prefetched` | `miss` | `waitmiss` |
+   *  `inline`) - always emitted, so the tail is attributable off the stored
+   *  record instead of `docker logs`. A row with no prefetch reports `inline`;
+   *  rows written before this field existed simply lack it. */
+  asrLane: LiveAsrLane;
+  /** ADAAAA-8611: wall ms this row's decide spent WAITING for the side lane
+   *  before the decide call started (0 = it never waited). Attribution inside
+   *  `decideE2eMs`, never an extra stage. */
+  asrWaitMs: number;
+  /** ADAAAA-8611: the side lane's own transcription cost for this row's window
+   *  (0 when nothing landed). Attribution inside `decideE2eMs`. */
+  asrPrefetchMs: number;
 }
 
 /** Per-row metric block emitted on `observeMetrics.deliveredLatency`. */
@@ -99,6 +142,11 @@ interface PendingDelivery {
    *  registered BEFORE its accept (the store ack fires DURING accept), so the
    *  accept gate's own done clock only lands afterwards via `noteAcceptDone`. */
   acceptDoneMs: number | null;
+  /** ADAAAA-8611: the window's ASR lane stage. Stamped by `noteAsrStage` as
+   *  soon as the decide knows it (the staged path passes it in at registration,
+   *  the serial path stamps it before its accept completes). Absent = no
+   *  prefetch was ever attached, i.e. `inline`. */
+  asr?: LiveAsrStage;
   /** Set by `notePersisted`; the row is emitted once the accept is done too. */
   triggerTs?: number;
   persistAckAtMs?: number;
@@ -119,6 +167,11 @@ export interface WindowDeliveryTimings {
    *  `noteAcceptDone` supplies it. A finite value keeps the legacy shape (a
    *  window handed over already accepted, e.g. the serial `onDecide` path). */
   acceptDoneMs?: number | null;
+  /** ADAAAA-8611: the window's ASR lane stage, when the caller already knows it
+   *  (the staged path: the decide has settled before the window is registered).
+   *  A caller that registers before deciding stamps it later via
+   *  {@link LiveDeliveryTracker.noteAsrStage}. */
+  asr?: LiveAsrStage;
 }
 
 /** Bounded ring: a 300 s share yields < 100 delivered rows, so 200 is slack. */
@@ -153,6 +206,9 @@ export function deliveredLatencyRow(
     contentOriginMs: number;
     /** ADAAAA-8024: the delivered highlight row id (dedupe key). */
     highlightId?: string;
+    /** ADAAAA-8611: the window's ASR lane stage (attribution inside
+     *  `decideE2eMs`). Absent = no prefetch existed => `inline`, 0, 0. */
+    asr?: LiveAsrStage;
   }
 ): LiveDeliveredLatencyRow {
   const fireLagMs = Math.max(0, Math.round(input.lagMs));
@@ -178,6 +234,11 @@ export function deliveredLatencyRow(
   // by construction. An absolute-clock reading can disagree only by rounding,
   // which is exactly the disagreement a grader must not have to explain.
   const stagedTotal = fireLagMs + decideE2eMs + acceptWaitMs + acceptMs + persistAckMs + localizeOffsetMs;
+  // ADAAAA-8611: the ASR lane stage. It is attribution INSIDE `decideE2eMs`
+  // (the wait sits between fire and the decide call), so it is emitted beside
+  // the stages and deliberately NOT added to `stagedTotal` — the identity
+  // `deliveredLatencyMs == sum(stages)` stays exact on a wait-miss row.
+  const asr = input.asr;
   return {
     triggerTs: input.triggerTs,
     deliveredLatencyMs: Math.max(0, stagedTotal),
@@ -187,6 +248,9 @@ export function deliveredLatencyRow(
     acceptMs,
     persistAckMs,
     localizeOffsetMs,
+    asrLane: asr?.lane ?? "inline",
+    asrWaitMs: Math.max(0, Math.round(asr?.waitMs ?? 0)),
+    asrPrefetchMs: Math.max(0, Math.round(asr?.prefetchMs ?? 0)),
     ...(input.highlightId ? { highlightId: input.highlightId } : {}),
   };
 }
@@ -194,7 +258,12 @@ export function deliveredLatencyRow(
 /** The stage sum a delivered row must reconstruct (ms). Lets a test (and the
  *  log line) prove the decomposition accounts for the total. ADAAAA-8024: the
  *  row now carries its own localization term, so a caller does not need the
- *  window centre; `window` stays accepted for older callers/shapes. */
+ *  window centre; `window` stays accepted for older callers/shapes.
+ *
+ *  ADAAAA-8611: `asrWaitMs` / `asrPrefetchMs` are deliberately NOT terms of
+ *  this sum. They attribute the part of `decideE2eMs` spent waiting for the
+ *  side-lane transcription (fire -> decide start), so adding them here would
+ *  count that tail twice and break the identity the AC is graded on. */
 export function deliveredStageSum(
   row: LiveDeliveredLatencyRow,
   window?: { centerTs: number }
@@ -284,8 +353,36 @@ export class LiveDeliveryTracker {
       settledAtMs: t.settledAtMs,
       acceptStartMs: t.acceptStartMs,
       acceptDoneMs: t.acceptDoneMs ?? null,
+      ...(t.asr ? { asr: t.asr } : {}),
     });
     if (this.pending.length > MAX_ROWS) this.pending.shift();
+  }
+
+  /** ADAAAA-8611: stamp the window's ASR lane stage once the decide knows it.
+   *  Needed on the rails that register a window BEFORE the decide runs (the
+   *  serial `onDecide` path: the persist ack fires during the accept, so the
+   *  window must exist first and the lane is only known afterwards). Matching is
+   *  exact on the centre — the same key `noteAcceptDone` uses — and the newest
+   *  unstamped entry wins, so a re-fired centre cannot inherit the previous
+   *  window's lane. A stage already stamped at registration is never overwritten
+   *  by a later, less specific one. */
+  noteAsrStage(centerTs: number, stage?: LiveAsrStage | null): void {
+    if (!stage || !Number.isFinite(centerTs)) return;
+    if (stage.lane !== "prefetched" && stage.lane !== "miss" && stage.lane !== "waitmiss" && stage.lane !== "inline") {
+      return;
+    }
+    for (let i = this.pending.length - 1; i >= 0; i--) {
+      const p = this.pending[i];
+      if (Math.abs(p.centerTs - centerTs) > 1e-6) continue;
+      if (!p.asr) {
+        p.asr = {
+          lane: stage.lane,
+          waitMs: Math.max(0, Math.round(stage.waitMs ?? 0)),
+          prefetchMs: Math.max(0, Math.round(stage.prefetchMs ?? 0)),
+        };
+      }
+      return;
+    }
   }
 
   /** ADAAAA-8495: the accept gate returned. Stamps the window's own done clock
@@ -366,18 +463,22 @@ export class LiveDeliveryTracker {
       persistAckAtMs: win.persistAckAtMs,
       contentOriginMs: this.contentOriginMs as number,
       ...(win.highlightId ? { highlightId: win.highlightId } : {}),
+      ...(win.asr ? { asr: win.asr } : {}),
     });
     this.pending.splice(idx, 1);
     this.delivered.push(row);
     if (this.delivered.length > MAX_ROWS) this.delivered.shift();
     // Per-row evidence line: the deployed run's AC is readable straight from
     // `docker logs highlights-server` with the same number the metric carries.
+    // ADAAAA-8611: the ASR lane rides the same line (`asr=<lane>/<wait>+<prefetch>`)
+    // so a wait-miss row's tail is attributable from one line instead of a
+    // `docker logs` dig plus a `decide_audit` join.
     // eslint-disable-next-line no-console
     console.log(
       `[live-deliver${this.label ? `:${this.label}` : ""}] row @${row.triggerTs}s ` +
         `delivered=${row.deliveredLatencyMs}ms fire=${row.fireLagMs}ms decide=${row.decideE2eMs}ms ` +
         `acceptWait=${row.acceptWaitMs}ms accept=${row.acceptMs}ms persistAck=${row.persistAckMs}ms ` +
-        `localize=${row.localizeOffsetMs}ms` +
+        `localize=${row.localizeOffsetMs}ms asr=${row.asrLane}/${row.asrWaitMs}+${row.asrPrefetchMs}ms` +
         (row.highlightId ? ` highlight=${row.highlightId}` : "")
     );
   }

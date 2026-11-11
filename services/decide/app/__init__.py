@@ -7,7 +7,7 @@ import time
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, FastAPI, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 log = logging.getLogger("highlights.decide")
 
@@ -450,6 +450,33 @@ class HighlightDecision(BaseModel):
     # response boundary, so the webapp never received it. Additive optional;
     # absent on rule-path verdicts that never built a prompt.
     analysis: Optional[dict] = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unknown_audit_fields(self, handler):
+        """ADAAAA-8625 / ADAAAA-8635: an audit field whose value is UNKNOWN must
+        not be stamped as an explicit null on the wire.
+
+        ``phase`` and ``reasoning`` are declared because the response model is
+        ``extra="ignore"``, so pydantic serializes them even when they carry no
+        information. The live compact contract never asks for a phase, so every
+        live window came back with an explicit null (`phase`, ADAAAA-8625); the
+        rule-fallback / group-verdict producers build a decision with no
+        rationale, and ``reasoning: str = ""`` re-serialized it anyway
+        (ADAAAA-8635). The server's ``AnalysisResponseSchema`` used ``.optional()``
+        for both, which accepts an ABSENT key and rejects an explicit null — one
+        such field deleted the WHOLE per-window analysis block.
+
+        Absent = unknown (AC8 unchanged): a known phase is still emitted exactly
+        as before, and a non-empty rationale is still emitted exactly as before.
+        """
+        data = handler(self)
+        if data.get("phase") is None:
+            data.pop("phase", None)
+        # An empty rationale carries no information, so it adds no key either —
+        # the same "absent means unknown" reading as `phase`.
+        if not data.get("reasoning"):
+            data.pop("reasoning", None)
+        return data
 
 
 def _is_gemma_mode() -> bool:

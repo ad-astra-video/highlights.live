@@ -697,6 +697,15 @@ export const ObserveMetricsSnapshotSchema = z.object({
   asrWaitMisses: z.number().int().min(0).optional(),
   asrWaitBudgetMs: z.number().int().min(0).optional(),
   asrLaneWidth: z.number().int().min(0).optional(),
+  // ADAAAA-8611: the headroom-clamp posture of the ASR wait. `asrWaitHeadroomMs`
+  // is the delivered-latency bar the wait was clamped to (`LIVE_DECIDE_ASR_HEADROOM_MS`,
+  // 5 000 = AC-B p95) and `asrWaitTrims` counts the decides whose wait the clamp
+  // CUT SHORT — a deliberate skip, kept separate from `asrWaitMisses` (a slow
+  // prefetch) so a headroom leg stays comparable to a pre-8611 leg. Both are
+  // additive optional and written only when the headroom env is set; declared
+  // here for the same 8219 reason (an undeclared counter is stripped).
+  asrWaitHeadroomMs: z.number().int().min(0).optional(),
+  asrWaitTrims: z.number().int().min(0).optional(),
   // ADAAAA-7774: the LIVE perceive stride (ingest -> analysis fps). The live
   // ingest delivers ~5 fps while the decide window only carries ~2 fps of
   // content, so the pass now CONSUMES frames at the analysis fps and runs the
@@ -878,6 +887,22 @@ export const ObserveMetricsSnapshotSchema = z.object({
              *  highlight and a re-attested row cannot double-count. Absent on
              *  rows written before this field existed. */
             highlightId: z.string().optional(),
+            /** ADAAAA-8611 (additive): which ASR road this row's decide took.
+             *  `prefetched` = the side lane's transcript rode the decide,
+             *  `miss` = the prefetch settled without transcribing (inline ASR),
+             *  `waitmiss` = the decide stopped waiting (budget / headroom clamp),
+             *  `inline` = no prefetch existed. Declared HERE because a zod object
+             *  strips undeclared keys: without it `JobSchema.parse` would drop
+             *  the attribution the ticket exists to persist (the 8219/8495
+             *  lesson). Absent on rows written before this field existed. */
+            asrLane: z.enum(["prefetched", "miss", "waitmiss", "inline"]).optional(),
+            /** ADAAAA-8611 (additive): wall ms this row's decide spent WAITING
+             *  for the side lane before the decide call started. Attribution
+             *  INSIDE `decideE2eMs` — never added to the stage sum. */
+            asrWaitMs: z.number().min(0).optional(),
+            /** ADAAAA-8611 (additive): the side lane's own transcription cost
+             *  for this row's window (0 when nothing landed). */
+            asrPrefetchMs: z.number().min(0).optional(),
           })
         )
         .max(200),
@@ -2007,6 +2032,23 @@ export const HighlightRecordSchema = z.object({
        *  `timeout` / `transport_failure` / `passthrough`). Additive optional; a
        *  verdict-producing dive never carries it. */
       dropReason: z.string().optional(),
+      /** ADAAAA-8647: which evidence carried a dead-lane promotion
+       *  (`frame_attestation_over_unread_score_lane`). The writer
+       *  (`live-confirm-async.ts`) always stamped it, but this schema did not
+       *  declare it, so zod STRIPPED it on persist and no stored row or page
+       *  could report the promotion basis. Additive optional. */
+      promotionBasis: z.string().optional(),
+      /** ADAAAA-8647: the pooled score-read counts that proved the lane was
+       *  DEAD (zero samples) rather than read-and-unchanged, so a fallback
+       *  promotion is gradable from the row alone. Additive optional. */
+      scoreLane: z
+        .object({
+          scoreReads: z.number().int().min(0),
+          preSamples: z.number().int().min(0),
+          postSamples: z.number().int().min(0),
+          need: z.number().int().min(0),
+        })
+        .optional(),
     })
     .optional(),
   deferredAttestation: z
@@ -2311,17 +2353,32 @@ export type AnalysisAsr = z.infer<typeof AnalysisAsrSchema>;
 export const AnalysisResponseSchema = z.object({
   isHighlight: z.boolean().optional(),
   score: z.number().min(0).max(100).optional(),
-  eventType: z.string().optional(),
-  reason: z.string().optional(),
+  eventType: z.string().nullish(),
+  reason: z.string().nullish(),
   outcome: z.enum(["scoring_play", "near_miss", "big_play", "not_highlight"]).optional(),
   // ADAAAA-8325 (Inc 2): the footage phase retained with the raw decide reply.
-  phase: z.enum(["live", "replay"]).optional(),
+  // ADAAAA-8625: `nullish`, not `optional`. The live compact contract never
+  // asks the model for a phase, so a live reply carries NO phase at all, and a
+  // pre-8625 decide stamped the unknown as an explicit `null`. Both mean
+  // UNKNOWN — `optional()` accepted only the absent form and rejected the
+  // explicit null, which dropped the ENTIRE window analysis at the decide-note
+  // seam (`WindowAnalysisSchema.parse` in services/server/src/analyzer.ts).
+  phase: z.enum(["live", "replay"]).nullish(),
   nearMiss: z.boolean().optional(),
-  reasoning: z.string().optional(),
+  // ADAAAA-8635: `nullish`, not `optional`, for the same reason `phase` is.
+  // These four are the decide boundary's OPTIONAL audit strings, and a decision
+  // built without one (the deterministic rule-fallback dict, a group verdict the
+  // model returned without the key, a pre-I1 reply) used to reach the wire as an
+  // explicit `null` — `_response_block` stamped `decision.get(k)`. `optional()`
+  // accepts only the ABSENT form, so one null reasoning deleted the WHOLE window
+  // analysis at the decide-note seam (`WindowAnalysisSchema.parse` in
+  // services/server/src/analyzer.ts, job 22ff6ca2 on the f1e7cc3 build).
+  // null and absent both mean "not captured"; a real value is unchanged.
+  reasoning: z.string().nullish(),
   verdict: z.unknown().optional(),
   evidenceAttested: z.array(z.string()).default([]),
   audioContext: z.unknown().optional(),
-  runningSummary: z.string().optional(),
+  runningSummary: z.string().nullish(),
   source: z.string().optional(),
 });
 export type AnalysisResponse = z.infer<typeof AnalysisResponseSchema>;
@@ -2682,8 +2739,19 @@ export const LiveProgressSchema = z.object({
   processedThroughTs: z.number().min(0),
   /** liveEdgeTs - processedThroughTs, clamped >= 0. */
   lagSec: z.number().min(0),
-  /** Cadence windows dropped past the lag budget this run. */
-  skippedWindows: z.number().int().min(0),
+  /** SUPPLY skip count: cadence windows the rail could not serve (stale +
+   * admission + backpressure; never the funded throttle — ADAAAA-7808).
+   * ADAAAA-8636: OPTIONAL because an in-flight share whose rail counters are not
+   * in memory carries no honest count — the projection OMITS the field rather
+   * than synthesizing one from `summaryLog` caption gaps (the 02:34Z leg read a
+   * fabricated 33 against a continuous 261-window ledger). Always present on a
+   * settled record (`observeMetrics.supplySkippedWindows`, floor
+   * `skippedStaleWindows`). */
+  skippedWindows: z.number().int().min(0).optional(),
+  /** ADAAAA-8636: `false` when an in-flight share has no rail supply evidence
+   * (so `skippedWindows` is absent and the chip renders no skip clause).
+   * Omitted on a terminal record and while live counters are available. */
+  skipData: z.boolean().optional(),
   /** `unknown` when the derivation has no anchor / no decided window yet, and
    * for a terminal job (no live edge — the UI shows the completion state). */
   state: z.enum(["caught_up", "behind", "unknown"]),
