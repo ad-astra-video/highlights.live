@@ -47,8 +47,8 @@ import {
   OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_MAX_FRAMES,
   LIVE_OBSERVE_LAG_BUDGET_S,
+  LIVE_OBSERVE_CADENCE_S,
   OBSERVE_CONTENT_FPS,
-  OBSERVE_CADENCE_S,
   OBSERVE_WINDOW_S,
   LIVE_OBSERVE_WINDOW_S,
 } from "./observe-loop";
@@ -1521,7 +1521,7 @@ export function scoreReadingsFromTimeline(
  *     same legibility bar, not perceive's fire-once cadence. Perceive's tracker
  *     ends its window exactly `minSamples` reads after the transition because it
  *     fires once; a DECIDE window is not that cadence. At the measured live cell
- *     (`LIVE_OBSERVE_MAX_FRAMES=4` / `IN_FLIGHT=2`) a window carries ~28 timeline
+ *     (`LIVE_OBSERVE_MAX_FRAMES=8` / `IN_FLIGHT=2`) a window carries ~28 timeline
  *     records over a 4-10 s span and windows overlap every ~4.4 s, so the
  *     boundary lands in a window with 1 post read (window ends AT the transition)
  *     or 4-33 post reads (window ends well after it) — requiring exactly
@@ -3306,10 +3306,12 @@ export interface AnalyzerConfig {
    */
   observeCadenceS?: number;
   /** ADAAAA-7799 (lever C addendum): LIVE-only decide HOP in content seconds.
-   *  Unset => the shared observe cadence (`OBSERVE_CADENCE_S` = 3). A 5 s hop on
-   *  the ~10 s rolling window keeps the span and gives ~5 s of overlap and ~60
-   *  decides per 300 s per stream — the CEO 5 s-hop row. It touches neither the
-   *  window span nor the audio noise-change trigger and leaves VOD alone.
+   *  Unset => the live cadence constant (`LIVE_OBSERVE_CADENCE_S` = 5, the
+   *  standing cut interval on every live path since ADAAAA-8676). 3 s remains
+   *  user-selectable through the per-stream knob. A 5 s hop on the ~10 s
+   *  rolling window keeps the span and gives ~60 decides per 300 s per stream —
+   *  the CEO 5 s-hop row. It touches neither the window span nor the audio
+   *  noise-change trigger and leaves VOD alone.
    *  Wired from `LIVE_OBSERVE_CADENCE_S`. */
   liveObserveCadenceS?: number;
   /** ADAAAA-8065 (rev 7): LIVE-only decide window SPAN in content seconds.
@@ -8115,8 +8117,8 @@ export interface PerceiveWindowLedger {
    * on every decide row. */
   spanSec?: number;
   /** ADAAAA-8065 (rev 7): the CONFIGURED decide cadence in MILLISECONDS
-   * (`LIVE_OBSERVE_CADENCE_S`, resolved to 3 s when unset). AC-SPAN-1 requires it
-   * on 100 % of rows. */
+   * (`LIVE_OBSERVE_CADENCE_S`, resolved to 5 s when unset — the standing live
+   * cut interval, ADAAAA-8676). AC-SPAN-1 requires it on 100 % of rows. */
   cadenceMs?: number;
   /** ADAAAA-8102: the CONFIGURED live content consume rate in frames per content
    *  second (`LIVE_OBSERVE_CONTENT_FPS`, resolved to 2 when unset). AC-8101-1
@@ -8690,10 +8692,10 @@ export function buildObserveDecideRequest(
             // ADAAAA-8065 (rev 7): the CONFIGURED cell, not the measured span.
             // `spanSec` is the `LIVE_OBSERVE_WINDOW_S` this payload was built
             // under (10 when unset) and `cadenceMs` the resolved decide hop
-            // (3000 when unset), so AC-SPAN-1 grades the row instead of
+            // (5000 when unset), so AC-SPAN-1 grades the row instead of
             // `printenv` — the 8074 lesson applied to the two knobs rev 7 adds.
             spanSec: cfg.liveObserveWindowS ?? cfg.observeWindowS ?? LIVE_OBSERVE_WINDOW_S,
-            cadenceMs: Math.round((cfg.liveObserveCadenceS ?? cfg.observeCadenceS ?? OBSERVE_CADENCE_S) * 1000),
+            cadenceMs: Math.round((cfg.liveObserveCadenceS ?? cfg.observeCadenceS ?? LIVE_OBSERVE_CADENCE_S) * 1000),
             // ADAAAA-8102: the CONFIGURED content consume rate, stamped next to
             // span/cadence for the same reason — AC-8101-1 grades the RATE off the
             // payload/audit row instead of `printenv`. Both live rails build their
@@ -10729,7 +10731,7 @@ export async function analyzeJob(
   const liveObserver =
     cfg.liveObserveLoop && cfg.decideWindowN === undefined
       ? new LiveObserver({
-          cadenceS: cfg.liveObserveCadenceS ?? cfg.observeCadenceS,
+          cadenceS: cfg.liveObserveCadenceS ?? cfg.observeCadenceS ?? LIVE_OBSERVE_CADENCE_S,
           // ADAAAA-8065 (rev 7): the LIVE span is its own knob now. Unset keeps
           // `observeWindowS` (today's 10 s), so the default rail is byte-identical
           // and a configured span cannot move VOD's symmetric window.

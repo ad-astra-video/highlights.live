@@ -41,10 +41,12 @@ import type { Job } from "@highlights/events";
  * "caught up". 5 s = the live tap's own sampling slack (AC3). */
 export const LIVE_PROGRESS_CAUGHT_UP_S = 5;
 
-/** Decide cadence in content seconds. Mirrors `OBSERVE_CADENCE_S` in
+/** Decide cadence in content seconds. Mirrors `LIVE_OBSERVE_CADENCE_S` in
  * observe-loop.ts — the read path has no live AnalyzerConfig at hand, so keep
- * this in sync (same convention as DEFAULT_WINDOW_PRE_S in job-detail.ts). */
-export const LIVE_PROGRESS_CADENCE_S = 3;
+ * this in sync (same convention as DEFAULT_WINDOW_PRE_S in job-detail.ts).
+ * ADAAAA-8676: the live cell cuts at 5 s on every path, so a legacy
+ * summary-log skip count must step by 5 s, not 3. */
+export const LIVE_PROGRESS_CADENCE_S = 5;
 
 /** Sources whose frames arrive in real time — the only ones with a "live edge"
  * to measure a lag against. A VOD (`file`) job's content clock is the source

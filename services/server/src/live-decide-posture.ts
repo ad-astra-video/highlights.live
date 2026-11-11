@@ -12,8 +12,8 @@
 import {
   LIVE_DECIDE_IMAGE_BUDGET,
   LIVE_DECIDE_IMAGE_CEILING,
+  LIVE_OBSERVE_CADENCE_S,
   LIVE_OBSERVE_WINDOW_S,
-  OBSERVE_CADENCE_S,
   OBSERVE_CONTENT_FPS,
 } from "./observe-loop";
 import { LIVE_FRAME_SCALE_DEFAULT } from "./config";
@@ -48,7 +48,7 @@ export interface LiveDecidePosture {
  */
 export function liveDecideBootLines(cfg: LiveDecidePosture): string[] {
   const span = cfg.liveObserveWindowS ?? LIVE_OBSERVE_WINDOW_S;
-  const cadenceMs = Math.round((cfg.liveObserveCadenceS ?? OBSERVE_CADENCE_S) * 1000);
+  const cadenceMs = Math.round((cfg.liveObserveCadenceS ?? LIVE_OBSERVE_CADENCE_S) * 1000);
   return [
     `[boot] live decide image budget: ${cfg.liveObserveMaxFrames} image(s)/decide ` +
       `(LIVE_OBSERVE_MAX_FRAMES, default ${LIVE_DECIDE_IMAGE_BUDGET}, ceiling ${LIVE_DECIDE_IMAGE_CEILING}, ` +
@@ -64,7 +64,7 @@ export function liveDecideBootLines(cfg: LiveDecidePosture): string[] {
       `(LIVE_OBSERVE_IN_FLIGHT, default ${LIVE_DECIDE_IN_FLIGHT_DEFAULT}, ceiling 4)`,
     `[boot] live decide window: ${span} s span / ${cadenceMs} ms cadence ` +
       `(LIVE_OBSERVE_WINDOW_S default ${LIVE_OBSERVE_WINDOW_S}, LIVE_OBSERVE_CADENCE_S default ` +
-      `${OBSERVE_CADENCE_S} s, trailing window)`,
+      `${LIVE_OBSERVE_CADENCE_S} s, trailing window)`,
     // ADAAAA-8102: the CONTENT consume rate both live rails analyse at. Named
     // here for the same reason as the other three: `printenv` is not evidence,
     // the decide rows carry `contentFps` and the media rail publishes its

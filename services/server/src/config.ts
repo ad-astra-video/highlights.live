@@ -329,9 +329,9 @@ export interface ServerConfig {
    * `LIVE_OBSERVE_IN_FLIGHT`. */
   liveObserveInFlight: number;
   /** ADAAAA-7799 (lever C addendum): LIVE-only decide hop in content seconds
-   *  (`LIVE_OBSERVE_CADENCE_S`). Unset keeps the CEO-locked 3 s cadence; 5
-   *  produces the 5 s-hop row (~60 decides / 300 s) without touching the window
-   *  span, the audio trigger or VOD. */
+   *  (`LIVE_OBSERVE_CADENCE_S`). Unset now resolves to the live cell's standing
+   *  **5 s** cadence ({@link LIVE_OBSERVE_CADENCE_S}, ADAAAA-8676); a per-stream
+   *  knob may still choose 3 or 5. VOD keeps `OBSERVE_CADENCE_S` = 3 untouched. */
   liveObserveCadenceS?: number;
   /** ADAAAA-8065 (rev 7): LIVE-only decide WINDOW SPAN in content seconds
    *  (`LIVE_OBSERVE_WINDOW_S`). The live window is a rolling PAST window
@@ -348,7 +348,8 @@ export interface ServerConfig {
    * call's wall time is dominated by the verdict DECODE (~8 s fixed for the
    * ~1.3 KB JSON reply) with a smaller per-frame multimodal prefill term, so the
    * live rail caps at a narrower budget than VOD. ADAAAA-8074: the default is
-   * now {@link LIVE_DECIDE_IMAGE_BUDGET} (4 — the ruled AC-3 cell), clamped to
+   * now {@link LIVE_DECIDE_IMAGE_BUDGET} (8 images — the ADAAAA-8676 cell,
+   * priced against a decide p95 <= 4.5 s), clamped to
    * the {@link LIVE_DECIDE_IMAGE_CEILING} (30) hard ceiling. Both live rails
    * (analyzer live pass + media/RTC rail) read THIS value into the window's
    * selection step, and every decide payload records it on its audit row.
@@ -1080,8 +1081,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // self-corrects instead of queueing unbounded. `LIVE_OBSERVE_IN_FLIGHT=1`
     // restores the old serial behaviour exactly.
     liveObserveInFlight: Number(env.LIVE_OBSERVE_IN_FLIGHT ?? 4),
-    // ADAAAA-7799 (lever C addendum): live-only decide hop. Unset keeps the 3 s
-    // cadence (byte-identical), so this cannot move the shipped rail by itself.
+    // ADAAAA-7799 (lever C addendum): live-only decide hop. Unset keeps the live
+    // cell's standing 5 s cadence (ADAAAA-8676, `LIVE_OBSERVE_CADENCE_S`); a
+    // per-stream knob may still choose 3 or 5. VOD's `OBSERVE_CADENCE_S` = 3 is
+    // a separate constant and is untouched.
     // ADAAAA-7808: compose passes an EMPTY string for the unset case, so parse
     // through the "empty means unset" guard — `Number("")` is 0, which pinned the
     // cadence to zero and fired on every consumed frame.
