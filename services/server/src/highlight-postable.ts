@@ -16,7 +16,16 @@
 // trail (every decide evaluation) still lives in `sections[].decideNotes`.
 //
 // Rules, in order:
-//   1. `status: "rejected"` is never postable (a human said no).
+//   1. `status: "rejected"` is never postable (a human said no). `pending` IS
+//      postable (ADAAAA-8678): status is a PUBLISH state, not an evidence
+//      verdict — auto-publish off stores `pending` and the card carries the
+//      Approve control, so dropping it would strand that flow and blank every
+//      such box. The GOAL-ness of a shipped card is disclosed by its
+//      `confirmation` lane (`confirmation-lane.ts`), which words an unapproved
+//      row as "Awaiting approval — …" and badges it UNCONFIRMED, never as an
+//      evidenced GOAL. `published` does not exist on the record (the enum is
+//      pending|accepted|rejected); an exported clip is settled to `accepted`,
+//      which this gate keeps serving unchanged.
 //   2. Only `outcome: "scoring_play"` is postable. `near_miss` / `big_play` are
 //      "notable, not a goal" and ride a separate lane; `not_highlight` and a
 //      legacy verdict with no outcome are not postable.
@@ -245,7 +254,9 @@ export function accountHighlightRows(
   return accounting;
 }
 
-/** Rule 1-3: may this single persisted record be posted? */
+/** Rule 1-3: may this single persisted record be posted? (ADAAAA-8678: `pending`
+ *  is postable — a publish state, not a verdict — and its lane is disclosed on
+ *  the card; only `rejected` is refused.) */
 export function isPostableHighlight(h: HighlightRecord): boolean {
   if (h.status === "rejected") return false;
   if (h.outcome !== "scoring_play") return false;

@@ -403,6 +403,31 @@ export class Store {
     return next;
   }
 
+  /** ADAAAA-8668: the `summary` lane's ONE write seam. It touches only the six
+   * `summary*` fields (copy, its audit token and the row's meter) — never a
+   * verdict, caption, title, clip or price field, so a copy pass can never move a
+   * row's lane or re-bill it. Called from the post-promotion lane asynchronously;
+   * a dropped generation writes the meter and leaves `summary` absent, so the card
+   * still renders on its headline exactly as before the lane existed. */
+  async patchHighlightSummary(
+    id: string,
+    patch: {
+      summary?: string;
+      summaryGate?: string;
+      summaryCalls?: number;
+      summaryDropped?: number;
+      summaryDroppedByReason?: Record<string, number>;
+      summaryP95Ms?: number;
+    }
+  ): Promise<HighlightRecord> {
+    const h = this.highlights.get(id);
+    if (!h) throw new Error(`no highlight ${id}`);
+    const next = HighlightRecordSchema.parse({ ...h, ...patch });
+    this.highlights.set(id, next);
+    if (this.db) await this.db.saveHighlight(next);
+    return next;
+  }
+
   /** ADAAAA-8321: mark an already-persisted window as a REPLAY of an earlier
    * moment. A dedicated seam on purpose: it writes only the replay marker and
    * the detector's measured evidence, never a verdict, clip or price field — the

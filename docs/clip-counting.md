@@ -35,6 +35,27 @@ and verdicts the precision gate dropped.
    best-corroborated, then earliest clip wins; the rest are marked
    `duplicateOf` the winner and reported through `duplicateCount` / `mergedIds`.
 
+### `status` is a publish state, not a verdict (ADAAAA-8678)
+
+A `pending` row is postable. `status` records whether the clip is approved for
+publishing: with auto-publish off (`config.autoPublishHighlights`) the write path
+stores `pending` and the card carries the operator's `Approve` control
+(`verdictAction`), so the row must ship. Dropping `pending` would strand that
+approve flow and blank every auto-publish-off box. The record's enum is
+`pending | accepted | rejected` (there is no `published`; an exported clip is
+settled to `accepted`, which this gate keeps serving unchanged), and `rejected`
+remains the only status-level drop.
+
+Because a `pending` row is not settled, the served card discloses its evidence
+rather than asserting a GOAL: its `confirmation` lane is derived from the row's
+own measurement / dive exactly like an accepted row's, and a row with neither
+carries `confirmation.lane: "unconfirmed"` worded as the approve queue
+(`Awaiting approval — …`, badge UNCONFIRMED) — never the `Accepted …` sentence.
+The MATCH SUMMARY counts the SAME population the page serves
+(`buildSummaryLadder` receives `postable.highlights`), so `goalCount` equals the
+GOAL cards rendered; a counted-but-unapproved goal is worded
+`… goals (K corroborated, P awaiting approval)`, never `accepted goals`.
+
 This is a pure function over stored rows. It adds no decide, confirm, or perceive
 call, so the metrics below cannot change inference cost.
 

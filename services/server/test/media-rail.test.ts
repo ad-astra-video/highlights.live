@@ -224,6 +224,11 @@ describe("media rail decide-window density follows the resolved live cadence (AD
     const rail = new MediaRailObserver({
       jobId: "j-trigger",
       onDecide: async (p) => (calls.push(p), false),
+      // ADAAAA-8676: the shipped live cadence is 5 s, so this test states the
+      // 3 s cell it was written for — at 5 s the trigger at 4.5 s lands inside
+      // the imminent cadence window and is COVERED by it (judged, not anchored),
+      // which is the same audible event reaching gemma either way.
+      cadenceS: 3,
       // Keep the gate's own coalescing semantics (2.5 s, per family).
     });
     // frames 0..6 (1 fps); a burst fires at ~4.5 s and re-fires 2 chunks later.
@@ -572,9 +577,11 @@ describe("media rail published-frame clock (ADAAAA-8069)", () => {
     // ADAAAA-8069: `LIVE_OBSERVE_MAX_FRAMES` is the documented live frame budget
     // ("trim 1") but only the analyzer's live pass read it, so the media rail ran
     // at the 30-frame default even in a 4-image cell.
-    const rail = new MediaRailObserver({ jobId: "j-cap", maxFrames: 4, onDecide: async (p) => (calls.push(p), false) });
+    const rail = new MediaRailObserver({ jobId: "j-cap", maxFrames: 4, cadenceS: 3, onDecide: async (p) => (calls.push(p), false) });
     // 3 fps publish clock over ~10 s AND every frame delivered (a runner that
     // keeps up): the image cap is the only thing that can separate the sets.
+    // The cadence is pinned at 3 s (ADAAAA-8676's shipped default is 5 s) so this
+    // 10 s clock still offers three decide ticks; the cell under test is the cap.
     for (let i = 0; i < 30; i++) rail.onFrameTick(T0 + i / 3);
     for (let i = 0; i < 30; i++) rail.onObservation({ seq: i, timestamp: T0 + i / 3, tracks: [] }, jpeg(i));
     await waitFor(() => calls.length >= 3);

@@ -131,13 +131,13 @@ reset_stub() {
   rm -f "$STUB_DIR/alive_left" "$STUB_DIR/launches" "$STUB_DIR/container_exists" "$STUB_DIR/calls.log"
   printf '2026-11-06T00:46:58.49Z' > "$STUB_DIR/started"
   printf '%s\n' \
-    '[boot] live decide image budget: 4 image(s)/decide' \
+    '[boot] live decide image budget: 8 image(s)/decide' \
     '[boot] live decide window: 10 s span / 5000 ms cadence (LIVE_OBSERVE_WINDOW_S default 10)' \
     > "$STUB_DIR/server.log"
   printf '%s\n' \
     'LIVE_OBSERVE_WINDOW_S=10' \
     'LIVE_OBSERVE_CADENCE_S=5' \
-    'LIVE_OBSERVE_MAX_FRAMES=4' \
+    'LIVE_OBSERVE_MAX_FRAMES=8' \
     'LIVE_OBSERVE_IN_FLIGHT=2' \
     > "$STUB_DIR/env.txt"
   printf '%s\n' 'DRIVE_DONE' 'DRIVE_EXIT reason=replay-complete pid=4242 code=0' > "$STUB_DIR/driver.log"
@@ -180,7 +180,7 @@ code=$?
 [ "$code" = 0 ] || fail "dry run exit=$code expected 0"
 expect_substr "dry run prints boot line" "$out" "BOOT_LINE=[boot] live decide window: 10 s span / 5000 ms cadence"
 expect_substr "dry run prints StartedAt" "$out" "SERVER_STARTED_AT=2026-11-06T00:46:58.49Z"
-for k in LIVE_OBSERVE_WINDOW_S=10 LIVE_OBSERVE_CADENCE_S=5 LIVE_OBSERVE_MAX_FRAMES=4 LIVE_OBSERVE_IN_FLIGHT=2 LIVE_OBSERVE_CONTENT_FPS=\<unset\>; do
+for k in LIVE_OBSERVE_WINDOW_S=10 LIVE_OBSERVE_CADENCE_S=5 LIVE_OBSERVE_MAX_FRAMES=8 LIVE_OBSERVE_IN_FLIGHT=2 LIVE_OBSERVE_CONTENT_FPS=\<unset\>; do
   expect_substr "dry run env $k" "$out" "$k"
 done
 expect_substr "dry run prints json.log path" "$out" "SERVER_JSON_LOG=/var/lib/docker/containers/deadbeef/deadbeef-json.log"

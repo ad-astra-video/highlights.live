@@ -84,8 +84,25 @@ export interface TriggerFamilyLatency {
   judgedP95Ms: number;
 }
 
-/** Decide invocation cadence in content seconds. CEO-locked (ADAAAA-7000). */
+/** Decide invocation cadence in content seconds. CEO-locked (ADAAAA-7000).
+ *
+ *  ADAAAA-8676: this is the VOD/library constant — it stays 3 s. The LIVE cell
+ *  has its own standing default ({@link LIVE_OBSERVE_CADENCE_S} = 5); keeping
+ *  the two names separate is what lets a diff prove the VOD pipeline is
+ *  untouched by a live cadence change. */
 export const OBSERVE_CADENCE_S = 3;
+
+/**
+ * ADAAAA-8676: the LIVE cell's standing decide cut interval, in content
+ * seconds. 5 s is the board directive for EVERY live path, including the
+ * server-side fallback a job lands on when no per-stream knob supplies a
+ * cadence — RTMP/ingest starts that bypass the webapp knob, QA/simulator legs.
+ *
+ * The per-stream knob (`LIVE_OBSERVE_CADENCE_S`, options [3, 5], default 5)
+ * still wins when a job carries one; this constant is the resolution default
+ * those paths inherit when the env is unset.
+ */
+export const LIVE_OBSERVE_CADENCE_S = 5;
 
 /** Reference window length in content seconds. CEO-locked (ADAAAA-7000). */
 export const OBSERVE_WINDOW_S = 10;
@@ -128,10 +145,16 @@ export function subsampleToCap<T>(ordered: T[], max: number): { items: T[]; capp
 /**
  * ADAAAA-8074: THE live decide image budget — the ONE config consulted where
  * the decide image set is SELECTED (`assembleLiveWindow` -> the payload's
- * `frames`), on both live rails. 4 is the ruled cell: the enhanced ladder read
- * 4 374 ms p50 at 4 images and >6 s at 8, so AC-3 (p50 <= 5 500 / max <= 8 000)
- * clears only at 4 (ADAAAA-8049/8065). Env override: `LIVE_OBSERVE_MAX_FRAMES`
- * ("trim 1"). It never exceeds the {@link OBSERVE_MAX_FRAMES} ceiling (30).
+ * `frames`), on both live rails.
+ *
+ * ADAAAA-8676: the budget is 8 images/decide, priced against a decide
+ * p95 <= 4.5 s. A 10 s span at the 2 fps content consume rate supplies ~20
+ * frames, so 8 is a real subsample of the window rather than padding; the
+ * older 4-image cell came from the ADAAAA-8049/8065 ladder and left most of
+ * the span unjudged. A graded leg rungs this env-only (8 -> 6 when decide
+ * p95 > 4.5 s, 8 -> 10 only when p95 <= 3.5 s), one rung per boot.
+ * Env override: `LIVE_OBSERVE_MAX_FRAMES` ("trim 1"). It never exceeds the
+ * {@link OBSERVE_MAX_FRAMES} ceiling (30).
  *
  * Before this a live leg booted `LIVE_OBSERVE_MAX_FRAMES=4` and still shipped
  * 27.4 images/decide (job f757a56b, 31/32 windows over the cap): the budget was
@@ -140,7 +163,7 @@ export function subsampleToCap<T>(ordered: T[], max: number): { items: T[]; capp
  * `imageBudgetApplied` on its decide_audit row, so a leg grades the payload
  * instead of `printenv`.
  */
-export const LIVE_DECIDE_IMAGE_BUDGET = 4;
+export const LIVE_DECIDE_IMAGE_BUDGET = 8;
 
 /** Hard ceiling on one decide payload's image set — unchanged contract. */
 export const LIVE_DECIDE_IMAGE_CEILING = OBSERVE_MAX_FRAMES;
@@ -1018,7 +1041,7 @@ export class LiveObserver {
      *  is every distinct frame/tick timestamp, byte-identical to shipped. */
     observationFps?: number;
   } = {}) {
-    this.cadenceS = opts.cadenceS ?? OBSERVE_CADENCE_S;
+    this.cadenceS = opts.cadenceS ?? LIVE_OBSERVE_CADENCE_S;
     this.windowS = opts.windowS ?? LIVE_OBSERVE_WINDOW_S;
     this.maxFrames = opts.maxFrames ?? LIVE_OBSERVE_MAX_FRAMES;
     this.fps = opts.fps ?? OBSERVE_CONTENT_FPS;

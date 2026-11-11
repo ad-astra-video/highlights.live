@@ -69,10 +69,13 @@ const NOW_IN_FLIGHT = T0 + 1_320_000; // ~1320 s into the share
 describe("in-flight skippedWindows comes from the rail, never the caption cadence (ADAAAA-8636 AC-1)", () => {
   it("renders NO skip count when the rail has no in-memory evidence — never the 33 (AC-3a)", () => {
     const job = inFlightJob();
-    // The old formula on this exact log: every 24 s caption gap is 8 cadences of
-    // 3 s, so each gap scored 7 "skipped" windows. Positive, arbitrary, and not
-    // missing coverage — the reason the field must be absent rather than derived.
-    expect(skippedWindowsFromSummaryLog(job.summaryLog as any)).toBeGreaterThan(0);
+    // The old formula on this exact log, at the 3 s cadence it was written for:
+    // every 24 s caption gap is 8 cadences of 3 s, so each gap scored 7
+    // "skipped" windows. Positive, arbitrary, and not missing coverage — the
+    // reason the field must be absent rather than derived. (The shipped live
+    // cadence is 5 s since ADAAAA-8676; at 5 s this 24 s log is off-grid and the
+    // legacy heuristic reads 0, which is why the AC is "absent", not "0".)
+    expect(skippedWindowsFromSummaryLog(job.summaryLog as any, 3)).toBeGreaterThan(0);
 
     const p = deriveLiveProgress({ job, newestObservationTs: 1319.8, nowMs: NOW_IN_FLIGHT });
     expect(p).not.toHaveProperty("skippedWindows");
@@ -133,13 +136,14 @@ describe("terminal skippedWindows is unchanged (ADAAAA-8636 AC-2)", () => {
   });
 
   it("keeps the recorded stale counter as the floor for a pre-supply-field legacy record", () => {
-    // Cadence-grid windows [0, 3, 9, 12] => exactly 1 derived skip, floored UP by
-    // the recorded stale counter (the legacy behaviour AC-2 preserves).
+    // Cadence-grid windows [0, 5, 15, 20] => exactly 1 derived skip (the 5 s
+    // live grid, ADAAAA-8676), floored UP by the recorded stale counter (the
+    // legacy behaviour AC-2 preserves).
     const legacyLog = [
       { seq: 1, ts: "", windowTs: 0, text: "" },
-      { seq: 2, ts: "", windowTs: 3, text: "" },
-      { seq: 3, ts: "", windowTs: 9, text: "" },
-      { seq: 4, ts: "", windowTs: 12, text: "" },
+      { seq: 2, ts: "", windowTs: 5, text: "" },
+      { seq: 3, ts: "", windowTs: 15, text: "" },
+      { seq: 4, ts: "", windowTs: 20, text: "" },
     ];
     const p = deriveLiveProgress({
       job: terminalJob({ summaryLog: legacyLog, observeMetrics: { skippedStaleWindows: 4 } }),

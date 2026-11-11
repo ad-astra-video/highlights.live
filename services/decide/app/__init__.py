@@ -40,6 +40,9 @@ from .gemma import (  # noqa: F401
     reconcile_outcome_with_ball_signal,
 )
 from .match_context_prompt import render_match_context_block, sanitize_match_context
+# ADAAAA-8668: the body-copy lane's text runner. Its OWN module on purpose — the
+# decide prompt/contract files stay untouched for this increment (spec AC3).
+from .summary_copy import summary_with_gemma
 
 
 class ReactionEvidence(BaseModel):
@@ -587,6 +590,28 @@ class TitleResponse(BaseModel):
     title: str
 
 
+class SummaryRequest(BaseModel):
+    """Body of the text-only summary call (ADAAAA-8668, spec ADAAAA-8665 §3).
+
+    The SERVER composes the prompt from the row's own evidence (the prompt is a
+    snapshot-tested contract in `packages/events/src/highlight-summary.ts`), so
+    this service is a thin text runner: it never sees a decide request, never
+    reads frames/audio, and never gates — the gate runs on the server after the
+    reply lands, in one place, shared with QA's replay."""
+
+    model_config = ConfigDict(extra="ignore")
+    prompt: str = ""
+    rail: str = "live"
+    # Ceiling the band's hard max implies (the server's clamp still applies).
+    maxWords: int = 70
+
+
+class SummaryResponse(BaseModel):
+    # None means "nothing usable" — the server drops the row and serves the card
+    # on its headline. There is no placeholder copy on this path.
+    summary: str | None = None
+
+
 def _rule_title(req: TitleRequest) -> str:
     """Deterministic fallback title when Gemma is unavailable / in rule mode.
     Mirrors the server's own fallback shape so a completed job still has a
@@ -1066,6 +1091,34 @@ def create_app() -> FastAPI:
         # Rule / fallback path: Gemma unavailable, rule mode, or a null reply —
         # return a deterministic title; the caller still has its own fallback.
         return TitleResponse(title=_rule_title(req))
+
+    @router.post("/summary", response_model=SummaryResponse)
+    async def summary(req: SummaryRequest):
+        """Text-only BODY-copy generation (ADAAAA-8668, spec ADAAAA-8665 §3).
+
+        One lightweight Gemma call per PROMOTED highlight, issued by the server
+        AFTER promotion and off the decide loop, so the live detect path gains no
+        latency. The prompt is composed by the server from the row's own evidence
+        (`packages/events/src/highlight-summary.ts`), and the reply is gated there
+        by the same contract QA replays — this route neither builds evidence nor
+        gates copy.
+
+        Runs the inference in a worker thread (like `/title`) so `/health` stays
+        responsive. Any failure — rule mode, Gemma down, unparseable, empty —
+        returns `summary: null` and the caller drops the row and serves the card
+        on its headline. It never blocks or fails a clip, and it never emits a
+        placeholder."""
+        if _is_gemma_mode() and req.prompt.strip():
+            text = await asyncio.to_thread(
+                summary_with_gemma,
+                prompt=req.prompt,
+                url=os.environ.get("GEMMA_URL", "http://127.0.0.1:8088"),
+                timeout_s=float(os.environ.get("SUMMARY_TIMEOUT_S", "2.5")),
+                max_words=max(40, int(req.maxWords or 70)),
+            )
+            if text:
+                return SummaryResponse(summary=text)
+        return SummaryResponse(summary=None)
 
     @router.post("/confirm", response_model=ConfirmDecision)
     async def confirm(req: ConfirmRequest):
