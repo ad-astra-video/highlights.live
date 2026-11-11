@@ -13,6 +13,7 @@
 // These falsifiers pin the invariant at the run's own ledger, where the
 // commitment lives — not at the OCR, which is reading a real plate.
 import { describe, expect, it, vi } from "vitest";
+import { ObserveMetricsSnapshotSchema } from "@highlights/events";
 import {
   LiveRunShared,
   applyDeferredGoalAttestations,
@@ -247,5 +248,26 @@ describe("score-lane monotonicity (ADAAAA-8588)", () => {
     });
     expect(repeated.scoreBoardChanged).toBe(true);
     expect(repeated.scoreBoardDelta?.post).toEqual([2, 2]);
+  });
+
+  it("T8 the refusal counter reaches the served row (observeMetrics.rowAccounting)", () => {
+    // AC4's metric is only gradeable after deploy if the count survives the
+    // persisted record: a zod object STRIPS undeclared keys, so this pins the
+    // counter through the schema as well as through the run's snapshot.
+    const run = legRun(); // committed (2,2)
+    expect(run.rowAccounting(7)).not.toHaveProperty("scoreFrontierRefusals");
+    expect(run.claimScoreTransition(delta([1, 1], [2, 1], 474.982, 5))).toBe(false);
+    const acct = run.rowAccounting(7);
+    expect(acct.scoreFrontierRefusals).toBe(1);
+    // The served row keeps the pre-8588 block intact (no counter drift).
+    expect(acct).toMatchObject({
+      acceptedWindows: 0,
+      persistedRows: 0,
+      servedCards: 7,
+      suppressedWindows: 0,
+      demotedCelebrations: 0,
+    });
+    const parsed = ObserveMetricsSnapshotSchema.shape.rowAccounting.parse(acct);
+    expect(parsed?.scoreFrontierRefusals).toBe(1);
   });
 });

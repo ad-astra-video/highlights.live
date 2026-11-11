@@ -3758,6 +3758,14 @@ export interface LiveRowAccountingSnapshot {
    *  and the ADAAAA-7865 repeat-goal downgrade): they ship, and the legacy
    *  `accepted` predicate refuses them, which is half of the observed gap. */
   demotedCelebrations: number;
+  /** ADAAAA-8588 (AC4): score transitions this run REFUSED because their POST
+   *  state sat behind the state the run had already committed (a replay/montage
+   *  re-read of a boundary it already credited). Additive optional: absent on a
+   *  run that refused none, and on every record written before the counter
+   *  existed. Published so the card's over-suppression risk (a genuine score
+   *  correction leaves the frontier high) is measurable on the served row
+   *  instead of silently deleting a goal. */
+  scoreFrontierRefusals?: number;
 }
 
 /** ADAAAA-7011: live decide-observer cadence + decide gemma E2E latency
@@ -5526,8 +5534,12 @@ export class LiveRunShared {
       servedCards,
       suppressedWindows: this.suppressedWindowCount,
       demotedCelebrations: this.celebrationRowCount,
+      // ADAAAA-8588 (AC4): only written when a transition was actually refused,
+      // so a run that admitted every read keeps the pre-8588 payload shape.
+      ...(this.scoreFrontierRefusalCount > 0 ? { scoreFrontierRefusals: this.scoreFrontierRefusalCount } : {}),
     };
   }
+
   /** ADAAAA-8006: a LIVE goal-shaped accept that had to be demoted for lack of a
    * measured attestation inside its judged window. Kept (bounded) so a later
    * scoreboard read can still re-attest the delivered row; see
