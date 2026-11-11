@@ -2032,6 +2032,23 @@ export const HighlightRecordSchema = z.object({
        *  `timeout` / `transport_failure` / `passthrough`). Additive optional; a
        *  verdict-producing dive never carries it. */
       dropReason: z.string().optional(),
+      /** ADAAAA-8647: which evidence carried a dead-lane promotion
+       *  (`frame_attestation_over_unread_score_lane`). The writer
+       *  (`live-confirm-async.ts`) always stamped it, but this schema did not
+       *  declare it, so zod STRIPPED it on persist and no stored row or page
+       *  could report the promotion basis. Additive optional. */
+      promotionBasis: z.string().optional(),
+      /** ADAAAA-8647: the pooled score-read counts that proved the lane was
+       *  DEAD (zero samples) rather than read-and-unchanged, so a fallback
+       *  promotion is gradable from the row alone. Additive optional. */
+      scoreLane: z
+        .object({
+          scoreReads: z.number().int().min(0),
+          preSamples: z.number().int().min(0),
+          postSamples: z.number().int().min(0),
+          need: z.number().int().min(0),
+        })
+        .optional(),
     })
     .optional(),
   deferredAttestation: z

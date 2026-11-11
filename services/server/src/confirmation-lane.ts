@@ -196,6 +196,35 @@ export function diveVerdict(confirm?: ConfirmRecord): DiveVerdict | undefined {
 }
 
 /**
+ * ADAAAA-8647: the dive verdict a SERVED row already carries on its own
+ * `confirmAttestation`, as a `DiveVerdict`.
+ *
+ * The async Stage-2 lane writes its verdict onto the HIGHLIGHT row, and
+ * `job_candidates` stores no confirm record at all (measured: `has_confirm=false`
+ * on every candidate of the graded job `f02ec0bf`). A row read through
+ * `confirmationForHighlightRow` therefore could not see the dive and fell through
+ * to the candidate's measured attestation, so a dive-refuted row served the same
+ * CONFIRMED badge as an attested one. Only a real verdict counts here: a dropped
+ * dive (`goalConfirmed:"dropped"` + `dropReason`) or a passthrough produced no
+ * verdict, and a stored `corroborated:true` is never a refutation.
+ */
+export function diveVerdictFromAttestation(
+  attestation?: { goalConfirmed?: string | null; corroborated?: boolean | null } | null
+): DiveVerdict | undefined {
+  const goalConfirmed = attestation?.goalConfirmed;
+  if (goalConfirmed !== "confirmed_goal" && goalConfirmed !== "near_miss" && goalConfirmed !== "not_goal") {
+    return undefined;
+  }
+  return {
+    goalConfirmed,
+    confidence: null,
+    stage1Disagreed: null,
+    outcome: null,
+    corroborated: attestation?.corroborated === true,
+  };
+}
+
+/**
  * Derive the confirmation lane for one stored candidate.
  *
  * Precedence (and why):
@@ -305,6 +334,11 @@ export function confirmationForHighlightRow(
      *  confirmed the goal, the window measured no transition). Read here so the
      *  badge distinguishes HELD from REFUTED without a second derivation. */
     provisionalGoal?: { held?: boolean; refuted?: boolean } | null;
+    /** ADAAAA-8647: the row's OWN stored dive verdict (`confirmAttestation`) —
+     *  the only place a live Stage-2 refutation is recorded, because the
+     *  candidate rows store no confirm record. Read so a refuted row can never
+     *  fall through to the candidate's `measured` lane. */
+    confirmAttestation?: { goalConfirmed?: string | null; corroborated?: boolean | null } | null;
   },
   candidate?: ConfirmationInput
 ): HighlightConfirmation | undefined {
@@ -319,6 +353,27 @@ export function confirmationForHighlightRow(
       label: LANE_LABELS.diveHeld,
       measurement: "dive",
       ...(derived ? { dive: derived } : {}),
+    });
+  }
+  // ADAAAA-8647: the row's OWN stored dive is the strongest evidence after HELD.
+  // Same precedence `deriveConfirmation` documents for a candidate's `confirm`:
+  // a verdict that did not corroborate wins over any measurement (so a refuted
+  // row never reads CONFIRMED), and a corroborated verdict names lane 2.
+  const rowDive = diveVerdictFromAttestation(row.confirmAttestation);
+  if (rowDive && !rowDive.corroborated) {
+    return servedConfirmation({
+      lane: "dive_disagreed",
+      label: LANE_LABELS.diveDisagreed,
+      measurement: "none",
+      dive: rowDive,
+    });
+  }
+  if (rowDive) {
+    return servedConfirmation({
+      lane: "dive",
+      label: LANE_LABELS.dive,
+      measurement: "dive",
+      dive: rowDive,
     });
   }
   if (candidate) return servedConfirmation(deriveConfirmation(candidate));
