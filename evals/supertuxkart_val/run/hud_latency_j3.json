@@ -1,0 +1,95 @@
+{
+ "admissible": true,
+ "backend": "live",
+ "bars": {
+  "stageAEventToCandidateCpuP95S": {
+   "bar": 0.5,
+   "measured": true,
+   "pass": true,
+   "value": 0.000149
+  }
+ },
+ "candidates": 39,
+ "cell": {
+  "cell": 8,
+  "changeSensitivity": 0.18,
+  "minDwellFrames": 2,
+  "quietFrames": 2
+ },
+ "classes": [
+  {
+   "candidates": 39,
+   "clip": "sh_onfoss_20230923_tournament.mp4",
+   "events": 15,
+   "fp": 36,
+   "fp_rate": 0.9230769230769231,
+   "gate": "hud-event",
+   "id": "objective_event",
+   "max_lat": 1.0,
+   "measured": true,
+   "negatives": {
+    "candidates": 12,
+    "fp_window_rate": 0.6153846153846154,
+    "fp_windows": 8,
+    "windows": 13
+   },
+   "p50": 0.0,
+   "p95": 1.0,
+   "recall": 0.2,
+   "recalled": 3,
+   "sr": 1,
+   "threshold_ids": [
+    "hud-event"
+   ]
+  }
+ ],
+ "clip": {
+  "height": 240,
+  "manifestPath": "sh_onfoss_20230923_tournament.mp4",
+  "path": "/tmp/hl_stk/sh_onfoss_20230923_tournament.mp4",
+  "sha256": "3da355cc6ffc5e0fa5bbffa25c3025b165cee7bbddd3e96b8f0746a11801b264",
+  "width": 426,
+  "window": [
+   4380.0,
+   5731.0
+  ]
+ },
+ "frames": 1351,
+ "gpu": {
+  "note": "the hud-event reader is GPU-free (WP1); the pass occupies the box but spends no GPU compute, so GPU-minutes are 0",
+  "used": false
+ },
+ "harness": "measure_hud_recall",
+ "latency": {
+  "cpuFrameS": {
+   "dwellFrames": 2,
+   "max": 0.000189,
+   "n": 1351,
+   "p50": 5.7e-05,
+   "p95": 7e-05
+  },
+  "definitions": {
+   "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+   "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+   "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+  },
+  "eventToCandidateCpuS": {
+   "dwellFrames": 2,
+   "max": 0.000207,
+   "n": 39,
+   "p50": 0.000124,
+   "p95": 0.000149
+  },
+  "eventToCandidateWallS": {
+   "dwellFrames": 2,
+   "max": 1.000097,
+   "n": 39,
+   "p50": 1.000066,
+   "p95": 1.000078
+  }
+ },
+ "livePath": true,
+ "schemaVersion": 1,
+ "trigger": "hud-event",
+ "wallS": 0.081
+}
