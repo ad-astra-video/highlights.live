@@ -170,7 +170,7 @@ import {
   type MatchContextResolver,
 } from "./match-context";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
-import { acceptanceLaneRow, acceptanceLaneCounts, buildDeletedJobTombstone } from "./acceptance-lane";
+import { acceptanceLaneRow, acceptanceLaneCounts, buildDeletedJobTombstone, deliveredAuthorityByCandidate } from "./acceptance-lane";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
 import { buildMediaNodeReport } from "./media-node";
@@ -6924,6 +6924,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         highlights: store.highlightsForJob(job.id).length,
         alternatives: store.alternativesForJob(job.id).length,
         observations: store.observationsForJob(job.id).length,
+        // ADAAAA-8774: keep each accepted row's DELIVERED disclosure in the
+        // tombstone, so the surviving lane names the authority the shipped card
+        // named instead of a candidate-only derivation that contradicts it.
+        delivered: store.highlightsForJob(job.id),
       },
       user.id ?? null
     );
@@ -6961,6 +6965,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (job) {
       if (job.ownerId !== user.id && user.role !== "admin") return reply.code(403).send({ error: "forbidden" });
       const candidates = store.candidatesForJob(job.id);
+      // ADAAAA-8774: project each row through the DELIVERED card's own
+      // disclosure (`attestationUsed.authority`), keyed by `candidateId`, so the
+      // lane's authority is the accept-time attestation the card renders rather
+      // than a candidate-only re-derivation that can contradict it.
+      const delivered = deliveredAuthorityByCandidate(store.highlightsForJob(job.id));
+      const rows = candidates.map((c) => acceptanceLaneRow(c, delivered.get(c.id)));
       return {
         jobId: job.id,
         deleted: false,
@@ -6968,12 +6978,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         deletedBy: null,
         status: job.status ?? null,
         source: job.source ?? null,
-        counts: acceptanceLaneCounts(candidates.map(acceptanceLaneRow), {
+        counts: acceptanceLaneCounts(rows, {
           highlights: store.highlightsForJob(job.id).length,
           alternatives: store.alternativesForJob(job.id).length,
           observations: store.observationsForJob(job.id).length,
         }),
-        candidates: candidates.map(acceptanceLaneRow),
+        candidates: rows,
       };
     }
     const tomb = await db.getJobTombstone(req.params.id);
