@@ -117,7 +117,9 @@ export function captionTokenOverlap(summary: string, caption?: string | null): n
  */
 export const SUMMARY_FEE_RATIO = 1.5;
 
-/** Never more than one retry, so a row bills at most two calls (AC5). */
+/** Never more than one retry, so a row bills at most two calls (AC5).
+ *  ADAAAA-8773: a DETERMINISTIC refusal (`too-few-facts`) ends the row on its
+ *  first call — see `runSummaryForRow` in `services/server/src/summary-lane.ts`. */
 export const SUMMARY_MAX_CALLS_PER_ROW = 2;
 
 /** p95 generation budget after promotion (AC4: `summary` p95 <= 6 s). It is a
@@ -613,6 +615,22 @@ export type SummaryViolation =
   | "unattested-role"
   /** AC9 (rev 3): fewer than two DISTINCT attested fact types. */
   | "too-few-facts";
+
+/**
+ * ADAAAA-8773 / spec §13.2 (rev 7): the refusals a SECOND sample cannot repair.
+ *
+ * The same prompt, re-sampled, cannot fix a deterministic defect: the row's fact
+ * menu is fixed, its own evidence does not carry the name the body invented, and
+ * the enum shape of an internal token does not change. QA measured the retry
+ * buying `$0.0049986` to reach the identical `too-few-facts` refusal on both VOD
+ * rows of job `70400b1d`. The lane keeps the retry slot for the AC8 repeat path
+ * only, where a different opening is plausible by construction.
+ */
+export const SUMMARY_DETERMINISTIC_REFUSALS: readonly SummaryViolation[] = [
+  "too-few-facts",
+  "ungrounded-name",
+  "internal-token",
+];
 
 /** The evidence a summary is gated against. Everything is the ROW's own
  *  evidence; a missing field fails closed (never invents). */
@@ -1228,15 +1246,61 @@ export interface SummaryPromptInput extends SummaryEvidence {
   avoidOpenings?: string[];
 }
 
+/** ADAAAA-8773: the placeholder a match-clock stamp is replaced with in the
+ *  prompt's evidence lines. Reads as English in a sentence ("at the window
+ *  moment"), never as a timestamp the model can copy. */
+const PROMPT_CLOCK_PLACEHOLDER = "the window moment";
+
+/**
+ * ADAAAA-8773: remove clock stamps the row's body can never EARN before the
+ * model sees them.
+ *
+ * The `Window:` line is stream/clip seconds; the decide reason, the ASR
+ * transcript and an adjacent scoring cue can carry a scorebug MATCH clock
+ * (ADAAAA-8733). The gate credits a `clock` fact only when the body's `m:ss`
+ * reconciles with `windowTs` inside `SUMMARY_CLOCK_ANCHOR_TOLERANCE_S`, so a
+ * match clock handed to the model is an ungrounded fact it will faithfully
+ * repeat — the measured cause of the all-dry VOD rail on `70400b1d`. Only
+ * stamps INSIDE the tolerance band survive, because they anchor the same
+ * moment as the window.
+ */
+export function redactUngroundedPromptClocks(
+  text: string | null | undefined,
+  windowTs: number | null | undefined
+): string {
+  const body = text ?? "";
+  if (!body) return body;
+  const anchor = typeof windowTs === "number" && Number.isFinite(windowTs) ? windowTs : null;
+  return body.replace(/(?:\bt=)?\b(\d{1,3}:\d{2})\b/g, (stamp, clock: string) => {
+    if (anchor === null) return PROMPT_CLOCK_PLACEHOLDER;
+    const seconds = clockSeconds(clock);
+    if (seconds === null) return stamp;
+    return Math.abs(seconds - anchor) <= SUMMARY_CLOCK_ANCHOR_TOLERANCE_S ? stamp : PROMPT_CLOCK_PLACEHOLDER;
+  });
+}
+
 /** Deterministic prompt. Snapshot-tested (`summary-prompt.test.ts`) so a prompt
- *  edit is a reviewed contract change, exactly like the decide prompt. */
+ *  edit is a reviewed contract change, exactly like the decide prompt.
+ *
+ *  ADAAAA-8773: the body clock must be the CLIP offset. The decide reason runs
+ *  on the scorebug's MATCH clock (ADAAAA-8733 parses it and combines clips on
+ *  game time), so the shipped VOD job `70400b1d` produced reasons that said
+ *  `t=18:02` for a 24 s window; the prompt repeated the reason verbatim, the
+ *  model wrote "at the 18:02 mark", and the gate — which reconciles a body clock
+ *  against `windowTs` within `SUMMARY_CLOCK_ANCHOR_TOLERANCE_S` — refused both
+ *  promoted rows `too-few-facts`. Grounding cannot be widened to accept a match
+ *  clock the row does not attest, so the prompt stops handing one over. */
 export function buildSummaryPrompt(input: SummaryPromptInput): string {
   const band = summaryBand(input.rail);
   const context = renderSummaryContext(input.matchContext) || "(none)";
   const verdict = input.verdict || input.eventType || "unknown";
   const windowLine =
     typeof input.windowTs === "number" && Number.isFinite(input.windowTs)
-      ? `Window: ${clockLabel(input.windowTs)}${input.windowDurationS ? ` (+${Math.round(input.windowDurationS)} s)` : ""}`
+      ? // ADAAAA-8773: the duration suffix is NOT rendered. The shipped probe
+        // showed the model copying the parenthetical into prose ("at the 0:24
+        // (+15 s) mark"), which reads as a broken timestamp on a served card.
+        // The offset is the only thing the body needs from this line.
+        `Window: ${clockLabel(input.windowTs)} — clip offset`
       : "Window: (unknown)";
   const transition = input.scoreTransition
     ? `Score transition: ${input.scoreTransition.from ?? "?"} -> ${input.scoreTransition.to ?? "?"}`
@@ -1259,6 +1323,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the competition or venue, or a named attested actor's action.`,
     `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
+    "- The clock fact is the `Window:` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.",
     "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.",
     attestsScoring
       ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
@@ -1275,14 +1340,14 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').",
     "Evidence:",
     `Verdict: ${verdict}`,
-    `Reason: ${input.reason || "(none)"}`,
+    `Reason: ${redactUngroundedPromptClocks(input.reason, input.windowTs) || "(none)"}`,
     `Headline: ${input.postTitle || "(none)"}`,
     `Announcer line: ${input.caption || "(none)"}`,
     windowLine,
     transition,
     `Match context:\n${context}`,
-    `ASR transcript: ${input.transcript || "(none)"}`,
-    `Adjacent scoring cue: ${input.adjacentScoreCue || "(none)"}`,
+    `ASR transcript: ${redactUngroundedPromptClocks(input.transcript, input.windowTs) || "(none)"}`,
+    `Adjacent scoring cue: ${redactUngroundedPromptClocks(input.adjacentScoreCue, input.windowTs) || "(none)"}`,
     "Body copy:",
   ];
   return lines.join("\n");

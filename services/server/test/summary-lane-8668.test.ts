@@ -261,7 +261,10 @@ describe("runSummaryForRow — the promoted row's copy", () => {
 
   it("retries a GATE refusal once and stores the second reply (ADAAAA-8687)", async () => {
     const { store, patches } = stubStore();
-    const f = stubFetch([ok("It is 2-2."), ok(GOOD_SUMMARY)]);
+    // A SHAPE refusal (`too-few-sentences`) is a property of one sample — the
+    // ADAAAA-8687 retry rationale. It still carries two credited kinds, so the
+    // ADAAAA-8773 deterministic-refusal rule does not apply.
+    const f = stubFetch([ok("At 2:38 Northbridge shoot on the right side of the field."), ok(GOOD_SUMMARY)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
       jobId: "j1",
       highlightId: "h1",
@@ -280,7 +283,7 @@ describe("runSummaryForRow — the promoted row's copy", () => {
   it("drops after TWO gate refusals and keeps the LAST refused reply as `summaryRaw` (ADAAAA-8687)", async () => {
     const { store, patches } = stubStore();
     const second = "The keeper claims the ball under pressure in midfield.";
-    const f = stubFetch([ok("It is 2-2."), ok(second)]);
+    const f = stubFetch([ok("At 2:38 Northbridge shoot on the right side of the field."), ok(second)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
       jobId: "j1",
       highlightId: "h1",

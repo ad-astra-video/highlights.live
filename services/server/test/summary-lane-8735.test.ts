@@ -149,12 +149,14 @@ describe("AC9 rev 4 — action needs a named attested actor at the lane seam", (
     );
     expect(result.outcome).toBe("dropped");
     expect(result.reason).toBe("gate");
-    // A gate refusal is retried once inside the 2-call bound, then dropped.
-    expect(result.calls).toBe(2);
+    // ADAAAA-8773: `too-few-facts` is deterministic, so the row ends on ONE call
+    // (the pre-8773 lane spent two and billed 2.0x DECIDE_FEE).
+    expect(result.calls).toBe(1);
     expect(patches[0].patch.summary).toBeUndefined();
     expect(patches[0].patch.summaryGate).toBe("dropped:gate");
     expect(patches[0].patch.summaryRaw).toBe(BARE_VERB);
     expect(patches[0].patch.summaryDroppedByReason).toEqual({ gate: 1 });
+    expect(patches[0].patch.summaryCalls).toBe(1);
   });
 
   it("stores the same body when it NAMES the attested team", async () => {
