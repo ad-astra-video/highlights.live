@@ -36,6 +36,7 @@ import {
   stripInternalTokens,
   taxonomyKey,
   attestedBallActionFrom,
+  carriesAuditMarker,
   BALL_OUTCOME_ASSERTION,
   type CaptionGroundingContext,
 } from "./caption-grounding.js";
@@ -1258,6 +1259,11 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   if (sentences < band.minSentences) out.push("too-few-sentences");
   if (sentences > band.maxSentences) out.push("too-many-sentences");
   if (stripInternalTokens(body) !== body) out.push("internal-token");
+  // ADAAAA-8830: the window audit marker (`at t=0.0`, `at t=-1.0s`) is the
+  // pipeline's own provenance and survives `stripInternalTokens`, so a body that
+  // cites it is the same `internal-token` class of copy — AC13 grades `summary`
+  // beside `caption`/`postTitle`, and a marker may reach neither.
+  else if (carriesAuditMarker(body)) out.push("internal-token");
   // A taxonomy/enum token mid-sentence (`… after a scoring_play …`) survives the
   // strip above, so the served value is checked with the existing taxonomy table
   // plus the snake_case enum SHAPE (no second token list). The table's everyday
