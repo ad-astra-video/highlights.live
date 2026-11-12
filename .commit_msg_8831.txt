@@ -1,0 +1,65 @@
+fix(events)(ADAAAA-8831): a served headline credits an actor it can certify, and the entity-bearing body serves
+
+Live leg `27bd816f` (2 promoted rows, both GOAL) FAILED AC9/AC10 on served
+text and AC12 at 100% dry. Two independent defects, one per clause group.
+
+AC9/AC10 — role-noun subject with no attested actor (`packages/events/src/post-title.ts`)
+
+  The served headlines read `Midfielder scores` / `Defender scores`: a role
+  noun plus a score verb on rows whose attested evidence was
+  [clock, score, action] with actors=["Barcelona"] and
+  bodyNamesAttestedActor=false. A role noun is not a NAME, so the write
+  seam's name gate and the read seam's S3 both had nothing to refuse and the
+  card credited a score to nobody, twice.
+
+  `postTitleActorMissing` names the measured SHAPE (subject is a bare role
+  noun) and is applied at BOTH seams — `postTitleViolations` (write) and
+  `servedPostTitleViolations` (read, which `projectPostTitle` uses), so the
+  two can no longer disagree. A refused title serves the deterministic
+  non-asserting label (`GOAL · 1:42`, plus `· <team>` only when the row's own
+  copy names exactly one team) — never an invented actor. Jersey numbers
+  (`No. 7 scores`, an actor the card can read) and grounded names
+  (`Barcelona midfielder scores`) are unaffected; the label form itself is
+  exempt so the fallback is never re-derived.
+
+  The role vocabulary moves from `highlight-summary` to `caption-grounding`,
+  beside the name gate that shares its judgement, and `ROLE_NOUN_FORM_ALT`
+  is shared so a title and a body cannot disagree about which words are role
+  nouns. `highlight-summary` re-exports the table, so its surface is
+  unchanged.
+
+AC12 — the entity-bearing 29-word body that was still refused
+(`packages/events/src/highlight-summary.ts`, `caption-grounding.ts`)
+
+  1. The AC10 neutraliser DELETED an object-position role sentence, taking row
+     `a4827973` from 29 words / 2 sentences to 13 / 1 and refusing it
+     `too-few-words,too-few-sentences,restates-caption,too-few-facts` — the
+     deleted sentence held that row's attested score line. It now rewrites the
+     phrase to a neutral noun (`a defender` -> `a player`) and keeps the
+     sentence, its score and its other facts; if the rewrite still leaves an
+     unattested role noun, the old deletion path still applies.
+  2. `gateSummaryDetail` reported `words`/`sentences` of the RAW reply on a
+     refusal instead of the body it judged, so the retry prompt was told a
+     29-word draft was short of a 25-word target. It now reports the judged
+     text and adds `droppedSentences` for the refusal's attribution.
+  3. `ungrounded-name` on `Real Madrid`, which the job's own matchContext TRAIL
+     measured (scorebug `RMA2-2 BAR`) but `renderSummaryContext` never printed
+     (it prints `teams` only). `summaryEvidenceText` now includes the trail's
+     names — structured measured data for THIS match, nothing generated.
+  4. The nationality adjective `Spanish` was read as an unsourced proper name
+     and rewritten to `the No. 9`. Nationality adjectives describe a side and
+     never identify one, so they join the name stopwords like `home`/`away`.
+  5. A retry refused `ungrounded-name` is now handed the attested actor list
+     explicitly; the first-pass line says "a name is optional", which is not a
+     prohibition.
+
+No threshold changed: live floor 18 / target 25 / hard max are the band the
+gate already advertised, and the tests assert 29 words clears it. Nothing
+generated (reason, caption, postTitle) is added to any evidence surface.
+
+Tests: packages/events 671 passed (38 files), including 21 new
+(`post-title-8831`, `highlight-summary-8831`); the two expectations the new
+bars supersede (AC10 object-clause deletion, 8356 `Goalkeeper holds ball`)
+are re-pinned with the measured reason.
+
+Co-Authored-By: Paperclip <noreply@paperclip.ing>

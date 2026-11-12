@@ -36,6 +36,7 @@ import {
   hasPlacePhrase,
   humanEventLabel,
   stripInternalTokens,
+  ROLE_NOUN_FORM_ALT,
   type CaptionGroundingContext,
 } from "./caption-grounding";
 
@@ -170,6 +171,10 @@ export type PostTitleViolation =
   | "internal-token"
   | "goal-claim"
   | "absence-claim"
+  /** ADAAAA-8831 (AC9/AC10): the title asserts an action with no attested
+   *  ACTOR — a bare role-noun subject (`Midfielder scores`) or a score/ball
+   *  claim that names nobody. */
+  | "unattested-actor"
   | "ungrounded-name";
 
 const CLOCK_PREFIX = /^T\s*\+\s*(?:\d{1,3}:\d{2}|\d+(?:\.\d+)?\s*s)\b[\s·:—–-]*/i;
@@ -303,6 +308,56 @@ export interface PostTitleGateDecision {
   violations: PostTitleViolation[];
 }
 
+/** The shape of a title whose SUBJECT is a bare role noun (`Midfielder scores`,
+ *  `The defender clears it`). The role vocabulary is the one the body gate
+ *  attests against (`caption-grounding`), so a title and a body can never
+ *  disagree about which words are role nouns. A jersey number (`No. 7 scores`)
+ *  is not a role noun: it is a legible actor, so it is unaffected. */
+const TITLE_ROLE_SUBJECT = new RegExp(
+  String.raw`^\s*(?:(?:the|a|an)\s+)?(?:${ROLE_NOUN_FORM_ALT})\b`,
+  "iu"
+);
+
+/** A LABEL-only title (`GOAL · 1:42`) is the deterministic fallback itself: it
+ *  asserts the event label the row's own verdict already certifies, never an
+ *  actor's action, so it must stay serveable rather than be re-derived. */
+const LABEL_ONLY_TITLE = new RegExp(
+  String.raw`^\s*(?:${[...new Set(Object.values(TITLE_LABELS))].join("|")})(?:\s*·\s*\d{1,3}:\d{2})?\s*$`,
+  "iu"
+);
+
+/**
+ * ADAAAA-8831 (AC9/AC10): the title asserts an action with NO attested actor.
+ *
+ * Live leg `27bd816f` served `Midfielder scores` / `Defender scores` on rows
+ * whose attested evidence was `[clock, score, action]` with
+ * `actors=["Barcelona"]` and `bodyNamesAttestedActor=false`: a role noun is not a
+ * name, so neither the write seam's name gate nor the read seam's S3 had anything
+ * to refuse, and the card's headline credited a score to nobody.
+ *
+ * The bar is the measured SHAPE: a title whose subject is a bare role noun. A
+ * role noun is an attestation claim (`SUMMARY_ROLE_NOUN_GROUPS`, the same table
+ * the AC10 body neutraliser uses) and a six-to-ten-word headline carries no
+ * evidence for it. Such a title is refused at BOTH seams, so the card serves the
+ * deterministic non-asserting title (`GOAL · 1:42`, or `GOAL · 1:42 · Barcelona`
+ * when the row's own copy names exactly one of the match's teams) — never an
+ * invented actor.
+ *
+ * What is NOT claimed here: a subjectless claim (`Scores from close range`) still
+ * passes, because the shipped name gate reads a sentence-initial capital as a
+ * possible proper name. The role-noun shape is what the leg measured, and adding
+ * a second verb/name lexicon to catch the rest is a product decision, not a
+ * silent widening. A title that DOES name its actor (`No. 7 scores`, `Barcelona
+ * midfielder scores`) is unaffected: its name still clears the same provenance
+ * gate (`ungrounded-name`).
+ */
+export function postTitleActorMissing(title: string): boolean {
+  const t = (title ?? "").trim();
+  if (!t) return false;
+  if (LABEL_ONLY_TITLE.test(t)) return false;
+  return TITLE_ROLE_SUBJECT.test(t);
+}
+
 /**
  * Every reason THIS candidate may not be served, shape AND evidence.
  *
@@ -311,6 +366,10 @@ export interface PostTitleGateDecision {
  */
 export function postTitleViolations(title: string, ctx?: CaptionGroundingContext): PostTitleViolation[] {
   const out = postTitleShapeViolations(title);
+  // ADAAAA-8831 (AC9/AC10): an action with no attested actor is not copy, at
+  // either seam — a title can be perfectly SHAPED and still credit a score to a
+  // role noun nobody measured.
+  if (postTitleActorMissing(title)) out.push("unattested-actor");
   if (ctx) {
     if (hasGoalClaim(title) && gateGoalClaims(title, ctx) !== title) out.push("goal-claim");
     if (gateAbsenceClaims(title, ctx) !== title) out.push("absence-claim");
@@ -411,6 +470,11 @@ export function postTitleRowCopy(row: PostTitleRow): string {
  */
 export function servedPostTitleViolations(title: string, row: PostTitleRow): PostTitleViolation[] {
   const out = postTitleShapeViolations(title);
+  // ADAAAA-8831 (AC9/AC10): the live leg's served titles were shaped fine and
+  // named nobody (`Midfielder scores`), so the read seam applies the actor bar
+  // too — the card is the customer surface, and the deterministic
+  // `LABEL · m:ss` title is the fallback.
+  if (postTitleActorMissing(title)) out.push("unattested-actor");
   const verdict = (row.outcome ?? "").trim().toLowerCase();
   if (verdict && verdict !== "scoring_play" && hasGoalClaim(title)) out.push("goal-claim");
   const copy = postTitleRowCopy({ ...row, postTitle: null });

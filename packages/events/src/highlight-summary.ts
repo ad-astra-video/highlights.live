@@ -38,7 +38,10 @@ import {
   attestedBallActionFrom,
   carriesAuditMarker,
   BALL_OUTCOME_ASSERTION,
+  ROLE_NOUN_FORM_ALT,
+  SUMMARY_ROLE_NOUN_GROUPS,
   type CaptionGroundingContext,
+  type SummaryRoleNoun,
 } from "./caption-grounding.js";
 import { hasPlacePhrase } from "./caption-grounding.js";
 
@@ -582,6 +585,48 @@ export function attestedActorNames(evidence: SummaryEvidence): string[] {
   ];
 }
 
+/**
+ * ADAAAA-8831: every entity the job's matchContext TRAIL names.
+ *
+ * The trail is the resolver's own measured attribution (scorebug OCR + the
+ * commentary it folded in) and it can name a side the resolver never promoted
+ * into `teams`: on live leg `27bd816f` every row's resolved teams were
+ * `["Barcelona"]` while the same job's trail carried an explicit
+ * `{"name":"Real Madrid","side":"home"}` entry from the `RMA2-2 BAR` scorebug
+ * read. `renderSummaryContext` prints `teams` only, so `summaryEvidenceText` —
+ * the evidence the NAME gate is held to — never contained Real Madrid, and a body
+ * that names a team the box actually measured was refused `ungrounded-name`.
+ *
+ * This is evidence completeness, not a loosening: the trail is structured
+ * measured data about THIS match, read the same way `roleAttestationText` already
+ * reads the raw matchContext for role attestation. Nothing generated (reason,
+ * caption, postTitle) is added.
+ */
+export function matchContextTrailNames(matchContext: unknown): string[] {
+  if (!matchContext || typeof matchContext !== "object") return [];
+  const trail = (matchContext as Record<string, any>).trail;
+  if (!Array.isArray(trail)) return [];
+  const out: string[] = [];
+  for (const entry of trail) {
+    if (!entry || typeof entry !== "object") continue;
+    const names = (entry as Record<string, any>).names;
+    if (!Array.isArray(names)) continue;
+    for (const item of names) {
+      if (typeof item === "string" && item.trim()) out.push(item.trim());
+      else if (item && typeof item === "object") {
+        for (const key of ["name", "team", "label"]) {
+          const value = (item as Record<string, any>)[key];
+          if (typeof value === "string" && value.trim()) {
+            out.push(value.trim());
+            break;
+          }
+        }
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
 /** True when `body` NAMES one of `names`. Whole-phrase match on the normalized
  *  word sequence; a multi-token roster name ("Virgil van Dijk") is also matched
  *  by any of its distinctive tokens ("van Dijk", "Dijk"). */
@@ -856,6 +901,11 @@ export function renderSummaryContext(matchContext: unknown): string {
 export function summaryEvidenceText(evidence: SummaryEvidence): string {
   const parts = [
     renderSummaryContext(evidence.matchContext),
+    // ADAAAA-8831: the match context's own measured ATTRIBUTION trail. A side
+    // the resolver folded into the trail but not into `teams` (live leg
+    // `27bd816f`: teams `["Barcelona"]`, trail `Real Madrid` home) is a name the
+    // box measured, so a body may name it.
+    matchContextTrailNames(evidence.matchContext).join("\n"),
     evidence.transcript ?? "",
     evidence.reason ?? "",
     evidence.adjacentScoreCue ?? "",
@@ -881,62 +931,19 @@ export function summaryGroundingContext(evidence: SummaryEvidence): CaptionGroun
 
 // --- AC10: role nouns are attestation claims -------------------------------
 
-/** One role noun the body uses, with the phrase that carries it. */
-export interface SummaryRoleNoun {
-  /** The canonical role ("midfielder", "goalkeeper", ...). */
-  canonical: string;
-  /** The matched phrase, e.g. "the midfielder". */
-  text: string;
-}
-
-/** AC10 (spec ADAAAA-8665 rev 3): the role nouns a body may only use when the
- *  row's own evidence attests the role. Each group is one ATTESTATION UNIT: the
- *  evidence saying "keeper" attests "the goalkeeper" for the same row, because it
- *  is the same role. A bare `forward` is deliberately NOT matched unless a
- *  determiner precedes it — "drives forward" is an adverb, not a claim about a
- *  person. */
-export const SUMMARY_ROLE_NOUN_GROUPS: readonly { canonical: string; forms: readonly string[] }[] = [
-  {
-    canonical: "midfielder",
-    forms: ["midfielder", "midfielders", "midfield player", "central midfielder", "holding midfielder"],
-  },
-  {
-    canonical: "goalkeeper",
-    forms: ["goalkeeper", "goalkeepers", "keeper", "keepers", "goalie", "netminder"],
-  },
-  {
-    canonical: "striker",
-    forms: ["striker", "strikers", "forward", "forwards", "attacker", "attackers", "frontman", "poacher", "marksman", "number 9"],
-  },
-  {
-    canonical: "defender",
-    forms: [
-      "defender",
-      "defenders",
-      "centre-back",
-      "centre back",
-      "center-back",
-      "center back",
-      "fullback",
-      "full-back",
-      "wing-back",
-      "wing back",
-    ],
-  },
-  { canonical: "winger", forms: ["winger", "wingers"] },
-  { canonical: "playmaker", forms: ["playmaker", "playmakers"] },
-  { canonical: "captain", forms: ["captain", "captains", "skipper"] },
-  { canonical: "sweeper", forms: ["sweeper", "sweepers"] },
-];
+// ADAAAA-8831: the vocabulary itself now lives beside the name gate in
+// `caption-grounding` (the post TITLE reads the same table), and is re-exported
+// here so this module's public surface is unchanged.
+export {
+  SUMMARY_ROLE_NOUN_GROUPS,
+  ROLE_NOUN_FORM_ALT,
+  type SummaryRoleNoun,
+};
 
 const ROLE_DETERMINER = "(?:the|a|an|their|its|his|her)";
 const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** Every role form, longest first so "central midfielder" wins over "midfielder". */
-const ROLE_ALT = [...SUMMARY_ROLE_NOUN_GROUPS]
-  .flatMap((g) => g.forms)
-  .sort((a, b) => b.length - a.length)
-  .map(escapeRe)
-  .join("|");
+const ROLE_ALT = ROLE_NOUN_FORM_ALT;
 const ROLE_PHRASE_SOURCE = `\\b${ROLE_DETERMINER}\\s+(${ROLE_ALT})\\b`;
 /** Any determiner+role phrase in a body. */
 const ROLE_PHRASE_RE = new RegExp(ROLE_PHRASE_SOURCE, "gi");
@@ -1022,6 +1029,43 @@ export function neutralRoleSubject(sentence: string): string {
   return "The play";
 }
 
+/**
+ * ADAAAA-8831: the neutral noun a role phrase is rewritten to when it is NOT the
+ * sentence's subject (an object or a modifier, where a subject rewrite cannot
+ * reach).
+ *
+ * Deleting the whole sentence was the shipped rule, and on live leg `27bd816f`
+ * that starved a compliant body of the facts the sentence carried: row
+ * `a4827973`'s 29-word reply lost *"after a defender found the back of the net."*
+ * — the sentence holding the attested score line — leaving 13 words / 1 sentence,
+ * refused `too-few-words,too-few-sentences,restates-caption,too-few-facts`.
+ * `player` is not a role noun in the attestation table, so the rewrite removes
+ * the unattested claim and adds none: the same trade `neutralRoleSubject`
+ * already makes for a subject, and still deletion-plus-neutral-word only — no
+ * fact, name, score or venue is introduced.
+ */
+function neutralRolePhrase(phrase: string): string {
+  const determiner = /^(the|a|an|their|its|his|her)\b/i.exec(phrase)?.[1]?.toLowerCase() ?? "";
+  const last = phrase.trim().split(/\s+/).pop() ?? "";
+  const noun = /s$/i.test(last) && last.length > 1 ? "players" : "player";
+  if (determiner === "the") return `the ${noun}`;
+  return `a ${noun}`;
+}
+
+/** Replace every unattested role PHRASE in a sentence with its neutral noun,
+ *  keeping the sentence's other facts intact. */
+function replaceUnattestedRolePhrases(sentence: string, claims: readonly SummaryRoleNoun[]): string {
+  let out = sentence;
+  for (const claim of claims) {
+    const re = new RegExp(claim.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+    const replacement = neutralRolePhrase(claim.text);
+    out = out.replace(re, (match) =>
+      /^[A-Z]/.test(match) ? replacement.charAt(0).toUpperCase() + replacement.slice(1) : replacement
+    );
+  }
+  return out;
+}
+
 export interface SummaryRoleNeutralisation {
   text: string;
   /** Phrases rewritten to a neutral subject. */
@@ -1039,10 +1083,12 @@ export interface SummaryRoleNeutralisation {
  *  1. a role noun opening its sentence is the SUBJECT: rewrite the subject to a
  *     neutral event noun ("the move", "the shot", "the play") and keep the verb,
  *     so the sentence still says what the evidence attests;
- *  2. a role noun anywhere else (object, modifier) cannot be rewritten without
- *     changing what the sentence claims, so the SENTENCE is deleted. If that
- *     takes the body under the depth band the gate refuses it and the lane
- *     regenerates/drops — never a fabricated repair.
+ *  2. a role noun anywhere else (object, modifier) is rewritten to a neutral
+ *     noun ("a player" / "the players") rather than deleting the sentence
+ *     (ADAAAA-8831: deleting it starved a compliant body of its attested facts).
+ *     If the rewritten body still carries an unattested role noun, or the depth
+ *     band is missed, the gate refuses it and the lane regenerates/drops —
+ *     never a fabricated repair.
  */
 export function neutraliseRoleNouns(text: string, evidence: SummaryEvidence): SummaryRoleNeutralisation {
   const body = (text ?? "").trim();
@@ -1067,6 +1113,14 @@ export function neutraliseRoleNouns(text: string, evidence: SummaryEvidence): Su
         neutralised.push({ canonical: roleGroupOf(leading[1] ?? ""), text: leading[0].trim() });
         continue;
       }
+    }
+    // ADAAAA-8831: an object/modifier role phrase — rewrite the phrase, keep the
+    // sentence and every fact it carries.
+    const repaired = replaceUnattestedRolePhrases(sentence, offending);
+    if (repaired !== sentence && unattestedRoleNouns(repaired, evidence).length === 0) {
+      kept.push(repaired);
+      for (const claim of offending) neutralised.push(claim);
+      continue;
     }
     droppedSentences++;
   }
@@ -1304,8 +1358,18 @@ export interface SummaryGateDecision {
   /** Audit token: `accepted` / `trimmed` (the extractive clamp) / `refused:<violations>` / `absent`. */
   gate: string;
   violations: SummaryViolation[];
+  /** ADAAAA-8831: the words/sentences of the text the gate actually JUDGED — the
+   *  post-neutralisation body on a refusal, not the model's raw reply. The two
+   *  differ whenever the AC10 neutraliser rewrites or deletes a sentence, and
+   *  reporting the raw count made a 13-word judged body look like a 29-word one:
+   *  the retry was then told a shortfall it did not have (`words=29` against a
+   *  25-word target) and the row stayed dry on its second call. */
   words: number;
   sentences: number;
+  /** ADAAAA-8831: sentences the AC10 neutraliser had to DELETE because a role
+   *  phrase could not be rewritten in place. A refusal carrying this > 0 is the
+   *  neutraliser, not the writer, having taken the body under the band. */
+  droppedSentences: number;
   /** ADAAAA-8687: the model's own reply, after the internal-token strip and the
    *  clock-prefix strip — i.e. exactly the text that was judged. The write seam
    *  persists it as `summaryRaw` on a refusal so the next QA can quote what the
@@ -1328,11 +1392,16 @@ export interface SummaryGateDecision {
 export function gateSummaryDetail(raw: string | null | undefined, evidence: SummaryEvidence): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
-  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, raw: "", captionOverlap: 0 };
+  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, raw: "", captionOverlap: 0 };
   const clamped = clampSummaryDepth(stripped, evidence.rail);
   const candidates: { text: string; trimmed: boolean }[] =
     clamped && clamped !== stripped ? [{ text: stripped, trimmed: false }, { text: clamped, trimmed: true }] : [{ text: stripped, trimmed: false }];
   const refused: SummaryViolation[] = [];
+  /** ADAAAA-8831: the text the LAST candidate was judged as, so a refusal reports
+   *  what the gate actually measured (post-neutralisation) instead of the raw
+   *  reply it never judged. */
+  let lastJudged = "";
+  let droppedSentences = 0;
   for (const candidate of candidates) {
     if (!candidate.text) continue;
     // AC10 (rev 3): an unattested role noun is removed BEFORE judging, so a body
@@ -1341,6 +1410,8 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     const neutralised = neutraliseRoleNouns(candidate.text, evidence);
     const judged = neutralised.text;
     if (!judged) continue;
+    lastJudged = judged;
+    droppedSentences = neutralised.droppedSentences;
     const violations = summaryViolations(judged, evidence);
     if (violations.length === 0) {
       return {
@@ -1349,6 +1420,7 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
         violations: [],
         words: summaryWordCount(judged),
         sentences: summarySentenceCount(judged),
+        droppedSentences,
         raw: stripped,
         captionOverlap: captionTokenOverlap(judged, evidence.caption),
       };
@@ -1356,12 +1428,14 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     for (const v of violations) if (!refused.includes(v)) refused.push(v);
   }
   void band;
+  const measured = lastJudged || stripped;
   return {
     summary: null,
     gate: `refused:${refused.join(",")}`,
     violations: refused,
-    words: summaryWordCount(stripped),
-    sentences: summarySentenceCount(stripped),
+    words: summaryWordCount(measured),
+    sentences: summarySentenceCount(measured),
+    droppedSentences,
     raw: stripped,
     captionOverlap: captionTokenOverlap(stripped, evidence.caption),
   };
@@ -1545,6 +1619,19 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       if (!actor) return [];
       return [
         `- The previous draft was fact-poor (${violations.join(", ")}). NAME ${actor} and say what they did, so the copy carries two different facts.`,
+      ];
+    })(),
+    ...(() => {
+      // ADAAAA-8831: a retry whose draft named an entity the row's evidence does
+      // not attest (row `8d521507` of live leg `27bd816f` wrote "Real Madrid"
+      // where the attested actor was Barcelona) is handed the attested actor
+      // list explicitly and told the claim is closed — the first-pass line says
+      // "a name is optional", which is not a prohibition.
+      const violations = input.retry?.violations ?? [];
+      if (!violations.includes("ungrounded-name")) return [];
+      if (attestedActors.length === 0) return [];
+      return [
+        `- The previous draft named an entity this evidence does not attest. Name ONLY these attested actors: ${attestedActors.slice(0, 8).join(", ")}. Do not name any other team, player, venue or competition.`,
       ];
     })(),
     "- Do not restate the headline or the announcer line.",
