@@ -199,3 +199,56 @@ def test_run_pass_with_unlabelled_frames_never_invents_a_moment(monkeypatch):
     )
     assert resp["goalConfirmed"] == "confirmed_goal"
     assert resp["momentTs"] is None, "no grid was sent, so no instant may be claimed"
+
+
+# --- the WIRE contract (ADAAAA-8838) ----------------------------------------
+# A pass that builds the moment is not enough. The route answers with
+# ``ConfirmDecision(**result)``, and that model is ``extra="ignore"`` — a field
+# the pass produced but the model never DECLARED is silently dropped at the HTTP
+# boundary. That is exactly how the served build read ``momentTs: null`` on every
+# live confirm while the dict-level tests above passed: the moment existed inside
+# the process and never reached the server.
+
+
+def test_response_model_declares_the_moment():
+    assert "momentTs" in cf.ConfirmDecision.model_fields
+    assert "momentConfidence" in cf.ConfirmDecision.model_fields
+
+
+def test_response_model_carries_a_numeric_moment_to_the_wire():
+    wire = cf.ConfirmDecision(
+        **{
+            "enabled": True,
+            "goalConfirmed": "confirmed_goal",
+            "momentTs": 41.5,
+            "momentConfidence": 0.82,
+        }
+    ).model_dump()
+    assert wire["momentTs"] == 41.5
+    assert wire["momentConfidence"] == pytest.approx(0.82)
+
+
+def test_response_model_keeps_an_unnamed_moment_null_on_the_wire():
+    wire = cf.ConfirmDecision(**{"enabled": True, "goalConfirmed": "near_miss"}).model_dump()
+    assert "momentTs" in wire and wire["momentTs"] is None
+    assert "momentConfidence" in wire and wire["momentConfidence"] is None
+
+
+def test_route_construction_carries_the_run_pass_moment(monkeypatch):
+    """The exact construction the /confirm route performs: pass dict -> model."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("AUDIO_CONTEXT", "0")
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: _reply(momentTs=41.6, momentConfidence=0.82))
+    result = run_confirmation_pass({"stage1": _stage1(), "eventType": "GOAL", "frames": _frames()})
+    wire = cf.ConfirmDecision(**result).model_dump()
+    assert wire["goalConfirmed"] == "confirmed_goal"
+    assert wire["momentTs"] == 41.5, "the snapped moment must survive the response model"
+    assert wire["momentConfidence"] == pytest.approx(0.82)
+
+
+def test_route_construction_keeps_the_passthrough_nullable(monkeypatch):
+    monkeypatch.delenv("DECIDE_CONFIRM_ENABLED", raising=False)
+    result = run_confirmation_pass({"stage1": _stage1(), "eventType": "GOAL", "frames": _frames()})
+    wire = cf.ConfirmDecision(**result).model_dump()
+    assert wire["goalConfirmed"] is None
+    assert "momentTs" in wire and wire["momentTs"] is None

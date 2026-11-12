@@ -643,6 +643,20 @@ class ConfirmDecision(BaseModel):
     # that never issued a call, so an old caller's contract is unchanged.
     usage: Optional[dict] = None
     usageSource: Optional[str] = None
+    # ADAAAA-8820 (D2) / ADAAAA-8838: the content-clock instant of the dense frame
+    # that carries the moment the clip should be cut on — snapped onto the grid
+    # this pass was actually shown (``snap_moment``) — plus its confidence.
+    #
+    # Declared HERE, on the RESPONSE model, because this model is
+    # ``extra="ignore"``: an undeclared field is silently DROPPED at the /confirm
+    # boundary. The pass built the moment, ``ConfirmDecision(**result)`` threw it
+    # away, and every live confirm read ``momentTs: null`` no matter what the
+    # prompt asked for. Nullable by contract (a refutation, a near miss, a reply
+    # that names no frame, or a pass with no frame grid names none) and present on
+    # EVERY verdict, so a client can always tell "no moment named" from "an old
+    # decide build that never asked".
+    momentTs: Optional[float] = None
+    momentConfidence: Optional[float] = None
 
 
 # --- prompt -----------------------------------------------------------------
