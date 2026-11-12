@@ -2399,10 +2399,32 @@ export type HighlightAlternative = z.infer<typeof HighlightAlternativeSchema>;
  * Lane + label only: the inspector half of `WindowConfirmationSchema` (the raw
  * attestation flags and the dive verdict) is deliberately NOT on a card surface
  * — mirrors what `stripWindowInspection()` gates on the decide notes. */
+/** ADAAAA-8721 (D3): WHY no Stage-2 dive ran for a served window.
+ *
+ * A card with no dive badge used to look identical whether (a) no dive was ever
+ * requested, (b) a dive ran and disagreed, or (c) a dive was dropped — all three
+ * read as "confirmation did not happen". This enum names the skip from
+ * already-persisted state only (`cfg.confirmEnabled`, the row's goal shape, the
+ * window's own measured attestation, and the row's stored
+ * `confirmAttestation.dropReason`), so it costs 0 decide calls and 0 GPU.
+ *
+ * `dropped:<cause>` uses the closed cause list the confirm lane already stores
+ * (`budget` / `pool_busy` / `descriptor_overflow` / `timeout` /
+ * `transport_failure` / `no_persisted_frames` / ...), never free text. */
+export const ConfirmationSkipReasonSchema = z.union([
+  z.enum(["measured_attestation", "not_goal_shaped", "dive_disabled"]),
+  z.string().regex(/^dropped:[a-z0-9_]+$/),
+]);
+export type ConfirmationSkipReason = z.infer<typeof ConfirmationSkipReasonSchema>;
+
 export const HighlightConfirmationSchema = z.object({
   lane: z.enum(["measured", "dive", "dive_disagreed", "dive_held", "unconfirmed"]),
   /** The row-body sentence for the lane, exactly as the decide note cites it. */
   label: z.string(),
+  /** ADAAAA-8721 (D3): present exactly when NO dive ran — names why. Absent when
+   *  a dive ran (a verdict, corroborated or not, is its own answer) and absent
+   *  when nothing could be derived, so the card never invents a reason. */
+  skipReason: ConfirmationSkipReasonSchema.optional(),
 });
 export type HighlightConfirmation = z.infer<typeof HighlightConfirmationSchema>;
 

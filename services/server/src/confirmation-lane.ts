@@ -20,7 +20,14 @@
  * persisted or mutated, so a row written before the captures existed derives
  * `unconfirmed` ("lane not recorded") instead of inventing a lane.
  */
-import type { ConfirmRecord, HighlightConfirmation, HighlightRecord, HighlightTrigger, WindowAnalysis } from "@highlights/events";
+import type {
+  ConfirmRecord,
+  ConfirmationSkipReason,
+  HighlightConfirmation,
+  HighlightRecord,
+  HighlightTrigger,
+  WindowAnalysis,
+} from "@highlights/events";
 
 /** Which lane confirmed the window. `unconfirmed` = accepted with no stored
  *  measurement AND no dive (never a claim that the clip is wrong). */
@@ -61,6 +68,10 @@ export interface WindowConfirmation {
   /** The measured detail the label cites when the store carries one
    *  (e.g. "0-0 → 0-1 at 04:47"). Never synthesized. */
   detail?: string;
+  /** ADAAAA-8721 (D3): present exactly when NO dive ran — names why the Stage-2
+   *  dive was skipped, derived from already-persisted state only. This IS a card
+   *  surface (unlike `flags` / `dive` below) and survives `servedConfirmation()`. */
+  skipReason?: ConfirmationSkipReason;
   // The inspector half (`?inspect=1` / `/sections/:index/inspect`): the raw
   // stored attestation + the dive verdict. Stripped from the row-level payload by
   // `stripWindowInspection()` exactly like `analysis` / `confirm`.
@@ -81,6 +92,17 @@ export interface ConfirmationInput {
   trigger?: HighlightTrigger;
   analysis?: WindowAnalysis;
   confirm?: ConfirmRecord;
+  /** ADAAAA-8721 (D3): the deployment gate the ACCEPT path actually read
+   *  (`cfg.confirmEnabled`, i.e. `decideConfirmEnabled` on VOD and
+   *  `decideConfirmEnabled && liveDecideConfirm` on the live rail). Only used to
+   *  name a skip reason when no dive ran; never to change the derived lane.
+   *  `undefined` = the reader had no config at hand, so a skip reason is omitted
+   *  rather than guessed. */
+  confirmEnabled?: boolean;
+  /** ADAAAA-8721 (D3): the row's OWN stored drop cause
+   *  (`confirmAttestation.dropReason`), the only persisted record that a dive was
+   *  requested and dropped fail-closed. */
+  droppedReason?: string;
 }
 
 const LANE_LABELS = {
@@ -243,6 +265,34 @@ export function diveVerdictFromAttestation(
 }
 
 /**
+ * ADAAAA-8721 (D3): WHY no Stage-2 dive ran, from persisted state only.
+ *
+ * Precedence (and why):
+ *   1. a stored drop cause wins — a dive WAS requested and dropped fail-closed,
+ *      and that is the most specific true statement about the window;
+ *   2. the lane disabled in config (`cfg.confirmEnabled === false`) — no dive
+ *      could have run for ANY window on this deployment;
+ *   3. the window's own measured attestation — `shouldRunConfirm()` short-circuits
+ *      on it, so the dive was deliberately skipped;
+ *   4. otherwise the read was not goal-shaped (a requested near-miss / big-play
+ *      highlight, or a true non-goal read never enters the dive);
+ *   5. `confirmEnabled` unknown → omit. A reader with no config at hand cannot
+ *      distinguish `dive_disabled` from `not_goal_shaped`, and naming the wrong
+ *      one would be an invented reason.
+ */
+function skipReasonFor(
+  input: ConfirmationInput,
+  measurement: ConfirmationMeasurement | undefined
+): ConfirmationSkipReason | undefined {
+  const dropped = typeof input.droppedReason === "string" ? input.droppedReason.trim() : "";
+  if (dropped) return `dropped:${dropped.split(":")[0]}`;
+  if (input.confirmEnabled === false) return "dive_disabled";
+  if (measurement && measurement !== "none") return "measured_attestation";
+  if (input.confirmEnabled === undefined) return undefined;
+  return "not_goal_shaped";
+}
+
+/**
  * Derive the confirmation lane for one stored candidate.
  *
  * Precedence (and why):
@@ -301,11 +351,13 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
             : detail
               ? `Confirmed by measured score: ${detail}`
               : "Confirmed by measured score change";
+    const skipReason = skipReasonFor(input, measured);
     return {
       lane: "measured",
       label,
       measurement: measured,
       ...(detail ? { detail } : {}),
+      ...(skipReason ? { skipReason } : {}),
       flags: stage1,
       flagsSource: stage1 ? "stage1_verdict" : input.trigger ? "trigger" : undefined,
     };
@@ -318,11 +370,13 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
   if (input.status === "rejected" || input.status === "suppressed") return undefined;
 
   const hasCapture = Boolean(input.analysis || input.trigger);
+  const skipReason = skipReasonFor(input, undefined);
   if (input.status === "pending") {
     return {
       lane: "unconfirmed",
       label: LANE_LABELS.pending,
       measurement: "none",
+      ...(skipReason ? { skipReason } : {}),
       flags: stage1,
       flagsSource: stage1 ? "stage1_verdict" : undefined,
     };
@@ -331,6 +385,7 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
     lane: "unconfirmed",
     label: hasCapture ? LANE_LABELS.noMeasurementNoDive : LANE_LABELS.legacy,
     measurement: "none",
+    ...(skipReason ? { skipReason } : {}),
     flags: stage1,
     flagsSource: stage1 ? "stage1_verdict" : undefined,
   };
@@ -342,7 +397,9 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
  * never leaves the decide note, exactly as `stripWindowInspection()` gates it.
  */
 export function servedConfirmation(derived: WindowConfirmation | undefined): HighlightConfirmation | undefined {
-  return derived ? { lane: derived.lane, label: derived.label } : undefined;
+  return derived
+    ? { lane: derived.lane, label: derived.label, ...(derived.skipReason ? { skipReason: derived.skipReason } : {}) }
+    : undefined;
 }
 
 /**
@@ -387,9 +444,18 @@ export function confirmationForHighlightRow(
      *  the only place a live Stage-2 refutation is recorded, because the
      *  candidate rows store no confirm record. Read so a refuted row can never
      *  fall through to the candidate's `measured` lane. */
-    confirmAttestation?: { goalConfirmed?: string | null; corroborated?: boolean | null } | null;
+    confirmAttestation?: {
+      goalConfirmed?: string | null;
+      corroborated?: boolean | null;
+      /** ADAAAA-8721 (D3): the stored fail-closed drop cause — proof a dive was
+       *  requested and did not run. */
+      dropReason?: string | null;
+    } | null;
   },
-  candidate?: ConfirmationInput
+  candidate?: ConfirmationInput,
+  /** ADAAAA-8721 (D3): the deployment gate the accept path read, so a lane-less
+   *  card can name `dive_disabled` instead of guessing. Omitted = unknown. */
+  options?: { confirmEnabled?: boolean }
 ): HighlightConfirmation | undefined {
   // ADAAAA-8542: a held row is neither confirmed nor refuted. It wins over the
   // candidate-derived lane (which still reads `dive`, because the dive's verdict
@@ -425,7 +491,7 @@ export function confirmationForHighlightRow(
       dive: rowDive,
     });
   }
-  if (candidate) return servedConfirmation(deriveConfirmation(candidate));
+  if (candidate) return servedConfirmation(deriveConfirmation(withSkipInput(candidate, row, options)));
   // ADAAAA-8678: highlight row status is pending|accepted|rejected and `pending`
   // is a PUBLISH state (auto-publish off), not a rejection: it derives its lane
   // like an accepted row, so a served GOAL card never carries an evidence-free
@@ -433,5 +499,23 @@ export function confirmationForHighlightRow(
   // approve queue ("Awaiting approval — …") and badges UNCONFIRMED.
   const status: ConfirmationInput["status"] =
     row.status === "accepted" ? "accepted" : row.status === "rejected" ? "rejected" : row.status === "pending" ? "pending" : "suppressed";
-  return servedConfirmation(deriveConfirmation({ status, trigger: row.trigger }));
+  return servedConfirmation(deriveConfirmation(withSkipInput({ status, trigger: row.trigger }, row, options)));
+}
+
+/** ADAAAA-8721 (D3): fold the persisted skip evidence (the row's stored drop
+ *  cause + the deployment gate) into the derivation input without overriding
+ *  anything the caller already set explicitly. */
+function withSkipInput(
+  input: ConfirmationInput,
+  row: { confirmAttestation?: { dropReason?: string | null } | null },
+  options?: { confirmEnabled?: boolean }
+): ConfirmationInput {
+  const droppedReason = row.confirmAttestation?.dropReason ?? undefined;
+  return {
+    ...input,
+    ...(droppedReason ? { droppedReason } : {}),
+    ...(options?.confirmEnabled !== undefined && input.confirmEnabled === undefined
+      ? { confirmEnabled: options.confirmEnabled }
+      : {}),
+  };
 }
