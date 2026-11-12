@@ -575,11 +575,21 @@ export function matchContextEntityNames(matchContext: unknown): string[] {
 /** ADAAAA-8735: the ACTORS a row can legitimately name — the match context's
  *  teams/players plus names the ASR transcript carries. The decide `reason` and
  *  the announcer `caption` are GENERATED copy, so they are deliberately not
- *  sources: that is exactly how `Ball` came to attest itself. */
+ *  sources: that is exactly how `Ball` came to attest itself.
+ *
+ *  ADAAAA-8831: the match context TRAIL is a source too, and for the same
+ *  reason. It is the resolver's measured attribution (scorebug OCR), so a side
+ *  it read (`Real Madrid` from `26:17 RMA2-2 BAR`) is an attested actor of THIS
+ *  match even when the resolver only promoted the other side into `teams`. The
+ *  two readers must agree: `summaryEvidenceText` grounds a name against the same
+ *  trail (a name the gate can ground), so leaving it out here made a grounded
+ *  name fail `bodyNamesAttestedActor` — a body could name a measured team and
+ *  still not earn the `action` fact it carried. */
 export function attestedActorNames(evidence: SummaryEvidence): string[] {
   return [
     ...new Set([
       ...matchContextEntityNames(evidence.matchContext),
+      ...matchContextTrailNames(evidence.matchContext),
       ...attestedEntityNames(evidence.transcript ?? ""),
     ]),
   ];
