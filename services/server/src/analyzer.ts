@@ -7518,14 +7518,14 @@ export async function acceptVideoDecision(
     cfg.decideWindowN === undefined &&
     shouldRunConfirm(cfg, candidate, stage1);
   const confirmOutcome = asyncConfirmArmed
-    ? { decision: stage1, confirmRan: false, confirm: undefined as ConfirmDecision | undefined }
+    ? { decision: stage1, confirmRan: false, confirm: undefined as ConfirmDecision | undefined, confirmAttestation: undefined }
     : await confirmReconcile(client, run, cfg, stage1, candidate, goalEventTs);
   // ADAAAA-6797: Stage-2 confirmation dive — for an un-attested goal-type
   // candidate whose Stage-1 read is a scoring_play accept, run the decide
   // /confirm deep frame dive and adopt the reconciled verdict in its place.
   // Strict no-op when the trigger doesn't fire or the flag (confirmEnabled) is
   // off; the Stage-1 verdict is kept on passthrough / transport failure.
-  const { decision: confirmReconciled, confirmRan, confirm } = confirmOutcome;
+  const { decision: confirmReconciled, confirmRan, confirm, confirmAttestation } = confirmOutcome;
   // ADAAAA-7185: accepted == corroborated. When the Stage-2 gate is live and it
   // RAN for this un-attested goal but could not corroborate it (passthrough or
   // transport failure left goalConfirmed null), the Stage-1 visual read is NOT
@@ -7534,8 +7534,18 @@ export async function acceptVideoDecision(
   // downgraded to near_miss by the decide-side gate.)
   // ADAAAA-8205: never on the async lane — the dive has not run yet, and the
   // provisional row must publish untouched until its verdict lands.
+  // ADAAAA-8796 (D1): bounded to a goal-shaped Stage-1 read. D1 dives every
+  // promoted row, and "the dive could not corroborate" says nothing about a big
+  // play or a celebration — downgrading those to near_miss would DELETE coverage
+  // in the name of confirming it.
   let decision = confirmReconciled;
-  if (cfg.confirmEnabled && !asyncConfirmArmed && confirmRan && !(confirm && confirm.goalConfirmed)) {
+  if (
+    cfg.confirmEnabled &&
+    !asyncConfirmArmed &&
+    confirmRan &&
+    isGoalShaped(stage1) &&
+    !(confirm && confirm.goalConfirmed)
+  ) {
     decision = downgradeUncorroborated(stage1);
   }
   // ADAAAA-6798 Inc 2: derive the trigger provenance ONCE from the candidate
@@ -8383,6 +8393,12 @@ export async function acceptVideoDecision(
     // its verdict moves THIS row in place (never an insert). Absent on every
     // scoring row, the VOD rail, and the unarmed posture.
     pendingConfirmDive: pendingConfirmDive ? { ...pendingConfirmDive, highlightId: "" } : undefined,
+    // ADAAAA-8796 (D1): the INLINE dive's verdict record (VOD / unarmed live
+    // posture). The live async lane stamps the same field later, in place, via
+    // `confirmDiveAdoption`; this is the rail-parity stamp so a VOD job's
+    // promoted rows carry `goalConfirmed` / `dropReason` too — "every promoted
+    // row carries a verdict" is a claim about BOTH rails, not one of them.
+    confirmAttestation: confirmAttestation as HighlightRecord["confirmAttestation"],
     // ADAAAA-7247 (ACC-7): record the per-company clip-window setting that
     // produced this clip plus the delivered window length so the delivered clip
     // window is auditable (Acc-3). Values come from the resolved (webui > env)
@@ -10563,14 +10579,28 @@ export function candidateHasMeasuredAttestation(c: {
   });
 }
 
-/** The Stage-2 trigger: an un-attested goal-type candidate whose Stage-1 read
- * is a scoring_play accept (goal-shaped), OR a goal-shaped read left as a bare
- * non-accept for lack of in-window corroboration (the delayed-corroboration
- * rescue, ADAAAA-7357), enters the confirmation dive. Everything else (non-goal
- * type, attested, a requested near-miss / big-play highlight — isHighlight=true
- * with a non-scoring outcome — or a true non-goal read) keeps the existing
- * path (recommended near-miss / big-play, attested goal, true non-goal). The
- * config gate is `cfg.confirmEnabled` — off is a strict no-op. */
+/** The Stage-2 trigger. ADAAAA-8796 (D1): the dive is a CONFIRMATION pass, not
+ * a goal gate — the trigger is "a PROMOTED row with no measured attestation",
+ * not "a goal-shaped row with no measured attestation".
+ *
+ *  - `cfg.confirmEnabled` is the config gate; off is a strict no-op.
+ *  - A row that already carries a MEASURED attestation is skipped: the measured
+ *    lane is its own corroboration and the dive would only re-bill it (this is
+ *    the cost bound, not a coverage bound).
+ *  - An ACCEPTED highlight (a promoted row) is dived whatever its goal shape.
+ *    Before D1 the `isGoalShaped()` early return meant a big play, celebration
+ *    or crowd burst could never enter the dive lane — measured on leg `357a927d`
+ *    only goal-shaped rows carried a verdict, which is exactly the "all
+ *    identified highlights had no deep-dive confirmation" complaint. The verdict
+ *    on a non-goal row can never create a GOAL by itself: {@link confirmReconcile}
+ *    only adopts a dive verdict when the Stage-1 read was goal-shaped, and the
+ *    live adoption writer (`confirmDiveAdoption`) keeps its own corroboration,
+ *    citation and recap gates. So D1 changes COVERAGE, not the GOAL gate.
+ *  - A NON-accept still needs a goal-shaped read to be rescued (the
+ *    delayed-corroboration bare-goal path, ADAAAA-7357). A plain non-goal
+ *    non-accept was never promoted, so there is no row for a verdict to move.
+ *
+ * One predicate for the live and VOD rails, so the two do not diverge again. */
 export function shouldRunConfirm(
   cfg: AnalyzerConfig,
   candidate: {
@@ -10584,26 +10614,22 @@ export function shouldRunConfirm(
   stage1Decision: DecisionResult
 ): boolean {
   if (!cfg.confirmEnabled) return false;
-  // ADAAAA-7185/7357: gate goal-ness on the DECISION + eventLabel, not the
-  // candidate's raw eventType alone. In the observe architecture the candidate
-  // carries the perceive bias-hint label (commonly SPORTING_EVENT) while the
-  // actual GOAL class lives on the verdict. Gating on outcome===scoring_play
-  // alone made the gate inert for the delayed-corroboration goal whose Stage-1
-  // read was outcome=not_highlight / eventType=GOAL (ADAAAA-7357).
-  if (!isGoalShaped(stage1Decision)) return false;
   // ADAAAA-8506: on the LIVE rail the skip must agree with the row-level gate,
   // so a noisy `scoreBoardChanged` cannot suppress the dive that checks it. VOD
   // keeps the legacy flag read: its promote path is the inline dive verdict, not
   // `liveGoalHasMeasuredEvidence`.
   const liveRail = cfg.liveObserveLoop === true && cfg.decideWindowN === undefined;
   if (liveRail ? candidateHasMeasuredAttestation(candidate) : hasIndependentAttestation(candidate)) return false;
-  // Accepted highlights: fire ONLY for a genuine goal read (scoring_play /
-  // legacy goal-type). A requested near-miss / big-play highlight
-  // (isHighlight=true, outcome != scoring_play) is never a goal, so no confirm.
-  if (stage1Decision.isHighlight) return isGoalDecision(stage1Decision);
+  // ADAAAA-8796 (D1): a PROMOTED row (an accepted highlight) is dived whatever
+  // its goal shape — a big play / celebration / crowd burst carries no measured
+  // attestation either, and it is the population that never entered the dive
+  // lane. The verdict cannot promote it past the GOAL gate: the inline path only
+  // adopts a dive verdict for a goal-shaped Stage-1 read, and the live adoption
+  // writer keeps its corroboration / citation / recap gates.
+  if (stage1Decision.isHighlight) return true;
   // Non-accept: fire for a goal-shaped bare non-accept (the notable-only /
-  // delayed-corroboration rescue). Bounded to goal-shaped reads; the confirm
-  // corroboration gate keeps a true non-goal from ever becoming a board GOAL.
+  // delayed-corroboration rescue, ADAAAA-7357). A plain non-goal non-accept was
+  // never promoted, so there is no row for a verdict to move.
   return isGateRejectedBareGoal(stage1Decision);
 }
 
@@ -10765,6 +10791,66 @@ function candidateFrameSignalsFromPayload(payload: ObserveDecidePayload): Locali
  * non-null); on passthrough (disabled/unparseable) or any transport failure it
  * keeps the Stage-1 verdict (no behavior change). Also records the disagreement
  * metric on `shared`. */
+/** ADAAAA-8796 (D1): the row-level verdict record an INLINE dive stamps.
+ *
+ * The live async lane writes exactly this object as `confirmAttestation` on the
+ * record (`confirmDiveAdoption`). D1 fires dives on non-goal promoted rows too,
+ * and it fires them on the VOD rail inline, so the inline path must leave the
+ * SAME observable verdict field — otherwise "every promoted row carries a
+ * verdict" would hold on live and silently fail on VOD, which is the rail
+ * divergence this increment exists to close. */
+export interface InlineConfirmAttestation {
+  goalConfirmed: string;
+  corroborated: boolean;
+  corroborationSource: string | null;
+  diveAt: string;
+  diveLatencyMs: number;
+  contextDegraded: string[];
+  dropReason?: string;
+}
+
+/** ADAAAA-8796 (D1): which context signals the inline dive could not build.
+ * The persisted-artifact lane tracks this on `confirmDiveAdoption`; the inline
+ * path builds its context directly, so it names the same four signals from what
+ * it actually produced — a signal that came back empty is REPORTED missing, and
+ * nothing is ever invented. */
+function inlineDegradedSignals(ctx: {
+  trajectories?: unknown[];
+  flowMagnitudes?: unknown[];
+  audioLevels?: unknown[];
+  audioB64?: string;
+}): string[] {
+  const out: string[] = [];
+  if (!(ctx.trajectories ?? []).length) out.push("motion_trajectories");
+  if (!(ctx.flowMagnitudes ?? []).length) out.push("optical_flow");
+  if (!ctx.audioB64) out.push("audio_clip");
+  if (!(ctx.audioLevels ?? []).length) out.push("audio_levels");
+  return out;
+}
+
+/** ADAAAA-8796 (D1): build the inline attestation. A dive that produced no
+ * structured verdict is still an ATTEMPT and says so (`passthrough`), and a
+ * transport failure is a `dropped` attempt with its cause — a promoted row is
+ * never left without a verdict field. */
+function inlineConfirmAttestation(input: {
+  confirm?: ConfirmDecision;
+  droppedReason?: string;
+  diveAt: string;
+  latencyMs: number;
+  contextDegraded?: readonly string[];
+}): InlineConfirmAttestation {
+  const verdict = input.confirm?.goalConfirmed;
+  return {
+    goalConfirmed: verdict ?? (input.droppedReason ? "dropped" : "passthrough"),
+    corroborated: input.confirm?.corroborated === true,
+    corroborationSource: input.confirm?.corroborationSource ?? null,
+    diveAt: input.diveAt,
+    diveLatencyMs: Math.max(0, Math.round(input.latencyMs)),
+    contextDegraded: [...(input.contextDegraded ?? [])],
+    ...(input.droppedReason ? { dropReason: input.droppedReason } : {}),
+  };
+}
+
 export async function confirmReconcile(
   client: PipelineClient,
   shared: LiveRunShared,
@@ -10787,7 +10873,14 @@ export async function confirmReconcile(
    * goal — NOT the window center. When absent (non-observe paths), falls back to
    * the candidate timestamp (which is already the goal trigger there). */
   goalEventTs?: number
-): Promise<{ decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision }> {
+): Promise<{
+  decision: DecisionResult;
+  confirmRan: boolean;
+  confirm?: ConfirmDecision;
+  /** ADAAAA-8796 (D1): the row-level verdict record, stamped on every promoted
+   *  row the inline dive touched (verdict, passthrough or dropped). */
+  confirmAttestation?: InlineConfirmAttestation;
+}> {
   if (!shouldRunConfirm(cfg, candidate, stage1)) {
     return { decision: stage1, confirmRan: false };
   }
@@ -10845,6 +10938,14 @@ export async function confirmReconcile(
     } as ConfirmRequest, { jobId: cfg.jobId });
     const confirmElapsedMs = Date.now() - confirmStartedAt;
     shared.recordConfirm({ stage1Disagreed: confirm.stage1Disagreed === true });
+    // ADAAAA-8796 (D1): the row-level verdict record, so the inline (VOD) rail
+    // leaves the same observable `confirmAttestation` the live async lane writes.
+    const confirmAttestation = inlineConfirmAttestation({
+      confirm,
+      diveAt: new Date(confirmStartedAt).toISOString(),
+      latencyMs: confirmElapsedMs,
+      contextDegraded: inlineDegradedSignals(ctx),
+    });
     // ADAAAA-7185: emit a decide-audit descriptor from the /confirm pass
     // (run_confirmation_pass) so the corroboration result for an accepted GOAL
     // is queryable after the fact. Keyed by (jobId, group:confirm) so it never
@@ -10868,18 +10969,35 @@ export async function confirmReconcile(
     }
     // Adopt the reconciled verdict only when the pass actually produced one; on
     // passthrough (goalConfirmed null) keep the Stage-1 verdict unchanged.
-    if (confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
-      const outcome = { decision: confirm.decision, confirmRan: true, confirm };
+    // ADAAAA-8796 (D1): adoption is bounded to a GOAL-SHAPED Stage-1 read. D1
+    // now dives non-goal promoted rows (big plays, celebrations, notable reads),
+    // and a dive verdict must never turn one of those into a postable GOAL — it
+    // may only corroborate or withhold inside the existing goal rules. The
+    // verdict is still carried out on `confirmAttestation`, so the row records
+    // what the dive said without changing its lane.
+    if (isGoalShaped(stage1) && confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
+      const outcome = { decision: confirm.decision, confirmRan: true, confirm, confirmAttestation };
       shared.rememberConfirmedGoal(key, outcome, eventTs);
       return outcome;
     }
-    const outcome = { decision: stage1, confirmRan: true, confirm };
+    const outcome = { decision: stage1, confirmRan: true, confirm, confirmAttestation };
     shared.rememberConfirmedGoal(key, outcome, eventTs);
     return outcome;
   } catch {
-    // Transport failure — keep the Stage-1 verdict (no behavior change).
+    // Transport failure — keep the Stage-1 verdict (no behavior change), but the
+    // ATTEMPT is settled: a dropped dive stamps its cause on the row (D1/AC1.2 —
+    // no promoted row is left silently un-dived).
     shared.recordConfirm({ stage1Disagreed: false });
-    const outcome = { decision: stage1, confirmRan: true };
+    const outcome = {
+      decision: stage1,
+      confirmRan: true,
+      confirmAttestation: inlineConfirmAttestation({
+        droppedReason: "transport_failure",
+        diveAt: new Date().toISOString(),
+        latencyMs: 0,
+        contextDegraded: [],
+      }),
+    };
     shared.rememberConfirmedGoal(key, outcome, eventTs);
     return outcome;
   }

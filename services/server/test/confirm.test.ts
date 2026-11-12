@@ -151,7 +151,15 @@ describe("shouldRunConfirm", () => {
     const coarseMiss: DecisionResult = { isHighlight: false, score: 0, eventType: "GOAL", outcome: "not_highlight" };
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, coarseMiss)).toBe(true);
   });
-  it("does not fire on a requested near-miss / big-play highlight (never a goal, ADAAAA-7185)", () => {
+  it("D1: fires on a requested near-miss / big-play highlight too (coverage, ADAAAA-8796)", () => {
+    // ADAAAA-8796 (D1): the trigger is "promoted row with no measured
+    // attestation", NOT "goal-shaped row with no measured attestation". A big
+    // play / celebration / requested near-miss is a promoted row that never
+    // entered the dive lane — measured on leg 357a927d as "all identified
+    // highlights had no deep-dive confirmation". It stays a NON-goal: the inline
+    // path only adopts a dive verdict for a goal-shaped Stage-1 read
+    // (`confirmReconcile`), and the live adoption writer keeps its own
+    // corroboration / citation / recap gates.
     const cfg = { confirmEnabled: true, preferLabels: ["near-misses"] } as any;
     const nearMissHighlight: DecisionResult = {
       isHighlight: true,
@@ -160,7 +168,9 @@ describe("shouldRunConfirm", () => {
       outcome: "near_miss",
       nearMiss: true,
     };
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nearMissHighlight)).toBe(false);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nearMissHighlight)).toBe(true);
+    // ... and the measured-attestation cost bound still skips the dive.
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, nearMissHighlight)).toBe(false);
   });
 });
 
