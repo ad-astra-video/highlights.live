@@ -68,6 +68,7 @@ import {
   summaryEntryTimestamp,
   type MergedMomentGroup,
   confirmationBadge,
+  confirmationSkipText,
   playTypeText,
   highlightMomentEntries,
   type HighlightMomentEntry,
@@ -1506,6 +1507,10 @@ export function HighlightCard({
   // whether a pipeline lane actually confirmed this window. Fail-closed: a row
   // with no derived lane (absent `confirmation`) reads UNCONFIRMED.
   const badge = confirmationBadge(h);
+  // ADAAAA-8721 (D3): when NO dive ran, the card names WHY in operator
+  // language, so "no dive badge" no longer reads as "confirmation did not
+  // happen" for all four honest cases. Absent when a dive ran.
+  const skipText = confirmationSkipText(h);
   // Play type is PLAIN DETAIL TEXT now — never badge copy (AC2).
   const playType = playTypeText(h);
   const durationS = Math.max(0, Math.round(h.end - h.start));
@@ -1605,6 +1610,18 @@ export function HighlightCard({
           {(h.provisionalGoal as any)?.refuted && (
             <span className="text-xs text-mut" data-detail-provisional-refuted>
               Deep dive did not confirm this goal.
+            </span>
+          )}
+          {/* ADAAAA-8721 (D3): no dive ran — say WHY, so an unconfirmed card
+              cannot read as "confirmation did not happen" for four different
+              cases. Plain detail text; the badge above is still the ONE badge. */}
+          {skipText && (
+            <span
+              className="text-xs text-mut"
+              data-detail-confirm-skip-reason={h.confirmation?.skipReason}
+              title={admin ? h.confirmation?.skipReason : undefined}
+            >
+              {skipText}
             </span>
           )}
           {selectable && !notable && onToggleSelect && (

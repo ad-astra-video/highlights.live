@@ -127,6 +127,13 @@ export interface ConfirmRecord {
  */
 export type ConfirmationLane = "measured" | "dive" | "dive_disagreed" | "dive_held" | "unconfirmed";
 export type ConfirmationMeasurement = "goal_line" | "ball_in_net" | "score" | "ball_outcome" | "dive" | "none";
+/** ADAAAA-8721 (D3): why no Stage-2 dive ran. `dropped:<cause>` names the stored
+ *  fail-closed cause (`budget` / `pool_busy` / `timeout` / ...). */
+export type ConfirmationSkipReason =
+  | "measured_attestation"
+  | "not_goal_shaped"
+  | "dive_disabled"
+  | `dropped:${string}`;
 export interface ConfirmationFlags {
   scoreboardChanged: boolean | null;
   ballCrossedLineBetweenPosts: boolean | null;
@@ -145,6 +152,8 @@ export interface WindowConfirmation {
   label: string;
   measurement: ConfirmationMeasurement;
   detail?: string;
+  /** ADAAAA-8721 (D3): present exactly when no dive ran — why it was skipped. */
+  skipReason?: ConfirmationSkipReason;
   flags?: ConfirmationFlags;
   flagsSource?: "stage1_verdict" | "dive_evidence" | "trigger";
   dive?: ConfirmationDive;
@@ -1517,7 +1526,44 @@ export function goalConfirmedLabel(
  * `highlights[]` and `notableHighlights[]`. The webapp only RENDERS it, so a card
  * can never invent a lane the pipeline did not derive.
  */
-export type HighlightConfirmation = Pick<WindowConfirmation, "lane" | "label">;
+export type HighlightConfirmation = Pick<WindowConfirmation, "lane" | "label"> & {
+  /** ADAAAA-8721 (D3): why no dive ran (server derivation). */
+  skipReason?: ConfirmationSkipReason;
+};
+
+/**
+ * ADAAAA-8721 (D3): operator-language copy for "why did my highlight have no
+ * deep-dive confirmation". Rendered as plain detail text under the ONE badge, so
+ * a card with no dive badge says which of the four honest cases it is instead of
+ * reading as "confirmation did not happen" for all of them.
+ *
+ * `null` when a dive ran (a verdict is its own answer) or when the payload
+ * carried no skip reason at all — the card never invents a reason.
+ */
+export function confirmationSkipText(
+  h: Pick<JobDetailHighlight, "confirmation">
+): string | null {
+  const reason = h.confirmation?.skipReason;
+  if (!reason) return null;
+  if (reason === "measured_attestation") return "No deep dive: this window already measured its own evidence";
+  if (reason === "not_goal_shaped") return "No deep dive: not goal-shaped";
+  if (reason === "dive_disabled") return "No deep dive: dive lane disabled";
+  if (reason.startsWith("dropped:")) {
+    const cause = reason.slice("dropped:".length);
+    const causeText: Record<string, string> = {
+      pool_busy: "dive pool was busy",
+      budget: "dive budget was spent",
+      descriptor_overflow: "too many dives were already queued",
+      timeout: "dive timed out",
+      transport_failure: "dive failed in transport",
+      frame_unreadable: "dive could not read the frames",
+      no_persisted_frames: "dive had no persisted frames",
+      passthrough: "dive passed through without a verdict",
+    };
+    return `No deep dive: dropped (${causeText[cause] ?? cause.replace(/_/g, " ")})`;
+  }
+  return null;
+}
 
 /**
  * ADAAAA-8530: THE badge on every Highlights card — confirmation state, not play
