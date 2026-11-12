@@ -233,6 +233,7 @@ class HardStopTest(unittest.TestCase):
                 "--stub-scenario", "clean-no-cost",
                 "--authorized-duration-s", "60",
                 "--cap-usd", "0.65",
+                "--billing-basis", "perceive",
                 "--metered-rate-usd-per-s", "0.2",
                 "--quiet-window-min", "0.08",
                 "--poll-s", "0.05",
@@ -291,12 +292,28 @@ class HardStopTest(unittest.TestCase):
 
     def test_a_leg_with_no_metered_rate_is_refused(self):
         # With no rate there is no projection, and a wall-clock stop alone cannot
-        # hold a metered cap (8483 metered 544.5 s inside a 300 s window).
+        # hold a metered cap (8483 metered 544.5 s inside a 300 s window). The
+        # refusal is basis-specific: the perceive basis needs its rate, the
+        # decide basis needs its fee/cadence (ADAAAA-8832).
         code, evidence = run_harness(
             [
                 "--authorized-duration-s", "60",
                 "--cap-usd", "0.65",
+                "--billing-basis", "perceive",
                 "--metered-rate-usd-per-s", "0",
+                "--quiet-window-min", "0.08",
+            ]
+        )
+        self.assertEqual(code, 5)
+        self.assertIsNone(evidence)
+
+    def test_a_decide_billed_leg_with_no_fee_is_refused(self):
+        code, evidence = run_harness(
+            [
+                "--authorized-duration-s", "60",
+                "--cap-usd", "0.65",
+                "--billing-basis", "decide",
+                "--decide-fee-usd", "0",
                 "--quiet-window-min", "0.08",
             ]
         )
@@ -524,6 +541,7 @@ class DecideConfigTest(unittest.TestCase):
         "GEMMA_MODEL": "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4",
         "LIVE_DECIDE_KEEP_RATIO": "0.35",
         "LIVE_OBSERVE_MAX_FRAMES": "8",
+        "LIVE_OBSERVE_CADENCE_S": "5",
     }
 
     def runner(self, values=None, rc=0):
@@ -545,6 +563,10 @@ class DecideConfigTest(unittest.TestCase):
         self.assertIn("pool http://decide-router:8081", block["line"])
         self.assertIn("model cyankiwi/gemma-4-12B-it-qat-AWQ-INT4", block["line"])
         self.assertIn("window keep-ratio 0.35 (LIVE_DECIDE_KEEP_RATIO)", block["line"])
+        # ADAAAA-8832: the cadence is what the projection is priced at, so a leg
+        # that names the build must name the cadence too.
+        self.assertEqual(block["values"]["LIVE_OBSERVE_CADENCE_S"], "5")
+        self.assertIn("LIVE_OBSERVE_CADENCE_S", funded_leg.DEFAULT_DECIDE_CONFIG_KEYS)
 
     def test_an_unset_key_is_recorded_as_the_code_default_not_a_hole(self):
         # LIVE_DECIDE_KEEP_RATIO unset is a real posture: config.ts leaves it
@@ -1017,6 +1039,230 @@ printf '%s\\n' "${FAKE_JOBS:-0}"
         block = funded_leg.preflight_block([sample], 600.0, "open")
         self.assertEqual(block["errors"], [])
         self.assertEqual(block["samples"][0]["errors"], [])
+
+
+class DecideBillingTest(unittest.TestCase):
+    """ADAAAA-8832: the guard prices the unit the build bills.
+
+    Leg 27bd816f (540 s, cap $0.46, abort $0.414) was stopped at 357.5 s on a
+    clock projection priced at the perceive-second rate: $0.4414 against
+    $0.414, while the leg's real spend at that instant was ~$0.2353 (71 decides
+    at $0.0033324). A decide-billed leg priced by the perceive second is priced
+    at ~1.7x its real spend, so the projection fires with half the cap unspent.
+    """
+
+    def test_the_decide_unit_rate_is_the_shipped_cost_identity(self):
+        billing = funded_leg.BillingBasis(basis="decide")
+        self.assertAlmostEqual(
+            billing.usd_per_s(),
+            funded_leg.DECIDE_USD_PER_DECIDE / funded_leg.DECIDE_CADENCE_DEFAULT_S
+            + funded_leg.PERCEIVE_PER_HOUR_USD / 3600.0,
+            places=12,
+        )
+        # ~$0.00067/s of decide unit, against $0.0011381/s of perceive second.
+        self.assertAlmostEqual(billing.usd_per_s(), 0.0006692578, places=10)
+        self.assertLess(billing.usd_per_s(), 0.0011381)
+
+    def test_the_8816_clock_on_the_decide_unit_is_under_the_abort_point(self):
+        billing = funded_leg.BillingBasis(basis="decide")
+        at_stop = funded_leg.project_metered_cost(billing, 387.868)
+        self.assertEqual(at_stop["projectedFrom"], "clock")
+        self.assertEqual(at_stop["fromBasis"], "decide")
+        self.assertAlmostEqual(at_stop["usd"], 0.2596, places=3)
+        # The projection that stopped the leg ($0.4414) is the perceive basis.
+        perceive = funded_leg.project_metered_cost(
+            funded_leg.BillingBasis(basis="perceive"), 387.868
+        )
+        self.assertAlmostEqual(perceive["usd"], 0.4414, places=3)
+        self.assertGreaterEqual(perceive["usd"], 0.414)
+        # On the decide unit the same instant is $0.1547 short of the guard.
+        self.assertLess(at_stop["usd"], 0.414 - 0.15)
+
+    def test_the_full_540_s_shape_fits_the_cap_on_the_decide_unit(self):
+        billing = funded_leg.BillingBasis(basis="decide")
+        at_end = funded_leg.project_metered_cost(billing, 540.0)
+        self.assertAlmostEqual(at_end["usd"], 0.3614, places=3)
+        self.assertLess(at_end["usd"], 0.414)   # under the guard point
+        self.assertLess(at_end["usd"], 0.46)    # and under the cap
+
+    def test_record_units_win_when_the_record_discloses_more_than_the_clock(self):
+        # A leg whose record discloses its billed counts is priced exactly; the
+        # summary lane bills at 1.5x the decide fee (SUMMARY_FEE_RATIO).
+        billing = funded_leg.BillingBasis(basis="decide")
+        clock = funded_leg.project_metered_cost(billing, 300.0)
+        self.assertAlmostEqual(clock["usd"], 0.2008, places=3)
+        exact = funded_leg.project_metered_cost(
+            billing, 300.0, record_decide_calls=71, record_summary_calls=4
+        )
+        self.assertEqual(exact["projectedFrom"], "record_units")
+        self.assertAlmostEqual(exact["recordUnitsUsd"], 0.2566, places=3)
+        self.assertAlmostEqual(exact["usd"], 0.2566, places=3)
+
+    def test_an_absent_record_count_is_none_not_zero(self):
+        billing = funded_leg.BillingBasis(basis="decide")
+        self.assertIsNone(funded_leg.unit_cost_usd(billing, decide_calls=None))
+        # A real zero count is priced, not dropped.
+        self.assertEqual(funded_leg.unit_cost_usd(billing, decide_calls=0), 0.0)
+        self.assertIsNone(funded_leg._record_count({"costUsd": 0.0}, "decideCalls"))
+        self.assertEqual(
+            funded_leg._record_count({"observeMetrics": {"decideCalls": 7}}, "decideCalls"), 7
+        )
+
+    def test_the_confirm_lane_is_billed_at_the_decide_fee(self):
+        # The shipped `costUsd` bills `confirmCalls` at the decide fee
+        # (`billableConfirmCalls`), so the exact-units reading must price it or a
+        # leg that promotes clips mid-leg is under-priced by the guard.
+        billing = funded_leg.BillingBasis(basis="decide")
+        priced = funded_leg.unit_cost_usd(
+            billing, decide_calls=71, confirm_calls=6, perceive_session_s=365.0
+        )
+        self.assertIsNotNone(priced)
+        assert priced is not None
+        self.assertAlmostEqual(
+            priced,
+            funded_leg.DECIDE_USD_PER_DECIDE * 77 + 365.0 / 3600.0 * 0.01,
+            places=9,
+        )
+        clock = funded_leg.project_metered_cost(billing, 300.0)
+        with_confirms = funded_leg.project_metered_cost(
+            billing, 300.0, record_decide_calls=71, record_confirm_calls=6
+        )
+        self.assertEqual(with_confirms["projectedFrom"], "record_units")
+        self.assertGreater(with_confirms["usd"], clock["usd"])
+        self.assertEqual(
+            funded_leg._record_count(
+                {"observeMetrics": {"confirmCalls": 6}}, "confirmCalls"
+            ),
+            6,
+        )
+
+    def test_a_decide_billed_leg_at_half_the_cap_keeps_running(self):
+        # The test this ticket asks for: a decide-billed leg that reaches 0.5 x
+        # its cap on the decide unit runs on to the authorized shape. The leg's
+        # record is dark (the live rail's mid-leg state), so the guard has only
+        # the meter's clock — priced per decide, at ~$0.00067/s.
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "decide-dark",
+                "--authorized-duration-s", "5",
+                "--cap-usd", "0.005",
+                "--quiet-window-min", "0.08",
+                "--hard-stop-slack-s", "2",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        leg = evidence["leg"]
+        self.assertEqual(leg["stopReason"], "authorized_duration")
+        self.assertEqual(leg["projectedBasis"], "decide")
+        self.assertEqual(leg["billingBasis"], "decide")
+        self.assertAlmostEqual(leg["meteredUsdPerS"], 0.0006692578, places=9)
+        self.assertGreaterEqual(leg["durationS"], 4.5)
+        # It reached at least 0.5 x the cap and kept running.
+        self.assertGreaterEqual(evidence["shape"]["projectedCostUsd"], 0.005 * 0.5)
+        self.assertLess(leg["projectedCostUsd"], 0.0045)
+        self.assertEqual(evidence["authorized"]["billingBasis"], "decide")
+
+    def test_the_perceive_basis_stops_the_same_shape_early(self):
+        # The defect this ticket fixes, as a regression guard: at the same shape
+        # the perceive-second rate crosses the abort point at ~3.9 s instead of
+        # running the 5 s the leg was authorized for.
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "decide-dark",
+                "--authorized-duration-s", "5",
+                "--cap-usd", "0.005",
+                "--billing-basis", "perceive",
+                "--quiet-window-min", "0.08",
+                "--hard-stop-slack-s", "2",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        leg = evidence["leg"]
+        self.assertEqual(leg["stopReason"], "projected_cost")
+        self.assertEqual(leg["projectedBasis"], "perceive")
+        self.assertLess(leg["durationS"], 4.5)
+
+    def test_a_three_second_cadence_prices_higher_than_five(self):
+        # The cadence is read from the box (LIVE_OBSERVE_CADENCE_S), because a
+        # 3 s cadence bills 1.67x what a 5 s one does on the same share.
+        five = funded_leg.BillingBasis(basis="decide", decide_cadence_s=5.0)
+        three = funded_leg.BillingBasis(basis="decide", decide_cadence_s=3.0)
+        self.assertAlmostEqual(three.usd_per_s() / five.usd_per_s(), 1.667, places=2)
+        self.assertAlmostEqual(three.usd_per_s(), 0.0011136, places=6)
+
+    def test_a_readable_cost_at_half_the_cap_is_not_overridden_by_the_clock(self):
+        # The ticket's other half: a projection that fires with costUsd at half
+        # the cap must not stop a leg. The record here bills $0.0016/s and is
+        # readable; a $0.01/s clock projection would cross the $0.009 abort
+        # point at 0.9 s. The billed figure wins, so the leg runs its 5 s.
+        code, evidence = run_harness(
+            [
+                "--stub-scenario", "live-cost-dark-session",
+                "--authorized-duration-s", "5",
+                "--cap-usd", "0.01",
+                "--billing-basis", "perceive",
+                "--metered-rate-usd-per-s", "0.01",
+                "--quiet-window-min", "0.08",
+                "--hard-stop-slack-s", "2",
+                "--poll-s", "0.2",
+                "--settle-timeout-s", "3",
+            ]
+        )
+        self.assertEqual(code, 0)
+        leg = evidence["leg"]
+        self.assertEqual(leg["stopReason"], "authorized_duration")
+        self.assertEqual(leg["guardSource"], "live_cost")
+        self.assertEqual(leg["costSource"], "live_cost")
+        self.assertEqual(leg["perceiveSessionS"], 0.0)  # dark metered field
+        self.assertGreaterEqual(leg["durationS"], 4.5)
+        self.assertAlmostEqual(leg["costUsd"], 0.008, places=2)
+
+
+class Leg8832ReplayTest(unittest.TestCase):
+    """$0 replay of the leg this ticket was opened on (job 27bd816f, 8816)."""
+
+    FIXTURE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "fixtures", "leg8832-evidence.json"
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        with open(cls.FIXTURE, "r", encoding="utf-8") as fh:
+            cls.leg = json.load(fh)
+
+    def test_the_stop_was_a_projection_on_the_perceive_second(self):
+        leg = self.leg["leg"]
+        self.assertEqual(leg["stopReason"], "projected_cost")
+        self.assertEqual(leg["projectedFrom"], "clock")
+        self.assertEqual(leg["perceiveSessionS"], 0.0)
+        self.assertEqual(leg["recordCostSource"], "dark")
+        self.assertAlmostEqual(leg["projectedCostUsd"], 0.4414, places=4)
+        self.assertGreaterEqual(leg["projectedCostUsd"], self.leg["authorized"]["abortAtUsd"])
+        self.assertAlmostEqual(leg["durationS"], 357.494, places=3)
+
+    def test_the_same_instant_on_the_decide_unit_keeps_the_leg_running(self):
+        billing = funded_leg.BillingBasis(basis="decide")
+        at_stop = funded_leg.project_metered_cost(
+            billing, self.leg["leg"]["meteredProjectionS"]
+        )
+        self.assertLess(at_stop["usd"], self.leg["authorized"]["abortAtUsd"])
+        self.assertGreater(self.leg["authorized"]["abortAtUsd"] - at_stop["usd"], 0.15)
+        # The leg's settled spend agrees with the decide unit, not the perceive
+        # second: 71 decides at $0.0033324 + the 365 s perceive accrual.
+        settled = self.leg["settled"]
+        priced = funded_leg.unit_cost_usd(
+            billing,
+            decide_calls=settled["decideCalls"],
+            perceive_session_s=settled["perceiveSessionS"],
+        )
+        self.assertAlmostEqual(priced, settled["costUsd"], delta=0.01)
+        self.assertAlmostEqual(
+            self.leg["authorized"]["capUsd"] - settled["costUsd"], 0.2247, places=4
+        )
 
 
 if __name__ == "__main__":

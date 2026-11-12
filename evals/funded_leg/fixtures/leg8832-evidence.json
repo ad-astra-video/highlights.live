@@ -1,0 +1,40 @@
+{
+  "authorized": {
+    "abortAtMeteredS": 363.76,
+    "abortAtUsd": 0.414,
+    "capUsd": 0.46,
+    "durationS": 540.0,
+    "guard": "max(costUsd, metered x meteredRateUsdPerS) where metered = max(record perceiveSessionS, seconds since job create)",
+    "meteredRateUsdPerS": 0.0011381
+  },
+  "harness": {
+    "issue": "ADAAAA-8816",
+    "jobId": "27bd816f-712f-40e0-a270-ccc121cdc854",
+    "version": "1.3.1"
+  },
+  "leg": {
+    "costUsd": 0.0,
+    "durationS": 357.494,
+    "finishedAt": "2026-11-12T20:45:14Z",
+    "meteredProjectionS": 387.868,
+    "perceiveSessionS": 0.0,
+    "projectedCostUsd": 0.441433,
+    "projectedFrom": "clock",
+    "recordCostSource": "dark",
+    "startedAt": "2026-11-12T20:39:16Z",
+    "stopReason": "projected_cost"
+  },
+  "settled": {
+    "costUsd": 0.2353,
+    "decideCalls": 71,
+    "framesAnalyzed": 717,
+    "perceiveSessionS": 365,
+    "status": "done"
+  },
+  "shape": {
+    "gradedCostUsd": 0.441433,
+    "line": "AUTHORIZED-VS-ACTUAL: authorized duration <= 540.0 s / cap $0.4600 -> actual 357.5 s / $0.0000 (duration headroom 182.51 s, cost headroom $0.0186, metered perceiveSessionS 0.0 s (0.000x wall), projected $0.4414 from clock (387.9 s metered at $0.0011381/s), graded max(costUsd $0.0000, projection $0.4414)) \u2014 WITHIN",
+    "verdict": "WITHIN"
+  },
+  "source": "ADAAAA-8816 leg27bd816f bundle (leg8816-evidence.json) + the QA settled row"
+}
