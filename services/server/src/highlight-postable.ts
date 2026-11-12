@@ -735,6 +735,23 @@ export function collapseOverlappingWindows(candidates: HighlightRecord[]): Colla
 //   R6 no new clip budget — nothing is re-cut or lengthened: the owner's clip
 //                     stays as delivered and the others are absorbed as
 //                     duplicates, exactly like the overlap collapse.
+//   R7 score identity (ADAAAA-8754) — the clock value is the OBSERVATION time,
+//                     not the goal's game time: `matchClockFromTimeline` stores
+//                     `ts` = the OCR frame nearest THAT window's own anchor, so
+//                     a re-delivery of one goal reads the bug again, later (job
+//                     `9a6b1d8f`: per-row ts 2.6 / 38.7 / 84.9 s). When the
+//                     SCORE already ties two GOAL-class moments to one
+//                     transition (the same `pre -> post` pair, from
+//                     `attestationUsed.transitionScore` / `transitionKey` or the
+//                     stored verdict text), the pair is one game event even
+//                     though the clock moved: a held value is the goal clock
+//                     re-shown, an advancing value is the same running clock
+//                     sampled later. For that class the content-coherence term
+//                     is dropped — only a read that CONTRADICTS a running clock
+//                     (rewound = replay inset, or a cut) blocks. R1/R2/R4 keep
+//                     their meaning for every pair the score does not tie, so a
+//                     clock can still never merge two genuinely distinct score
+//                     transitions.
 //
 // The tolerances are GT-1's measurements, not intuition: the largest |Δclock|
 // between two re-reads of the SAME event was 7 s (=> CLOCK_SAME_MOMENT_S = 10),
@@ -757,8 +774,17 @@ export const CLOCK_FROZEN_SPAN_S = 20;
 export type ClockPairRelation =
   /** R1: agree within CLOCK_SAME_MOMENT_S on one coherent segment. */
   | "same_moment"
+  /** R7 (ADAAAA-8754): the score ties both rows to ONE transition, and the
+   * clock reading is consistent with re-observing that event later (held value,
+   * or a clock advancing in step with content). */
+  | "same_event"
   /** R2: both legible, >= CLOCK_DISTINCT_S apart, coherent. */
   | "distinct"
+  /** R5 (ADAAAA-8754): an UNCHANGING value while content advanced past
+   * `CLOCK_FROZEN_SPAN_S`, on a pair the score does NOT tie to one transition —
+   * a static/placeholder bug, never a merge. (A frozen pair the score DOES tie
+   * is `same_event`: that is the goal clock re-shown.) */
+  | "frozen"
   /** R4: the clock went BACKWARDS against content time (a replay inset). */
   | "rewound"
   /** R4: the clock does not advance with content (a graphic/match cut). */
@@ -775,7 +801,64 @@ type ClockBearing = {
   start?: number;
   end?: number;
   localizedTs?: number;
+  /** ADAAAA-8754 (R7): the score transition the row already credits. Read-only:
+   * the lane uses it to decide that two rows are ONE event, and never to attest,
+   * confirm, demote or re-lane a GOAL (R3). */
+  attestationUsed?: {
+    transitionKey?: string | null;
+    transitionScore?: { pre: readonly number[]; post: readonly number[] } | null;
+  } | null;
+  /** ADAAAA-8754: the persisted verdict text. On rows written before
+   * `attestationUsed.transitionScore` existed this is the only score-pair
+   * evidence on the row (job `9a6b1d8f`: "Scoreboard changes from 1-1 to 2-1"). */
+  reason?: string;
 };
+
+/** The `pre -> post` score pair in a transition key or a verdict sentence. */
+const TRANSITION_PAIR = /(\d+)\s*[-\u2013:]\s*(\d+)\s*(?:->|>|\u2192|\bto\b)\s*(\d+)\s*[-\u2013:]\s*(\d+)/i;
+
+/** Canonical `pre>post` form of a transition, e.g. `1-1>2-1`. */
+function canonicalTransition(preA: number, preB: number, postA: number, postB: number): string {
+  return `${preA}-${preB}>${postA}-${postB}`;
+}
+
+/**
+ * ADAAAA-8754 (R7): the scoreboard transition a row credits, or null.
+ *
+ * Priority is the most explicit evidence first — the disclosed `transitionScore`
+ * pair, then the `transitionKey` string, then the pair named in the stored
+ * verdict text — so a row written before ADAAAA-8663 (job `9a6b1d8f`) can still
+ * be tied to its transition. Only identity: two rows that name the SAME
+ * `pre -> post` pair describe the same scoreboard event. A row whose evidence is
+ * absent (or not a pair) returns null, which keeps every existing rule exactly as
+ * it was.
+ */
+export function transitionIdentity(h: ClockBearing): string | null {
+  const att = h.attestationUsed;
+  const pair = att?.transitionScore;
+  if (pair && Array.isArray(pair.pre) && Array.isArray(pair.post) && pair.pre.length === 2 && pair.post.length === 2) {
+    const [preA, preB, postA, postB] = [pair.pre[0], pair.pre[1], pair.post[0], pair.post[1]];
+    if ([preA, preB, postA, postB].every((n) => Number.isInteger(n) && n >= 0)) {
+      return canonicalTransition(preA, preB, postA, postB);
+    }
+  }
+  const key = att?.transitionKey;
+  if (typeof key === "string" && key.trim()) {
+    const m = key.match(TRANSITION_PAIR);
+    if (m) return canonicalTransition(+m[1], +m[2], +m[3], +m[4]);
+    return key.trim().toLowerCase();
+  }
+  const fromReason = typeof h.reason === "string" ? h.reason.match(TRANSITION_PAIR) : null;
+  if (fromReason) return canonicalTransition(+fromReason[1], +fromReason[2], +fromReason[3], +fromReason[4]);
+  return null;
+}
+
+/** ADAAAA-8754 (R7): do both rows credit the SAME score transition? */
+export function sharesTransition(a: ClockBearing, b: ClockBearing): boolean {
+  const ia = transitionIdentity(a);
+  if (ia === null) return false;
+  return ia === transitionIdentity(b);
+}
 
 /** The legible clock of a row, or undefined (a null/unreadable clock never
  * participates — R3's no-op). A period-less reading is allowed: the census's
@@ -821,6 +904,22 @@ export function clockPairRelation(a: ClockBearing, b: ClockBearing): ClockPairRe
     // Two reads at the same content instant: agreeing clocks are one moment.
     return Math.abs(deltaClock) <= CLOCK_SAME_MOMENT_S ? "same_moment" : "inconclusive";
   }
+  // ADAAAA-8754 (R7): the score already ties both rows to ONE transition, so a
+  // clock that moved with the re-delivery is not evidence of a second event —
+  // `matchClock.ts` is the observation frame of THIS window's anchor, and a later
+  // delivery observes the same running bug later. A held value (the goal clock
+  // re-shown) and a value advancing in step with content (a later live sample)
+  // are both consistent with one event here; the content-coherence term that R4
+  // uses for untied pairs is deliberately dropped. Only a read that contradicts a
+  // running clock blocks: rewound (a replay inset) or a jump (a cut).
+  if (sharesTransition(a, b)) {
+    if (Math.abs(deltaClock) <= CLOCK_SAME_MOMENT_S) return "same_event";
+    if (skew <= CLOCK_COHERENCE_TOLERANCE_S) return "same_event";
+    return deltaClock < 0 ? "rewound" : "jumping";
+  }
+  // R5: an unchanging value over a long span with no score tie is the static /
+  // placeholder bug the lane must never merge on.
+  if (deltaClock === 0 && deltaContent > CLOCK_FROZEN_SPAN_S) return "frozen";
   if (skew > CLOCK_COHERENCE_TOLERANCE_S) {
     // Incoherent: the clock moved independently of content time. Backwards is a
     // replay inset (R4); forwards is a cut to another graphic/match.
@@ -832,25 +931,41 @@ export function clockPairRelation(a: ClockBearing, b: ClockBearing): ClockPairRe
 }
 
 /**
- * ADAAAA-8733 (R5): is the clock lane live for THIS job?
+ * ADAAAA-8733 (R5) / ADAAAA-8754 (R7): is the clock lane live for THIS job?
  *
  * Disabled when the job carries fewer than two legible clock readings (nothing
- * to combine on), and disabled when any two reads show an UNCHANGING clock while
+ * to combine on), and disabled when two reads show an UNCHANGING clock while
  * content time advances past `CLOCK_FROZEN_SPAN_S` — a static/placeholder bug,
  * which would otherwise merge genuinely distinct goals. Deliberately conservative:
  * a job with no clock keeps byte-identical delivery (AC-GT5).
+ *
+ * ADAAAA-8754: a frozen pair that the SCORE ties to one transition is exempt —
+ * a re-delivered goal reads the same goal clock again, and the score (not the
+ * clock) is what keeps two distinct goals apart there. Without the exemption the
+ * measured `9a6b1d8f` shape (held 1520 over 36/82 s, same `1-1 -> 2-1`) turned
+ * the whole lane off and AC-GT2 could not pass. A job whose frozen value has NO
+ * score tie anywhere is still a placeholder bug and keeps the lane off (AC-GT5);
+ * in a mixed job each untied frozen pair is refused pairwise (`frozen`), so the
+ * no-op guarantee survives without losing the score-tied merge.
  */
 export function clockLaneEnabledForJob(rows: ReadonlyArray<ClockBearing>): boolean {
-  const clocks = rows.map((h) => legibleClock(h)).filter((c): c is { seconds: number; period: string | null; ts: number } => !!c);
-  if (clocks.length < 2) return false;
-  for (let i = 0; i < clocks.length; i++) {
-    for (let j = i + 1; j < clocks.length; j++) {
-      const a = clocks[i];
-      const b = clocks[j];
-      if (a.seconds === b.seconds && Math.abs(b.ts - a.ts) > CLOCK_FROZEN_SPAN_S) return false;
+  const bearing = rows
+    .map((h) => ({ h, c: legibleClock(h) }))
+    .filter((e): e is { h: ClockBearing; c: { seconds: number; period: string | null; ts: number } } => !!e.c);
+  if (bearing.length < 2) return false;
+  let frozenPairs = 0;
+  let explained = 0;
+  for (let i = 0; i < bearing.length; i++) {
+    for (let j = i + 1; j < bearing.length; j++) {
+      const a = bearing[i];
+      const b = bearing[j];
+      if (a.c.seconds !== b.c.seconds || Math.abs(b.c.ts - a.c.ts) <= CLOCK_FROZEN_SPAN_S) continue;
+      frozenPairs += 1;
+      if (sharesTransition(a.h, b.h)) explained += 1;
     }
   }
-  return true;
+  // No frozen pair at all, or at least one that the score explains.
+  return frozenPairs === 0 || explained > 0;
 }
 
 /**
@@ -877,10 +992,25 @@ export function combineClockMoments(moments: PostableHighlight[]): CollapsedMome
       continue;
     }
     const joined = clusters.find((cluster) => {
-      const spread = (seconds: number[]) => Math.max(...seconds) - Math.min(...seconds);
-      const memberClocks = cluster.map((h) => legibleClock(h)!.seconds);
-      if (spread([...memberClocks, mine.seconds]) > CLOCK_SAME_MOMENT_S) return false;
-      return cluster.every((member) => clockPairRelation(member, m) === "same_moment");
+      // ADAAAA-8754 (R7): a cluster the score ties to one transition is compared
+      // on the relation alone — the clock's own spread is the re-observation lag,
+      // not a second event (held 1520 or advancing 1520/1556/1602 both merge).
+      // Every other cluster keeps the spread bound so a chain of reads can never
+      // drift a cluster across a longer clock span.
+      const allSameEvent = cluster.every((member) => sharesTransition(member, m));
+      const sameMoment = (member: PostableHighlight) => {
+        const relation = clockPairRelation(member, m);
+        return relation === "same_moment" || relation === "same_event";
+      };
+      if (!allSameEvent) {
+        // A clockless member can neither own nor join a clock cluster; reading its
+        // clock here would throw (start order decides which cluster is open).
+        if (cluster.some((member) => !legibleClock(member))) return false;
+        const spread = (seconds: number[]) => Math.max(...seconds) - Math.min(...seconds);
+        const memberClocks = cluster.map((h) => legibleClock(h)!.seconds);
+        if (spread([...memberClocks, mine.seconds]) > CLOCK_SAME_MOMENT_S) return false;
+      }
+      return cluster.every(sameMoment);
     });
     if (joined) joined.push(m);
     else clusters.push([m]);
