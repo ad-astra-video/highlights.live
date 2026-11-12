@@ -63,6 +63,43 @@ const cfg = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+describe("ADAAAA-8773 — the §13.2 deterministic set ends the row on ONE call", () => {
+  it("pins the ratified set: fact density, ungrounded name, internal token", async () => {
+    const { SUMMARY_DETERMINISTIC_REFUSALS } = await import("@highlights/events");
+    expect([...SUMMARY_DETERMINISTIC_REFUSALS].sort()).toEqual(["internal-token", "too-few-facts", "ungrounded-name"]);
+  });
+
+  it("does not retry an `ungrounded-name` refusal", async () => {
+    const { store, patches } = stubStore();
+    // "Lionel Messi" appears nowhere in the row's evidence: a second sample cannot
+    // make the evidence carry the name.
+    const f = stubFetch([ok("Manuel Ordoñez finds the back of the net for Real Madrid at the 0:24 mark. Lionel Messi celebrates the strike.")]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
+      jobId: "j1",
+      highlightId: "h1",
+      evidence: EVIDENCE,
+    });
+    expect(result.calls).toBe(1);
+    expect(f.calls()).toBe(1);
+    expect(patches[0].patch.summary).toBeUndefined();
+  });
+
+  it("does not retry an `internal-token` refusal", async () => {
+    const { store, patches } = stubStore();
+    const f = stubFetch([
+      ok("Manuel Ordoñez finds the back of the net at the 0:24 mark. The row reads near miss — the strike is a goalshot_play."),
+    ]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
+      jobId: "j1",
+      highlightId: "h1",
+      evidence: EVIDENCE,
+    });
+    expect(result.calls).toBe(1);
+    expect(f.calls()).toBe(1);
+    expect(patches[0].patch.summaryGate).toBe("dropped:gate");
+  });
+});
+
 describe("ADAAAA-8773 — deterministic refusal ends the row on ONE call", () => {
   it("bills one call on `too-few-facts` and keeps the row fee inside the AC5 ceiling", async () => {
     const { store, patches } = stubStore();
