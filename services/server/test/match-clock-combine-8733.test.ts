@@ -27,6 +27,8 @@ import {
   clockCombineForJob,
   clockLaneEnabledForJob,
   clockPairRelation,
+  sharesTransition,
+  transitionIdentity,
 } from "../src/highlight-postable";
 
 const JOB = "9a6b1d8f-0000-4000-8000-000000000000";
@@ -200,79 +202,278 @@ describe("clockPairRelation (ADAAAA-8733 R1/R2/R4)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. AC-GT2 — the 9a6b1d8f shape: one goal delivered 3x (0 / 37 / 82 s apart)
+// 2b. transitionIdentity (ADAAAA-8754 R7) — the score's own event identity
 // ---------------------------------------------------------------------------
-describe("AC-GT2: the clock combines one goal delivered three times", () => {
-  // Three accepted GOAL rows for ONE `1-1 -> 2-1` transition, windows that do
-  // NOT overlap, every row honest (a legible forward score read in its own
-  // window) — the measured 9a6b1d8f shape.
-  const rows = [
-    goal({
-      id: "hl-g1",
-      start: 93,
-      end: 108,
-      score: 96,
-      corroborated: true,
-      matchClock: clock(1520, 100),
+describe("transitionIdentity (ADAAAA-8754 R7)", () => {
+  it("reads the disclosed transitionScore pair first", () => {
+    const row = goal({
+      id: "a",
+      start: 0,
       attestationUsed: {
         scoreBoardChanged: true,
-        goalCrossed: true,
-        ballOutcome: "goal",
-        corroborated: true,
-        goalConfirmed: "confirmed_goal",
-        transitionKey: "1-1>2-1",
+        goalCrossed: false,
+        ballOutcome: null,
+        corroborated: false,
+        goalConfirmed: null,
+        transitionKey: "9-9>9-9",
+        transitionScore: { pre: [1, 1], post: [2, 1] },
       },
-    }),
-    goal({ id: "hl-g2", start: 130, end: 145, score: 92, corroborated: true, matchClock: clock(1520, 100) }),
-    goal({ id: "hl-g3", start: 175, end: 190, score: 80, matchClock: clock(1527, 100) }),
-  ];
+    });
+    expect(transitionIdentity(row)).toBe("1-1>2-1");
+  });
 
-  it("delivers exactly 1 moment, duplicateCount = 2, both absorbed ids named", () => {
+  it("reads the transitionKey string in either separator form", () => {
+    const key = (transitionKey: string) =>
+      goal({
+        id: "a",
+        start: 0,
+        attestationUsed: {
+          scoreBoardChanged: true,
+          goalCrossed: false,
+          ballOutcome: null,
+          corroborated: false,
+          goalConfirmed: null,
+          transitionKey,
+        },
+      });
+    expect(transitionIdentity(key("1-1>2-1"))).toBe("1-1>2-1");
+    expect(transitionIdentity(key("1-1 -> 2-1"))).toBe("1-1>2-1");
+  });
+
+  it("falls back to the verdict sentence on rows written before ADAAAA-8663", () => {
+    expect(transitionIdentity(goal({ id: "a", start: 0, reason: "Scoreboard changes from 1-1 to 2-1 at t=-5.1s." }))).toBe(
+      "1-1>2-1"
+    );
+  });
+
+  it("is null when the row names no score pair (every rule stays as it was)", () => {
+    expect(transitionIdentity(goal({ id: "a", start: 0 }))).toBeNull();
+    expect(transitionIdentity(goal({ id: "b", start: 0, reason: "players celebrate, no score graphic" }))).toBeNull();
+  });
+
+  it("ties only rows that name the SAME pair", () => {
+    const goalA = goal({ id: "a", start: 0, reason: "Scoreboard changes from 1-1 to 2-1." });
+    const goalA2 = goal({ id: "b", start: 90, reason: "Scoreboard changes from 1-1 to 2-1." });
+    const goalB = goal({ id: "c", start: 180, reason: "Scoreboard changes from 2-1 to 3-1." });
+    expect(sharesTransition(goalA, goalA2)).toBe(true);
+    expect(sharesTransition(goalA, goalB)).toBe(false);
+    // A row without evidence never shares a transition with one that has it.
+    expect(sharesTransition(goalA, goal({ id: "d", start: 270 }))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. AC-GT2 (ADAAAA-8754) — the 9a6b1d8f shape, clock read at each row's ANCHOR
+// ---------------------------------------------------------------------------
+// Production-faithful: `matchClockFromTimeline` stores `ts` = the OCR frame
+// nearest THAT window's own anchor, so the three deliveries of one goal carry
+// ts 2.603 / 38.730 / 84.941 — never one shared content instant. The old fixture
+// (one shared `ts: 100`) reached 1 moment on HEAD for the wrong reason: it handed
+// the lane three reads at the same content instant, which production cannot
+// write. With per-row ts every clock value that merges these rows is a value the
+// score already proves: all three name the same `1-1 -> 2-1` transition.
+const STORED_9A6B1D8F = [
+  {
+    id: "e17aecb0",
+    start: 0,
+    end: 15,
+    localizedTs: 2.6029999256134033,
+    score: 95,
+    reason: "Scoreboard changes from 1-1 to 2-1 at t=-5.1s and players celebrate.",
+    attestationUsed: {
+      scoreBoardChanged: true,
+      goalCrossed: false,
+      ballOutcome: null,
+      corroborated: false,
+      goalConfirmed: null,
+      scoreReads: 30,
+      preSamples: 15,
+      postSamples: 15,
+      need: 2,
+    },
+  },
+  {
+    id: "7f1091c8",
+    start: 31.730000019073486,
+    end: 46.730000019073486,
+    localizedTs: 38.730000019073486,
+    score: 85,
+    reason: "Scoreboard changes from 1-1 to 2-1 at t=-3.5s, confirmed by player celebration.",
+    attestationUsed: {
+      scoreBoardChanged: true,
+      goalCrossed: false,
+      ballOutcome: null,
+      corroborated: false,
+      goalConfirmed: null,
+      scoreReads: 45,
+      preSamples: 34,
+      postSamples: 11,
+      need: 2,
+    },
+  },
+  {
+    id: "081785e2",
+    start: 77.94099998474121,
+    end: 92.94099998474121,
+    localizedTs: 84.94099998474121,
+    score: 85,
+    reason: "Scoreboard changes from 1-1 to 2-1 at t=-3.3s, confirmed by player celebration.",
+    attestationUsed: {
+      scoreBoardChanged: true,
+      goalCrossed: false,
+      ballOutcome: null,
+      corroborated: false,
+      goalConfirmed: null,
+      scoreReads: 44,
+      preSamples: 34,
+      postSamples: 10,
+      need: 2,
+    },
+  },
+].map((r) => goal({ ...r, jobId: JOB }));
+
+describe("AC-GT2 (ADAAAA-8754): one goal re-delivered three times, per-row clock ts", () => {
+  const anchorTs = (r: HighlightRecord) => r.localizedTs as number;
+
+  /** The three deliveries with the clock read at their own anchors. */
+  const withClocks = (seconds: (i: number) => number) =>
+    STORED_9A6B1D8F.map((r, i) => ({ ...r, matchClock: clock(seconds(i), anchorTs(r)) }));
+
+  const assertOneMoment = (rows: HighlightRecord[]) => {
     const out = buildPostableHighlights(rows);
     expect(out.highlights).toHaveLength(1);
     const moment = out.highlights[0];
-    expect(moment.id).toBe("hl-g1");
+    expect(moment.id).toBe("e17aecb0");
     expect(moment.duplicateCount).toBe(2);
-    expect([...(moment.mergedIds ?? [])].sort()).toEqual(["hl-g2", "hl-g3"]);
-  });
-
-  it("names both absorbed rows in the duplicate lane", () => {
-    const out = buildPostableHighlights(rows);
-    expect(out.duplicates.map((d) => d.id).sort()).toEqual(["hl-g2", "hl-g3"]);
-    expect(out.duplicates.every((d) => d.duplicateOf === "hl-g1")).toBe(true);
-  });
-
-  it("keeps the count identity and accounts every absorbed row on the page", () => {
-    const out = buildPostableHighlights(rows);
+    expect([...(moment.mergedIds ?? [])].sort()).toEqual(["081785e2", "7f1091c8"]);
+    expect(out.duplicates.map((d) => d.id).sort()).toEqual(["081785e2", "7f1091c8"]);
+    expect(out.duplicates.every((d) => d.duplicateOf === "e17aecb0")).toBe(true);
     expect(out.counts).toMatchObject({ total: 3, postable: 1, merged: 2, rejected: 0, notScoring: 0, contradicting: 0 });
     expect(out.counts.total - out.counts.postable).toBe(
       out.counts.merged + out.counts.rejected + out.counts.notScoring + out.counts.contradicting
     );
-    expect(out.rowAccounting.unrepresented.map((r) => r.id).sort()).toEqual(["hl-g2", "hl-g3"]);
-    expect(out.rowAccounting.unrepresented.every((r) => r.reason === "merged_duplicate")).toBe(true);
-  });
-
-  it("R3: the clock never changes a GOAL lane — the surviving row is the same row", () => {
-    const out = buildPostableHighlights(rows);
-    expect(out.highlights[0].outcome).toBe("scoring_play");
-    expect(out.highlights[0].attestationUsed).toEqual(rows[0].attestationUsed);
+    // R3/R6: the surviving row is the SAME delivered row — untouched footage.
+    expect(moment.outcome).toBe("scoring_play");
+    expect(moment.start).toBe(0);
+    expect(moment.end).toBe(15);
+    expect(moment.clipUri).toBe("/clips/e17aecb0.mp4");
     expect(out.notable).toHaveLength(0);
     expect(out.counts.notScoring).toBe(0);
+    return out;
+  };
+
+  it("held clock (1520 re-shown at every anchor) delivers ONE moment", () => {
+    // The measured production read: the frozen-bug gate must not disable a lane
+    // whose frozen pair the score ties to one transition.
+    const rows = withClocks(() => 1520);
+    expect(clockLaneEnabledForJob(rows)).toBe(true);
+    assertOneMoment(rows);
   });
 
-  it("R6: no new clip budget — the owner window is delivered exactly as accepted", () => {
+  it("advancing clock (1520 / 1556 / 1602) delivers ONE moment", () => {
+    // The same running bug sampled at each later anchor: Δclock = Δcontent, so
+    // R2 must not call these distinct.
+    assertOneMoment(withClocks((i) => 1520 + [0, 36, 82][i]));
+  });
+
+  it("a re-read within CLOCK_SAME_MOMENT_S of the first delivers ONE moment", () => {
+    assertOneMoment(withClocks((i) => 1520 + [0, 4, 7][i]));
+  });
+
+  it("the relation names the class: same_event, not distinct/jumping", () => {
+    const held = withClocks(() => 1520);
+    const advancing = withClocks((i) => 1520 + [0, 36, 82][i]);
+    expect(clockPairRelation(held[0], held[1])).toBe("same_event");
+    expect(clockPairRelation(advancing[0], advancing[1])).toBe("same_event");
+    expect(clockPairRelation(held[0], held[2])).toBe("same_event");
+    expect(sharesTransition(held[0], held[2])).toBe(true);
+    expect(transitionIdentity(held[0])).toBe("1-1>2-1");
+  });
+
+  it("post-8663 rows (disclosed transitionKey) with an advancing clock deliver ONE moment", () => {
+    const keyed = withClocks((i) => 1520 + [0, 36, 82][i]).map((r) => ({
+      ...r,
+      attestationUsed: { ...r.attestationUsed!, transitionKey: "1-1>2-1" },
+    }));
+    assertOneMoment(keyed);
+  });
+
+  it("post-8663 rows (disclosed transitionScore) deliver ONE moment", () => {
+    const scored = withClocks((i) => 1520 + [0, 36, 82][i]).map((r) => ({
+      ...r,
+      attestationUsed: {
+        ...r.attestationUsed!,
+        transitionKey: "1-1>2-1",
+        transitionScore: { pre: [1, 1] as [number, number], post: [2, 1] as [number, number] },
+      },
+    }));
+    assertOneMoment(scored);
+  });
+
+  it("DIFFERENT score transitions with the same held clock stay TWO moments", () => {
+    // The score, not the clock, keeps genuinely different goals apart: a frozen
+    // value can never merge rows that name different transitions (R5 + R2).
+    const rows = withClocks(() => 1520).map((r, i) => ({
+      ...r,
+      attestationUsed: { ...r.attestationUsed!, transitionKey: i === 2 ? "2-1>3-1" : "1-1>2-1" },
+    }));
     const out = buildPostableHighlights(rows);
-    expect(out.highlights[0].start).toBe(93);
-    expect(out.highlights[0].end).toBe(108);
-    expect(out.highlights[0].clipUri).toBe("/clips/hl-g1.mp4");
+    // `e17aecb0` + `7f1091c8` share `1-1>2-1`; `081785e2` is the next goal.
+    expect(out.highlights.map((h) => h.id)).toEqual(["e17aecb0", "081785e2"]);
+    expect(out.duplicates.map((d) => d.id)).toEqual(["7f1091c8"]);
+    expect(out.counts).toMatchObject({ postable: 2, merged: 1 });
   });
 
-  it("is a no-op without the clock (the defect this increment fixes)", () => {
-    const noClock = rows.map((r) => ({ ...r, matchClock: undefined }));
+  it("a REWOUND re-read is a replay inset, not a duplicate", () => {
+    const rows = STORED_9A6B1D8F.map((r, i) => ({
+      ...r,
+      matchClock: clock(i === 2 ? 1440 : 1520, anchorTs(r)),
+    }));
+    expect(clockPairRelation(rows[0], rows[2])).toBe("rewound");
+    const out = buildPostableHighlights(rows);
+    expect(out.highlights.map((h) => h.id)).toEqual(["e17aecb0", "081785e2"]);
+    expect(out.counts.merged).toBe(1);
+  });
+
+  it("CROSS-MATCH: one multi-match bug showing three matches' clocks never merges", () => {
+    // The GT-1 mandatory case: a FOX-Euro-shaped job carries several matches at
+    // once (86:35 / 82:45 / 95:55) and every match's transition text can read
+    // the same `1-1 -> 2-1`. A clock that jumps or rewinds between content
+    // neighbours is a match cut, so the identity tie cannot merge across it.
+    const rows = [
+      goal({ id: "m1", start: 0, end: 15, localizedTs: 7, matchClock: clock(86 * 60 + 35, 7), reason: "Scoreboard changes from 1-1 to 2-1." }),
+      goal({ id: "m2", start: 40, end: 55, localizedTs: 47, matchClock: clock(82 * 60 + 45, 47), reason: "Scoreboard changes from 1-1 to 2-1." }),
+      goal({ id: "m3", start: 80, end: 95, localizedTs: 87, matchClock: clock(95 * 60 + 55, 87), reason: "Scoreboard changes from 1-1 to 2-1." }),
+    ];
+    expect(sharesTransition(rows[0], rows[1])).toBe(true);
+    expect(clockPairRelation(rows[0], rows[1])).toBe("rewound");
+    expect(clockPairRelation(rows[0], rows[2])).toBe("jumping");
+    const out = buildPostableHighlights(rows);
+    expect(out.highlights.map((h) => h.id)).toEqual(["m1", "m2", "m3"]);
+    expect(out.duplicates).toHaveLength(0);
+    expect(out.counts).toMatchObject({ postable: 3, merged: 0 });
+  });
+
+  it("is a no-op without the clock (master behaviour for legacy rows)", () => {
+    const noClock = STORED_9A6B1D8F.map((r) => ({ ...r, matchClock: undefined }));
     const out = buildPostableHighlights(noClock);
-    // Master behaviour: three non-overlapping accepted rows = three moments.
     expect(out.highlights).toHaveLength(3);
     expect(out.duplicates).toHaveLength(0);
+    expect(out.counts).toMatchObject({ postable: 3, merged: 0 });
+  });
+
+  it("a clockless earlier row cannot break the merge loop (mixed-order job)", () => {
+    // The clockless row sorts first, so it owns an open cluster when the clocked
+    // rows are visited — the join test must skip it instead of reading a missing
+    // clock.
+    const rows = [
+      goal({ id: "hl-early", start: 10, end: 25 }),
+      goal({ id: "hl-a", start: 400, end: 415, matchClock: clock(2000, 407), reason: "Scoreboard changes from 1-1 to 2-1." }),
+      goal({ id: "hl-b", start: 480, end: 495, matchClock: clock(2080, 487), reason: "Scoreboard changes from 1-1 to 2-1." }),
+    ];
+    const out = buildPostableHighlights(rows);
+    expect(out.highlights.map((h) => h.id)).toEqual(["hl-early", "hl-a"]);
+    expect(out.duplicates.map((d) => d.id)).toEqual(["hl-b"]);
   });
 });
 
