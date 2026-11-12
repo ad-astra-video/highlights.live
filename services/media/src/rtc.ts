@@ -131,6 +131,17 @@ export interface RtcIngestOptions {
 }
 
 export interface DecodedFrame {
+  /**
+   * The DECODER's frame counter for the CURRENT peer connection. It restarts at
+   * 0 on every re-offer (see {@link WebRtcIngestSession.resetConnection}) and
+   * exists for logging/evidence only.
+   *
+   * ADAAAA-8817: never use it as the video-in / events-out trickle index.
+   * go-livepeer's trickle is index-addressed and the perceive runner's
+   * subscriber is strictly ordered, so an index that rewinds to 0 on a reconnect
+   * wedges the runner forever. The publish index is `stream.publishSeq` in
+   * `server.ts`, assigned once per published frame in `publishAndObserve`.
+   */
   seq: number;
   /** End-to-end receive wall-clock timestamp (seconds). Used downstream for
    *  the orchestrator video-in trickle timestamp and the live latency budget. */
@@ -234,6 +245,9 @@ export class WebRtcIngestSession extends EventEmitter {
   private au: RtpPacket[] = [];
   /** werift's cross-call fragment buffer for fragmented NAL units. */
   private fragment?: Buffer;
+  /** Decoded-frame counter for THIS peer connection (reset on re-offer). Used as
+   *  logging/evidence and attached next to the publish index — never as the
+   *  trickle index (ADAAAA-8817: see {@link DecodedFrame.seq}). */
   private seq = 0;
   private started = false;
   private closed = false;
@@ -426,6 +440,11 @@ export class WebRtcIngestSession extends EventEmitter {
     }
     this.au = [];
     this.fragment = undefined;
+    // ADAAAA-8817: the decoder counter is per-connection evidence and MUST be
+    // reset here (a fresh peer restarts its own frame numbering). The trickle
+    // index is deliberately NOT part of this state — it lives on the session's
+    // `stream.publishSeq` (server.ts) so a re-offer resumes the video-in index
+    // instead of republishing idx 0 on a stream that already advanced.
     this.seq = 0;
     this.started = false;
     this.codecMime = "";

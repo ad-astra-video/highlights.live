@@ -42,6 +42,22 @@ interface ActiveStream {
    *  it with `resolveSampleFps` / `LIVE_SAMPLE_BASE_FPS`). Absent -> the node
    *  fallback (`rtcSampleFps`, funded 3 fps). */
   sampleFps?: number;
+  /**
+   * ADAAAA-8817: the video-in / events-out trickle index for THIS session, and
+   * the observation index the relay reads back at the same number.
+   *
+   * It is monotonic for the session's whole life and is NEVER reset. That is the
+   * whole point: go-livepeer's video-in trickle is index-addressed and the
+   * perceive runner's subscriber is strictly ordered, so a rewind is a
+   * permanent stall. The RTC decoder's own `seq` lives on the
+   * `WebRtcIngestSession` and is reset by `resetConnection()` on every re-offer,
+   * so addressing the trickle with it republished idx 0 on a stream already
+   * ~299 indices in and froze BOTH the observation clock and the tick clock
+   * while the audio lane kept flowing (measured leg `3740585f`: 6 re-offers,
+   * `analysedThroughTs` pinned at the first segment boundary, 21 decides then
+   * zero for ~9 minutes). The decoder counter stays logging evidence only.
+   */
+  publishSeq: number;
   /** Muxed (video+audio) MediaRecorder chunks reassembled in arrival order.
    *  Lazily created on the first muxed chunk; the container's own PTS is the
    *  authoritative clock for clip cutting AND for feeding the analysis rails. */
@@ -372,6 +388,9 @@ export class MediaServer {
         startedAt: Date.now(),
         everAttached: false,
         sampleFps: requestedSampleFps,
+        // ADAAAA-8817: the session's monotonic video-in index (see the field's
+        // note). Starts at 0 for a fresh perceive slot and only ever climbs.
+        publishSeq: 0,
       };
       this.active.set(p.sessionId, stream);
       // Pay the orchestrator for as long as the stream is open (no-op offchain).
@@ -432,6 +451,10 @@ export class MediaServer {
                 `[rtc] frame seq=${f.seq} packets=${s.packetsReceived} frames=${s.framesEmitted} latency=${f.latencyMs ?? 0}ms`
               );
             }
+            // ADAAAA-8817: `f.seq` is the decoder's PER-CONNECTION counter
+            // (reset on every re-offer). It is passed as evidence for the log
+            // line only; publishAndObserve hands the trickle the session's
+            // monotonic `stream.publishSeq` instead.
             void this.publishAndObserve(stream, f.seq, f.jpeg, f.ts, undefined, f.latencyMs).catch((e) =>
               console.error("[media] rtc frame err", e)
             );
@@ -764,6 +787,9 @@ export class MediaServer {
     if (!jpeg.length) return;
     const ts = typeof timestamp === "number" ? timestamp : seq;
 
+    // ADAAAA-8817: the WS client's `seq` is evidence only. The trickle index
+    // comes from the session's monotonic counter inside publishAndObserve, so a
+    // WS re-attach that restarts its own numbering at 0 cannot rewind video-in.
     await this.publishAndObserve(stream, seq, jpeg, ts, socket);
   }
 
@@ -784,7 +810,7 @@ export class MediaServer {
    */
   private async publishAndObserve(
     stream: ActiveStream,
-    seq: number,
+    sourceSeq: number,
     jpeg: Uint8Array,
     ts: number,
     socket?: any,
@@ -792,6 +818,28 @@ export class MediaServer {
   ) {
     const p = stream.provisioned;
     const relay = this.observeRelay(stream);
+    // ADAAAA-8817: the trickle index is the SESSION's counter, not the producing
+    // transport's. go-livepeer's video-in is index-addressed and the perceive
+    // runner's subscriber is strictly ordered, so the index may never rewind.
+    // The RTC decoder's `seq` is per-connection: `WebRtcIngestSession
+    // .resetConnection()` zeroes it on every re-offer, so addressing the trickle
+    // with it republished idx 0 on a stream ~299 indices in. go-livepeer then
+    // served that as a rewind, the runner re-requested an index that never
+    // arrived, and EVERY subsequent publish on the share failed while the
+    // browser and the audio lane stayed healthy (leg `3740585f`: 6 re-offers,
+    // both the observation clock and the tick clock frozen at the first segment
+    // boundary). `sourceSeq` is evidence only — logged next to the index.
+    //
+    // Assigning before the first await keeps the order identical to arrival
+    // order even though the RTC path does not await this call.
+    const seq = stream.publishSeq++;
+    // One line per connection boundary (`sourceSeq===0` proves the transport's
+    // own counter restarted while the index kept climbing — the ADAAAA-8817
+    // evidence a QA leg re-grades), then a cadence line every 30 frames.
+    if (seq === 0 || sourceSeq === 0 || seq % 30 === 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[rtc] publish idx=${seq} sourceSeq=${sourceSeq} session=${p.sessionId}`);
+    }
     // Publish EVERY decoded frame. go-livepeer's video-in trickle is a strictly
     // ordered stream: a frame we do not publish leaves a permanent HOLE, and the
     // perceive runner's serial subscriber re-requests that seq forever instead of
@@ -1145,7 +1193,7 @@ export class MediaServer {
       console.log(
         `[rtc] observe session=${stream.provisioned.sessionId} seconds=${Number(
           Math.max(0, (Date.now() - stream.startedAt) / 1000).toFixed(1)
-        )} ${stream.observations.summary()}`
+        )} publishIdx=${stream.publishSeq} ${stream.observations.summary()}`
       );
       stream.observations.close();
       stream.observations = undefined;
