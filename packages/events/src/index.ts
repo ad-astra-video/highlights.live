@@ -1975,6 +1975,22 @@ export const HighlightRecordSchema = z.object({
   clipScoreFlipPx: z.number().min(0).optional(),
   clipScoreFlipDigits: z.number().min(0).optional(),
   clipScoreFlipRunnerUpTs: z.number().min(0).optional(),
+  /** ADAAAA-8820 (D2): which anchor the deferred cut rested on. Absent on rows
+   *  whose cut used the accept's own instant (every pre-D2 row, byte-identical);
+   *  `"dive"` marks a row the Stage-2 dive RE-ANCHORED — its `momentTs` moved the
+   *  evidence instant by >= 1 s and the clip was re-cut on it (at most once). */
+  clipAnchorSource: z.enum(["accept", "dive"]).optional(),
+  /** ADAAAA-8820 (D2): the content-clock instant the dive named for the moment
+   *  (the anchor the re-cut used, when `clipAnchorSource` is `"dive"`). */
+  clipAnchorDiveMomentTs: z.number().min(0).optional(),
+  /** ADAAAA-8820 (D2): `momentTs - localizedTs` — how far the dive moved the
+   *  anchor off the accept instant (signed; the trigger for the re-cut is
+   *  |value| >= 1 s). This is the AC2.2 "dive moment vs evidence instant" lag;
+   *  `clipAnchorLagSec` keeps its shipped meaning (content instant vs the
+   *  recording-file instant that carries it). */
+  clipAnchorDiveLagSec: z.number().optional(),
+  /** ADAAAA-8820 (D2): the dive's own confidence in the moment it named. */
+  clipAnchorDiveConfidence: z.number().min(0).max(1).optional(),
   eventType: z.string().optional(),
   score: z.number().min(0).max(100),
   reason: z.string().optional(),
@@ -2248,6 +2264,14 @@ export const HighlightRecordSchema = z.object({
       authority: z.enum(["scoreboard", "frame", "none"]).optional(),
       /** ADAAAA-8728 (R7): why the GOAL was refused, on a refused attestation. */
       refusalReason: z.string().optional(),
+      /** ADAAAA-8820 (D2/AC2.1): the content-clock instant the dive named for
+       *  the moment (seconds from stream start), and the dive's own confidence in
+       *  it. `momentTs` is ABSENT when the dive named none (a refutation, a pass
+       *  with no frame grid, or a dropped dive) — never fabricated. Declared here
+       *  or zod strips it on persist and no stored row can be re-anchored or
+       *  graded. */
+      momentTs: z.number().min(0).optional(),
+      momentConfidence: z.number().min(0).max(1).optional(),
     })
     .optional(),
   deferredAttestation: z
@@ -2709,6 +2733,11 @@ export const ConfirmRecordSchema = z.object({
     // token must never drop the record.
     corroborated: z.boolean().optional(),
     corroborationSource: z.string().nullable().optional(),
+    /** ADAAAA-8820 (D2/AC2.1): the moment the dive named (content instant) and
+     * its confidence. Declared here or zod strips them from the stored confirm
+     * audit and a dive can never be graded on the moment it produced. */
+    momentTs: z.number().min(0).nullable().optional(),
+    momentConfidence: z.number().min(0).max(1).nullable().optional(),
     transcript: z.string().optional(),
   }).passthrough().default({}),
 });
