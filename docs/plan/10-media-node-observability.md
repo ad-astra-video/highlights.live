@@ -204,6 +204,23 @@ this, the browser job was indistinguishable from "the pipeline never ran": a bar
   `reason: "media-node-restart"` for each leftover session (bounded retry: the
   control plane is usually restarting at the same instant; the server's boot sweep
   is the backstop). `/health.cost.sessionsLostReported` counts them.
+- **Paid live-runner release at boot (ADAAAA-8813).** Reporting the job does NOT stop the
+  perceive session: that session is a PAID live-runner session on the external
+  orchestrator, whose payment loop has no liveness check, so it kept
+  `Accounted payment` every 5 s and held the capacity-1 perceive slot until its
+  balance expired (~2 h) — every new provision answered
+  `HTTP 503 no capacity available for runner`. So the same reconcile now calls
+  `POST {controlUrl}/stop` (fallback
+  `{ORCHESTRATOR_URL}/apps/highlights-perceive/session/{sid}/stop`) for EVERY
+  leftover, BEFORE and independently of the jobId-only callback above. The ledger
+  record therefore persists the reserve's `controlUrl`, so the stop targets the
+  exact orchestrator that issued the session even when discovery picked one that
+  is not `ORCHESTRATOR_URL`. A stop on an already-expired session answers 404 and
+  bills nothing, so a repeat is a harmless no-op.
+  `/health.cost.sessionsReleasedAtBoot` / `sessionsReleaseFailedAtBoot` are the
+  evidence counters; a leftover with no job prints
+  `[media] session-lost job=(direct) … orch-release=released` (its id is the only
+  key the release needs).
 - The control plane maps `media-node-restart` to `status: "failed"` with
   `failureReason: "media-session-lost"` and an actionable `error` ("Media node
   restarted — … Click Start to share again."). A client/control close still
