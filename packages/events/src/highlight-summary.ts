@@ -1280,7 +1280,11 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   const verdict = input.verdict || input.eventType || "unknown";
   const windowLine =
     typeof input.windowTs === "number" && Number.isFinite(input.windowTs)
-      ? `Window: ${clockLabel(input.windowTs)}${input.windowDurationS ? ` (+${Math.round(input.windowDurationS)} s)` : ""} — clip offset`
+      ? // ADAAAA-8773: the duration suffix is NOT rendered. The shipped probe
+        // showed the model copying the parenthetical into prose ("at the 0:24
+        // (+15 s) mark"), which reads as a broken timestamp on a served card.
+        // The offset is the only thing the body needs from this line.
+        `Window: ${clockLabel(input.windowTs)} — clip offset`
       : "Window: (unknown)";
   const transition = input.scoreTransition
     ? `Score transition: ${input.scoreTransition.from ?? "?"} -> ${input.scoreTransition.to ?? "?"}`

@@ -98,10 +98,10 @@ describe("prompt — the model is handed the clip offset and nothing that cannot
 
   it("labels the window as the clip offset and forbids restating any other clock", () => {
     const prompt = buildSummaryPrompt(ROW_5F32F6F4);
-    expect(prompt).toContain("Window: 0:24 (+15 s) — clip offset");
+    expect(prompt).toContain("Window: 0:24 — clip offset");
     expect(prompt).toContain("The clock fact is the `Window:` label only");
     expect(prompt).toContain("never restate one as the body's clock");
-    expect(buildSummaryPrompt(ROW_995CD9B5)).toContain("Window: 0:27 (+15 s) — clip offset");
+    expect(buildSummaryPrompt(ROW_995CD9B5)).toContain("Window: 0:27 — clip offset");
   });
 
   it("leaves every clock it DOES show inside the gate's anchor tolerance", () => {
@@ -127,6 +127,14 @@ describe("prompt — the model is handed the clip offset and nothing that cannot
     // An unknown window attests no clock at all, so none is offered.
     expect(redactUngroundedPromptClocks("net at 0:24", null)).toBe("net at the window moment");
     expect(redactUngroundedPromptClocks(null, 24)).toBe("");
+  });
+
+  it("does not render the duration suffix the model copied into prose", () => {
+    // Served probe: the pre-8773 window line `0:24 (+15 s)` came back as "at the
+    // 0:24 (+15 s) mark", a broken-looking timestamp on a card.
+    const prompt = buildSummaryPrompt({ ...ROW_5F32F6F4, windowDurationS: 15 });
+    expect(prompt).not.toContain("+15 s");
+    expect(prompt).toContain("Window: 0:24 — clip offset");
   });
 
   it("keeps the score line, which is a DIFFERENT fact and stays grounded", () => {

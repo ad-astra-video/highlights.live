@@ -22,7 +22,7 @@ Verdict: big_play
 Reason: Ball shoots in midfield
 Headline: (none)
 Announcer line: Ball shoots in midfield
-Window: 0:12 (+12 s) — clip offset
+Window: 0:12 — clip offset
 Score transition: (none measured)
 Match context:
 (none)
@@ -82,7 +82,7 @@ Verdict: scoring_play
 Reason: Scoreboard changes to 2-2 and the ball enters the net.
 Headline: GOAL · 2:38
 Announcer line: Ball enters the net at the near post.
-Window: 2:38 (+12 s) — clip offset
+Window: 2:38 — clip offset
 Score transition: 1-2 -> 2-2
 Match context:
 Teams: Northbridge vs Riverside
