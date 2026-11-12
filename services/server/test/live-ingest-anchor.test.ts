@@ -354,3 +354,65 @@ describe("LiveIngest.cut (ADAAAA-8168 ingest rail)", () => {
     expect(clip.clipAudit?.clipDeliveredSec as number).toBeGreaterThan(8);
   }, 120_000);
 });
+
+// ADAAAA-8714 (AC2): a celebration-tail row cuts the PLACED window — the cue at
+// the card's end — on the ingest rail too, and the score flip that sits BEFORE
+// the cue must not re-centre it (that is the defect being fixed: `[roar-7,
+// roar+8]` puts a goal > 7 s before the roar outside the card).
+describe("LiveIngest.cut celebration-tail placement (ADAAAA-8714)", () => {
+  /** The placed window the analyzer hands over for a reaction cue at PICTURE_AT. */
+  const placed = { start: PICTURE_AT - 13, end: PICTURE_AT + 2, cueTail: true };
+
+  it("cuts [cue-13, cue+2] with the cue at the END and never re-anchors on the flip", async () => {
+    if (!hasFfmpeg) return;
+    const jobId = "tail";
+    const sess = sessionPathFor(jobId);
+    mkdirSync(path.dirname(sess), { recursive: true });
+    execFileSync("cp", [fullSession, sess]);
+    writeFrames(jobId);
+    const ing = new LiveIngest(cfg(), jobId, { kind: "file-sim", url: "x", sampleInterval: 1 });
+    ing.running = true;
+
+    const clip = await ing.cut(PICTURE_AT, { window: placed });
+    const out = path.join(dataDir, "clips", `${clip.clipId}.mp4`);
+    expect(existsSync(out)).toBe(true);
+
+    // The cue is the anchor, so the flip probe is skipped by design.
+    expect(clip.clipAudit?.clipAnchorMethod).toBe("frame_match");
+    expect(clip.clipAudit?.clipScoreFlipPx).toBeUndefined();
+    expect(clip.clipAudit?.clipAnchorEvidenceTs).toBe(PICTURE_AT);
+
+    // AC2: the delivered file meets the >= 15.000 s floor ...
+    const delivered = (await probeDuration("ffmpeg", out)) as number;
+    expect(delivered).toBeGreaterThanOrEqual(15.0);
+    expect(clip.clipAudit?.clipDeliveredSec as number).toBeGreaterThanOrEqual(15.0);
+
+    // ... and the cue really sits at the END of it (>= clipWindowSec - 2.5 s), not
+    // in the middle third a goal-anchored card promises. The ROW's value (13.000)
+    // is what AC2 grades; the delivered measurement carries the session's
+    // keyframe grid (ADAAAA-8170: a copy cut trims on GOP boundaries, so this
+    // fixture lands it 0.65 s early), hence the one-second grid tolerance.
+    const offset = clip.clipAudit?.clipAnchorDeliveredOffsetSec as number;
+    expect(offset).toBeGreaterThanOrEqual(WINDOW - 2.5 - 1.0);
+    expect(offset).toBeLessThanOrEqual(WINDOW);
+    expect(Math.abs(offset - (WINDOW - 2))).toBeLessThanOrEqual(1.0);
+  }, 180_000);
+
+  it("keeps the LENGTH when the cue cannot hold 13 s of pre-roll (early share)", async () => {
+    if (!hasFfmpeg) return;
+    const jobId = "tail-early";
+    const sess = sessionPathFor(jobId);
+    mkdirSync(path.dirname(sess), { recursive: true });
+    execFileSync("cp", [fullSession, sess]);
+    writeFrames(jobId);
+    const ing = new LiveIngest(cfg(), jobId, { kind: "file-sim", url: "x", sampleInterval: 1 });
+    ing.running = true;
+
+    // Cue at 4 s: the card slides to [0, 15] instead of going short.
+    const clip = await ing.cut(4, { window: { start: 0, end: 15, cueTail: true } });
+    const out = path.join(dataDir, "clips", `${clip.clipId}.mp4`);
+    const delivered = (await probeDuration("ffmpeg", out)) as number;
+    expect(delivered).toBeGreaterThanOrEqual(15.0);
+    expect(clip.clipAudit?.clipCutStartSec).toBeGreaterThanOrEqual(0);
+  }, 180_000);
+});

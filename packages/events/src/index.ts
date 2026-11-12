@@ -1836,6 +1836,21 @@ export const HighlightRecordSchema = z.object({
    * delivered clip (`localizedTs - start`), i.e. the number ACC-2 grades. Persisted
    * so placement is auditable from the row without re-reading pixels. */
   clipGoalOffsetSec: z.number().min(0).optional(),
+  /** ADAAAA-8714 (AC2/AC3): WHY the delivered window sits where it does, from
+   * the ONE placement decision (`placeLiveClipWindow`):
+   * - `goal_anchor` — the row can name its goal instant (measured transition /
+   *   frame attestation), so it keeps the ADAAAA-8152 placement;
+   * - `celebration_tail` — the accept's cue is a reaction/celebration and the
+   *   judged window carries no goal instant, so the cue is the card's END
+   *   (`[cue - (window - tail), cue + tail]`, length unchanged);
+   * - `evidence_anchor` — no judged live window (the VOD rail): nominal centre.
+   * Additive optional — legacy rows carry none. */
+  clipPlacementReason: z.enum(["goal_anchor", "celebration_tail", "evidence_anchor"]).optional(),
+  /** ADAAAA-8714 (AC2): on a `celebration_tail` row, the second number that
+   * grades the ruling — the cue's offset inside the delivered window
+   * (`localizedTs - start`, `>= clipWindowSec - 2.5`). Absent on every other
+   * placement. */
+  clipCelebrationOffsetSec: z.number().min(0).optional(),
   /** ADAAAA-8152 (ACC-2/ACC-3): how the DELIVERED file was actually placed, as
    * opposed to where the content clock said it should be. The live lane has two
    * clocks — the media rail's (which `localizedTs` lives on) and the recording

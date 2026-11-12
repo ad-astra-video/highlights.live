@@ -33,6 +33,7 @@ import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
 import { clipWindow } from "./config";
 import type { ClipCut } from "./clip-anchor";
+import { placeLiveClipWindow, type ClipCutWindow } from "./clip-placement";
 import {
   ObserveDecider,
   LiveObserver,
@@ -7087,7 +7088,9 @@ export function storedSurfaceFor(
 export async function acceptVideoDecision(
   client: PipelineClient,
   run: LiveRunShared,
-  cut: (ts: number) => Promise<ClipCut>,
+  // ADAAAA-8714: the cut receives the PLACED window (a celebration-tail row cuts
+  // `[cue - (window - tail), cue + tail]`, not a window re-centred on the cue).
+  cut: (ts: number, window?: ClipCutWindow) => Promise<ClipCut>,
   cfg: AnalyzerConfig,
   onEvent: ((ev: AnalyzeEvent) => void) | undefined,
   emit: { seq: number; timestamp: number },
@@ -7686,6 +7689,27 @@ export async function acceptVideoDecision(
       return;
     }
   }
+  // ADAAAA-8714 (AC2/AC3): ONE placement decision for the delivered window,
+  // taken from the accept's own anchor. A reaction/celebration cue with NO goal
+  // instant ENDS the card (`[cue - (window - tail), cue + tail]`, length
+  // unchanged) so the judged window plus the reaction lands inside it; a row
+  // that names its goal instant keeps the ADAAAA-8152 placement byte-for-byte.
+  // `win` above stays the NOMINAL window on purpose: every ledger decision
+  // (repeat-goal, celebration duplicate, deferred attestation) reads it, so the
+  // placement change moves no trigger, span, cadence or dedupe reach.
+  const placed = placeLiveClipWindow({
+    localizedTs: loc.ts,
+    anchorReason: loc.anchorReason,
+    window: win,
+    live: liveWindow !== undefined,
+  });
+  if (placed.reason === "celebration_tail") {
+    console.log(
+      `[live-clip-place:${cfg.jobId}] celebration_tail @${loc.ts.toFixed(3)}s (${loc.anchorReason}): ` +
+        `cut [${placed.start.toFixed(3)}, ${placed.end.toFixed(3)}] — cue at ` +
+        `${placed.cueOffsetSec.toFixed(3)}s of ${(placed.end - placed.start).toFixed(3)}s`
+    );
+  }
   // ADAAAA-8168: a failed cut must never lose the accepted moment. The ingest
   // rail's cut can now refuse to publish (its window was not flushed in time,
   // or the delivered file came up short), and before this the throw unwound
@@ -7706,7 +7730,11 @@ export async function acceptVideoDecision(
   // deferred cut publishes the whole window or leaves `clipError` on the row.
   if (!cfg.deferLiveClipCut) {
     try {
-      clip = await cut(loc.ts);
+      clip = await cut(loc.ts, {
+        start: placed.start,
+        end: placed.end,
+        cueTail: placed.reason === "celebration_tail",
+      });
     } catch (e: any) {
       clipError = `Clip cut failed: ${String(e?.message || e)}`;
       console.error(`[live-clip:${cfg.jobId}] ${clipError} (row ${loc.ts.toFixed(3)}s kept as an unclipped highlight)`);
@@ -7822,11 +7850,21 @@ export async function acceptVideoDecision(
     // to the >=15 s floor, so clipWindowSec reflects the ACTUAL delivered length.
     clipWindowBeforeS: cfg.clipBeforeS,
     clipWindowAfterS: cfg.clipAfterS,
-    clipWindowSec: win.end - win.start,
+    // ADAAAA-8714 (AC2): the DELIVERED window is the PLACED one, so a
+    // celebration-tail row reads its cue at `window - tail` and the card is
+    // 13 s of context before the roar instead of 7 s before / 8 s after.
+    clipWindowSec: placed.end - placed.start,
+    // ADAAAA-8714: WHY the window sits there (`goal_anchor` | `celebration_tail`
+    // | `evidence_anchor`) plus the graded cue offset on a tail row, so the
+    // placement is auditable from the row alone (AC2).
+    clipPlacementReason: placed.reason,
+    ...(placed.celebrationOffsetSec != null
+      ? { clipCelebrationOffsetSec: Math.round(placed.celebrationOffsetSec * 1000) / 1000 }
+      : {}),
     // ADAAAA-8152 (ACC-2): how far the measured goal instant sits inside the
     // delivered window, so a grader can read the placement straight off the row
     // (`(localizedTs - start) / clipWindowSec` = `clipGoalOffsetSec` / 15).
-    clipGoalOffsetSec: Math.round((loc.ts - win.start) * 1000) / 1000,
+    clipGoalOffsetSec: Math.round(placed.cueOffsetSec * 1000) / 1000,
     // ADAAAA-6874 (Phase 2): deterministic idempotency key so a resumed job that
     // re-decides the same candidate cannot double-persist/double-bill.
     idempotencyKey: highlightIdempotencyKey(cfg.jobId, emit.seq, decision.eventType ?? candidate.eventType),
@@ -7838,8 +7876,8 @@ export async function acceptVideoDecision(
     // the moment instead of disappearing with the clip.
     ...(clip.clipAudit ? clip.clipAudit : {}),
     clipError,
-    start: win.start,
-    end: win.end,
+    start: placed.start,
+    end: placed.end,
     eventType: highlightEventType(decision),
     score: decision.score,
     // ADAAAA-7962 (contract v4 §3.1): a user-readable field is gated BEFORE it

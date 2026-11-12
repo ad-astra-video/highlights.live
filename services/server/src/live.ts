@@ -9,6 +9,7 @@ import { readdir, readFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { probeDuration, probeFlushedDuration } from "./ffmpeg";
 import { anchorCutOnEvidence, clipAuditFields, type ClipCut } from "./clip-anchor";
+import type { ClipCutWindow } from "./clip-placement";
 import { clipWindow } from "./config";
 import type { ServerConfig } from "./config";
 
@@ -370,14 +371,19 @@ export class LiveIngest {
    * decide/perceive call and no extra clip debit either way. */
   async cut(
     ts: number,
-    opts: { maxFlushWaitMs?: number; requireFullWindow?: boolean } = {}
+    opts: { maxFlushWaitMs?: number; requireFullWindow?: boolean; window?: ClipCutWindow } = {}
   ): Promise<ClipCut> {
     const { mkdir } = await import("node:fs/promises");
     const outDir = path.join(this.cfg.dataDir, "clips");
     await mkdir(outDir, { recursive: true });
     const name = `${this.jobId}-${Math.round(ts * 10)}`;
     const out = path.join(outDir, `${name}.mp4`);
-    const win = clipWindow(ts, this.cfg.clipBeforeS, this.cfg.clipAfterS, this.cfg.clipWindowMinSec ?? 15);
+    // ADAAAA-8714: the analyzer hands the PLACED window. A celebration-tail row
+    // cuts `[cue - (window - tail), cue + tail]` — the whole judged window plus
+    // the reaction — instead of re-centring on the cue here. Absent (measured
+    // rows, VOD, any legacy caller) => the nominal centred window, unchanged.
+    const win =
+      opts.window ?? clipWindow(ts, this.cfg.clipBeforeS, this.cfg.clipAfterS, this.cfg.clipWindowMinSec ?? 15);
     // The length the ROW promises (the ACC grades >= clipWindowMinSec of it) vs
     // the length actually asked of ffmpeg (padded for seek/keyframe quantisation).
     const needDur = win.end - win.start;
@@ -410,6 +416,10 @@ export class LiveIngest {
         evidenceTs: ts,
         evidenceFramePath,
         tag: `live-ingest:${this.jobId}`,
+        // ADAAAA-8714: on a celebration-tail row the cue IS the anchor — a score
+        // flip found earlier would re-centre the card on the goal and push the
+        // reaction off the end.
+        cueTail: opts.window?.cueTail === true,
       });
     let result = await cutNow();
     let deliveredSec = await probeDuration(this.cfg.ffmpegPath, out).catch(() => null);
