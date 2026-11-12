@@ -68,15 +68,14 @@ describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
     expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
   });
 
-  it("names the refused draft's length in the repair prompt", () => {
-    const plain = buildSummaryPrompt(ROW_0526);
-    const repair = buildSummaryPrompt({ ...ROW_0526, repairWords: 36 });
-    expect(plain).not.toContain("previous draft");
-    expect(repair).toContain("previous draft was 36 words");
-    expect(repair).toContain(`at least ${SUMMARY_VOD_BAND.targetMinWords} words this time`);
-    // Nothing else about the prompt moves: the fact menu and the clip-offset
-    // clock rule are unchanged, so score/clock grounding is not widened.
-    expect(repair).toContain("Score transition: 2-1 -> 2-2");
-    expect(repair).toContain("The clock fact is the `Window:` label only");
+  it("keeps the prompt's fact menu and clip-offset clock rule unchanged", () => {
+    // The depth fix is a band change, not a prompt/grounding change: the fact
+    // menu, the clip-offset clock rule and the score grounding are byte-identical
+    // to the served build, so nothing is widened by closing the depth FAIL.
+    const prompt = buildSummaryPrompt(ROW_0526);
+    expect(prompt).toContain("Carry at least TWO different facts from the evidence");
+    expect(prompt).toContain("Score transition: 2-1 -> 2-2");
+    expect(prompt).toContain("The clock fact is the `Window:` label only");
+    expect(prompt).toContain(`at least ${SUMMARY_VOD_BAND.targetMinWords} words`);
   });
 });

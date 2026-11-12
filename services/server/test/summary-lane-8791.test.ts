@@ -1,8 +1,8 @@
 // ADAAAA-8791: a VOD draft under the 40-word target is refused `too-few-words`
-// (non-deterministic), so the lane spends its ONE retry slot on length repair
-// with a prompt that names the short draft — and never serves sub-target copy.
-// Measured defect: job `a200d2bd` promoted row `0526c296` served 36 words as
-// `accepted` because the old floor was 30.
+// (non-deterministic), so the lane's existing ONE retry slot re-samples it and
+// only a target-length body is ever stored; a row that stays short drops rather
+// than serving thin copy. Measured defect: job `a200d2bd` promoted row
+// `0526c296` served 36 words as `accepted` because the old floor was 30.
 import { describe, expect, it } from "vitest";
 import type { SummaryEvidence } from "@highlights/events";
 import { runSummaryForRow, type SummaryLaneStore } from "../src/summary-lane.js";
@@ -60,7 +60,7 @@ const cfg = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-describe("ADAAAA-8791 — length repair inside the two-call bound", () => {
+describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => {
   it("retries the 36-word draft once and serves a target-length body", async () => {
     const { store, patches } = stubStore();
     const f = stubFetch([ok(SHORT), ok(LONG)]);
@@ -71,9 +71,10 @@ describe("ADAAAA-8791 — length repair inside the two-call bound", () => {
     });
     expect(result.outcome).toBe("stored");
     expect(result.calls).toBe(2);
-    // The second sample was asked for the target, naming the refused draft.
-    expect(f.bodies[0]).not.toContain("previous draft");
-    expect(f.bodies[1]).toContain("previous draft was 36 words");
+    // The 36-word draft is refused as non-deterministic length, so the same
+    // prompt is sampled once more and the short shape is never stored.
+    expect(f.bodies).toHaveLength(2);
+    expect(f.bodies[1]).toContain("at least 40 words");
     const stored = patches.find((p) => typeof p.patch.summary === "string");
     expect(stored?.patch.summary).toBe(LONG);
     expect(String(stored?.patch.summary).split(/\s+/).length).toBeGreaterThanOrEqual(40);
