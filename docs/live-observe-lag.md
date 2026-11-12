@@ -245,3 +245,39 @@ after the decide, the lane surviving `JobSchema.parse`, the headroom clamp's
 pure arithmetic, the inert default, a trimmed wait proceeding inline without
 aborting the prefetch, the `[live-deliver]` evidence line, and the config +
 compose posture).
+
+## Named supply stall (ADAAAA-8807)
+
+The lag budget above drops windows that arrive LATE. A share whose video lane
+simply STOPS arriving used to leave no trace at all: leg `3740585f` decided 21
+windows up to content t = 99.592 s and then nothing for ~9 minutes while the job
+stayed `active`, the socket stayed `connected`, audio kept being relayed (rail
+tap through 601.89 s) and the serve clock kept billing (`liveWatchMinutes`
+11.818 beside a 1.7 min decide sample).
+
+The media rail now polls a supply watch every 5 s (one `unref`'d interval per
+share, cleared in `finish()`/`release()`) and names the interval that outlives
+`LIVE_SUPPLY_STALL_S` (default 60 s, which covers the 30-40 s session warmup;
+`<= 0` restores the old silence). One line per transition, never one per tick:
+
+```
+[live-stall:<job>] no-video-supply: no decide frame for 62s (content frozen at 99.592s, served 161.6s; frames=189 newestTick=99.592s audioThrough=601.892s) — no pixels, no decide; the share keeps accruing served time, so this is the only named stop
+[live-stall:<job>] recovered: decide frames resumed at 138.000s after 38.4s of no-video-supply (served 200.0s, frames=241)
+```
+
+On the job record (`GET /jobs/:id` → `observeMetrics.supplyStall`, absent when
+the share never stalled):
+
+- `reason` — `no-observation-supply` (frame ticks arrive, no observation: relay
+  or perceive-runner stall), `no-video-supply` (frames stopped, audio alive: the
+  publisher's video track died — leg `3740585f`), `no-media-supply` (nothing at
+  all is arriving).
+- `contentTs` / `tickTs` / `audioTs` — the three content clocks at detection, so
+  a reader can tell WHICH lane froze.
+- `stallSeconds` / `longestStallSeconds` / `occurrences` / `active`, `wallS`
+  (served seconds at detection), `recoveredAtContentTs` (null = never).
+
+The serve clock is deliberately NOT paused: `perceiveSessionS` /
+`liveWatchMinutes` are the billing basis (§1 denominator), so the stall is
+recorded beside them rather than rewriting them. Unit coverage:
+`services/server/test/live-supply-stall-8807.test.ts`.
