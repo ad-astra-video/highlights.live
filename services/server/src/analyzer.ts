@@ -2308,6 +2308,14 @@ export interface LiveGoalAttestationUsed {
    *  contract carry no field at all — the accept gate refuses an absent value
    *  (fail-closed), so legacy rows can never re-enter the scoring lane. */
   authority?: GoalAuthority;
+  /** ADAAAA-8774 (R3 offline): how many in-window frames the dive's frame
+   *  attestation cited. Present ONLY when a frame attestation claimed the row
+   *  (`corroborationSource: "frame_attestation"`): absent = no frame claim (not
+   *  applicable), `0` = claimed but cited nothing (refused), `>= 1` = cited.
+   *  Persisted so R3 (`frame_attestation_uncited`) is re-derivable from the
+   *  stored row — the accept lane's frames payload is never persisted, so the
+   *  count is the only durable citation record on that path (ADAAAA-8768). */
+  frameRefCount?: number;
   /** ADAAAA-8728 (R7): why the GOAL was refused on a demoted row (text-only
    *  corroboration, an uncited frame claim, a recap window, …). Absent on rows
    *  that were not refused. */
@@ -2384,6 +2392,13 @@ export function liveGoalAttestationUsed(input: {
     // ADAAAA-8728 (R7): every row names the authority it used/refused.
     authority,
     ...(input.refusalReason ? { refusalReason: input.refusalReason } : {}),
+    // ADAAAA-8774 (R3 offline): disclose the citation count beside the authority,
+    // and ONLY for a frame attestation — an absent key means "no frame claim",
+    // which is what keeps a goal-line/net-attested row (`authority: frame` from
+    // `goalCrossed`/`ballOutcome`, no dive citation) from being read as uncited.
+    ...(input.corroborationSource === "frame_attestation"
+      ? { frameRefCount: input.frameRefCount ?? 0 }
+      : {}),
     // Only spread when a transition was actually credited: a row that carries no
     // measured delta keeps the legacy payload shape byte-identical.
     ...(input.transitionKey ? { transitionKey: input.transitionKey } : {}),
