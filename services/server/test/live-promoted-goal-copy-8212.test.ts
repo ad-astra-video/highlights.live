@@ -266,6 +266,8 @@ describe("deferred-lane resolution attestation (ADAAAA-8212)", () => {
       ballOutcome: null,
       corroborated: false,
       goalConfirmed: null,
+      // ADAAAA-8728 (R7): the resolving delta IS a measured scoreboard authority.
+      authority: "scoreboard",
       scoreReads: 14,
       preSamples: 4,
       postSamples: 2,

@@ -122,8 +122,17 @@ describe("liveGoalHasMeasuredEvidence (ADAAAA-7996)", () => {
     expect(liveGoalHasMeasuredEvidence({ scoreBoardChanged: true })).toBe(true);
     expect(liveGoalHasMeasuredEvidence({ goalCrossed: true })).toBe(true);
     expect(liveGoalHasMeasuredEvidence({ ballOutcome: "goal" })).toBe(true);
-    expect(liveGoalHasMeasuredEvidence({ corroborated: true })).toBe(true);
-    expect(liveGoalHasMeasuredEvidence({ goalConfirmed: "confirmed_goal" })).toBe(true);
+    // ADAAAA-8728 (R1/R3): corroboration counts only with a NAMED measured
+    // source — a bare flag (the ASR-only dive) is a cue, not an authority.
+    expect(liveGoalHasMeasuredEvidence({ corroborated: true })).toBe(false);
+    expect(liveGoalHasMeasuredEvidence({ corroborated: true, corroborationSource: "audio_text" })).toBe(false);
+    expect(liveGoalHasMeasuredEvidence({ corroborated: true, corroborationSource: "scoreboard" })).toBe(true);
+    expect(
+      liveGoalHasMeasuredEvidence({ corroborated: true, corroborationSource: "frame_attestation", frameRefCount: 1 })
+    ).toBe(true);
+    expect(
+      liveGoalHasMeasuredEvidence({ goalConfirmed: "confirmed_goal", corroborationSource: "frame_attestation", frameRefCount: 1 })
+    ).toBe(true);
   });
 
   it("refuses a model-only read (the 289.5 s false goal)", () => {

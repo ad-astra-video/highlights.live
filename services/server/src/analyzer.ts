@@ -72,7 +72,7 @@ import { liveDecideAdmission } from "./live-decide-admission";
 // reaction carries a goal cue but no scoreboard change is surfaced as a
 // PROVISIONAL goal on the same row (still `big_play`, never postable), and the
 // deferred re-attestation clears the marker when the transition is measured.
-import { deriveProvisionalGoal, provisionalGoalReasonSuffix, type ProvisionalGoal } from "./live-provisional-goal";
+import { deriveProvisionalGoal, asrCarriesGoalCall, provisionalGoalReasonSuffix, type ProvisionalGoal } from "./live-provisional-goal";
 import {
   LIVE_FRAME_REREAD_MAX_FRAMES,
   LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN,
@@ -86,8 +86,13 @@ import {
   ConfirmDiveBudget,
   LIVE_CONFIRM_PENDING_RING,
   confirmDiveKey,
+  corroborationAuthorityOf,
+  framesReadOpenPlay,
+  recapWindowRefusal,
   rowMeasuredScoreTransition,
   type ConfirmDiveAdmissionSnapshot,
+  type ConfirmHoldReason,
+  type GoalAuthority,
   type PendingConfirmDive,
 } from "./live-confirm-async";
 import type { TriggerFamilyLatency } from "./observe-loop";
@@ -845,6 +850,14 @@ export function liveGoalHasMeasuredEvidence(input: {
   ballOutcome?: string | null;
   corroborated?: boolean;
   goalConfirmed?: string | null;
+  /** ADAAAA-8728 (R1/R2): WHICH corroboration signal fired. Only a MEASURED
+   * source can attest — `scoreboard` (a measured transition) or
+   * `frame_attestation` (frames citing the goal apparatus). `audio_text` is a
+   * cue, never an authority; an absent source names no authority either. */
+  corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
+  /** ADAAAA-8728 (R3): for a `frame_attestation`, how many frames inside the
+   * judged window it cites. Zero = a text opinion, not an attestation. */
+  frameRefCount?: number;
   /** ADAAAA-8140: the measured delta behind the claim. An equal / backward pair
    * is refused even when the claim is true. */
   scoreBoardDelta?: ScoreboardDeltaEvidence | null;
@@ -858,8 +871,17 @@ export function liveGoalHasMeasuredEvidence(input: {
   if (input.scoreBoardChanged === true && scoreChangeAttests(input.scoreBoardDelta, input.scoreReads)) return true;
   if (input.goalCrossed === true) return true;
   if (typeof input.ballOutcome === "string" && /^goal$/i.test(input.ballOutcome.trim())) return true;
-  if (input.corroborated === true) return true;
-  if ((input.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal") return true;
+  // ADAAAA-8728 (R1/R2/R3): corroboration attests only when it names a MEASURED
+  // authority. `corroborated === true` used to count on its own, so a dive that
+  // only HEARD the announcer kept a mid-field window in the scoring lane.
+  const src = input.corroborationSource ?? null;
+  const frameCited = src === "frame_attestation" && (input.frameRefCount ?? 0) >= 1;
+  if (input.corroborated === true && (src === "scoreboard" || frameCited)) return true;
+  // The dive's own `confirmed_goal` is the same claim, so it needs the same
+  // authority: a measured scoreboard, or a frame attestation that cites frames.
+  if ((input.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal") {
+    if (src === "scoreboard" || frameCited) return true;
+  }
   return false;
 }
 
@@ -895,6 +917,24 @@ export function liveUnattestedGoalRefusal(used: LiveGoalAttestationUsed): string
   const post = used.postSamples ?? 0;
   const pre = used.preSamples ?? 0;
   const need = used.need ?? SCOREBOARD_MIN_CONSISTENT_READS;
+  // ADAAAA-8728 (R1/R4/R6): the AUTHORITY refusals come first. The branches
+  // below describe a score span that was read and did not attest; these describe
+  // a window whose evidence could not be an authority at all.
+  if (used.refusalReason === "recap_window_open_play") {
+    return (
+      "the window's frames read as open/mid-field play (no ball in the net and no ball across the line " +
+      "between the posts), so this is a recap of an earlier goal, not a goal"
+    );
+  }
+  if (used.refusalReason === "text_only_corroboration") {
+    return "the corroboration was commentary text (ASR) alone — a cue, never a goal authority";
+  }
+  if (used.refusalReason === "frame_attestation_uncited") {
+    return "the frame attestation cited no frame inside the judged window, so it is a text opinion, not a measurement";
+  }
+  if (used.refusalReason === "unnamed_corroboration") {
+    return "the corroboration named no measured authority (no scoreboard, no cited frame)";
+  }
   // ADAAAA-8610: the accept lane measured a legible transition and REFUSED it
   // because it lands below a state the run already read. Name that, not the
   // generic "already credited" sentence — this window's transition was never
@@ -2042,6 +2082,17 @@ export interface LiveGoalAttestationUsed {
    * Disclosed on the demoted row so the copy names the real refusal; absent when
    * nothing was refused. */
   scoreRewindRefusal?: string;
+  /** ADAAAA-8728 (R7): the MEASURED authority this row used (`scoreboard` /
+   *  `frame`) or `none`. A `GOAL` requires `scoreboard`/`frame`; every demoted
+   *  row names `none`, so a delivered GOAL with no authority is countable from
+   *  the stored row alone. OPTIONAL only because rows persisted before this
+   *  contract carry no field at all — the accept gate refuses an absent value
+   *  (fail-closed), so legacy rows can never re-enter the scoring lane. */
+  authority?: GoalAuthority;
+  /** ADAAAA-8728 (R7): why the GOAL was refused on a demoted row (text-only
+   *  corroboration, an uncited frame claim, a recap window, …). Absent on rows
+   *  that were not refused. */
+  refusalReason?: ConfirmHoldReason;
 }
 
 /**
@@ -2069,6 +2120,14 @@ export function liveGoalAttestationUsed(input: {
   /** ADAAAA-8610: the accept lane refused this window's measured transition as a
    * rewind (POST below the run's read high-water). */
   scoreRewindRefusal?: string | null;
+  /** ADAAAA-8728 (R1/R2): which corroboration signal fired, so the row can name
+   * the authority it used (or `none` for commentary text). */
+  corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
+  /** ADAAAA-8728 (R3): cited in-window frames on a frame attestation (0 = text
+   * opinion, so the authority stays `none`). */
+  frameRefCount?: number;
+  /** ADAAAA-8728 (R7): why the GOAL was refused (set by the demotion seam). */
+  refusalReason?: ConfirmHoldReason | null;
 }): LiveGoalAttestationUsed {
   // ADAAAA-8663: the pre/post pair rides ONLY the credited transition the key
   // already names — a mismatch (different instant/step than the claimed key)
@@ -2085,12 +2144,27 @@ export function liveGoalAttestationUsed(input: {
           post: [creditedDelta.post[0], creditedDelta.post[1]] as [number, number],
         }
       : undefined;
+  const authority: GoalAuthority =
+    input.transitionKey ||
+    (input.attribution.scoreBoardChanged === true &&
+      scoreChangeAttests(input.attribution.scoreBoardDelta, input.scoreReads))
+      ? "scoreboard"
+      : corroborationAuthorityOf({
+          corroborationSource: input.corroborationSource,
+          corroborated: input.corroborated,
+          frameRefCount: input.frameRefCount,
+          goalCrossed: input.attribution.goalCrossed,
+          ballOutcome: input.attribution.ballOutcome,
+        });
   return {
     scoreBoardChanged: input.attribution.scoreBoardChanged === true,
     goalCrossed: input.attribution.goalCrossed === true,
     ballOutcome: input.attribution.ballOutcome ?? null,
     corroborated: input.corroborated === true,
     goalConfirmed: input.goalConfirmed ?? null,
+    // ADAAAA-8728 (R7): every row names the authority it used/refused.
+    authority,
+    ...(input.refusalReason ? { refusalReason: input.refusalReason } : {}),
     // Only spread when a transition was actually credited: a row that carries no
     // measured delta keeps the legacy payload shape byte-identical.
     ...(input.transitionKey ? { transitionKey: input.transitionKey } : {}),
@@ -2242,7 +2316,11 @@ export function goalHasIndependentTransitionEvidence(input: {
   confirmEvidenceScoreboardChanged?: boolean | null;
 }): boolean {
   if (input.corroborationSource === "scoreboard") return true;
-  if (input.corroborationSource === "audio_text") return true;
+  // ADAAAA-8728 (R1/R6): a goal CALL in the commentary is a cue, not a measured
+  // transition. It used to open a NEW scoring event on its own, so an
+  // announcer's recap of the previous goal skipped the repeat-goal downgrade and
+  // minted a second GOAL. Only a measured delta (or a credited scoreboard read)
+  // may open a new event; text never does.
   if (input.scoreboardDeltaLegible === true) return true;
   // ADAAAA-7938: the Stage-2 dive's own `scoreboardChanged` read is NOT
   // independent transition evidence. It is model prose, and a celebration
@@ -7222,7 +7300,7 @@ export async function acceptVideoDecision(
   // attestation strength: a row that measured the goal is never deleted as a
   // duplicate of a celebration. Pure function — the same object the demotion
   // gate and the stored row read, moved up (no behaviour change on its own).
-  const attestationUsed = liveGoalAttestationUsed({
+  let attestationUsed = liveGoalAttestationUsed({
     attribution: {
       scoreBoardChanged: candidate.scoreBoardChanged,
       goalCrossed: candidate.goalCrossed,
@@ -7242,6 +7320,10 @@ export async function acceptVideoDecision(
     // ADAAAA-8610: a refused rewind is named on the row, so a grader can tell
     // "no measurement" apart from "measured and refused".
     scoreRewindRefusal: candidate.scoreRewindRefusal,
+    // ADAAAA-8728 (R1/R2/R3): the dive's corroboration source and the frames its
+    // record cites, so the row's authority is derivable at accept time.
+    corroborationSource: confirm?.corroborationSource ?? null,
+    frameRefCount: confirm?.analysis?.request?.frames?.length ?? 0,
   });
   // ADAAAA-8442: the SAME predicate the live scoring-lane gate applies
   // (`liveGoalHasMeasuredEvidence`), so "attested enough to win the burst owner"
@@ -7252,6 +7334,10 @@ export async function acceptVideoDecision(
     ballOutcome: attestationUsed.ballOutcome,
     corroborated: attestationUsed.corroborated,
     goalConfirmed: attestationUsed.goalConfirmed,
+    // ADAAAA-8728 (R1/R3): only a NAMED measured source attests; an uncited
+    // frame attestation and commentary text name no authority.
+    corroborationSource: confirm?.corroborationSource ?? null,
+    frameRefCount: confirm?.analysis?.request?.frames?.length ?? 0,
     // ADAAAA-8140: the score channel must agree with the measured span — a
     // `1-1 -> 1-1` no-op or a `2-2 -> 1-1` backward read attests nothing.
     scoreBoardDelta: candidate.scoreBoardDelta,
@@ -7363,9 +7449,45 @@ export async function acceptVideoDecision(
   // every goal claim in the row's own sentence and title: on leg 5c09695c a
   // scoreboard-attested GOAL stored `Ball shoots on the left.` and 0/3 cards
   // carried model copy. A GOAL the gate itself certified is corroborated.
-  const laneOneAttested =
-    isGoalAccept && !!cfg.liveObserveLoop && cfg.decideWindowN === undefined && measuredGoalAttested;
-  if (isGoalAccept && cfg.liveObserveLoop && cfg.decideWindowN === undefined && !laneOneAttested) {
+  const liveScoringLaneGate = isGoalAccept && !!cfg.liveObserveLoop && cfg.decideWindowN === undefined;
+  // ADAAAA-8728 (R6): the RECAP discriminator. A window whose own frames read as
+  // open/mid-field play is a hard refuse for a GOAL even when the ASR carries a
+  // goal call, the scoreboard flips inside the window, or the dive answers
+  // `confirmed_goal` — the frames are the decider. Reads the evidence the window
+  // already paid for (no call, no GPU).
+  const recapRefused =
+    liveScoringLaneGate &&
+    recapWindowRefusal({
+      frameReads: {
+        ballInNet: confirm?.evidence?.ballInNet ?? decision.verdict?.criteria?.ballInNet ?? null,
+        ballTrajectoryCrossedLine:
+          confirm?.evidence?.ballTrajectoryCrossedLine ??
+          decision.verdict?.criteria?.ballCrossedLineBetweenPosts ??
+          null,
+      },
+      asrGoalCall: asrCarriesGoalCall(decision.analysis?.asr?.transcript),
+      scoreBoardChanged: attestationUsed.scoreBoardChanged,
+      corroborated: attestationUsed.corroborated,
+      corroborationSource: confirm?.corroborationSource ?? null,
+      diveConfirms: confirm?.goalConfirmed === "confirmed_goal",
+    });
+  // ADAAAA-8728 (R7): `eventType: GOAL` requires a NAMED authority. Strict
+  // positive test: `none` and an absent field (legacy row) both refuse.
+  const authorityAttested = attestationUsed.authority === "scoreboard" || attestationUsed.authority === "frame";
+  const laneOneAttested = liveScoringLaneGate && measuredGoalAttested && authorityAttested && !recapRefused;
+  if (liveScoringLaneGate && !laneOneAttested) {
+    // ADAAAA-8728 (R7): name WHY on the row — the authority it lacked and the
+    // concrete refusal, not a generic "no attestation".
+    const refusalReason: ConfirmHoldReason = recapRefused
+      ? "recap_window_open_play"
+      : attestationUsed.corroborated && confirm?.corroborationSource === "audio_text"
+        ? "text_only_corroboration"
+        : attestationUsed.corroborated && confirm?.corroborationSource === "frame_attestation"
+          ? "frame_attestation_uncited"
+          : attestationUsed.corroborated
+            ? "unnamed_corroboration"
+            : "no_measured_authority";
+    attestationUsed = { ...attestationUsed, authority: "none", refusalReason };
     console.error(
       `[live-goal-gate:${cfg.jobId}] downgraded unattested GOAL accept @${candidate.timestamp}s ` +
         `(trigger ${trigger.kind}) to a celebration: ${liveUnattestedGoalRefusal(attestationUsed)} ` +
@@ -9479,6 +9601,8 @@ export function attestationUsedForDeferredResolution(
     ballOutcome: null,
     corroborated: false,
     goalConfirmed: null,
+    // ADAAAA-8728 (R7): the resolving delta IS a measured scoreboard authority.
+    authority: "scoreboard",
     // The resolving delta's own counts (already >= `need` per side on every
     // legible read); the entry's pooled count only widens the disclosure.
     scoreReads: Math.max(upgrade.scoreReads?.scoreReads ?? 0, d.preSamples + d.postSamples),

@@ -120,11 +120,16 @@ describe("ADAAAA-7865 dedup fires on the accept path (ADAAAA-7938 Spec B)", () =
     expect(hl[1].dedupeReason).toBe(`goal_celebration_duplicate:${hl[0].id}`);
   });
 
-  it("keeps a goal-call-corroborated accept as a second scoring play", async () => {
+  it("downgrades a goal-call-corroborated accept to a celebration (ADAAAA-8728 R1)", async () => {
+    // Pre-fix this stayed a second `scoring_play` because `audio_text` counted as
+    // independent transition evidence — which is exactly how an announcer's recap
+    // minted a GOAL. The clip is still delivered (a celebration), never a second
+    // scoring event: the audio is a cue, not an authority.
     const hl = await accept(60, {}, confirmDecision({ corroborationSource: "audio_text" }));
     expect(hl.length).toBe(2);
-    expect(hl[1].outcome).toBe("scoring_play");
-    expect(hl[1].dedupeReason).toBeUndefined();
+    expect(hl[1].outcome).toBe("big_play");
+    expect(hl[1].eventType).toBe("BIG_PLAY");
+    expect(hl[1].dedupeReason).toBeTruthy();
   });
 
   it("does not touch a GOAL accept outside the 60 s reach (recall guard)", async () => {

@@ -155,6 +155,9 @@ describe("ADAAAA-8085 celebration lane delivers one row per delivered goal", () 
       ballOutcome: null,
       corroborated: false,
       goalConfirmed: null,
+      // ADAAAA-8728 (R7): the demoted row names the authority it did not have.
+      authority: "none",
+      refusalReason: "no_measured_authority",
     });
     expect(row.reason ?? "").toContain(LIVE_UNATTESTED_GOAL_NOTE.slice(0, 40));
     // The second window is recorded as a suppressed candidate, exactly like the

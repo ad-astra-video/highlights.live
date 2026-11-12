@@ -29,6 +29,9 @@ const meta = {
   diveAt: "2026-11-10T02:35:00.000Z",
   diveLatencyMs: 42_000,
   contextDegraded: ["motion_trajectories", "optical_flow", "audio_clip", "audio_levels"] as DegradedSignal[],
+  // ADAAAA-8728 (R3): the dead-lane fallback promotes only on a frame
+  // attestation that CITES an in-window frame — one persisted JPEG the dive read.
+  frameRefs: [{ seq: 2336, ts: 233.6 }],
 };
 
 /** The exact disclosure job 50b7aed6 stored on every delivered row. */
@@ -145,7 +148,7 @@ describe("confirmDiveAdoption — a dive-confirmed goal over a DEAD score lane",
       held: true,
       holdReason: "score_lane_read_no_transition",
     });
-    expect(a.reason).toMatch(/no measured score transition/i);
+    expect(a.reason).toMatch(/score_lane_read_no_transition|no measured score transition/i);
   });
 
   it("keeps the 8239 hold when the row discloses no read counts", () => {
