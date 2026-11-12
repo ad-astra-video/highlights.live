@@ -77,22 +77,22 @@
    "cell": "s0.08_d2",
    "changeSensitivity": 0.08,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.000799,
+   "eventToCandidateCpuP95S": 0.000976,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d2.json",
    "flickersSuppressed": 20,
    "forcedRearms": 80,
    "fp": 75,
    "fpRate": 0.9146,
-   "frameCostP95Ms": 0.386,
+   "frameCostP95Ms": 0.479,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 2,
-     "max": 0.001041,
+     "max": 0.003957,
      "n": 1351,
-     "p50": 0.000361,
-     "p95": 0.000386
+     "p50": 0.00045,
+     "p95": 0.000479
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -101,17 +101,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 2,
-     "max": 0.000849,
+     "max": 0.004794,
      "n": 85,
-     "p50": 0.000752,
-     "p95": 0.000799
+     "p50": 0.000925,
+     "p95": 0.000976
     },
     "eventToCandidateWallS": {
      "dwellFrames": 2,
-     "max": 1.000475,
+     "max": 1.000837,
      "n": 85,
-     "p50": 1.000386,
-     "p95": 1.000414
+     "p50": 1.000475,
+     "p95": 1.000503
     }
    },
    "livePath": true,
@@ -122,7 +122,7 @@
    "outsideWindow": 3,
    "recall": 0.3333,
    "recalled": 5,
-   "runWallS": 0.492,
+   "runWallS": 0.603,
    "silentWindows": 1
   },
   {
@@ -139,22 +139,22 @@
    "cell": "s0.08_d3",
    "changeSensitivity": 0.08,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.001121,
+   "eventToCandidateCpuP95S": 0.001311,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d3.json",
    "flickersSuppressed": 39,
    "forcedRearms": 75,
    "fp": 78,
    "fpRate": 0.9398,
-   "frameCostP95Ms": 0.368,
+   "frameCostP95Ms": 0.436,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 3,
-     "max": 0.000411,
+     "max": 0.000482,
      "n": 1351,
-     "p50": 0.00032,
-     "p95": 0.000368
+     "p50": 0.000399,
+     "p95": 0.000436
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -163,17 +163,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 3,
-     "max": 0.001169,
+     "max": 0.001347,
      "n": 87,
-     "p50": 0.001001,
-     "p95": 0.001121
+     "p50": 0.001212,
+     "p95": 0.001311
     },
     "eventToCandidateWallS": {
      "dwellFrames": 3,
-     "max": 2.000399,
+     "max": 2.00047,
      "n": 87,
-     "p50": 2.000348,
-     "p95": 2.00039
+     "p50": 2.00042,
+     "p95": 2.000461
     }
    },
    "livePath": true,
@@ -184,7 +184,7 @@
    "outsideWindow": 4,
    "recall": 0.4,
    "recalled": 6,
-   "runWallS": 0.444,
+   "runWallS": 0.542,
    "silentWindows": 0
   },
   {
@@ -201,22 +201,22 @@
    "cell": "s0.08_d4",
    "changeSensitivity": 0.08,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.001391,
+   "eventToCandidateCpuP95S": 0.001636,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d4.json",
    "flickersSuppressed": 47,
    "forcedRearms": 76,
    "fp": 66,
    "fpRate": 0.9296,
-   "frameCostP95Ms": 0.349,
+   "frameCostP95Ms": 0.412,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 4,
-     "max": 0.001236,
+     "max": 0.000471,
      "n": 1351,
-     "p50": 0.000327,
-     "p95": 0.000349
+     "p50": 0.000388,
+     "p95": 0.000412
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -225,17 +225,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 4,
-     "max": 0.001423,
+     "max": 0.001668,
      "n": 74,
-     "p50": 0.001315,
-     "p95": 0.001391
+     "p50": 0.001574,
+     "p95": 0.001636
     },
     "eventToCandidateWallS": {
      "dwellFrames": 4,
-     "max": 3.00039,
+     "max": 3.000446,
      "n": 74,
-     "p50": 3.000344,
-     "p95": 3.000374
+     "p50": 3.000411,
+     "p95": 3.000431
     }
    },
    "livePath": true,
@@ -246,7 +246,7 @@
    "outsideWindow": 3,
    "recall": 0.3333,
    "recalled": 5,
-   "runWallS": 0.44,
+   "runWallS": 0.522,
    "silentWindows": 0
   },
   {
@@ -263,22 +263,22 @@
    "cell": "s0.12_d2",
    "changeSensitivity": 0.12,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.000702,
+   "eventToCandidateCpuP95S": 0.000836,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d2.json",
    "flickersSuppressed": 43,
    "forcedRearms": 47,
    "fp": 87,
    "fpRate": 0.9062,
-   "frameCostP95Ms": 0.351,
+   "frameCostP95Ms": 0.411,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 2,
-     "max": 0.000418,
+     "max": 0.000457,
      "n": 1351,
-     "p50": 0.000317,
-     "p95": 0.000351
+     "p50": 0.000387,
+     "p95": 0.000411
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -287,17 +287,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 2,
-     "max": 0.000722,
+     "max": 0.000847,
      "n": 100,
-     "p50": 0.000672,
-     "p95": 0.000702
+     "p50": 0.000797,
+     "p95": 0.000836
     },
     "eventToCandidateWallS": {
      "dwellFrames": 2,
-     "max": 1.000371,
+     "max": 1.000446,
      "n": 100,
-     "p50": 1.000343,
-     "p95": 1.000366
+     "p50": 1.000409,
+     "p95": 1.000429
     }
    },
    "livePath": true,
@@ -308,7 +308,7 @@
    "outsideWindow": 4,
    "recall": 0.4667,
    "recalled": 7,
-   "runWallS": 0.436,
+   "runWallS": 0.522,
    "silentWindows": 1
   },
   {
@@ -325,22 +325,22 @@
    "cell": "s0.12_d3",
    "changeSensitivity": 0.12,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.00105,
+   "eventToCandidateCpuP95S": 0.001658,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d3.json",
    "flickersSuppressed": 88,
    "forcedRearms": 47,
    "fp": 61,
    "fpRate": 0.8971,
-   "frameCostP95Ms": 0.349,
+   "frameCostP95Ms": 0.43,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 3,
-     "max": 0.000376,
+     "max": 0.001633,
      "n": 1351,
-     "p50": 0.000327,
-     "p95": 0.000349
+     "p50": 0.000388,
+     "p95": 0.00043
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -349,17 +349,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 3,
-     "max": 0.001079,
+     "max": 0.002172,
      "n": 73,
-     "p50": 0.001,
-     "p95": 0.00105
+     "p50": 0.001189,
+     "p95": 0.001658
     },
     "eventToCandidateWallS": {
      "dwellFrames": 3,
-     "max": 2.000373,
+     "max": 2.000758,
      "n": 73,
-     "p50": 2.000343,
-     "p95": 2.000367
+     "p50": 2.00041,
+     "p95": 2.000469
     }
    },
    "livePath": true,
@@ -370,7 +370,7 @@
    "outsideWindow": 5,
    "recall": 0.4,
    "recalled": 6,
-   "runWallS": 0.439,
+   "runWallS": 0.542,
    "silentWindows": 3
   },
   {
@@ -387,22 +387,22 @@
    "cell": "s0.12_d4",
    "changeSensitivity": 0.12,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.001478,
+   "eventToCandidateCpuP95S": 0.001621,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d4.json",
    "flickersSuppressed": 115,
    "forcedRearms": 44,
    "fp": 60,
    "fpRate": 0.9524,
-   "frameCostP95Ms": 0.367,
+   "frameCostP95Ms": 0.412,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 4,
-     "max": 0.003031,
+     "max": 0.00044,
      "n": 1351,
-     "p50": 0.000333,
-     "p95": 0.000367
+     "p50": 0.000388,
+     "p95": 0.000412
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -411,17 +411,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 4,
-     "max": 0.004673,
+     "max": 0.001635,
      "n": 68,
-     "p50": 0.001364,
-     "p95": 0.001478
+     "p50": 0.001574,
+     "p95": 0.001621
     },
     "eventToCandidateWallS": {
      "dwellFrames": 4,
-     "max": 3.001012,
+     "max": 3.000436,
      "n": 68,
-     "p50": 3.000358,
-     "p95": 3.000392
+     "p50": 3.00041,
+     "p95": 3.000431
     }
    },
    "livePath": true,
@@ -432,7 +432,7 @@
    "outsideWindow": 5,
    "recall": 0.1333,
    "recalled": 2,
-   "runWallS": 0.457,
+   "runWallS": 0.522,
    "silentWindows": 2
   },
   {
@@ -449,22 +449,22 @@
    "cell": "s0.18_d2",
    "changeSensitivity": 0.18,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.000758,
+   "eventToCandidateCpuP95S": 0.000898,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d2.json",
    "flickersSuppressed": 48,
    "forcedRearms": 24,
    "fp": 52,
    "fpRate": 1.0,
-   "frameCostP95Ms": 0.373,
+   "frameCostP95Ms": 0.427,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 2,
-     "max": 0.000505,
+     "max": 0.002423,
      "n": 1351,
-     "p50": 0.000352,
-     "p95": 0.000373
+     "p50": 0.000389,
+     "p95": 0.000428
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -473,17 +473,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 2,
-     "max": 0.000765,
+     "max": 0.001095,
      "n": 56,
-     "p50": 0.000673,
-     "p95": 0.000758
+     "p50": 0.000827,
+     "p95": 0.000898
     },
     "eventToCandidateWallS": {
      "dwellFrames": 2,
-     "max": 1.0004,
+     "max": 1.000607,
      "n": 56,
-     "p50": 1.000344,
-     "p95": 1.000389
+     "p50": 1.000422,
+     "p95": 1.000473
     }
    },
    "livePath": true,
@@ -494,7 +494,7 @@
    "outsideWindow": 4,
    "recall": 0.0,
    "recalled": 0,
-   "runWallS": 0.465,
+   "runWallS": 0.532,
    "silentWindows": 7
   },
   {
@@ -511,22 +511,22 @@
    "cell": "s0.18_d3",
    "changeSensitivity": 0.18,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.001037,
+   "eventToCandidateCpuP95S": 0.001295,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d3.json",
    "flickersSuppressed": 60,
    "forcedRearms": 24,
    "fp": 37,
    "fpRate": 0.9487,
-   "frameCostP95Ms": 0.343,
+   "frameCostP95Ms": 0.433,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 3,
-     "max": 0.000433,
+     "max": 0.000608,
      "n": 1351,
-     "p50": 0.000324,
-     "p95": 0.000343
+     "p50": 0.000413,
+     "p95": 0.000433
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -535,17 +535,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 3,
-     "max": 0.00105,
+     "max": 0.001315,
      "n": 41,
-     "p50": 0.000998,
-     "p95": 0.001037
+     "p50": 0.001213,
+     "p95": 0.001295
     },
     "eventToCandidateWallS": {
      "dwellFrames": 3,
-     "max": 2.000371,
+     "max": 2.000478,
      "n": 41,
-     "p50": 2.000344,
-     "p95": 2.00037
+     "p50": 2.000419,
+     "p95": 2.000464
     }
    },
    "livePath": true,
@@ -556,7 +556,7 @@
    "outsideWindow": 2,
    "recall": 0.1333,
    "recalled": 2,
-   "runWallS": 0.436,
+   "runWallS": 0.552,
    "silentWindows": 8
   },
   {
@@ -573,22 +573,22 @@
    "cell": "s0.18_d4",
    "changeSensitivity": 0.18,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.001381,
+   "eventToCandidateCpuP95S": 0.001627,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d4.json",
    "flickersSuppressed": 76,
    "forcedRearms": 24,
    "fp": 29,
    "fpRate": 1.0,
-   "frameCostP95Ms": 0.345,
+   "frameCostP95Ms": 0.424,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 4,
-     "max": 0.000416,
+     "max": 0.000755,
      "n": 1351,
-     "p50": 0.000327,
-     "p95": 0.000346
+     "p50": 0.000388,
+     "p95": 0.000424
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -597,17 +597,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 4,
-     "max": 0.001396,
+     "max": 0.00164,
      "n": 31,
-     "p50": 0.00135,
-     "p95": 0.001381
+     "p50": 0.001586,
+     "p95": 0.001627
     },
     "eventToCandidateWallS": {
      "dwellFrames": 4,
-     "max": 3.000364,
+     "max": 3.000456,
      "n": 31,
-     "p50": 3.000352,
-     "p95": 3.000364
+     "p50": 3.000414,
+     "p95": 3.000431
     }
    },
    "livePath": true,
@@ -618,7 +618,7 @@
    "outsideWindow": 2,
    "recall": 0.0,
    "recalled": 0,
-   "runWallS": 0.439,
+   "runWallS": 0.533,
    "silentWindows": 9
   },
   {
@@ -635,22 +635,22 @@
    "cell": "s0.25_d2",
    "changeSensitivity": 0.25,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.00077,
+   "eventToCandidateCpuP95S": 0.00092,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d2.json",
    "flickersSuppressed": 19,
    "forcedRearms": 13,
    "fp": 23,
    "fpRate": 0.92,
-   "frameCostP95Ms": 0.369,
+   "frameCostP95Ms": 0.42,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 2,
-     "max": 0.002499,
+     "max": 0.002394,
      "n": 1351,
-     "p50": 0.000338,
-     "p95": 0.000369
+     "p50": 0.000387,
+     "p95": 0.00042
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -659,17 +659,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 2,
-     "max": 0.000803,
+     "max": 0.000947,
      "n": 27,
-     "p50": 0.000731,
-     "p95": 0.00077
+     "p50": 0.000815,
+     "p95": 0.00092
     },
     "eventToCandidateWallS": {
      "dwellFrames": 2,
-     "max": 1.00043,
+     "max": 1.000493,
      "n": 27,
-     "p50": 1.000378,
-     "p95": 1.000403
+     "p50": 1.000419,
+     "p95": 1.000465
     }
    },
    "livePath": true,
@@ -680,7 +680,7 @@
    "outsideWindow": 2,
    "recall": 0.1333,
    "recalled": 2,
-   "runWallS": 0.461,
+   "runWallS": 0.524,
    "silentWindows": 11
   },
   {
@@ -697,22 +697,22 @@
    "cell": "s0.25_d3",
    "changeSensitivity": 0.25,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.001081,
+   "eventToCandidateCpuP95S": 0.001301,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d3.json",
    "flickersSuppressed": 27,
    "forcedRearms": 12,
    "fp": 18,
    "fpRate": 0.9474,
-   "frameCostP95Ms": 0.366,
+   "frameCostP95Ms": 0.428,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 3,
-     "max": 0.000394,
+     "max": 0.000481,
      "n": 1351,
-     "p50": 0.000335,
-     "p95": 0.000366
+     "p50": 0.000396,
+     "p95": 0.000428
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -721,17 +721,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 3,
-     "max": 0.001108,
+     "max": 0.001303,
      "n": 21,
-     "p50": 0.001005,
-     "p95": 0.001081
+     "p50": 0.001212,
+     "p95": 0.001301
     },
     "eventToCandidateWallS": {
      "dwellFrames": 3,
-     "max": 2.000382,
+     "max": 2.000463,
      "n": 21,
-     "p50": 2.000347,
-     "p95": 2.000381
+     "p50": 2.000424,
+     "p95": 2.000457
     }
    },
    "livePath": true,
@@ -742,7 +742,7 @@
    "outsideWindow": 2,
    "recall": 0.0667,
    "recalled": 1,
-   "runWallS": 0.45,
+   "runWallS": 0.542,
    "silentWindows": 11
   },
   {
@@ -759,22 +759,22 @@
    "cell": "s0.25_d4",
    "changeSensitivity": 0.25,
    "clears": false,
-   "eventToCandidateCpuP95S": 0.001385,
+   "eventToCandidateCpuP95S": 0.001613,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d4.json",
    "flickersSuppressed": 27,
    "forcedRearms": 12,
    "fp": 18,
    "fpRate": 0.9474,
-   "frameCostP95Ms": 0.34,
+   "frameCostP95Ms": 0.404,
    "frames": 1351,
    "latency": {
     "cpuFrameS": {
      "dwellFrames": 4,
-     "max": 0.00038,
+     "max": 0.000456,
      "n": 1351,
-     "p50": 0.000312,
-     "p95": 0.00034
+     "p50": 0.000387,
+     "p95": 0.000404
     },
     "definitions": {
      "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -783,17 +783,17 @@
     },
     "eventToCandidateCpuS": {
      "dwellFrames": 4,
-     "max": 0.001395,
+     "max": 0.001629,
      "n": 21,
-     "p50": 0.001295,
-     "p95": 0.001385
+     "p50": 0.001559,
+     "p95": 0.001613
     },
     "eventToCandidateWallS": {
      "dwellFrames": 4,
-     "max": 3.00038,
+     "max": 3.000425,
      "n": 21,
-     "p50": 3.000337,
-     "p95": 3.000366
+     "p50": 3.000409,
+     "p95": 3.000422
     }
    },
    "livePath": true,
@@ -804,7 +804,7 @@
    "outsideWindow": 2,
    "recall": 0.0667,
    "recalled": 1,
-   "runWallS": 0.431,
+   "runWallS": 0.518,
    "silentWindows": 11
   }
  ],
@@ -1569,7 +1569,76 @@
   "referenceFrames": 3,
   "sensitivity": 0.12
  },
- "latencyExport": null,
+ "latencyExport": {
+  "admissible": true,
+  "backend": "live",
+  "bars": {
+   "stageAEventToCandidateCpuP95S": {
+    "bar": 0.5,
+    "measured": true,
+    "pass": true,
+    "value": 0.000836
+   }
+  },
+  "candidates": 100,
+  "cell": {
+   "cell": 8,
+   "changeSensitivity": 0.12,
+   "maxLatchFrames": 30,
+   "minDwellFrames": 2,
+   "quietFrames": 2,
+   "referenceFrames": 3
+  },
+  "clip": {
+   "height": 240,
+   "manifestPath": "sh_onfoss_20230923_tournament.mp4",
+   "path": "/tmp/hl8744-data/clip.mp4",
+   "sha256": "3da355cc6ffc5e0fa5bbffa25c3025b165cee7bbddd3e96b8f0746a11801b264",
+   "width": 426,
+   "window": [
+    4380.0,
+    5731.0
+   ]
+  },
+  "frames": 1351,
+  "gpu": {
+   "note": "the hud-event reader is GPU-free (WP1); the pass occupies the box but spends no GPU compute, so GPU-minutes are 0",
+   "used": false
+  },
+  "harness": "measure_hud_recall",
+  "latency": {
+   "cpuFrameS": {
+    "dwellFrames": 2,
+    "max": 0.000457,
+    "n": 1351,
+    "p50": 0.000387,
+    "p95": 0.000411
+   },
+   "definitions": {
+    "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+    "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+    "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+   },
+   "eventToCandidateCpuS": {
+    "dwellFrames": 2,
+    "max": 0.000847,
+    "n": 100,
+    "p50": 0.000797,
+    "p95": 0.000836
+   },
+   "eventToCandidateWallS": {
+    "dwellFrames": 2,
+    "max": 1.000446,
+    "n": 100,
+    "p50": 1.000409,
+    "p95": 1.000429
+   }
+  },
+  "livePath": true,
+  "schemaVersion": 1,
+  "trigger": "hud-event",
+  "wallS": 0.522
+ },
  "manifest": "/tmp/hl8767repo/evals/supertuxkart_val/label-manifest.json",
  "manifestPinned": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
  "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",

@@ -22,8 +22,8 @@
    "coincidentBands": [
     "grand-prix-panel"
    ],
-   "eventToCandidateCpuS": 0.0010285060006935964,
-   "eventToCandidateWallS": 2.0003576770004656,
+   "eventToCandidateCpuS": 0.0013145820003046538,
+   "eventToCandidateWallS": 2.0004545350002445,
    "kind": "banner",
    "score": 0.3403,
    "t": 4392.0
@@ -31,8 +31,8 @@
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010139930000150343,
-   "eventToCandidateWallS": 2.000361720000001,
+   "eventToCandidateCpuS": 0.0012893670009361813,
+   "eventToCandidateWallS": 2.0004573030000756,
    "kind": "counter",
    "score": 0.2374,
    "t": 4636.0
@@ -42,8 +42,8 @@
    "coincidentBands": [
     "race-clock"
    ],
-   "eventToCandidateCpuS": 0.0009941119997165515,
-   "eventToCandidateWallS": 2.0003395000003366,
+   "eventToCandidateCpuS": 0.001315321999754815,
+   "eventToCandidateWallS": 2.0004782720006915,
    "kind": "banner",
    "score": 0.3299,
    "t": 4651.0
@@ -54,8 +54,8 @@
     "grand-prix-panel",
     "race-clock"
    ],
-   "eventToCandidateCpuS": 0.000968051000199921,
-   "eventToCandidateWallS": 2.000340877000781,
+   "eventToCandidateCpuS": 0.001285074000406894,
+   "eventToCandidateWallS": 2.0004550990006464,
    "kind": "banner",
    "score": 0.4667,
    "t": 4759.0
@@ -63,8 +63,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010365260004618904,
-   "eventToCandidateWallS": 2.000354482000148,
+   "eventToCandidateCpuS": 0.0012844250004491187,
+   "eventToCandidateWallS": 2.0004520780003077,
    "kind": "banner",
    "score": 0.1887,
    "t": 4855.0
@@ -72,8 +72,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010198769996350165,
-   "eventToCandidateWallS": 2.0003532509999786,
+   "eventToCandidateCpuS": 0.0012952979996043723,
+   "eventToCandidateWallS": 2.0004640590004783,
    "kind": "clock",
    "score": 0.2395,
    "t": 4955.0
@@ -81,8 +81,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009571099999448052,
-   "eventToCandidateWallS": 2.000330902999849,
+   "eventToCandidateCpuS": 0.0012685380006587366,
+   "eventToCandidateWallS": 2.000437628000327,
    "kind": "clock",
    "score": 0.2287,
    "t": 4971.0
@@ -92,8 +92,8 @@
    "coincidentBands": [
     "grand-prix-panel"
    ],
-   "eventToCandidateCpuS": 0.001033525999446283,
-   "eventToCandidateWallS": 2.000352355999894,
+   "eventToCandidateCpuS": 0.0012891369997305446,
+   "eventToCandidateWallS": 2.000450380000075,
    "kind": "banner",
    "score": 0.4113,
    "t": 5004.0
@@ -103,8 +103,8 @@
    "coincidentBands": [
     "grand-prix-panel"
    ],
-   "eventToCandidateCpuS": 0.000957629999902565,
-   "eventToCandidateWallS": 2.0003350859997227,
+   "eventToCandidateCpuS": 0.0012834319995818078,
+   "eventToCandidateWallS": 2.0004523609995886,
    "kind": "banner",
    "score": 0.5462,
    "t": 5121.0
@@ -112,8 +112,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010150469997824985,
-   "eventToCandidateWallS": 2.0003482109996185,
+   "eventToCandidateCpuS": 0.001291860999117489,
+   "eventToCandidateWallS": 2.000465074999738,
    "kind": "banner",
    "score": 0.2006,
    "t": 5203.0
@@ -121,8 +121,8 @@
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.001009571001304721,
-   "eventToCandidateWallS": 2.000352602000021,
+   "eventToCandidateCpuS": 0.001285221000216552,
+   "eventToCandidateWallS": 2.000455415000033,
    "kind": "counter",
    "score": 0.2128,
    "t": 5261.0
@@ -133,8 +133,8 @@
     "grand-prix-panel",
     "race-clock"
    ],
-   "eventToCandidateCpuS": 0.0010502260010980535,
-   "eventToCandidateWallS": 2.0003598290004447,
+   "eventToCandidateCpuS": 0.0012918740012537455,
+   "eventToCandidateWallS": 2.0004596750004566,
    "kind": "banner",
    "score": 0.3313,
    "t": 5275.0
@@ -145,8 +145,8 @@
     "grand-prix-panel",
     "race-clock"
    ],
-   "eventToCandidateCpuS": 0.0010238140002911678,
-   "eventToCandidateWallS": 2.000368390999938,
+   "eventToCandidateCpuS": 0.0011995370005024597,
+   "eventToCandidateWallS": 2.000420272000156,
    "kind": "banner",
    "score": 0.3499,
    "t": 5337.0
@@ -154,8 +154,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009631110006012022,
-   "eventToCandidateWallS": 2.0003367219997017,
+   "eventToCandidateCpuS": 0.0011825699994005845,
+   "eventToCandidateWallS": 2.0004189739993308,
    "kind": "banner",
    "score": 0.4502,
    "t": 5371.0
@@ -163,8 +163,8 @@
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010205629996562493,
-   "eventToCandidateWallS": 2.000369991000298,
+   "eventToCandidateCpuS": 0.001212767000652093,
+   "eventToCandidateWallS": 2.0004129819999434,
    "kind": "counter",
    "score": 0.2292,
    "t": 5374.0
@@ -172,8 +172,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009628480011087959,
-   "eventToCandidateWallS": 2.000333636000505,
+   "eventToCandidateCpuS": 0.0011938459992961725,
+   "eventToCandidateWallS": 2.000411587999224,
    "kind": "clock",
    "score": 0.3405,
    "t": 5390.0
@@ -181,8 +181,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009150960004262743,
-   "eventToCandidateWallS": 2.000333462000526,
+   "eventToCandidateCpuS": 0.0011603749999267166,
+   "eventToCandidateWallS": 2.000417429000663,
    "kind": "clock",
    "score": 0.2648,
    "t": 5404.0
@@ -190,8 +190,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010163799997826573,
-   "eventToCandidateWallS": 2.0003699789995153,
+   "eventToCandidateCpuS": 0.001236779000464594,
+   "eventToCandidateWallS": 2.0004255590001776,
    "kind": "banner",
    "score": 0.3978,
    "t": 5405.0
@@ -199,8 +199,8 @@
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009581690001141396,
-   "eventToCandidateWallS": 2.0003315160001875,
+   "eventToCandidateCpuS": 0.0011966029996983707,
+   "eventToCandidateWallS": 2.000412819000303,
    "kind": "counter",
    "score": 0.2307,
    "t": 5420.0
@@ -208,8 +208,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009569159992679488,
-   "eventToCandidateWallS": 2.000332339999659,
+   "eventToCandidateCpuS": 0.0012042110010952456,
+   "eventToCandidateWallS": 2.0004130470006203,
    "kind": "clock",
    "score": 0.3439,
    "t": 5434.0
@@ -217,8 +217,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010105970004588016,
-   "eventToCandidateWallS": 2.0003345370005263,
+   "eventToCandidateCpuS": 0.0011984410002696677,
+   "eventToCandidateWallS": 2.0004127909996896,
    "kind": "banner",
    "score": 0.2494,
    "t": 5439.0
@@ -226,8 +226,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010095620009451522,
-   "eventToCandidateWallS": 2.000333205000061,
+   "eventToCandidateCpuS": 0.0011919489988940768,
+   "eventToCandidateWallS": 2.0004136569996263,
    "kind": "clock",
    "score": 0.3292,
    "t": 5450.0
@@ -235,8 +235,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009970609999072622,
-   "eventToCandidateWallS": 2.000371164999706,
+   "eventToCandidateCpuS": 0.0012049360002492904,
+   "eventToCandidateWallS": 2.0004236360000505,
    "kind": "banner",
    "score": 0.2002,
    "t": 5473.0
@@ -244,8 +244,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.001006323000183329,
-   "eventToCandidateWallS": 2.000350491000063,
+   "eventToCandidateCpuS": 0.0012058029997206177,
+   "eventToCandidateWallS": 2.0004104959998585,
    "kind": "clock",
    "score": 0.4261,
    "t": 5484.0
@@ -253,8 +253,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010077150000142865,
-   "eventToCandidateWallS": 2.000360738999916,
+   "eventToCandidateCpuS": 0.0011308039993309649,
+   "eventToCandidateWallS": 2.000389107999581,
    "kind": "clock",
    "score": 0.512,
    "t": 5497.0
@@ -262,8 +262,8 @@
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009556029981467873,
-   "eventToCandidateWallS": 2.0003308239993203,
+   "eventToCandidateCpuS": 0.0012228269997649477,
+   "eventToCandidateWallS": 2.000419721999606,
    "kind": "counter",
    "score": 0.1891,
    "t": 5506.0
@@ -271,8 +271,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009904960006679175,
-   "eventToCandidateWallS": 2.0003527799999574,
+   "eventToCandidateCpuS": 0.0011243589997320669,
+   "eventToCandidateWallS": 2.0003917189997082,
    "kind": "clock",
    "score": 0.1925,
    "t": 5540.0
@@ -280,8 +280,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009616389997972874,
-   "eventToCandidateWallS": 2.0003336359995956,
+   "eventToCandidateCpuS": 0.0012279529983061366,
+   "eventToCandidateWallS": 2.000418585999796,
    "kind": "banner",
    "score": 0.5978,
    "t": 5557.0
@@ -289,8 +289,8 @@
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009935139996741782,
-   "eventToCandidateWallS": 2.000343697000062,
+   "eventToCandidateCpuS": 0.0012487529984355206,
+   "eventToCandidateWallS": 2.0004212589992676,
    "kind": "counter",
    "score": 0.534,
    "t": 5558.0
@@ -298,8 +298,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.000980022999101493,
-   "eventToCandidateWallS": 2.0003535079995345,
+   "eventToCandidateCpuS": 0.0011311490006846725,
+   "eventToCandidateWallS": 2.000412649000282,
    "kind": "banner",
    "score": 0.2246,
    "t": 5573.0
@@ -307,8 +307,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.001041168999108777,
-   "eventToCandidateWallS": 2.000334303999807,
+   "eventToCandidateCpuS": 0.0012727900002573733,
+   "eventToCandidateWallS": 2.0004586219993143,
    "kind": "clock",
    "score": 0.2314,
    "t": 5575.0
@@ -316,8 +316,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009615459994165576,
-   "eventToCandidateWallS": 2.0003336239997225,
+   "eventToCandidateCpuS": 0.0011873839985128143,
+   "eventToCandidateWallS": 2.0004107749991817,
    "kind": "banner",
    "score": 0.5819,
    "t": 5603.0
@@ -325,8 +325,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009926519996952266,
-   "eventToCandidateWallS": 2.0003440390000833,
+   "eventToCandidateCpuS": 0.0012182149994259817,
+   "eventToCandidateWallS": 2.0004188130005787,
    "kind": "clock",
    "score": 0.3845,
    "t": 5604.0
@@ -334,8 +334,8 @@
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010175209999943036,
-   "eventToCandidateWallS": 2.0003398580001885,
+   "eventToCandidateCpuS": 0.0012484409999160562,
+   "eventToCandidateWallS": 2.0004188530001557,
    "kind": "counter",
    "score": 0.484,
    "t": 5605.0
@@ -343,8 +343,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010056099999928847,
-   "eventToCandidateWallS": 2.0003489159998935,
+   "eventToCandidateCpuS": 0.0011745269994207774,
+   "eventToCandidateWallS": 2.0004123939997953,
    "kind": "clock",
    "score": 0.1854,
    "t": 5623.0
@@ -352,8 +352,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010122990006493637,
-   "eventToCandidateWallS": 2.000352387000021,
+   "eventToCandidateCpuS": 0.0012111970008845674,
+   "eventToCandidateWallS": 2.0004184250001344,
    "kind": "banner",
    "score": 0.2473,
    "t": 5630.0
@@ -361,8 +361,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009643780003898428,
-   "eventToCandidateWallS": 2.00033564900059,
+   "eventToCandidateCpuS": 0.001184519000162254,
+   "eventToCandidateWallS": 2.0004181770000287,
    "kind": "banner",
    "score": 0.5791,
    "t": 5653.0
@@ -372,8 +372,8 @@
    "coincidentBands": [
     "race-clock"
    ],
-   "eventToCandidateCpuS": 0.0009962109998014057,
-   "eventToCandidateWallS": 2.000344803999724,
+   "eventToCandidateCpuS": 0.0012181020001662546,
+   "eventToCandidateWallS": 2.0004033750001327,
    "kind": "counter",
    "score": 0.5065,
    "t": 5654.0
@@ -381,8 +381,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.000997535998976673,
-   "eventToCandidateWallS": 2.0003515669995977,
+   "eventToCandidateCpuS": 0.0011685429990393459,
+   "eventToCandidateWallS": 2.0004208059999655,
    "kind": "banner",
    "score": 0.2021,
    "t": 5669.0
@@ -390,8 +390,8 @@
   {
    "band": "centre-banner",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0010098760003529605,
-   "eventToCandidateWallS": 2.0003329060000397,
+   "eventToCandidateCpuS": 0.001180096000098274,
+   "eventToCandidateWallS": 2.0004389980003907,
    "kind": "banner",
    "score": 0.258,
    "t": 5680.0
@@ -399,8 +399,8 @@
   {
    "band": "race-clock",
    "coincidentBands": [],
-   "eventToCandidateCpuS": 0.0009556730001349933,
-   "eventToCandidateWallS": 2.000329540000166,
+   "eventToCandidateCpuS": 0.001180729999759933,
+   "eventToCandidateWallS": 2.000390071999391,
    "kind": "clock",
    "score": 0.427,
    "t": 5713.0
