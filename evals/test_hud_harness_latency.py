@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import sys
 from contextlib import redirect_stdout
 
@@ -177,6 +178,29 @@ def test_fixture_backend_is_refused_before_any_decode(tmp_path):
     assert "INADMISSIBLE" in err.getvalue()
     doc = json.loads(out_path.read_text())
     assert doc["admissible"] is False and doc["numbers"] is None
+
+
+def test_metrics_runner_cli_grades_an_export_with_no_manifest(tmp_path):
+    """The export must be readable on its own: a reviewer has the JSON, not the clip."""
+    row, _, manifest = _run(tmp_path)
+    doc = m.latency_export(row, manifest, "clip.mp4", "sha", (4380, 5731))
+    path = tmp_path / "hud_latency.json"
+    path.write_text(json.dumps(doc))
+    proc = subprocess.run(
+        [sys.executable, os.path.join(HERE, "metrics_runner.py"), "--hud-latency", str(path)],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "PASS" in proc.stdout and "event->candidate CPU p95" in proc.stdout
+    # ... and the manifest-required branch still errors when a trace run is asked for.
+    trace = tmp_path / "trace.json"
+    trace.write_text(json.dumps({"events": []}))
+    proc2 = subprocess.run(
+        [sys.executable, os.path.join(HERE, "metrics_runner.py"), "--hud-latency", str(path),
+         "--vod", str(trace), "--live", str(trace)],
+        capture_output=True, text=True,
+    )
+    assert proc2.returncode != 0 and "manifest is required" in proc2.stderr
 
 
 def test_a5_bar_and_trigger_id_are_pinned():

@@ -470,7 +470,7 @@ def load_manifest(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("manifest")
+    ap.add_argument("manifest", nargs="?")
     ap.add_argument("trace", nargs="?")
     ap.add_argument("--vod", help="VOD pass trace (paired mode)")
     ap.add_argument("--live", help="live baseline trace (paired mode)")
@@ -488,6 +488,13 @@ def main():
         rc_lat = _print_hud_latency(args.hud_latency)
         if not args.trace and not (args.vod and args.live):
             return rc_lat
+
+    # The manifest is only needed by the trace/paired modes. A latency-only grade is
+    # self-contained (the export carries the clip sha256, the window and the bar), so
+    # `--hud-latency <export>` must work on its own — that is what "the export is
+    # readable by metrics_runner" means for a reviewer without the clip (ADAAAA-8745).
+    if not args.manifest:
+        ap.error("manifest is required unless --hud-latency grades an export on its own")
 
     clips, accept, sport = load_manifest(args.manifest)
 
