@@ -9,6 +9,7 @@ import {
   SUMMARY_VOD_BAND,
   buildSummaryPrompt,
   gateSummaryDetail,
+  summaryRetryMinWords,
   type SummaryEvidence,
 } from "../src/highlight-summary.js";
 
@@ -45,9 +46,16 @@ const SERVED_44 =
   "Real Madrid takes the lead in this intense match against Barcelona. The scoreboard updates from 1-1 to 2-1 at the 0:27 mark of the clip. A player in a white kit celebrates the successful scoring play. This goal shifts the momentum during the competition.";
 
 describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
-  it("puts floorWords at targetMinWords so sub-target copy cannot serve", () => {
-    expect(SUMMARY_VOD_BAND.targetMinWords).toBe(40);
-    expect(SUMMARY_VOD_BAND.floorWords).toBe(SUMMARY_VOD_BAND.targetMinWords);
+  // ADAAAA-8803 supersedes the "floor IS the target" shape pinned here at 8791:
+  // a target that sits ON the serve floor makes every compliant draft a boundary
+  // case (job `4e5ddf8d` served its only VOD body at 41 against a 40 floor). The
+  // floor stays the serve bar at 40; the TARGET band moved to 45-55 above it, and
+  // the retry asks for the floor plus a margin.
+  it("keeps the 40-word serve floor below a 45-word target band", () => {
+    expect(SUMMARY_VOD_BAND.floorWords).toBe(40);
+    expect(SUMMARY_VOD_BAND.targetMinWords).toBe(45);
+    expect(SUMMARY_VOD_BAND.targetMinWords).toBeGreaterThan(SUMMARY_VOD_BAND.floorWords);
+    expect(summaryRetryMinWords(SUMMARY_VOD_BAND)).toBe(45);
   });
 
   it("refuses the served 36-word body as `too-few-words`", () => {
@@ -60,7 +68,7 @@ describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
     expect(decision.violations).not.toContain("ungrounded-name");
   });
 
-  it("still accepts a target-length body on the same evidence", () => {
+  it("still accepts a body above the 40-word floor on the same evidence", () => {
     const decision = gateSummaryDetail(SERVED_44, ROW_48FE);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(SERVED_44);
@@ -76,6 +84,6 @@ describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
     expect(prompt).toContain("Carry at least TWO different facts from the evidence");
     expect(prompt).toContain("Score transition: 2-1 -> 2-2");
     expect(prompt).toContain("The clock fact is the `Window:` label only");
-    expect(prompt).toContain(`at least ${SUMMARY_VOD_BAND.targetMinWords} words`);
+    expect(prompt).toContain(`aim for ${SUMMARY_VOD_BAND.targetMinWords}-${SUMMARY_VOD_BAND.targetMaxWords} words`);
   });
 });

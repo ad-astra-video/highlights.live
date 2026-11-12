@@ -71,10 +71,13 @@ describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => 
     });
     expect(result.outcome).toBe("stored");
     expect(result.calls).toBe(2);
-    // The 36-word draft is refused as non-deterministic length, so the same
-    // prompt is sampled once more and the short shape is never stored.
-    expect(f.bodies).toHaveLength(2);
-    expect(f.bodies[1]).toContain("at least 40 words");
+    // ADAAAA-8803: the retry no longer re-reads the first-pass line. It is told
+    // the measured shape of the refused draft and asks for the floor plus a
+    // margin, so a boundary draft cannot re-land under it.
+    expect(f.bodies[0]).toContain("aim for 45-55 words");
+    expect(f.bodies[1]).toContain("RETRY: the previous draft measured");
+    expect(f.bodies[1]).toContain("this copy must reach at least 45 words");
+    expect(f.bodies[1]).toContain("too-few-words");
     const stored = patches.find((p) => typeof p.patch.summary === "string");
     expect(stored?.patch.summary).toBe(LONG);
     expect(String(stored?.patch.summary).split(/\s+/).length).toBeGreaterThanOrEqual(40);
