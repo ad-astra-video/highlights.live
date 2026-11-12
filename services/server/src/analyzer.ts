@@ -10,6 +10,7 @@ import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation,
 import type { DecideKnobStamp } from "@highlights/events";
 import type { CaptionGroundingContext, ColourSignal, ColourTrace, ColourSignalDecisionReason } from "@highlights/events";
 import { decideStageRecorder, type DecideStagesSnapshot } from "./decide-stage-timings";
+import type { SupplyStallSnapshot } from "./live-supply-stall";
 import {
   attestationDetailCopy,
   captionColour,
@@ -4253,6 +4254,11 @@ export interface LiveObserveMetricsSnapshot {
    *  Deliberately EXCLUDES `throttleSkippedWindows`, which is a funded rate
    *  decision and must never be folded into the supply number. */
   supplySkippedWindows?: number;
+  /** ADAAAA-8807: the reason this share's DECIDE supply stopped, if it did — a
+   *  frozen video lane (or a dead relay) named instead of leaving the decide
+   *  cadence silently at zero for the rest of an `active` share. Absent when the
+   *  supply never stalled, so a healthy record stays byte-identical. */
+  supplyStall?: SupplyStallSnapshot;
   /** ADAAAA-8425: decide windows the runner REFUSED for capacity
    *  (`isDecideCapacityError`: the admission queue budget expired or every 503
    *  retry was exhausted). The decide produced no verdict, so the window is

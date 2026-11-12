@@ -3,6 +3,7 @@ import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
 import { resolveExportTokenSecret } from "./export-token";
 import { LIVE_OBSERVE_LAG_BUDGET_S, resolveDecideImageBudget } from "./observe-loop";
+import { LIVE_SUPPLY_STALL_S } from "./live-supply-stall";
 import { normalizeConfirmDiveCap } from "./live-confirm-async";
 
 export interface ServerConfig {
@@ -322,6 +323,12 @@ export interface ServerConfig {
    * Default 30 (the cadence + decide-E2E budget); `<= 0` disables the drop.
    * `LIVE_OBSERVE_LAG_BUDGET_S`. */
   liveObserveLagBudgetS: number;
+  /** ADAAAA-8807: seconds without a DECIDE frame after which a live share NAMES
+   *  its supply stall (`[live-stall]` line + `observeMetrics.supplyStall`)
+   *  instead of deciding nothing for the rest of an `active` window. Default 60
+   *  (covers the 30-40 s session warmup); `<= 0` disables the watch.
+   *  `LIVE_SUPPLY_STALL_S`. */
+  liveSupplyStallS: number;
   /** ADAAAA-7771: how many LIVE observe decide windows may be in flight per
    * stream. 1 = the serial pass (one decide at a time, capped at
    * `cadence / decideWall` coverage); 2-4 pipelines the decide work so the 3 s
@@ -1073,6 +1080,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // content clock falls further behind wall time than this budget, stale
     // frames/windows are dropped (counted on the job) instead of decided late.
     liveObserveLagBudgetS: Number(env.LIVE_OBSERVE_LAG_BUDGET_S ?? LIVE_OBSERVE_LAG_BUDGET_S),
+    // ADAAAA-8807: name a dead decide-supply lane instead of going silent for the
+    // rest of an `active` share. `<= 0` disables the watch (the old silence),
+    // which is the only way to reproduce the pre-change posture.
+    liveSupplyStallS: Number(env.LIVE_SUPPLY_STALL_S ?? LIVE_SUPPLY_STALL_S),
     // ADAAAA-7771: pipeline the live decide pass. K windows in flight per stream
     // (1 = serial). Default 4: at the measured ~5 s decide wall per card and
     // ~0.8 decides/s per card at 4 concurrent, depth 4 holds the 3 s cadence for
