@@ -19,14 +19,29 @@ frame is a candidate. So each band here runs a small state machine:
        ^                                                                  |
        +--------------- quiet for ``quiet_frames`` ----------------------- +
 
-- A step is ``|signature - baseline| >= change_sensitivity``.
+- A step is ``|signature - reference| >= change_sensitivity``, where ``reference``
+  is a **short rolling reference** (the mean of the last ``reference_frames``
+  observed signatures) and not a frozen latch-time frame. A frozen frame is a
+  drift accumulator: every later frame is scored against a picture the band left
+  behind seconds ago, so a moving band reads as a permanent step.
 - A step must persist ``min_dwell_frames`` consecutive frames before it is a
   transition; a shorter one is a flicker and emits nothing (the default of 3
-  suppresses the 2-frame flicker this module is tested against).
+  suppresses the 2-frame flicker this module is tested against). The reference is
+  held at its pre-step value for the length of the run, so the last frame of the
+  dwell run still measures the full step.
 - Once emitted, the band LATCHES: while the new state persists no further
-  candidate can come out of it, and the return to baseline is the re-arm, not a
+  candidate can come out of it, and the return to rest is the re-arm, not a
   second candidate. Emitting both edges would double the candidate volume for
   one event, which is the A4 failure mode, not a feature.
+- The latch release is **physical**, not an exact return to the latch-time
+  picture: the band re-arms after ``quiet_frames`` consecutive frames back below
+  sensitivity against the reference it latched with, or after ``max_latch_frames``
+  frames at the outside. On release the reference is reset to the band's *current*
+  rolling reference, so the next transition is measured from where the band
+  actually is. Requiring an exact return forever is what ADAAAA-8744 measured as
+  the park: on a 1 fps HUD the race clock's digits change every frame and the
+  banner band sits over animated gameplay, so the quiet run never accumulated and
+  14 of 15 labelled instants found the event band already latched.
 - At most ONE candidate per frame: bands that confirm on the same frame are the
   same observable event (a race start is clock-reset *and* banner at once), so
   the highest-scoring band carries the candidate and the rest are reported as
@@ -146,6 +161,19 @@ def band_change_score(
     return float(np.abs(sig - baseline).mean() / 255.0)
 
 
+def signature_change_score(
+    sig: Optional[np.ndarray], reference: Optional[np.ndarray]
+) -> Optional[float]:
+    """The same score for an already-extracted signature and reference.
+
+    The reader scores every frame against its rolling reference, so it has the
+    signature in hand already; re-extracting it per band would double the cost.
+    """
+    if sig is None or reference is None or sig.shape != reference.shape:
+        return None
+    return float(np.abs(sig - reference).mean() / 255.0)
+
+
 # --- the transition record -------------------------------------------------
 
 
@@ -165,12 +193,24 @@ class HudTransition:
 
 @dataclass
 class BandState:
-    """Per-band latch for the discrete transition detector."""
+    """Per-band latch for the discrete transition detector.
+
+    - ``recent`` — the trailing window of observed signatures; the rolling
+      reference is their mean. It advances on every readable frame, which is what
+      keeps a moving band from reading as a permanent step.
+    - ``baseline`` — the reference the step is scored against. At rest it IS the
+      rolling reference (so drift is followed); while a step run is in progress it
+      is held at its pre-step value so the whole dwell run measures the same step.
+    - ``latched`` / ``latch_frames`` — the new state, and how long it has held.
+    """
 
     baseline: Optional[np.ndarray] = None
+    recent: list = field(default_factory=list)
     changed_run: int = 0
     quiet_run: int = 0
     latched: bool = False
+    latch_frames: int = 0
+    in_run: bool = False
     pending_score: float = 0.0
     last_score: float = 0.0
 
@@ -199,14 +239,31 @@ class HudEventReader:
         self.frames_observed = 0
         self.candidates_emitted = 0
         self.flickers_suppressed = 0
+        self.forced_rearms = 0
 
     # -- internals -------------------------------------------------------
 
     def state_for(self, band_name: str) -> BandState:
         return self._states[band_name]
 
+    def _rolling_reference(self, st: BandState) -> Optional[np.ndarray]:
+        """The mean of the trailing window, excluding the frame being scored.
+
+        ``None`` until the window holds at least one older frame: the first frame
+        has nothing to be compared against and seeds the reference instead.
+        """
+        if not st.recent:
+            return None
+        return np.mean(np.stack(st.recent[-self.model.reference_frames:]), axis=0)
+
+    def _push(self, st: BandState, sig: np.ndarray) -> None:
+        st.recent.append(sig)
+        keep = max(1, int(self.model.reference_frames))
+        if len(st.recent) > keep:
+            del st.recent[:-keep]
+
     def change_scores(self, frame: Any) -> dict[str, Optional[float]]:
-        """Per-band change score against each band's CURRENT baseline.
+        """Per-band change score against each band's CURRENT reference.
 
         A diagnostic/evidence read used by the tests and the measurement passes;
         it does not mutate the latch.
@@ -221,14 +278,18 @@ class HudEventReader:
     def reset(self) -> None:
         for st in self._states.values():
             st.baseline = None
+            st.recent = []
             st.changed_run = 0
             st.quiet_run = 0
             st.latched = False
+            st.latch_frames = 0
+            st.in_run = False
             st.pending_score = 0.0
             st.last_score = 0.0
         self.frames_observed = 0
         self.candidates_emitted = 0
         self.flickers_suppressed = 0
+        self.forced_rearms = 0
 
     # -- the frame entry point -------------------------------------------
 
@@ -252,47 +313,92 @@ class HudEventReader:
             sig = band_signature(frame, band, self.model.cell)
             if sig is None:
                 continue
-            if st.baseline is None:
-                # Seed frame: this signature IS the resting state. A single
-                # sample is never a transition.
+            live = self._rolling_reference(st)
+            if live is None or live.shape != sig.shape:
+                # Seed frame (or a band whose geometry changed): this signature IS
+                # the resting state. A single sample is never a transition.
+                st.recent = [sig]
                 st.baseline = sig
                 continue
-            if sig.shape != st.baseline.shape:
+
+            # --- latched: hold the new state until one of two releases --------
+            if st.latched:
+                st.latch_frames += 1
+                score = signature_change_score(sig, st.baseline)
+                if score is not None:
+                    st.last_score = score
+                if score is not None and score < self.model.change_sensitivity:
+                    st.quiet_run += 1
+                else:
+                    st.quiet_run = 0
+                bounded = False
+                if st.quiet_run < self.model.quiet_frames:
+                    if st.latch_frames < self.model.max_latch_frames:
+                        self._push(st, sig)
+                        continue
+                    bounded = True
+                # Two physical releases:
+                #  * settled — the band came back to the pre-step state, which is
+                #    the settling edge and is NOT a candidate (A4);
+                #  * bounded — the band held some state for max_latch_frames, so
+                #    the hold has outlived any single HUD display. Re-arm against
+                #    where the band actually is; this emits nothing by itself.
+                st.latched = False
+                st.latch_frames = 0
+                st.quiet_run = 0
+                st.changed_run = 0
+                st.in_run = False
+                st.pending_score = 0.0
+                # Adopt the state the band is IN, and rebuild the rolling window
+                # from it: a window that still holds frames from before the change
+                # would read as a step against itself on the next frame.
                 st.baseline = sig
+                st.recent = []
+                if bounded:
+                    self.forced_rearms += 1
                 continue
-            score = float(np.abs(sig - st.baseline).mean() / 255.0)
+
+            # --- armed: score the step against the rolling reference ---------
+            if not st.in_run:
+                # At rest the reference follows the band (that is the drift
+                # tracking that keeps a slow HUD move from reading as a step).
+                st.baseline = live
+            score = signature_change_score(sig, st.baseline)
+            if score is None:
+                st.baseline = live
+                self._push(st, sig)
+                continue
             st.last_score = score
 
             if score >= self.model.change_sensitivity:
                 st.changed_run += 1
                 st.quiet_run = 0
                 st.pending_score = max(st.pending_score, score)
-                if not st.latched:
-                    if st.changed_run >= self.model.min_dwell_frames:
-                        st.latched = True
-                        confirmed.append((band, st.pending_score))
-                continue
-
-            # below sensitivity: quiet
-            st.quiet_run += 1
-            if st.latched:
-                if st.quiet_run >= self.model.quiet_frames:
-                    # The settling edge re-arms the band. It is NOT a candidate:
-                    # emitting it too would double the volume for one event (A4).
-                    st.latched = False
+                if not st.in_run:
+                    # Freeze the pre-step reference for the run: every frame of the
+                    # dwell run has to measure the same step, or a 4-frame dwell
+                    # could never confirm against a reference that already rolled.
+                    st.in_run = True
+                if st.changed_run >= self.model.min_dwell_frames:
+                    st.latched = True
+                    st.latch_frames = 0
                     st.changed_run = 0
+                    st.in_run = False
+                    confirmed.append((band, st.pending_score))
+                    st.pending_score = 0.0
+            else:
+                # below sensitivity: the band is at rest against its reference
+                if st.in_run:
+                    # A change that never reached the dwell bar was a flicker.
+                    self.flickers_suppressed += 1
+                    st.changed_run = 0
+                    st.in_run = False
                     st.pending_score = 0.0
                     st.baseline = sig
-                continue
-            if st.changed_run:
-                # A change that never reached the dwell bar was a flicker.
-                self.flickers_suppressed += 1
-                st.changed_run = 0
-                st.pending_score = 0.0
-            # At rest: track the resting signature so a slow HUD drift never
-            # reads as a step (that is the continuous-detector failure).
-            st.quiet_run = 0
-            st.baseline = sig
+                    st.recent = []
+                else:
+                    st.baseline = live
+            self._push(st, sig)
 
         if not confirmed:
             return []
