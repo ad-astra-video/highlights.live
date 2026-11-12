@@ -493,10 +493,20 @@ export function projectAnnouncerCaption(row: PostTitleRow, servedTitle: string):
   // prompt at read time — a scoreline is served only on a row whose stored
   // verdict is `scoring_play`. Measured: this is the ONE holdout of the Phase D
   // FAIL (row f4407757, card `GOAL · 2:38`).
-  const evidence = (row.reasonRaw ?? "").trim();
+  // ADAAAA-8830: a legacy row whose `caption`/`reason` was refused by the
+  // caption-source bar often has NO `reason_raw` — the seam omits it when the
+  // stored line IS the model's line (row `8d521507` on leg `27bd816f`). Its own
+  // stored `reason` is the same sentence, so it is the deletion lane's source
+  // here: extractive only, the marker and the citation deleted, every gate and
+  // the store-time post-condition unchanged (measured on the 10-day corpus:
+  // 92 of 500 stored rows serve evidence prose; without this they would degrade
+  // to the bare fact line while a fresh row of the same shape serves the ledger
+  // sentence — a store/served shape disagreement).
+  const evidence = (row.reasonRaw ?? "").trim() || own;
   if (evidence) {
     const fact = attestationDetailCopy(evidence, { verdict: row.outcome ?? null, eventType: row.eventType ?? null });
-    if (fact && fact !== servedTitle.trim()) return fact;
+    // Never serve the refused string back as its own "derivation".
+    if (fact && fact !== servedTitle.trim() && fact !== stored && fact !== own) return fact;
   }
   // ADAAAA-8411: the announcer line may never degrade to the headline, so a
   // postable row with no honest model copy at all (nothing stored, nothing
