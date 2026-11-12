@@ -195,7 +195,7 @@ describe("gate — the clock is what starved the row (replayed on the stored bod
     // from matchContext.teams) serves". The team is the only entity the VOD rail
     // attests on row 5f32f6f4 besides the ASR names, so it must carry the copy.
     const body =
-      "Barcelona work the ball down the left at the 0:24 mark of this clip. A low cross is cut out at the near post and cleared away. The loose ball is recycled back into the box under pressure.";
+      "Barcelona work the ball down the left at the 0:24 mark of this clip. A low cross is cut out at the near post and cleared away. The loose ball is recycled back into the box under pressure. Barcelona keep their shape through the restart.";
     const decision = gateSummaryDetail(body, ROW_5F32F6F4);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(body);
