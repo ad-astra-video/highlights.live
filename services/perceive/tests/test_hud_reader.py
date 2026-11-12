@@ -6,6 +6,9 @@ Acceptance criteria this file covers, one test each:
 2. the dwell gate suppresses a two-frame flicker;
 3. exactly ONE candidate per HUD transition (no re-fire while the new state
    persists, and a second transition after the re-arm is a second candidate);
+3b. the re-arm is physical: a moving band that never returns to its latch-time
+   picture re-arms on the ``max_latch_frames`` bound (ADAAAA-8767), and a
+   never-resting band's volume stays bounded by that window;
 4. a profile with no ``hudModel`` leaves the site inert — no crash, no fire;
 5. the env flag OFF produces zero candidates (the site is opt-in, default off);
 6. the reader's import graph does not reach ``build_stk_labels`` (A6) and has no
@@ -200,8 +203,91 @@ def test_a_quiet_hud_never_emits_and_tracks_drift():
     out = []
     for i in range(40):
         out += reader.observe(_frame(fill=30 + i), float(i))
-    assert out == []
+    assert out == []  # no candidate anywhere in the drift
     assert reader.candidates_emitted == 0
+    # ... and the score stays at rest, because the reference is the rolling
+    # window and not the seed frame. Against the frozen seed the same drift is
+    # a 40/255 step: that is the accumulator ADAAAA-8744 measured as a park.
+    band = HudBand(name="banner", rect=BANNER_RECT, kind="banner")
+    seed = band_signature(_frame(fill=30), band, 8)
+    frozen = band_change_score(_frame(fill=69), band, seed, 8)
+    assert frozen is not None and frozen > _model().change_sensitivity
+    assert reader.state_for("banner").last_score < _model().change_sensitivity
+
+
+# --- 3b. the physical re-arm (ADAAAA-8767) --------------------------------
+
+
+def _level_frame(level: int) -> np.ndarray:
+    """A frame whose clock band is a flat patch of ``level`` grayscale.
+
+    A flat band makes the change score exactly ``|level - reference| / 255``, so
+    the test can state the mechanism without fighting an 8x8 downsample: a
+    counting clock moves a little every frame and never returns to the picture it
+    was latched on, which is what the park measured.
+    """
+    frame = np.full((FRAME_H, FRAME_W, 3), 30, dtype=np.uint8)
+    x0, y0, x1, y1 = CLOCK_RECT
+    frame[y0:y1, x0:x1, :] = level
+    return frame
+
+
+def test_the_latch_releases_when_the_band_never_returns_to_its_latch_picture():
+    """The park's mechanism: a moving band under a latch re-arms on the bound.
+
+    Against the latch-time frame this band scores above sensitivity forever, so
+    the old "quiet against the latch-time baseline" rule never released it — and
+    14 of 15 labelled instants found the event band already latched.
+    """
+    model = _model(min_dwell_frames=2, max_latch_frames=8)
+    reader = HudEventReader(model, enabled=True)
+    out = []
+    out += reader.observe(_level_frame(30), 0.0)  # seed: at rest
+    out += reader.observe(_level_frame(30), 1.0)
+    # the transition into the counting state: 30/255 = 0.118 >= 0.10 for 2 frames
+    out += reader.observe(_level_frame(60), 2.0)
+    out += reader.observe(_level_frame(60), 3.0)
+    assert len(out) == 1 and out[0].kind == "clock"
+
+    # the count runs: +3/255 a frame. That is a "quiet" frame by any per-frame
+    # reading, but it never returns to the latch picture, so the old rule held
+    # the latch until the end of the stream.
+    level = 60
+    for i in range(4, 12):
+        level += 3
+        out += reader.observe(_level_frame(level), float(i))
+    assert reader.state_for("clock").latched is False, (
+        "the latch must release on the max_latch_frames bound"
+    )
+    assert reader.forced_rearms == 1
+    assert len(out) == 1, "releasing the latch manufactures no candidate"
+
+    # counting on is not an event: the rolling reference tracks it (A4)
+    for i in range(12, 20):
+        level += 3
+        out += reader.observe(_level_frame(level), float(i))
+    assert reader.candidates_emitted == 1
+
+    # a genuinely new state (the clock resets) is a second candidate
+    for i in range(20, 23):
+        out += reader.observe(_level_frame(30), float(i))
+    assert len(out) == 2, "a new transition after the bounded re-arm must emit"
+    assert reader.candidates_emitted == 2
+
+
+def test_a_band_that_never_rests_is_bounded_by_max_latch_frames():
+    """A4's structural bound: volume is bounded by the latch window, not frames."""
+    model = _model(min_dwell_frames=2, max_latch_frames=10, quiet_frames=3)
+    reader = HudEventReader(model, enabled=True)
+    frames = 120
+    emitted = 0
+    for i in range(frames):
+        # three levels cycling: every frame is a step, so the band never settles
+        emitted += len(reader.observe(_level_frame((30, 90, 150)[i % 3]), float(i)))
+    assert reader.forced_rearms >= 1
+    assert emitted <= 1 + frames // model.max_latch_frames, (
+        "a never-resting band must be bounded by the latch window, not by the frame count"
+    )
 
 
 # --- 4. no hudModel -> inert ----------------------------------------------

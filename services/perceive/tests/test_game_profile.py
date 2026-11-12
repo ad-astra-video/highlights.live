@@ -1055,6 +1055,10 @@ def test_hud_model_is_the_declared_hud_geometry_field():
     view = prof.to_dict()["hudModel"]
     assert view["changeSensitivity"] == 0.10
     assert view["minDwellFrames"] == 3
+    # the re-arm bounds serialize too, so a measurement artifact can state them
+    assert view["quietFrames"] == 2
+    assert view["referenceFrames"] == 3
+    assert view["maxLatchFrames"] == 60
     assert [b["name"] for b in view["bands"]] == ["race-clock", "event-banner"]
     # rects stay NATIVE pixels, not normalized fractions
     assert view["bands"][0]["rect"] == [20, 10, 140, 40]
@@ -1090,5 +1094,10 @@ def test_hud_geometry_is_validated_as_data():
         HudModel(bands=(HudBand("a", (0, 0, 8, 8)),), change_sensitivity=2.0)
     with pytest.raises(ValueError):
         HudModel(bands=(HudBand("a", (0, 0, 8, 8)),), min_dwell_frames=0)
+    with pytest.raises(ValueError):
+        HudModel(bands=(HudBand("a", (0, 0, 8, 8)),), reference_frames=0)
+    # the latch bound cannot be shorter than the quiet run that releases it
+    with pytest.raises(ValueError):
+        HudModel(bands=(HudBand("a", (0, 0, 8, 8)),), quiet_frames=4, max_latch_frames=3)
     with pytest.raises(ValueError):
         HudBand(name="bad", rect=(4, 4, 4, 9))

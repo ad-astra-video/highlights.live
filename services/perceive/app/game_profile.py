@@ -372,7 +372,16 @@ class HudModel:
       be a transition. At the default of 3 a two-frame flicker is suppressed by
       construction, which is the difference between a discrete detector and the
       audio gate's volume problem.
-    - ``quiet_frames`` — frames back at baseline before a latched band re-arms.
+    - ``quiet_frames`` — frames back at rest before a latched band re-arms.
+    - ``reference_frames`` — the length of the trailing window the change score is
+      measured against. The step is scored against the mean of the last
+      ``reference_frames`` signatures, not a frozen latch-time frame, so a moving
+      band cannot accumulate a permanent step. It is a window length, not a
+      threshold: it does not decide what counts as a change, only what the change
+      is measured from.
+    - ``max_latch_frames`` — the outside bound on a latch. A band that never comes
+      to rest still re-arms eventually, so one page of gameplay cannot own the
+      band for the rest of the stream.
 
     No ``hudModel`` on a profile means the type has no measured HUD geometry, so
     the ``hud-event`` site is inert (``GameProfile.__post_init__`` drops the
@@ -384,6 +393,8 @@ class HudModel:
     min_dwell_frames: int = 3
     quiet_frames: int = 2
     cell: int = 8
+    reference_frames: int = 3
+    max_latch_frames: int = 60
 
     def __post_init__(self) -> None:
         if not self.bands:
@@ -403,6 +414,12 @@ class HudModel:
             raise ValueError("quiet frames must be >= 1")
         if int(self.cell) < 2:
             raise ValueError("the signature cell grid must be >= 2")
+        if int(self.reference_frames) < 1:
+            raise ValueError("the rolling reference window must be >= 1 frame")
+        if int(self.max_latch_frames) < int(self.quiet_frames):
+            raise ValueError(
+                "the latch bound must not be shorter than the quiet run that re-arms it"
+            )
 
     @property
     def band_names(self) -> Tuple[str, ...]:
@@ -418,6 +435,8 @@ class HudModel:
             "minDwellFrames": self.min_dwell_frames,
             "quietFrames": self.quiet_frames,
             "cell": self.cell,
+            "referenceFrames": self.reference_frames,
+            "maxLatchFrames": self.max_latch_frames,
         }
 
 
