@@ -28,6 +28,7 @@
 // never disagree with a rendered one.
 import {
   attestationDetailCopy,
+  captionSourceViolation,
   gateGoalClaims,
   gateAbsenceClaims,
   groundNames,
@@ -469,12 +470,20 @@ export function projectPostTitle(
  * resort exactly as before.
  */
 export function projectAnnouncerCaption(row: PostTitleRow, servedTitle: string): string {
+  // ADAAAA-8830: the READ gate mirrors the write gate. A row stored before
+  // ADAAAA-8830 can carry the model's SCORING-LANE sentence as its `caption`
+  // and/or `reason` — the window audit marker (`at t=0.0`, `at t=-1.0s`) and the
+  // `ASR confirms …` citation are provenance, never copy (live leg `27bd816f`
+  // rows `8d521507`/`a4827973` served them verbatim). `captionSourceViolation`
+  // is the same bar `storedReasonViolations` applies at the write seam, so the
+  // two surfaces cannot disagree: such a row falls through to the row's own
+  // attested fact sentence below — never to `reason_raw` prose.
   const stored = (row.caption ?? "").trim();
-  if (stored) return stored;
+  if (stored && captionSourceViolation(stored) === "") return stored;
   const own = (row.reason ?? "").trim();
   // Never serve a caption byte-identical to the title: that is the degrade the
   // bar exists to catch, so a `reason` that repeats the title is not detail.
-  if (own && own !== servedTitle.trim()) return own;
+  if (own && own !== servedTitle.trim() && captionSourceViolation(own) === "") return own;
   // ADAAAA-8411: a row whose ONLY model sentence is a clock-bracketed
   // attestation line (`Scoreboard changes to 2-2 at t=-3.3s and ASR confirms 'il
   // gol!'`) stores no `reason` at all — the store-time post-condition refuses the
