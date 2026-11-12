@@ -429,6 +429,72 @@ export class SummaryLane {
 }
 
 /**
+ * A `{pre, post}` score pair as the transition's `from`/`to` score strings.
+ *
+ * ADAAAA-8787: reads the tuple shape the pipeline actually PERSISTS
+ * (`deferredAttestation.pre/post` on the live rail, `attestationUsed
+ * .transitionScore` on both rails) — the `scoreboardDelta {from,to}` shape is
+ * kept first for the contract's own documented path, but no persisted row ever
+ * wrote it, which is what starved the score fact. Only a legible 2x2 non-negative
+ * integer pair qualifies: anything else is absent evidence, never a guess.
+ */
+function transitionPairFromTuples(
+  pre: readonly number[] | null | undefined,
+  post: readonly number[] | null | undefined
+): { from: string; to: string } | null {
+  if (!Array.isArray(pre) || !Array.isArray(post) || pre.length !== 2 || post.length !== 2) return null;
+  if (![...pre, ...post].every((n) => Number.isInteger(n) && n >= 0)) return null;
+  return { from: `${pre[0]}-${pre[1]}`, to: `${post[0]}-${post[1]}` };
+}
+
+/** The `pre -> post` pair a transition key names (`1-1>2-1`), or null. */
+function transitionPairFromKey(key: string | null | undefined): { from: string; to: string } | null {
+  if (typeof key !== "string") return null;
+  const m = key.trim().match(/^(\d+)\s*-\s*(\d+)\s*(?:->|>|\u2192|\bto\b)\s*(\d+)\s*-\s*(\d+)$/i);
+  if (!m) return null;
+  return { from: `${+m[1]}-${+m[2]}`, to: `${+m[3]}-${+m[4]}` };
+}
+
+/**
+ * The score transition a row CREDITS, or null.
+ *
+ * ADAAAA-8787: the lane used to read `deferredAttestation.scoreboardDelta`
+ * alone, a shape no row persists, so `scoreTransition` was always null and every
+ * body that relayed the score line was judged against a menu of
+ * `[clock, action]` — a VOD promoted row whose verbs register no `action` fact
+ * was then refused `too-few-facts` (job `a200d2bd`, row `48fe4280`). Priority is
+ * the most explicit evidence first, and it only ever NAMES the measured pair:
+ *   1. `deferredAttestation.scoreboardDelta` (the live rail's documented path);
+ *   2. `deferredAttestation.pre/post` (what a live deferred promotion persists);
+ *   3. `attestationUsed.transitionScore` (the measured transition a VOD row
+ *      discloses, ADAAAA-8663);
+ *   4. `attestationUsed.transitionKey` (legacy rows: the key names the pair).
+ * An absent or illegible pair returns null, so no fact is invented.
+ */
+function scoreTransitionForRow(row: {
+  deferredAttestation?: {
+    scoreboardDelta?: { from?: string | null; to?: string | null } | null;
+    pre?: readonly number[] | null;
+    post?: readonly number[] | null;
+  } | null;
+  attestationUsed?: {
+    transitionScore?: { pre?: readonly number[] | null; post?: readonly number[] | null } | null;
+    transitionKey?: string | null;
+  } | null;
+}): { from: string | null; to: string | null } | null {
+  const delta = row.deferredAttestation?.scoreboardDelta;
+  if (delta && (delta.from || delta.to)) return { from: delta.from ?? null, to: delta.to ?? null };
+  const deferred = transitionPairFromTuples(row.deferredAttestation?.pre, row.deferredAttestation?.post);
+  if (deferred) return deferred;
+  const attested = transitionPairFromTuples(
+    row.attestationUsed?.transitionScore?.pre,
+    row.attestationUsed?.transitionScore?.post
+  );
+  if (attested) return attested;
+  return transitionPairFromKey(row.attestationUsed?.transitionKey);
+}
+
+/**
  * The evidence a stored row carries, mapped to the summary contract. Pure, so a
  * caller can assert the inputs the model sees without a pipeline.
  */
@@ -442,7 +508,21 @@ export function summaryEvidenceForRow(row: {
   trigger?: { timestamp?: number; durationS?: number } | null;
   start?: number;
   end?: number;
-  deferredAttestation?: { scoreboardDelta?: { from?: string; to?: string } } | null;
+  deferredAttestation?: {
+    scoreboardDelta?: { from?: string | null; to?: string | null } | null;
+    pre?: readonly number[] | null;
+    post?: readonly number[] | null;
+    /** The persisted audit fields beside the pair (never read by this lane). */
+    deltaTs?: number;
+    readAt?: number;
+    windowLo?: number;
+    windowHi?: number;
+    channel?: string;
+  } | null;
+  attestationUsed?: {
+    transitionScore?: { pre?: readonly number[] | null; post?: readonly number[] | null } | null;
+    transitionKey?: string | null;
+  } | null;
   asrTranscript?: string | null;
   matchContext?: unknown;
 }, rail: SummaryRail, adjacentScoreCue?: string | null): SummaryEvidence {
@@ -460,9 +540,7 @@ export function summaryEvidenceForRow(row: {
     postTitle: row.postTitle ?? null,
     windowTs,
     windowDurationS: duration ?? null,
-    scoreTransition: row.deferredAttestation?.scoreboardDelta
-      ? { from: row.deferredAttestation.scoreboardDelta.from ?? null, to: row.deferredAttestation.scoreboardDelta.to ?? null }
-      : null,
+    scoreTransition: scoreTransitionForRow(row),
     matchContext: row.matchContext ?? null,
     transcript: row.asrTranscript ?? null,
     adjacentScoreCue: adjacentScoreCue ?? null,
