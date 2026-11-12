@@ -64,13 +64,14 @@ import {
 import type { StageAOutcomeLedger } from "./stage-a-metrics";
 import type { LiveConsumeEvidence, LiveSupplyEvidence } from "./live-progress";
 import { liveDecideAdmission } from "./live-decide-admission";
+import { audioTriggerFromCandidate, isStageBTrigger, triggerFamily, type AudioTriggerRecord, type TriggerSchedulerStats } from "./audio-trigger";
 import {
-  audioTriggerFromCandidate,
-  isStageBTrigger,
-  triggerFamily,
-  type AudioTriggerRecord,
-  type TriggerSchedulerStats,
-} from "./audio-trigger";
+  SupplyStallWatch,
+  LIVE_SUPPLY_STALL_S,
+  LIVE_SUPPLY_STALL_POLL_MS,
+  type SupplyStallEvent,
+  type SupplyStallSnapshot,
+} from "./live-supply-stall";
 
 /** The observation shape the media node relays (a perceive events-out step).
  *  `candidate` is optional: perceive publishes a candidate only on the frames
@@ -158,6 +159,15 @@ export interface MediaRailObserverOptions {
   /** ADAAAA-8431: the SERVED clock the decide-rate budget accrues on (epoch ms).
    *  Defaults to `Date.now`; tests inject a simulated clock. */
   wallClock?: () => number;
+  /** ADAAAA-8807: seconds without a DECIDE frame after which this share names a
+   *  supply stall (`[live-stall]` + `observeMetrics.supplyStall`). Undefined =
+   *  {@link LIVE_SUPPLY_STALL_S}. A share that never sends a decided frame is
+   *  named too, so the threshold covers the 30-40 s session warmup. */
+  supplyStallS?: number;
+  /** ADAAAA-8807: how often the rail polls the supply watch, in ms. Default
+   *  5000. `<= 0` disables the timer (tests poll {@link
+   *  MediaRailObserver.pollSupplyStall} directly). */
+  supplyStallPollMs?: number;
   /** ADAAAA-8108 (AC-E3): the enrichment arm for this rail — `on` (default) sends
    *  the per-window `perceiveTimeline`, `off` omits it, `alternate` alternates per
    *  DECIDED window in content order starting OFF. Undefined = the shipped `on`,
@@ -413,6 +423,14 @@ export class MediaRailObserver {
   private readonly pipelined: boolean;
   /** ADAAAA-8504: the admission snapshot this share latched at its start. */
   private readonly decideCapacityLatch?: () => DecideCapacityLatch | undefined;
+  /** ADAAAA-8807: the SERVED clock the supply watch measures against. */
+  private readonly servedNow: () => number;
+  /** ADAAAA-8807: names a dead decide-supply lane (see `live-supply-stall.ts`). */
+  private readonly stallWatch: SupplyStallWatch;
+  /** ADAAAA-8807: the poll timer (cleared on `finish()`/`release()`). */
+  private stallTimer: NodeJS.Timeout | null = null;
+  /** ADAAAA-8807: `LIVE_SUPPLY_STALL_S <= 0` disables the watch entirely. */
+  private readonly supplyWatchEnabled: boolean;
 
   constructor(opts: MediaRailObserverOptions, run?: LiveRunShared) {
     this.jobId = opts.jobId;
@@ -512,6 +530,32 @@ export class MediaRailObserver {
       // decides with another live job and stretch both past the budget.
       canDecide: () => liveDecideAdmission.admit(this.jobId),
     });
+    // ADAAAA-8807: name a supply stall instead of going silent. The share keeps
+    // `active` and its SERVED clock keeps running (that is the billing basis),
+    // so without this the only trace of a dead video lane was
+    // `observeMetrics.perceive.analysedThroughTs` freezing. The poll is a
+    // `unref`'d interval: it can never hold the process open and it is cleared
+    // in `finish()`/`release()`.
+    this.servedNow = opts.wallClock ?? (() => Date.now());
+    const stallS =
+      typeof opts.supplyStallS === "number" && Number.isFinite(opts.supplyStallS)
+        ? opts.supplyStallS
+        : LIVE_SUPPLY_STALL_S;
+    // `LIVE_SUPPLY_STALL_S <= 0` is the documented opt-out (the pre-8807 silence).
+    this.supplyWatchEnabled = stallS > 0;
+    this.stallWatch = new SupplyStallWatch({
+      stallS: this.supplyWatchEnabled ? stallS : LIVE_SUPPLY_STALL_S,
+      now: this.servedNow,
+    });
+    this.stallWatch.start(this.servedNow());
+    const stallPollMs =
+      typeof opts.supplyStallPollMs === "number" && Number.isFinite(opts.supplyStallPollMs)
+        ? opts.supplyStallPollMs
+        : LIVE_SUPPLY_STALL_POLL_MS;
+    if (this.supplyWatchEnabled && stallPollMs > 0) {
+      this.stallTimer = setInterval(() => this.pollSupplyStall(), stallPollMs);
+      (this.stallTimer as any).unref?.();
+    }
   }
 
   /** ADAAAA-7987: give back the shared depth registration WITHOUT spending a
@@ -521,6 +565,7 @@ export class MediaRailObserver {
   release(): void {
     if (this.closed) return;
     this.closed = true;
+    this.stopSupplyWatch();
     liveDecideAdmission.releaseLiveJob(this.jobId);
   }
 
@@ -652,6 +697,10 @@ export class MediaRailObserver {
       // ADAAAA-8121: an evidence-only frame still reached the TAP, so it moves
       // the live edge's content clock (it is never the analysed position).
       if (ts > this.lastSeenTs) this.lastSeenTs = ts;
+      // ADAAAA-8807: the relay IS alive here, so a share fed only evidence-only
+      // observations is named `no-observation-supply` (no pixels -> no decide)
+      // instead of reading as a dead transport.
+      this.stallWatch.noteFrameTick(ts, this.servedNow());
       // Evidence-only: the observation's findings still belong on the timeline.
       this.live.recordObservation(ts, seedFromObservation(ts, obs));
       return;
@@ -660,6 +709,9 @@ export class MediaRailObserver {
     // ADAAAA-8121: every relayed frame moves the tap clock before the stride can
     // refuse it — the strided frames ARE content the live edge already holds.
     if (ts > this.lastSeenTs) this.lastSeenTs = ts;
+    // ADAAAA-8807: this is a DECIDE frame (pixels present), so it is the only
+    // clock that clears a supply stall.
+    this.stallWatch.noteObservation(ts, this.servedNow());
     // ADAAAA-8102: consume at the CONTENT rate, not the ingest rate. The media
     // node relays every frame it sampled (~2.8 fps on the funded share); the rail
     // used to record, seed and persist all of them — 833 frames / 300 s on job
@@ -805,6 +857,10 @@ export class MediaRailObserver {
       return;
     }
     this.frameTicks++;
+    // ADAAAA-8807: the media node published this frame, so the VIDEO supply is
+    // alive here even when no observation follows (that distinction is what
+    // separates `no-observation-supply` from `no-video-supply`).
+    this.stallWatch.noteFrameTick(this.contentTs(rawTs), this.servedNow());
     // ADAAAA-8102: a content-rate rail takes its timeline from the frames it
     // CONSUMED, so the published clock only advances the clip clock (the
     // `/media/frames` route calls `noteBrowserContentTs`). Adding it here too
@@ -822,6 +878,10 @@ export class MediaRailObserver {
     if (this.closed) return;
     if (!samples || !Number.isFinite(rawTs)) return;
     this.audioChunks++;
+    // ADAAAA-8807: audio is the lane that outlives a dead video track — the
+    // measurement this ticket is built on (leg `3740585f`: video froze at
+    // 99.592 s content, audio relayed through 601.89 s).
+    this.stallWatch.noteAudio(this.contentTs(rawTs), this.servedNow());
     this.run.addAudioChunk(this.contentTs(rawTs), samples);
   }
 
@@ -839,6 +899,9 @@ export class MediaRailObserver {
    *  Idempotent: a second call (client /stop and the media session-close
    *  callback can race) just awaits the same chain. */
   async finish(): Promise<void> {
+    // ADAAAA-8807: settle the supply watch BEFORE the terminal snapshot is read
+    // (the share is over; nothing else will arrive to clear a stall).
+    this.stopSupplyWatch();
     if (!this.flushing && this.frames > 0) {
       this.flushing = true;
       this.enqueue(async () => {
@@ -923,6 +986,52 @@ export class MediaRailObserver {
     return true;
   }
 
+  /** ADAAAA-8807: poll the supply watch and name a transition on the share's log.
+   *
+   *  One line per transition, never per tick: a nine-minute dead video lane costs
+   *  TWO lines (stall + optional recovery) instead of nine minutes of silence.
+   *  The same event is persisted on the share's `observeMetrics.supplyStall`, so
+   *  a stored leg names its own stall without a DB forensics pass.
+   *
+   *  Public (and the timer is skippable via `supplyStallPollMs <= 0`) so the
+   *  boundary is testable without sleeping. */
+  pollSupplyStall(nowMs: number = this.servedNow()): SupplyStallEvent[] {
+    if (this.closed || !this.supplyWatchEnabled) return [];
+    const ev = this.stallWatch.poll(nowMs, { frames: this.frames });
+    if (!ev) return [];
+    if (ev.type === "stalled") {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[live-stall:${this.jobId}] ${ev.reason}: no decide frame for ${ev.stallSeconds}s ` +
+          `(content frozen at ${ev.contentTs.toFixed(3)}s, served ${ev.wallS.toFixed(1)}s; ` +
+          `frames=${ev.frames} newestTick=${ev.tickTs.toFixed(3)}s audioThrough=${ev.audioTs.toFixed(3)}s) — ` +
+          `no pixels, no decide; the share keeps accruing served time, so this is the only named stop`
+      );
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[live-stall:${this.jobId}] recovered: decide frames resumed at ${ev.contentTs.toFixed(3)}s ` +
+          `after ${ev.stallSeconds}s of ${ev.reason} (served ${ev.wallS.toFixed(1)}s, frames=${ev.frames})`
+      );
+    }
+    return [ev];
+  }
+
+  /** ADAAAA-8807: the stall summary this share will persist (null = no stall). */
+  supplyStallSnapshot(nowMs?: number): SupplyStallSnapshot | null {
+    if (!this.supplyWatchEnabled) return null;
+    return this.stallWatch.snapshot(nowMs);
+  }
+
+  /** ADAAAA-8807: stop the supply watch before the share settles, so a terminal
+   *  read cannot race a late poll line. */
+  private stopSupplyWatch(): void {
+    if (this.stallTimer) {
+      clearInterval(this.stallTimer);
+      this.stallTimer = null;
+    }
+  }
+
   /** The job-visible observe snapshot (decideCalls / latency / anchored vs
    *  cadence fires), read at share end. */
   observeMetrics(): LiveObserveMetricsSnapshot {
@@ -977,8 +1086,14 @@ export class MediaRailObserver {
     // block (the shipped record is unchanged) UNLESS the perceive runner reported
     // the ROI pass — that counter must stay gradeable on a rail with no content
     // stride, and `analysisFps: 0` states plainly that no stride ran.
-    if (this.contentFps <= 0 && !this.roiSeen) return metrics;
-    return {
+    // ADAAAA-8807: a share that ever stalled names it on the record it persists.
+    // Additive: a share that never stalled keeps the shipped bytes.
+    const withSupplyStall = (m: LiveObserveMetricsSnapshot): LiveObserveMetricsSnapshot => {
+      const stall = this.supplyStallSnapshot(this.servedNow());
+      return stall ? { ...m, supplyStall: stall } : m;
+    };
+    if (this.contentFps <= 0 && !this.roiSeen) return withSupplyStall(metrics);
+    return withSupplyStall({
       ...metrics,
       perceive: {
         framesSeen: this.framesSeen,
@@ -1008,7 +1123,7 @@ export class MediaRailObserver {
             }
           : {}),
       },
-    };
+    });
   }
 
   stats(): MediaRailStats {

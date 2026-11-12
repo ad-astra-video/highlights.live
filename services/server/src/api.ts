@@ -2539,6 +2539,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // exists: a browser share recorded no capacity posture at all).
         decideCapacityLatch: latchDecideCapacityAtStart(adapter),
         observeDecideOffLoop: cfg.observeDecideOffLoop,
+        // ADAAAA-8807: name a dead decide-supply lane on this share's log + its
+        // record instead of leaving the cadence silently at zero. `<= 0` disables.
+        supplyStallS: cfg.liveSupplyStallS,
       },
       shared
     );

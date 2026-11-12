@@ -690,6 +690,38 @@ export const ObserveMetricsSnapshotSchema = z.object({
   // shortfall. Additive optional.
   droppedFrames: z.number().int().min(0).optional(),
   supplySkippedWindows: z.number().int().min(0).optional(),
+  // ADAAAA-8807: the NAMED reason a share's decide supply stopped. Before this a
+  // dead video lane left an `active` share deciding nothing for the rest of its
+  // window with no line on the record (leg `3740585f`: content frozen at
+  // 99.592 s, zero decides for the following ~9 minutes, `liveWatchMinutes`
+  // still 11.8). Declared here because a zod object STRIPS undeclared keys —
+  // without it the rail's stall summary would be computed and dropped before
+  // persistence. Additive optional: absent on a share that never stalled.
+  supplyStall: z
+    .object({
+      /** Which lane died: the relay (`no-observation-supply`), the publisher's
+       *  video track (`no-video-supply`) or the whole transport. */
+      reason: z.enum(["no-observation-supply", "no-video-supply", "no-media-supply"]),
+      /** Wall clock the stall was named (ISO). */
+      detectedAt: z.string(),
+      /** Content clock of the newest decided frame when the supply froze. */
+      contentTs: z.number().min(0),
+      /** Content clock of the newest frame the media node published. */
+      tickTs: z.number().min(0),
+      /** Content clock of the newest audio chunk relayed. */
+      audioTs: z.number().min(0),
+      /** Served seconds when the stall was named. */
+      wallS: z.number().min(0),
+      /** Length of the current stall (0 once recovered). */
+      stallSeconds: z.number().min(0),
+      /** Still stalled when the share settled? */
+      active: z.boolean(),
+      occurrences: z.number().int().min(0),
+      longestStallSeconds: z.number().min(0),
+      /** Content clock where the supply resumed (null = never). */
+      recoveredAtContentTs: z.number().min(0).nullable(),
+    })
+    .optional(),
   // ADAAAA-8425: decide windows the runner REFUSED for capacity — the
   // `isDecideCapacityError` path (queue budget expired / 503 retries
   // exhausted). The decide produced no verdict, so the window was silently not
