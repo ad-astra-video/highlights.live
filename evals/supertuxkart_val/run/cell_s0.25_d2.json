@@ -2,17 +2,17 @@
  "band_state_at_end": {
   "centre-banner": {
    "baselineNull": false,
-   "lastScore": 0.00386,
+   "lastScore": 0.01605,
    "latched": false
   },
   "grand-prix-panel": {
    "baselineNull": false,
-   "lastScore": 0.00803,
+   "lastScore": 0.0364,
    "latched": false
   },
   "race-clock": {
    "baselineNull": false,
-   "lastScore": 0.37843,
+   "lastScore": 0.39163,
    "latched": true
   }
  },
@@ -22,29 +22,30 @@
    "coincidentBands": [
     "grand-prix-panel"
    ],
+   "eventToCandidateCpuS": 0.0006915669991940376,
+   "eventToCandidateWallS": 1.0003564029993868,
    "kind": "banner",
-   "score": 0.32898,
+   "score": 0.3292,
    "t": 4391.0
-  },
-  {
-   "band": "grand-prix-panel",
-   "coincidentBands": [],
-   "kind": "counter",
-   "score": 0.36648,
-   "t": 4562.0
   },
   {
    "band": "centre-banner",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0006921680005689268,
+   "eventToCandidateWallS": 1.0003576330000215,
    "kind": "banner",
-   "score": 0.33027,
+   "score": 0.3272,
    "t": 4650.0
   },
   {
-   "band": "grand-prix-panel",
-   "coincidentBands": [],
-   "kind": "counter",
-   "score": 0.40233,
+   "band": "centre-banner",
+   "coincidentBands": [
+    "grand-prix-panel"
+   ],
+   "eventToCandidateCpuS": 0.0006630549996771151,
+   "eventToCandidateWallS": 1.0003487189997031,
+   "kind": "banner",
+   "score": 0.4667,
    "t": 4758.0
   },
   {
@@ -52,8 +53,10 @@
    "coincidentBands": [
     "grand-prix-panel"
    ],
+   "eventToCandidateCpuS": 0.0006883559999550926,
+   "eventToCandidateWallS": 1.00036230600017,
    "kind": "banner",
-   "score": 0.41109,
+   "score": 0.4104,
    "t": 5003.0
   },
   {
@@ -61,180 +64,219 @@
    "coincidentBands": [
     "grand-prix-panel"
    ],
+   "eventToCandidateCpuS": 0.000689207000505121,
+   "eventToCandidateWallS": 1.0003602870001487,
    "kind": "banner",
-   "score": 0.30558,
+   "score": 0.5462,
+   "t": 5120.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007823970008757897,
+   "eventToCandidateWallS": 1.0004289920007068,
+   "kind": "banner",
+   "score": 0.3283,
    "t": 5274.0
   },
   {
-   "band": "grand-prix-panel",
-   "coincidentBands": [],
-   "kind": "counter",
-   "score": 0.31256,
+   "band": "centre-banner",
+   "coincidentBands": [
+    "grand-prix-panel"
+   ],
+   "eventToCandidateCpuS": 0.0006947140000193031,
+   "eventToCandidateWallS": 1.0003592339999159,
+   "kind": "banner",
+   "score": 0.3499,
    "t": 5336.0
   },
   {
    "band": "race-clock",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0006983499997659237,
+   "eventToCandidateWallS": 1.0003621280002335,
    "kind": "clock",
-   "score": 0.40123,
+   "score": 0.4012,
    "t": 5346.0
   },
   {
-   "band": "race-clock",
+   "band": "centre-banner",
    "coincidentBands": [],
-   "kind": "clock",
-   "score": 0.29614,
+   "eventToCandidateCpuS": 0.00064997199933714,
+   "eventToCandidateWallS": 1.0003576239996619,
+   "kind": "banner",
+   "score": 0.4131,
    "t": 5357.0
   },
   {
    "band": "race-clock",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.000747153000702383,
+   "eventToCandidateWallS": 1.0003737110000657,
    "kind": "clock",
-   "score": 0.39902,
-   "t": 5361.0
-  },
-  {
-   "band": "centre-banner",
-   "coincidentBands": [],
-   "kind": "banner",
-   "score": 0.45018,
-   "t": 5370.0
+   "score": 0.3631,
+   "t": 5359.0
   },
   {
    "band": "race-clock",
-   "coincidentBands": [],
+   "coincidentBands": [
+    "centre-banner"
+   ],
+   "eventToCandidateCpuS": 0.0007292350001080194,
+   "eventToCandidateWallS": 1.0003765860001295,
    "kind": "clock",
-   "score": 0.29265,
+   "score": 0.3405,
    "t": 5389.0
   },
   {
    "band": "centre-banner",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.000731313999494887,
+   "eventToCandidateWallS": 1.000374878999537,
    "kind": "banner",
-   "score": 0.53438,
-   "t": 5408.0
+   "score": 0.3574,
+   "t": 5405.0
   },
   {
    "band": "race-clock",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007419569992634933,
+   "eventToCandidateWallS": 1.0003731619999598,
    "kind": "clock",
-   "score": 0.40938,
-   "t": 5409.0
+   "score": 0.338,
+   "t": 5407.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007307719997697859,
+   "eventToCandidateWallS": 1.0003565570004866,
+   "kind": "clock",
+   "score": 0.3439,
+   "t": 5433.0
   },
   {
    "band": "centre-banner",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0006927009999344591,
+   "eventToCandidateWallS": 1.0003549889997885,
    "kind": "banner",
-   "score": 0.39945,
+   "score": 0.3638,
    "t": 5437.0
   },
   {
    "band": "race-clock",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0006923630007804604,
+   "eventToCandidateWallS": 1.0003577730003599,
    "kind": "clock",
-   "score": 0.32788,
+   "score": 0.3058,
    "t": 5450.0
   },
   {
    "band": "centre-banner",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007073269998727483,
+   "eventToCandidateWallS": 1.000356131999979,
    "kind": "banner",
-   "score": 0.42071,
-   "t": 5454.0
-  },
-  {
-   "band": "grand-prix-panel",
-   "coincidentBands": [],
-   "kind": "counter",
-   "score": 0.25313,
-   "t": 5478.0
+   "score": 0.3764,
+   "t": 5452.0
   },
   {
    "band": "centre-banner",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.000690396000209148,
+   "eventToCandidateWallS": 1.0003576369999791,
    "kind": "banner",
-   "score": 0.38407,
+   "score": 0.3173,
+   "t": 5483.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007257079996634275,
+   "eventToCandidateWallS": 1.0003680709996843,
+   "kind": "clock",
+   "score": 0.3615,
+   "t": 5484.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0006478090008386062,
+   "eventToCandidateWallS": 1.000358197999958,
+   "kind": "banner",
+   "score": 0.3841,
    "t": 5488.0
   },
   {
    "band": "race-clock",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.00073024199991778,
+   "eventToCandidateWallS": 1.000382384000659,
    "kind": "clock",
-   "score": 0.35386,
+   "score": 0.374,
    "t": 5505.0
   },
   {
-   "band": "grand-prix-panel",
+   "band": "centre-banner",
    "coincidentBands": [
+    "grand-prix-panel",
     "race-clock"
    ],
-   "kind": "counter",
-   "score": 0.53787,
+   "eventToCandidateCpuS": 0.0007303359998331871,
+   "eventToCandidateWallS": 1.0003757109998332,
+   "kind": "banner",
+   "score": 0.5381,
    "t": 5557.0
   },
   {
    "band": "centre-banner",
-   "coincidentBands": [],
+   "coincidentBands": [
+    "race-clock"
+   ],
+   "eventToCandidateCpuS": 0.0007365900000877446,
+   "eventToCandidateWallS": 1.0003837149997707,
    "kind": "banner",
-   "score": 0.35417,
-   "t": 5563.0
-  },
-  {
-   "band": "race-clock",
-   "coincidentBands": [],
-   "kind": "clock",
-   "score": 0.38333,
-   "t": 5584.0
-  },
-  {
-   "band": "race-clock",
-   "coincidentBands": [],
-   "kind": "clock",
-   "score": 0.35251,
+   "score": 0.5384,
    "t": 5603.0
   },
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007864239996706601,
+   "eventToCandidateWallS": 1.0004027089999,
    "kind": "counter",
-   "score": 0.42077,
+   "score": 0.4628,
    "t": 5604.0
   },
   {
    "band": "centre-banner",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007313750002140296,
+   "eventToCandidateWallS": 1.0003768619999391,
    "kind": "banner",
-   "score": 0.35031,
-   "t": 5611.0
+   "score": 0.5791,
+   "t": 5652.0
   },
   {
    "band": "grand-prix-panel",
    "coincidentBands": [
     "race-clock"
    ],
+   "eventToCandidateCpuS": 0.0007649549997950089,
+   "eventToCandidateWallS": 1.0003880929998559,
    "kind": "counter",
-   "score": 0.50729,
+   "score": 0.5065,
    "t": 5653.0
-  },
-  {
-   "band": "centre-banner",
-   "coincidentBands": [],
-   "kind": "banner",
-   "score": 0.31299,
-   "t": 5663.0
-  },
-  {
-   "band": "grand-prix-panel",
-   "coincidentBands": [],
-   "kind": "counter",
-   "score": 0.31801,
-   "t": 5711.0
   },
   {
    "band": "race-clock",
    "coincidentBands": [],
+   "eventToCandidateCpuS": 0.0007321609991777223,
+   "eventToCandidateWallS": 1.000375628999791,
    "kind": "clock",
-   "score": 0.41428,
+   "score": 0.427,
    "t": 5712.0
   }
  ],
@@ -273,12 +315,21 @@
   ],
   "cell": 8,
   "changeSensitivity": 0.25,
+  "maxLatchFrames": 30,
   "minDwellFrames": 2,
-  "quietFrames": 2
+  "quietFrames": 2,
+  "referenceFrames": 3
  },
- "flickers_suppressed": 22,
+ "flickers_suppressed": 19,
+ "forced_rearms": 13,
  "fps": 1,
  "frames_observed": 1351,
+ "integrity": {
+  "manifestPath": "/tmp/hl8767repo/evals/supertuxkart_val/label-manifest.json",
+  "manifestPinned": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+  "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+  "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23"
+ },
  "producer": "hud-event/hud_reader (measure_hud_recall grid cell)",
  "video": {
   "duration_s": 5950.549,
