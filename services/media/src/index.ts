@@ -105,7 +105,9 @@ async function main() {
     .then((r) => {
       if (r.leftover > 0) {
         // eslint-disable-next-line no-console
-        console.log(`[media] lost-session reconcile leftover=${r.leftover} reported=${r.reported}`);
+        console.log(
+          `[media] lost-session reconcile leftover=${r.leftover} reported=${r.reported} released=${r.released} releaseFailed=${r.releaseFailed}`
+        );
       }
     })
     .catch((e) => console.error("[media] lost-session reconcile failed:", String(e?.message || e)));

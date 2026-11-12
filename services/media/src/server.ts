@@ -268,6 +268,14 @@ export class MediaServer {
     /** ADAAAA-7700: leftover sessions reported to the control plane at boot
      *  (the sessions a restart/crash took down with it). */
     sessionsLostReported: 0,
+    /** ADAAAA-8813: leftover sessions whose ORCHESTRATOR live-runner session was
+     *  released at boot (the billing + capacity-1 slot half). Counted apart from
+     *  `sessionsLostReported` because the two paths have different prerequisites:
+     *  the report needs a jobId, the release needs only the session id. */
+    sessionsReleasedAtBoot: 0,
+    /** ADAAAA-8813: leftovers whose release did not land (orchestrator
+     *  unreachable / 5xx). Non-zero means a slot may still be billed. */
+    sessionsReleaseFailedAtBoot: 0,
     /** ADAAAA-7658 media-edge audio relay: PCM chunks POSTed to the control
      *  plane for perceive /audio, and chunks dropped on backlog/error. */
     audioChunksPosted: 0,
@@ -642,6 +650,11 @@ export class MediaServer {
         // ADAAAA-7700: sessions that died with the previous boot and were
         // reported to the control plane as `media-node-restart`.
         sessionsLostReported: this.counters.sessionsLostReported,
+        // ADAAAA-8813: the orchestrator's live-runner sessions released at boot
+        // (billing + capacity-1 slot), and any release that did not land. These
+        // are the counters that say whether a restart STILL leaks a paid slot.
+        sessionsReleasedAtBoot: this.counters.sessionsReleasedAtBoot,
+        sessionsReleaseFailedAtBoot: this.counters.sessionsReleaseFailedAtBoot,
       },
       ...(lifecycle
         ? {
@@ -1226,6 +1239,10 @@ export class MediaServer {
       startedAt: stream.startedAt,
       transport: stream.rtc ? "webrtc" : stream.sockets.size > 0 ? "ws" : "none",
       everAttached: stream.everAttached,
+      // ADAAAA-8813: persist the exact stop target so the next boot's reconcile
+      // can release this session's paid live-runner slot on the orchestrator that
+      // issued it (not necessarily `orchBase` — discovery can pick another one).
+      controlUrl: stream.provisioned.controlUrl ?? "",
     });
   }
 
@@ -1237,17 +1254,58 @@ export class MediaServer {
    * `failureReason: media-session-lost` and the console can say "the media node
    * restarted, reshare" instead of the job silently flipping to `failed`.
    *
-   * Bounded retry: on a compose recreate the control plane is usually restarting
-   * at the same instant, so the first POST can find it down. Three attempts over
-   * ~6 s; if they all fail the server's own boot sweep attributes the stranded
-   * job from `media_sessions`, so the outcome is still attributable.
+   * ADAAAA-8813: reporting the job is NOT enough. The perceive session itself is
+   * a PAID live-runner session on the external orchestrator
+   * (`livepeer/go-livepeer:v0.9.2`), whose payment loop has no liveness check:
+   * nothing in the job-record path (`POST /jobs/{id}/media/session-closed`)
+   * touches it, so a lost session kept `Accounted payment` every 5 s and held
+   * the capacity-1 perceive slot until its balance expired (~2 h in the
+   * 2026-11-12 incident), wedging every new provision with
+   * `HTTP 503 no capacity available for runner`. So this reconcile now RELEASES
+   * the orchestrator session by id, FIRST and unconditionally — the release path
+   * must not depend on `jobId`, which is empty for a session provisioned
+   * straight on this node (`POST /sessions {}`, e.g. a harness probe).
+   *
+   * Bounded retry on the report: on a compose recreate the control plane is
+   * usually restarting at the same instant, so the first POST can find it down.
+   * Three attempts over ~6 s; if they all fail the server's own boot sweep
+   * attributes the stranded job from `media_sessions`, so the outcome is still
+   * attributable. The stop call itself does not retry: it is idempotent on the
+   * orchestrator and a second reconcile pass cannot happen (the ledger is
+   * drained exactly once), so a failed stop is counted and surfaced on `/health`
+   * (`cost.sessionsReleaseFailedAtBoot`) rather than retried blind.
    */
-  async reconcileLostSessions(): Promise<{ reported: number; leftover: number }> {
+  async reconcileLostSessions(): Promise<{
+    reported: number;
+    leftover: number;
+    released: number;
+    releaseFailed: number;
+  }> {
     const leftover = drainOpenSessions(this.opts.stateDir);
-    if (!leftover.length) return { reported: 0, leftover: 0 };
+    if (!leftover.length) return { reported: 0, leftover: 0, released: 0, releaseFailed: 0 };
     let reported = 0;
+    let released = 0;
+    let releaseFailed = 0;
     for (const rec of leftover) {
       const seconds = rec.startedAt ? Number(Math.max(0, (Date.now() - rec.startedAt) / 1000).toFixed(1)) : 0;
+      // 1) Release the orchestrator's live-runner session for this id. This is
+      //    the billing + capacity half (AC1/AC2/AC3) and runs for EVERY leftover
+      //    before any jobId-dependent work, so a session that never carried a
+      //    job id is still stopped (AC5).
+      let stop: { ok: boolean; status: number; target: string } = { ok: false, status: 0, target: "" };
+      try {
+        stop = await this.orch.stopSession(rec.sessionId, rec.controlUrl, this.opts.orchBase);
+      } catch (e: any) {
+        // eslint-disable-next-line no-console
+        console.warn(`[media] session-lost release THREW session=${rec.sessionId}: ${String(e?.message || e)}`);
+      }
+      if (stop.ok) {
+        released++;
+        this.counters.sessionsReleasedAtBoot++;
+      } else {
+        releaseFailed++;
+        this.counters.sessionsReleaseFailedAtBoot++;
+      }
       const payload = {
         sessionId: rec.sessionId,
         jobId: rec.jobId,
@@ -1262,9 +1320,12 @@ export class MediaServer {
         nodeId: this.nodeId,
         transport: rec.transport === "none" ? "ws" : rec.transport,
       };
+      // ADAAAA-8813 AC5: a session provisioned with no job (`POST /sessions {}`)
+      // prints `job=(direct)` instead of a bare `job=-`, and the release above
+      // already ran for it — the stop path never needs a job id.
       // eslint-disable-next-line no-console
       console.log(
-        `[media] session-lost job=${rec.jobId || "-"} session=${rec.sessionId} reason=media-node-restart attached=${rec.everAttached}`
+        `[media] session-lost job=${rec.jobId || "(direct)"} session=${rec.sessionId} reason=media-node-restart attached=${rec.everAttached} orch-release=${stop.ok ? "released" : `failed:${stop.status}`}`
       );
       if (!this.opts.callbackBase || !rec.jobId) continue;
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -1293,6 +1354,6 @@ export class MediaServer {
         console.warn(`[media] session-lost report FAILED job=${rec.jobId} session=${rec.sessionId}`);
       }
     }
-    return { reported, leftover: leftover.length };
+    return { reported, leftover: leftover.length, released, releaseFailed };
   }
 }
