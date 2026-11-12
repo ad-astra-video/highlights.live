@@ -255,15 +255,18 @@ def test_ac3_oracle_imports_only_stdlib_so_the_graph_cannot_reach_the_reader():
 
 
 def test_ac3_runtime_module_graph_holds_no_reader_or_label_builder():
-    assert "hud_reader" not in sys.modules
-    assert "build_stk_labels" not in sys.modules
+    """The oracle's own import closure must not reach the reader or the label builder.
+
+    Scoped deliberately: a process-wide ``sys.modules`` assertion is order-dependent
+    and reads false the moment a *different* harness in the same pytest session
+    legitimately loads the reader. ``evals/measure_hud_recall.py`` (ADAAAA-8745 WP4)
+    scores the live reader by design, so the property under test is the oracle's own
+    closure, not what else the process imported.
+    """
+    closure = _local_import_closure(os.path.abspath(ORACLE_PATH))
     forbidden = {os.path.abspath(HUD_READER), os.path.abspath(LABEL_BUILDER)}
-    leaked = []
-    for name, mod in list(sys.modules.items()):
-        path = getattr(mod, "__file__", None)
-        if isinstance(path, str) and os.path.abspath(path) in forbidden:
-            leaked.append(name)
-    assert leaked == []
+    assert closure & forbidden == set()
+    assert "build_stk_labels" not in sys.modules
 
 
 def test_ac3_oracle_takes_only_a_manifest_path_and_a_candidate_path():

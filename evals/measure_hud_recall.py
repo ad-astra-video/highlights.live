@@ -96,6 +96,17 @@ BAR_CANDIDATES_PER_MIN = 1.5  # <= 34 over the 1351 s window
 DEFAULT_SENSITIVITIES = (0.08, 0.12, 0.18, 0.25)
 DEFAULT_DWELLS = (2, 3, 4)
 
+# --- WP4 (ADAAAA-8745): live-path latency + audio-harness parity ---------------------------
+
+#: AC A5 bar: Stage-A event -> candidate latency, CPU seconds, p95.
+LATENCY_CPU_P95_BAR_S = 0.5
+
+#: exit code for a refused run: a fixture figure is not a measurement (plan §2 WP4).
+INADMISSIBLE_EXIT = 4
+
+#: the served frame-path trigger id the latency measurement belongs to.
+TRIGGER_HUD_EVENT = "hud-event"
+
 
 class Voided(RuntimeError):
     """The manifest or the clip is not the pinned artifact; no number may print."""
@@ -117,6 +128,56 @@ def load_reader_module():
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def load_audio_harness():
+    """Load `evals/measure_audio_recall.py` — the harness whose contract this one mirrors.
+
+    Importing it (rather than copying ``measure_fires`` / ``pc`` / ``print_table``)
+    is what makes the parity claim structural: the fidelity table below *is* the
+    audio table, so the two can never drift cell for cell (AC: same classes, same
+    -3/+2 s window, same columns).
+    """
+    path = os.path.join(HERE, "measure_audio_recall.py")
+    spec = importlib.util.spec_from_file_location("measure_audio_recall", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["measure_audio_recall"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def load_stage_a_module():
+    """Load the served frame path `services/perceive/app/stage_a.py` (WP4 A5).
+
+    Stage-A is the layer the deployed perceive loop calls per frame; timing
+    `HudEventReader.observe` alone would miss it. Loaded into the same synthetic
+    package the reader uses so its relative imports resolve.
+    """
+    app_dir = os.path.join(REPO, "services", "perceive", "app")
+    path = os.path.join(app_dir, "stage_a.py")
+    spec = importlib.util.spec_from_file_location(f"{READER_PKG}.stage_a", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def armed_profile(game_profile, model):
+    """A measurement-only copy of the type's profile that enables ``hud-event``.
+
+    The shipped `supertuxkart` profile keeps the trigger off (arming it is a served
+    default change, out of this package). The copy exists in memory for the run,
+    and carries the model because `GameProfile.__post_init__` drops the trigger when
+    no geometry is declared — arming without it would score nothing.
+    """
+    import dataclasses
+    profile = game_profile.load_game_profile("supertuxkart")
+    triggers = profile.triggers.with_trigger(TRIGGER_HUD_EVENT)
+    return dataclasses.replace(profile, triggers=triggers, hud_model=model)
 
 
 def load_oracle_module():
@@ -190,8 +251,16 @@ def decode_frames(clip_path: str, start_s: float, end_s: float, width: int, heig
 
 def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell: int,
              out_dir: str, manifest: dict, manifest_path: str, span_s: float,
-             match_pre=None, match_post=None, fps: int = 1) -> dict:
-    """Run the reader over the labelled window at one (sensitivity, dwell) cell."""
+             match_pre=None, match_post=None, fps: int = 1, stage_a=None) -> dict:
+    """Run the reader over the labelled window at one (sensitivity, dwell) cell.
+
+    ``stage_a`` turns the pass into the LIVE PATH (ADAAAA-8745 A5): every frame goes
+    through ``stage_a.evaluate_stage_a`` — the call the deployed perceive loop makes
+    per frame — with the reader armed for the measurement. Without it the pass calls
+    ``HudEventReader.observe`` directly, which is how WP3's grid was measured; the
+    candidates are identical (Stage-A only routes to the reader), the CPU numbers are
+    Stage-A's, not the reader's alone.
+    """
     # Build the model from the profile contract's own dataclasses so the reader sees
     # exactly the objects it is shipped with (no local reimplementation of HudBand).
     game_profile = sys.modules[f"{READER_PKG}.game_profile"]
@@ -206,26 +275,48 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         cell=8,
     )
     reader = reader_mod.HudEventReader(model, enabled=True)
+    prof = armed_profile(sys.modules[f"{READER_PKG}.game_profile"], model) if stage_a else None
 
     candidates: list[dict] = []
     frame_times: list[float] = []
     state_after: dict = {}
     wall_ms: list[float] = []
+    cpu_s: list[float] = []
     import time as _time
+    pass_t0 = _time.perf_counter()
     for i in range(frames.shape[0]):
         ts = float(start_s + i * (1.0 / fps))
         t0 = _time.perf_counter()
-        fires = reader.observe(frames[i], ts, seq=i)
-        wall_ms.append((_time.perf_counter() - t0) * 1000.0)
+        if prof is not None:
+            out = stage_a.evaluate_stage_a(prof, frame=frames[i], hud_reader=reader,
+                                           timestamp=ts, seq=i)
+            fires = [types.SimpleNamespace(timestamp=ts,
+                                           band=str((f.detail or {}).get("band") or ""),
+                                           kind=str((f.detail or {}).get("kind") or ""),
+                                           score=float((f.detail or {}).get("score") or 0.0),
+                                           coincident_bands=tuple(
+                                               (f.detail or {}).get("coincidentBands") or ()))
+                     for f in out]
+        else:
+            fires = reader.observe(frames[i], ts, seq=i)
+        cpu = _time.perf_counter() - t0
+        wall_ms.append(cpu * 1000.0)
+        cpu_s.append(cpu)
         frame_times.append(ts)
         for fire in fires:
+            # The confirmed run is the last `dwell` consecutive frames, so the CPU the
+            # trigger spent between seeing the step and this candidate is their sum.
+            run_cpu = sum(cpu_s[-dwell:])
             candidates.append({
                 "t": round(float(fire.timestamp), 3),
                 "band": fire.band,
                 "kind": fire.kind,
                 "score": round(float(fire.score), 5),
                 "coincidentBands": list(fire.coincident_bands),
+                "eventToCandidateCpuS": run_cpu,
+                "eventToCandidateWallS": (dwell - 1) / float(fps) + cpu,
             })
+    pass_wall = _time.perf_counter() - pass_t0
     for band in band_objs:
         st = reader.state_for(band.name)
         state_after[band.name] = {
@@ -272,6 +363,19 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
 
     overall = result["overall"]
     p95 = float(np.percentile(wall_ms, 95)) if wall_ms else 0.0
+    e2c_cpu = [c["eventToCandidateCpuS"] for c in candidates]
+    e2c_wall = [c["eventToCandidateWallS"] for c in candidates]
+    latency = {
+        "cpuFrameS": _latency_block([v / 1000.0 for v in wall_ms], dwell),
+        "eventToCandidateCpuS": _latency_block(e2c_cpu, dwell),
+        "eventToCandidateWallS": _latency_block(e2c_wall, dwell),
+        "definitions": {
+            "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+            "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+            "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU",
+        },
+    }
+    p95_cpu = latency["eventToCandidateCpuS"]["p95"]
     # A4 is judged on the volume the trigger emits inside the DECODED window (the plan's
     # 1351 s window), which is the same denominator the audio measurement used. The
     # oracle's own `candidates_per_minute` divides by its narrower label coverage, so the
@@ -297,6 +401,12 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         "candidatesPerMinuteLabelCoverage": round(float(overall["candidates_per_minute"]), 3),
         "candidatesInDecodedWindow": int(in_decoded),
         "frameCostP95Ms": round(p95, 3),
+        "livePath": bool(stage_a is not None),
+        "runWallS": round(pass_wall, 3),
+        "latency": latency,
+        "candidateTimes": [c["t"] for c in candidates],
+        "a5": bool(e2c_cpu) and p95_cpu <= LATENCY_CPU_P95_BAR_S,
+        "eventToCandidateCpuP95S": p95_cpu,
         "flickersSuppressed": int(reader.flickers_suppressed),
         "exportPath": export_path,
         "a1": bool(overall["recall"] >= BAR_RECALL),
@@ -435,6 +545,133 @@ def pick_best(rows: list[dict]) -> dict | None:
     return clearing[0]
 
 
+
+# --- WP4: latency export + audio-harness parity table --------------------------------------
+
+def _pct(values: list[float], q: float) -> float:
+    """Nearest-rank percentile, the same indexing as `measure_audio_recall.pc`."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(q * len(ordered)))]
+
+
+def _latency_block(samples: list[float], dwell: int) -> dict:
+    return {"n": len(samples), "p50": round(_pct(samples, 0.5), 6),
+            "p95": round(_pct(samples, 0.95), 6),
+            "max": round(max(samples), 6) if samples else 0.0,
+            "dwellFrames": dwell}
+
+
+def latency_export(row: dict, manifest: dict, clip_path: str, clip_sha: str,
+                   window: tuple, backend: str = "live") -> dict:
+    """The artifact `evals/metrics_runner.py --hud-latency` reads and grades (AC A5).
+
+    It carries the cell it was measured at, the clip digest, the frame count and the
+    three latency blocks, so the A5 bar can be re-graded by a reviewer without the
+    box, the clip, or this harness. ``backend`` is recorded and `admissible` follows
+    it: only a live-path export is a measurement.
+    """
+    latency = row.get("latency") or {}
+    cpu = latency.get("eventToCandidateCpuS") or {"n": 0, "p95": 0.0}
+    return {
+        "harness": "measure_hud_recall",
+        "schemaVersion": 1,
+        "backend": backend,
+        "admissible": backend == "live" and bool(row.get("livePath")),
+        "trigger": TRIGGER_HUD_EVENT,
+        "livePath": bool(row.get("livePath")),
+        "cell": {"changeSensitivity": row.get("changeSensitivity"),
+                 "minDwellFrames": row.get("minDwellFrames"),
+                 "quietFrames": 2, "cell": 8},
+        "clip": {"path": clip_path, "sha256": clip_sha,
+                 "manifestPath": (manifest.get("video") or {}).get("path"),
+                 "window": [round(float(window[0]), 2), round(float(window[1]), 2)],
+                 "width": (manifest.get("video") or {}).get("width"),
+                 "height": (manifest.get("video") or {}).get("height")},
+        "frames": row.get("frames"),
+        "candidates": row.get("candidates"),
+        "latency": latency,
+        "bars": {"stageAEventToCandidateCpuP95S": {
+            "bar": LATENCY_CPU_P95_BAR_S,
+            "value": round(float(cpu.get("p95") or 0.0), 6),
+            "pass": bool(row.get("a5")),
+            "measured": bool(cpu.get("n")),
+        }},
+        "wallS": row.get("runWallS"),
+        "gpu": {"used": False,
+                "note": ("the hud-event reader is GPU-free (WP1); the pass occupies the "
+                         "box but spends no GPU compute, so GPU-minutes are 0")},
+    }
+
+
+def manifest_classes(manifest: dict) -> list[dict]:
+    """The scoring classes, in the audio harness' shape.
+
+    A ``classes`` manifest is used verbatim (that is what the parity run passes to
+    both harnesses); a ``windows`` manifest derives one class per ``event_type``
+    with the verified non-event windows as that class' negatives — one label
+    artifact, two harnesses.
+    """
+    if manifest.get("classes"):
+        return manifest["classes"]
+    windows = manifest.get("windows") or []
+    order: list[str] = []
+    onsets: dict[str, list[float]] = {}
+    negatives: list[dict] = []
+    for w in windows:
+        if w.get("kind") == "non_event":
+            negatives.append({"clip": (manifest.get("video") or {}).get("path"),
+                              "start": float(w["t_start"]), "end": float(w["t_end"])})
+            continue
+        if w.get("ground_truth") != "objective_event":
+            continue
+        cls_id = w.get("event_type") or "objective_event"
+        if cls_id not in onsets:
+            order.append(cls_id)
+            onsets[cls_id] = []
+        onsets[cls_id].append(float(w["instant"]))
+    video = manifest.get("video") or {}
+    return [{"id": c, "clip": video.get("path"), "onsets": onsets[c], "negatives": negatives}
+            for c in order]
+
+
+def fidelity_rows(audio, candidate_times: list[float], manifest: dict, pre: float,
+                  post: float, fps: float) -> list[dict]:
+    """Score this pass' candidates per class with the AUDIO harness' own scorer.
+
+    Every fire is scored by `measure_audio_recall.measure_fires` against the class'
+    onsets in the same -3/+2 s window, and the lag in the `onset->fire` column is
+    ``fire - matched onset`` — so a HUD cell and an audio cell are comparable cell
+    for cell, and the columns cannot drift because `print_table` is the audio one.
+    """
+    rows = []
+    for cls in manifest_classes(manifest):
+        onsets = sorted({float(t) for t in (cls.get("onsets") or [])})
+        lags = []
+        for t in candidate_times:
+            matched = [o for o in onsets if o - pre <= t <= o + post]
+            if matched:
+                lags.append(t - min(matched, key=lambda o: abs(t - o)))
+        scored = audio.measure_fires(candidate_times, lags, ["hud-event"], onsets, pre, post,
+                                    known=cls.get("detectedOnsets", ()))
+        scored.update({"id": cls["id"], "clip": cls.get("clip"),
+                       "measured": bool(cls.get("clip")), "sr": round(fps, 3),
+                       "gate": TRIGGER_HUD_EVENT})
+        rows.append(scored)
+    return rows
+
+
+def render_fidelity(audio, rows: list[dict]) -> str:
+    """The audio harness' table, captured so it can also be written to the artifact."""
+    import io
+    from contextlib import redirect_stdout
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        audio.print_table(rows, None)
+    return buf.getvalue().rstrip("\n")
+
+
 # --- main ----------------------------------------------------------------------------------
 
 def main(argv=None) -> int:
@@ -458,7 +695,40 @@ def main(argv=None) -> int:
                     help="trace latches for one cell (default: the best-recall cell when "
                          "nothing clears, else the chosen cell)")
     ap.add_argument("--json", default=None, help="write hud_grid.json here (default: out-dir)")
+    ap.add_argument("--backend", choices=["live", "fixture"], default="live",
+                    help="live (default, admissible: frames decoded from the real clip and "
+                         "scored through the served Stage-A frame path) or fixture (refused — "
+                         "no fixture figure is a measurement, plan §2 WP4)")
+    ap.add_argument("--latency-export", default=None,
+                    help="write the A5 latency export here (read by "
+                         "evals/metrics_runner.py --hud-latency)")
+    ap.add_argument("--latency-cell", metavar="S:D", default=None,
+                    help="cell whose latency is exported (default: the chosen cell, else the "
+                         "best-recall cell — the same pool the latch trace uses)")
+    ap.add_argument("--fidelity", action="store_true",
+                    help="print the audio harness' fidelity table for this pass (AC: HUD and "
+                         "audio cells comparable cell for cell)")
+    ap.add_argument("--labels", default=None,
+                    help="label manifest scored in --fidelity mode (default: --manifest). "
+                         "Pass the same file to both harnesses for the parity check.")
+    ap.add_argument("--class", dest="classes", action="append",
+                    help="only print these fidelity class ids (repeatable)")
     args = ap.parse_args(argv)
+
+    if args.backend != "live":
+        # Executable refusal, not a docstring promise: AC "no --backend fixture number is
+        # admissible anywhere as a measurement".
+        print("INADMISSIBLE — --backend fixture produces no measurement.\n"
+              "Plan §2 WP4 admits no fixture figure anywhere in WP1-WP4: frames come from "
+              "the clip whose sha256 the manifest pins, scored by the served Stage-A frame "
+              "path. No numbers are printed and none are written.", file=sys.stderr)
+        for path in filter(None, (args.latency_export, args.json)):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"harness": "measure_hud_recall", "schemaVersion": 1,
+                           "backend": "fixture", "admissible": False, "numbers": None,
+                           "reason": "fixture backend is inadmissible as a measurement"}, fh)
+                fh.write("\n")
+        return INADMISSIBLE_EXIT
 
     sens = [float(x) for x in str(args.sensitivities).split(",") if x.strip()]
     dwells = [int(x) for x in str(args.dwells).split(",") if x.strip()]
@@ -466,6 +736,8 @@ def main(argv=None) -> int:
 
     oracle = load_oracle_module()
     reader_mod = load_reader_module()
+    stage_a = load_stage_a_module()
+    audio = load_audio_harness()
 
     # A6: pin the label artifact and the clip BEFORE any frame is decoded.
     sha_before = check_manifest(args.manifest, oracle)
@@ -489,7 +761,7 @@ def main(argv=None) -> int:
         for d in dwells:
             row = run_cell(reader_mod, oracle, frames, int(win_start), s, d, args.out_dir,
                            manifest, args.manifest, float(span), args.match_pre,
-                           args.match_post)
+                           args.match_post, stage_a=stage_a)
             rows.append(row)
             print(f"cell s{s:g}/d{d}: candidates={row['candidatesInWindow']} "
                   f"recall={row['recall']:.2f} fpRate={row['fpRate']:.4f} "
@@ -541,6 +813,57 @@ def main(argv=None) -> int:
         except ValueError:
             print(f"ignoring --latch-trace {trace_target!r}: want S:D", file=sys.stderr)
 
+    # --- WP4: the latency export and the fidelity table (same pass, same frames) ----------
+    latency_row = None
+    if args.latency_cell:
+        want = str(args.latency_cell)
+        latency_row = next((r for r in rows if r["cell"] == want.replace(":", "_")), None)
+        if latency_row is None:
+            want_tag = f"s{float(want.split(':')[0]):g}_d{int(want.split(':')[1])}"
+            latency_row = next((r for r in rows if r["cell"] == want_tag), None)
+        if latency_row is None:
+            print(f"ignoring --latency-cell {args.latency_cell!r}: no such cell in this grid",
+                  file=sys.stderr)
+    if latency_row is None:
+        latency_row = best or max(rows, key=lambda r: r["recall"])
+    export_block = latency_export(latency_row, manifest, args.clip, clip_sha_before,
+                                  (win_start, win_end), backend=args.backend)
+    print()
+    print("| latency (live path) | n | p50 | p95 | max |")
+    print("| --- | --- | --- | --- | --- |")
+    for key, label in (("cpuFrameS", "cpu/frame (s)"),
+                       ("eventToCandidateCpuS", "event->candidate CPU (s)"),
+                       ("eventToCandidateWallS", "event->candidate wall (s)")):
+        block = export_block["latency"].get(key) or {}
+        print(f"| {label} | {block.get('n', 0)} | {block.get('p50', 0):.4f} | "
+              f"{block.get('p95', 0):.4f} | {block.get('max', 0):.4f} |")
+    bar = export_block["bars"]["stageAEventToCandidateCpuP95S"]
+    print(f"\nA5 stage-A event->candidate p95 <= {bar['bar']:.2f} s CPU: "
+          f"{'PASS' if bar['pass'] else 'FAIL' if bar['measured'] else 'NO CANDIDATES'} "
+          f"(p95={bar['value']:.4f} s, cell={latency_row['cell']}, "
+          f"frames={export_block['frames']}, candidates={export_block['candidates']}, "
+          f"runWall={export_block['wallS']} s, livePath={export_block['livePath']})")
+
+    fidelity_block = ""
+    if args.fidelity or args.labels:
+        scored_manifest = json.load(open(args.labels)) if args.labels else manifest
+        pre = float(latency_row["result"]["matchPre"])
+        post = float(latency_row["result"]["matchPost"])
+        frows = fidelity_rows(audio, latency_row["candidateTimes"], scored_manifest, pre, post,
+                              fps=1)
+        if args.classes:
+            frows = [r for r in frows if r["id"] in args.classes]
+        fidelity_block = render_fidelity(audio, frows)
+        export_block["classes"] = frows
+        print()
+        print(fidelity_block)
+
+    if args.latency_export:
+        with open(args.latency_export, "w", encoding="utf-8") as fh:
+            json.dump(export_block, fh, indent=1, sort_keys=True)
+            fh.write("\n")
+        print(f"\nlatency export: {args.latency_export}")
+
     payload = {
         "harness": "evals/measure_hud_recall.py",
         "clip": args.clip,
@@ -559,11 +882,13 @@ def main(argv=None) -> int:
         "bars": {"A1_recall": BAR_RECALL, "A2_fpRate": BAR_FP_RATE,
                  "A3_silentWindows": BAR_SILENT_WINDOWS,
                  "A4_candidatesPerMinute": BAR_CANDIDATES_PER_MIN},
-        "grid": [{k: v for k, v in r.items() if k != "result"} for r in rows],
+        "grid": [{k: v for k, v in r.items() if k not in ("result", "candidateTimes")}
+                 for r in rows],
         "chosen": None if best is None else best["cell"],
         "verdict": "continue" if best is not None else "park",
         "diagnose": diag,
         "latchTrace": trace,
+        "latencyExport": export_block if args.latency_export else None,
     }
     out_json = args.json or os.path.join(args.out_dir, "hud_grid.json")
     with open(out_json, "w", encoding="utf-8") as fh:
