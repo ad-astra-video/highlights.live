@@ -23,7 +23,7 @@ import {
 } from "../src/job-settlement.js";
 
 const GOOD_SUMMARY =
-  "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box beats the keeper at the near post.";
+  "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.";
 
 const evidence = () => ({
   rail: "live" as const,
@@ -202,14 +202,14 @@ describe("runSummaryForRow — the promoted row's copy", () => {
       {
         caption: "Ball shoots in midfield",
         body:
-          "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
-          "A burst of noise and motion around 0:12 marks the move that briefly lifts the ground.",
+          "The crowd erupts as the ball shoots through midfield in the opening exchanges. " +
+          "A burst of noise near 2:38 marks the move that breaks forward again.",
       },
       {
         caption: "Scoreboard changes to 2-2.",
         body:
           "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
-          "The keeper is beaten low and the crowd behind the net is up before the restart.",
+          "The near post is beaten low and the crowd behind the net is up before the restart.",
       },
     ];
     for (const c of cases) {
