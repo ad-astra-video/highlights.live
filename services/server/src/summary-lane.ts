@@ -28,6 +28,7 @@ import {
   SUMMARY_DETERMINISTIC_REFUSALS,
   SUMMARY_FEE_RATIO,
   SUMMARY_MAX_CALLS_PER_ROW,
+  summaryRefusalIsRepairable,
   SUMMARY_RAW_MAX_CHARS,
   buildSummaryPrompt,
   gateSummaryDetail,
@@ -212,6 +213,9 @@ export async function runSummaryForRow(
     const prompt = buildSummaryPrompt({
       ...evidence,
       ...(servedOpenings && servedOpenings.size > 0 ? { avoidOpenings: [...servedOpenings] } : {}),
+      // ADAAAA-8803/8806: the retry directive carries the refused draft's
+      // measured shape AND its violations, so the repair line can name both the
+      // shortfall and the missing fact.
       ...(retry ? { retry } : {}),
     });
     const body: SummaryCallBody = {
@@ -238,7 +242,10 @@ export async function runSummaryForRow(
       // `70400b1d` spent 2 calls on both promoted rows to reach the identical
       // `too-few-facts` refusal, which billed 2 x the 1.5x ceiling = 2.0x
       // DECIDE_FEE per row. The second call is now the AC8 repeat path's alone.
-      if (decision.violations.some((v) => SUMMARY_DETERMINISTIC_REFUSALS.includes(v))) {
+      // ADAAAA-8806: a `too-few-facts` refusal is deterministic ONLY when the
+      // row's own evidence cannot nourish two fact types; a thin reply on a row
+      // that does attest two earns the repair retry instead of a drop.
+      if (decision.violations.some((v) => !summaryRefusalIsRepairable(v, evidence))) {
         log(
           `[summary:${descriptor.jobId}] deterministic-refusal highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
         );
@@ -537,6 +544,12 @@ export function summaryEvidenceForRow(row: {
   attestationUsed?: {
     transitionScore?: { pre?: readonly number[] | null; post?: readonly number[] | null } | null;
     transitionKey?: string | null;
+    /** ADAAAA-8806: the folded attestation's own flags. Read only for "did this
+     *  window record a ball outcome at all", so the body (and the prompt) never
+     *  assert what the ball did on a row that measured nothing. */
+    ballOutcome?: string | null;
+    goalCrossed?: boolean | null;
+    scoreBoardChanged?: boolean | null;
   } | null;
   asrTranscript?: string | null;
   matchContext?: unknown;
@@ -559,6 +572,13 @@ export function summaryEvidenceForRow(row: {
     matchContext: row.matchContext ?? null,
     transcript: row.asrTranscript ?? null,
     adjacentScoreCue: adjacentScoreCue ?? null,
+    attestation: row.attestationUsed
+      ? {
+          ballOutcome: row.attestationUsed.ballOutcome ?? null,
+          goalCrossed: row.attestationUsed.goalCrossed ?? null,
+          scoreBoardChanged: row.attestationUsed.scoreBoardChanged ?? null,
+        }
+      : null,
   };
 }
 

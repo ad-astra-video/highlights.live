@@ -35,6 +35,8 @@ import {
   placePhraseOf,
   stripInternalTokens,
   taxonomyKey,
+  attestedBallActionFrom,
+  BALL_OUTCOME_ASSERTION,
   type CaptionGroundingContext,
 } from "./caption-grounding.js";
 import { hasPlacePhrase } from "./caption-grounding.js";
@@ -372,9 +374,52 @@ export function summaryRestatement(summary: string, caption?: string | null): Su
   return { novelTokens, longestSharedRun, captionSubset, overlap, failed, restates: failed.length > 0 };
 }
 
-/** The boolean form the gate uses. */
-export function captionRestatesSummary(summary: string, caption?: string | null): boolean {
-  return summaryRestatement(summary, caption).restates;
+/** The boolean form the gate uses.
+ *
+ *  ADAAAA-8806 (defect 3 on job `3740585f`): the restatement bar must not refuse
+ *  a body that carries an attested fact the caption does NOT carry. Measured
+ *  defect: row `6ff00ac9`'s body read "… during the match involving **Barcelona**
+ *  …" while its served caption named nothing, and `summaryViolations` refused the
+ *  body `restates-caption` because the caption's own tokens ("shoots", "right")
+ *  reappeared. That is the opposite of restatement: the body was the only surface
+ *  with the entity. When `evidence` is supplied, a body that names an attested
+ *  team/player (or carries an attested score line) the caption does not is
+ *  exempt.
+ */
+export function captionRestatesSummary(
+  summary: string,
+  caption?: string | null,
+  evidence?: SummaryEvidence | null
+): boolean {
+  const restatement = summaryRestatement(summary, caption);
+  if (!restatement.restates) return false;
+  if (evidence && summaryAddsAttestedFact(summary, caption, evidence)) return false;
+  return true;
+}
+
+/** ADAAAA-8806: does `summary` carry an ATTESTED entity or score line that
+ *  `caption` lacks? Both directions are read from the row's own evidence, so no
+ *  new source is introduced. */
+export function summaryAddsAttestedFact(
+  summary: string,
+  caption: string | null | undefined,
+  evidence: SummaryEvidence
+): boolean {
+  const cap = caption ?? "";
+  // An attested team/player named by the body and not by the caption.
+  if (bodyNamesAttestedActor(summary, evidence) && !bodyNamesAttestedActor(cap, evidence)) return true;
+  // An attested score line in the body that the caption does not carry.
+  const capFacts = summaryFacts(cap).filter((f) => f.kind === "score");
+  const bodyScores = summaryFacts(summary).filter((f) => f.kind === "score");
+  for (const fact of bodyScores) {
+    const grounded =
+      scoreFactGrounded(fact.text, evidence) ||
+      (!!evidence.adjacentScoreCue && sameScore(evidence.adjacentScoreCue, fact.text));
+    if (!grounded) continue;
+    const shared = capFacts.some((c) => sameScore(c.text, fact.text) || cap.includes(fact.text));
+    if (!shared) return true;
+  }
+  return false;
 }
 
 // --- facts -----------------------------------------------------------------
@@ -641,7 +686,10 @@ export type SummaryViolation =
   /** AC10 (rev 3): a role noun the row's evidence does not attest. */
   | "unattested-role"
   /** AC9 (rev 3): fewer than two DISTINCT attested fact types. */
-  | "too-few-facts";
+  | "too-few-facts"
+  /** ADAAAA-8806 (AC9): the body asserts what the BALL did while the row's own
+   *  attestation recorded no ball outcome. */
+  | "unattested-action";
 
 /**
  * ADAAAA-8773 / spec §13.2 (rev 7): the refusals a SECOND sample cannot repair.
@@ -658,6 +706,29 @@ export const SUMMARY_DETERMINISTIC_REFUSALS: readonly SummaryViolation[] = [
   "ungrounded-name",
   "internal-token",
 ];
+
+/**
+ * ADAAAA-8806: is THIS refusal repairable by one more sample of the same prompt?
+ *
+ * `too-few-facts` was treated as deterministic unconditionally, which is right
+ * only when the row's own evidence cannot nourish two fact types. When the menu
+ * DOES offer two (the measured rows of job `3740585f` offered clock + a named
+ * Barcelona action), a clock-only reply is a SAMPLING miss — the reply, not the
+ * row, is thin — so the retry slot (still `SUMMARY_MAX_CALLS_PER_ROW`, AC5) is
+ * spent on a repair instruction instead of giving up on the row. Measured cost
+ * of the wrong rule: row `2d8e9521` dropped after ONE call although `Barcelona`
+ * was attested in its own `matchContext`.
+ */
+export function summaryRefusalIsRepairable(
+  violation: SummaryViolation,
+  evidence: SummaryEvidence
+): boolean {
+  if (!SUMMARY_DETERMINISTIC_REFUSALS.includes(violation)) return true;
+  if (violation === "too-few-facts") {
+    return attestedFactKinds(evidence).length >= SUMMARY_MIN_FACT_KINDS;
+  }
+  return false;
+}
 
 /** The evidence a summary is gated against. Everything is the ROW's own
  *  evidence; a missing field fails closed (never invents). */
@@ -683,6 +754,36 @@ export interface SummaryEvidence {
   transcript?: string | null;
   /** An adjacent scoring cue (the neighbouring scoring window's line), when one exists. */
   adjacentScoreCue?: string | null;
+  /**
+   * ADAAAA-8806 (AC9 on the body): the row's folded goal attestation, as the
+   * record carries it (`attestationUsed`). Absent => no attestation on this
+   * surface, and every bar below keeps today's behaviour byte-identically.
+   *
+   * Read for ONE thing: whether the window recorded a ball OUTCOME. A body may
+   * not assert what the ball did when the row's own measurement says nothing was
+   * measured — the measured defect is row `6ff00ac9` of job `3740585f`
+   * (`ballOutcome: none`, `goalCrossed: false`) served as "The ball shoots on
+   * the right.".
+   */
+  attestation?: {
+    ballOutcome?: string | null;
+    goalCrossed?: boolean | null;
+    scoreBoardChanged?: boolean | null;
+  } | null;
+}
+
+/** ADAAAA-8806 (AC9): does the row's attestation record NO ball outcome? `null`
+ *  when the surface carries no attestation at all (legacy / VOD rows), so every
+ *  existing body keeps its behaviour. */
+export function summaryBallActionAttested(evidence: SummaryEvidence): boolean | null {
+  return attestedBallActionFrom(evidence.attestation ?? null);
+}
+
+/** ADAAAA-8806 (AC9): the body asserts what the ball did while the row's own
+ *  measurement recorded nothing. */
+export function bodyAssertsUnattestedAction(text: string, evidence: SummaryEvidence): boolean {
+  if (summaryBallActionAttested(evidence) !== false) return false;
+  return BALL_OUTCOME_ASSERTION.test(text ?? "");
 }
 
 const SPECULATIVE_RE = /\b(?:appeared\s+to|seemed\s+to|looked\s+like|looks\s+like|might\s+have|may\s+have|could\s+have|perhaps|possibly|probably)\b/i;
@@ -1176,7 +1277,7 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   if (hasGoalClaim(body) && gateGoalClaims(body, ctx) !== body) out.push("goal-claim");
   if (gateAbsenceClaims(body, ctx) !== body) out.push("absence-claim");
   if (groundNames(body, ctx.promptText) !== body) out.push("ungrounded-name");
-  if (captionRestatesSummary(body, evidence.caption)) out.push("restates-caption");
+  if (captionRestatesSummary(body, evidence.caption, evidence)) out.push("restates-caption");
   // Depth bars — a name is NOT required (ADAAAA-8456 lesson).
   if (newSummaryFacts(body, evidence.postTitle).length === 0) out.push("no-new-fact");
   if (!hasAttestedEntity(body, summaryEvidenceText(evidence))) out.push("no-attested-entity");
@@ -1185,6 +1286,7 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   // deterministic neutraliser cannot reach. `too-few-facts` is the fact-density
   // bar: two DISTINCT attested channels, never a clock on its own.
   if (unattestedRoleNouns(body, evidence).length > 0) out.push("unattested-role");
+  if (bodyAssertsUnattestedAction(body, evidence)) out.push("unattested-action");
   if (attestedSummaryFactKinds(body, evidence).length < SUMMARY_MIN_FACT_KINDS) out.push("too-few-facts");
   return out;
 }
@@ -1290,7 +1392,12 @@ export interface SummaryPromptInput extends SummaryEvidence {
   avoidOpenings?: string[];
   /** ADAAAA-8803: present only on the RETRY call — the measured shape of the
    *  draft the gate refused. Absent on the first pass, so the first prompt stays
-   *  the snapshot-pinned one. */
+   *  the snapshot-pinned one.
+   *
+   *  ADAAAA-8806 reads the same directive's `violations`: when the refused draft
+   *  was fact-poor (`too-few-facts` / `no-attested-entity`) the retry is told to
+   *  name the row's attested actor, so the second sample repairs the fact menu
+   *  instead of re-landing clock-only. */
   retry?: SummaryRetryDirective;
 }
 
@@ -1379,6 +1486,13 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
         "- Do not pad with generic talk about momentum, intensity or the crowd rising: every added sentence must carry a fact from the evidence below.",
       ]
     : [];
+  // ADAAAA-8806: the actors the row's own evidence attests, named EXPLICITLY so
+  // the body can carry the entity (AC11) and a second fact type (AC9/AC12)
+  // instead of a clock-only sentence — the measured cause of the 2/2 dry rows on
+  // job `3740585f`, whose summary bodies named nobody although `matchContext`
+  // carried Barcelona.
+  const attestedActors = attestedActorNames(input);
+  const ballActionAttested = attestedBallActionFrom(input.attestation ?? null);
   const lines = [
     "You write the BODY copy under a highlight clip's short headline.",
     "The headline is already on the card; your copy sits underneath it and must add detail.",
@@ -1391,6 +1505,16 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
     "- The clock fact is the `Window:` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.",
     "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.",
+    ...(attestedActors.length > 0
+      ? [
+          `- The evidence attests these actors: ${attestedActors.slice(0, 8).join(", ")}. NAME at least one of them and say what they did — that is the second fact type your copy needs, and the headline is not allowed to carry a name so this is where it belongs.`,
+        ]
+      : []),
+    ...(ballActionAttested === false
+      ? [
+          "- No ball outcome was measured in this window: do NOT say the ball was shot, headed, struck, fired, saved, blocked, cleared or went wide/in/near, and do not describe the ball entering the net. Describe the move, the reaction, the crowd or the team's play instead.",
+        ]
+      : []),
     attestsScoring
       ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
       : "- This is NOT a scoring play: the words 'goal', 'scoring', 'score' and 'net' are off limits. Do not describe a goal or a scoring chance, do not name the net, and do not state a score or whether it changed.",
@@ -1402,6 +1526,21 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     ...(input.avoidOpenings && input.avoidOpenings.length > 0
       ? [`- Do not open with any of these already-served runs: ${input.avoidOpenings.slice(0, 8).map((o) => `'${o}'`).join(", ")}.`]
       : []),
+    ...(() => {
+      // ADAAAA-8806: a retry whose draft was FACT-POOR gets an explicit repair
+      // instruction naming the row's attested actor — the measured case is row
+      // `2d8e9521` of job `3740585f`, whose retried copy only has to name
+      // Barcelona to clear `too-few-facts`.
+      const violations = input.retry?.violations ?? [];
+      const factPoor =
+        violations.includes("too-few-facts") || violations.includes("no-attested-entity");
+      if (!factPoor) return [];
+      const actor = attestedActors[0];
+      if (!actor) return [];
+      return [
+        `- The previous draft was fact-poor (${violations.join(", ")}). NAME ${actor} and say what they did, so the copy carries two different facts.`,
+      ];
+    })(),
     "- Do not restate the headline or the announcer line.",
     "- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').",
     "Evidence:",
