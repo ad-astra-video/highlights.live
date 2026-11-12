@@ -75,21 +75,27 @@ export const SUMMARY_LIVE_BAND: SummaryDepthBand = {
   hardMaxChars: 420,
 };
 
-/** VOD: 3-5 sentences / 40-90 words, hard reject > 120 words / 700 chars.
+/** VOD: 3-5 sentences / aim 45-55 words / floor 40, hard reject > 120 words / 700
+ *  chars.
  *
- *  ADAAAA-8791: the floor IS the target. It used to sit at 0.72x (30), which let
- *  a 36-word body serve as `accepted` on promoted row `0526c296` of job
- *  `a200d2bd` — a depth FAIL on the VOD band even though the fact menu was
- *  correct. A draft under `targetMinWords` is now a `too-few-words` refusal, so
- *  the lane spends its one retry slot on length repair (a non-deterministic
- *  refusal: another sample can be longer) and a row that never reaches the
- *  target drops instead of serving thin copy. */
+ *  ADAAAA-8791: the floor sits at the spec's 40-word bar, not at the old 0.72x
+ *  fraction (30), which let a 36-word body serve as `accepted` on promoted row
+ *  `0526c296` of job `a200d2bd`. A draft under `floorWords` is a `too-few-words`
+ *  refusal.
+ *
+ *  ADAAAA-8803: the TARGET band is now ABOVE the floor (45-55, not 40-90). The
+ *  served VOD leg of job `4e5ddf8d` landed its only accepted body on exactly 41
+ *  words — one word over the floor — so "compliant" was a single-word boundary
+ *  case that the next fresh sample could miss in either direction. Asking for a
+ *  band well clear of the floor keeps a compliant draft off the boundary, and the
+ *  retry (see `summaryRetryMinWords`) asks for the floor plus a margin. The floor
+ *  itself is unchanged: it is the SERVE bar, and the gate is the same gate. */
 export const SUMMARY_VOD_BAND: SummaryDepthBand = {
   rail: "vod",
   minSentences: 3,
   maxSentences: 5,
-  targetMinWords: 40,
-  targetMaxWords: 90,
+  targetMinWords: 45,
+  targetMaxWords: 55,
   floorWords: 40,
   hardMaxWords: 120,
   hardMaxChars: 700,
@@ -97,6 +103,21 @@ export const SUMMARY_VOD_BAND: SummaryDepthBand = {
 
 export function summaryBand(rail: SummaryRail): SummaryDepthBand {
   return rail === "vod" ? SUMMARY_VOD_BAND : SUMMARY_LIVE_BAND;
+}
+
+/** ADAAAA-8803: the word margin a RETRY is asked to clear above the floor.
+ *
+ *  A retry that only restates the floor can re-land on it (the served VOD row
+ *  `2f5a5796` retried to 34 words against a 40-word floor, six short). The retry
+ *  instruction therefore asks for `floorWords + this margin`, i.e. 45 words when
+ *  the floor is 40 — the same number the first-pass target band asks for. */
+export const SUMMARY_RETRY_DEPTH_MARGIN_WORDS = 5;
+
+/** The depth a retry is asked for: the band target, never less than the floor
+ *  plus `SUMMARY_RETRY_DEPTH_MARGIN_WORDS`. Live resolves to its 25-word target;
+ *  VOD resolves to 45 (floor 40 + 5). */
+export function summaryRetryMinWords(band: SummaryDepthBand): number {
+  return Math.max(band.targetMinWords, band.floorWords + SUMMARY_RETRY_DEPTH_MARGIN_WORDS);
 }
 
 /** R4 (rev 2, ADAAAA-8687): the caption-token coverage figure, kept ONLY as a
@@ -1240,6 +1261,23 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
 
 // --- prompt contract -------------------------------------------------------
 
+/** ADAAAA-8803: what the RETRY is told about the draft that was refused.
+ *
+ *  A retry that re-sends the same prompt is a second sample of the same
+ *  distribution: the served VOD row `2f5a5796` retried 28 words -> 34 words
+ *  against a 40-word floor, so both calls were spent and the row still dropped.
+ *  The lane hands the gate's own measurement to the second call, so the model is
+ *  told the measured shortfall and the fact types that close it instead of
+ *  re-reading the first instruction. Optional: the first pass carries none. */
+export interface SummaryRetryDirective {
+  /** Words the refused draft measured (the gate's count, not an estimate). */
+  words: number;
+  /** Sentences the refused draft measured, when the gate reports one. */
+  sentences?: number;
+  /** The violation tokens that refused it, e.g. `["too-few-words"]`. */
+  violations?: string[];
+}
+
 /** Everything the summary prompt may show the model. Built from the row's own
  *  evidence: no invented team, no invented name, no decide-contract change. */
 export interface SummaryPromptInput extends SummaryEvidence {
@@ -1250,6 +1288,10 @@ export interface SummaryPromptInput extends SummaryEvidence {
    *  for a different opening instead of relying on the gate to reject a repeat —
    *  prompt first, gate as the backstop. */
   avoidOpenings?: string[];
+  /** ADAAAA-8803: present only on the RETRY call — the measured shape of the
+   *  draft the gate refused. Absent on the first pass, so the first prompt stays
+   *  the snapshot-pinned one. */
+  retry?: SummaryRetryDirective;
 }
 
 /** ADAAAA-8773: the placeholder a match-clock stamp is replaced with in the
@@ -1320,13 +1362,31 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   const factMenu = attestsScoring
     ? "the score line, the clock or spell, the competition or venue, or an attested team's or player's action"
     : "the clock or spell, the competition or venue, or an attested team's or player's action";
+  // ADAAAA-8803: the depth instruction is a BAND, and the RETRY is told what the
+  // refused draft measured. Both fixes answer the same measured defect on the
+  // served VOD leg of job `4e5ddf8d`: a compliant draft landed on 41 words
+  // against a 40-word floor (one-word margin), and the retried row re-landed at
+  // 34 words because the retry re-read the same "at least 40 words" line.
+  const retryMin = summaryRetryMinWords(band);
+  const retryLines = input.retry
+    ? [
+        `RETRY: the previous draft measured ${input.retry.words} words${
+          typeof input.retry.sentences === "number" ? ` across ${input.retry.sentences} sentences` : ""
+        } and was refused${input.retry.violations && input.retry.violations.length > 0 ? ` for: ${input.retry.violations.join(", ")}` : ""}.`,
+        `- Close the measured shortfall: this copy must reach at least ${retryMin} words inside ${band.minSentences}-${band.maxSentences} sentences. ${retryMin} is ${retryMin - band.floorWords} words above the ${band.floorWords}-word floor on purpose: a draft that only just clears the floor is the defect this retry exists to repair.`,
+        `- Expand with facts, not filler: add ${factMenu}. The half or spell and a named attested actor's action carry the most words without inventing anything.`,
+        `- Do NOT spend a whole sentence on the clip clock: the \`Window:\` label (${typeof input.windowTs === "number" && Number.isFinite(input.windowTs) ? clockLabel(input.windowTs) : "the offset"}) must sit INSIDE a sentence that also carries another fact. A sentence that only says when the clip moment occurs adds no depth and does not count toward the two-fact rule.`,
+        "- Do not pad with generic talk about momentum, intensity or the crowd rising: every added sentence must carry a fact from the evidence below.",
+      ]
+    : [];
   const lines = [
     "You write the BODY copy under a highlight clip's short headline.",
     "The headline is already on the card; your copy sits underneath it and must add detail.",
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the competition or venue, or a named attested actor's action.`,
+    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, the competition or venue, or a named attested actor's action — rather than padding.`,
+    ...retryLines,
     `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
     "- The clock fact is the `Window:` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.",

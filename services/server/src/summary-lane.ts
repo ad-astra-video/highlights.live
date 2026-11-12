@@ -36,6 +36,7 @@ import {
   type SummaryDropReason,
   type SummaryEvidence,
   type SummaryRail,
+  type SummaryRetryDirective,
 } from "@highlights/events";
 
 /** The subset of the store this lane needs (narrow on purpose: the lane must not
@@ -200,6 +201,9 @@ export async function runSummaryForRow(
   let lastReason: SummaryDropReason | null = null;
   /** The last refusal, so the drop path can keep its reply as `summaryRaw`. */
   let lastGate: ReturnType<typeof gateSummaryDetail> | null = null;
+  /** ADAAAA-8803: the measured shape of the draft the gate refused, handed to
+   *  the retry call. Absent on the first pass, so the first prompt is unchanged. */
+  let retry: SummaryRetryDirective | undefined;
   const started = now();
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
     // AC8 prompt-first: the regeneration (and any retry) is asked to avoid the
@@ -208,6 +212,7 @@ export async function runSummaryForRow(
     const prompt = buildSummaryPrompt({
       ...evidence,
       ...(servedOpenings && servedOpenings.size > 0 ? { avoidOpenings: [...servedOpenings] } : {}),
+      ...(retry ? { retry } : {}),
     });
     const body: SummaryCallBody = {
       prompt,
@@ -247,8 +252,18 @@ export async function runSummaryForRow(
       // rows, so a second sample is the difference between 78% coverage and the
       // 95% bar. A refused reply is still never stored as `summary`.
       if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
+        // ADAAAA-8803: the retry is TOLD what the refused draft measured. A
+        // second sample of the same prompt is where the served VOD row
+        // `2f5a5796` went 28 -> 34 words against the 40-word floor; the retry now
+        // carries the shortfall and asks for the floor plus a margin
+        // (`summaryRetryMinWords`), so it cannot re-land on the boundary.
+        retry = {
+          words: decision.words,
+          sentences: decision.sentences,
+          violations: decision.violations,
+        };
         log(
-          `[summary:${descriptor.jobId}] gate-retry highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+          `[summary:${descriptor.jobId}] gate-retry highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} words=${decision.words} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
         );
         continue;
       }
