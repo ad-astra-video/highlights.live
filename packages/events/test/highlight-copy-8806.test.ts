@@ -19,10 +19,15 @@ import {
   attestationDetailCopy,
   captionAssertsUnattestedAction,
   captionSourceText,
+  captionSourceViolation,
+  carriesAuditMarker,
   groundCaption,
   quietStoredCopy,
+  storedCardSurface,
+  storedReasonViolations,
   stripInternalTokens,
 } from "../src/caption-grounding.js";
+import { projectAnnouncerCaption } from "../src/post-title.js";
 import {
   buildSummaryPrompt,
   captionRestatesSummary,
@@ -210,5 +215,120 @@ describe("ADAAAA-8806 — the prompt names the attested actors", () => {
     });
     expect(prompt).toContain("previous draft was fact-poor");
     expect(prompt).toContain("NAME Barcelona");
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8830 — the SCORING-LANE sentence is never a caption source.
+ *
+ * Live leg `27bd816f` (build `fedc717f`) served the model's own audit sentence
+ * as the card caption on 2 of 2 rows, with its window-relative marker and its
+ * channel citation intact (both strings below are verbatim from
+ * `highlights.record`):
+ *
+ *   row `8d521507` caption/postTitle `Midfielder scores`
+ *   row `a4827973` caption/postTitle `Defender scores`
+ *
+ * Two independent holes, one gate family: the marker test required the trailing
+ * unit (`at t=0.0` slipped it), and the CARD gate never applied the store-time
+ * post-condition, so a corroborated card's caption became `reason` and the
+ * post-condition never ran on that row. The bar: neither string may be stored
+ * as copy, and a row already stored that way must not serve it at read time.
+ * ------------------------------------------------------------------------- */
+
+/** Row `8d521507` — the unit-less marker form (`at t=0.0`, no `s`). */
+const ROW_8830_A = "The scoreboard changes to 2-1 at t=0.0 and ASR confirms a goal.";
+/** Row `a4827973` — the unit form, no `at`, plus the evidence tag. */
+const ROW_8830_B =
+  "Ball enters net at t=-1.0s, scoreboard changes to 2-2, and crowd erupts.; scoreboard score change confirmed";
+
+/** The arm that reproduces both stored rows byte-for-byte (lane-1 attested). */
+const GROUNDING_8830 = {
+  verdict: "scoring_play",
+  corroborated: true,
+  place: "",
+  promptText: null as string | null,
+  attestedBallAction: false,
+};
+
+describe("ADAAAA-8830 — the audit marker is never served copy", () => {
+  it("refuses both SERVED strings QA graded (the exact captions)", () => {
+    expect(captionSourceViolation(ROW_8830_A)).toBe("audit-marker");
+    expect(captionSourceViolation("Ball enters net at t=-1.0s, scoreboard changes to 2-2, and crowd erupts.")).toBe(
+      "audit-marker"
+    );
+    // The store-time post-condition agrees on every path, not only the card's.
+    expect(storedReasonViolations(ROW_8830_A, [ROW_8830_A])).toContain("audit-marker");
+    expect(storedReasonViolations(captionSourceText(ROW_8830_B), [ROW_8830_B])).toContain("audit-marker");
+  });
+
+  it("matches the marker with or without the unit and with or without `at`", () => {
+    for (const marker of ["at t=0.0", "at t=-1.0s", "t=0.0", "t = -2.5s", "at t=-3.3s to 0.0s"]) {
+      expect(carriesAuditMarker(`Scoreboard changes to 2-1 ${marker}.`)).toBe(true);
+    }
+    // … and a plain ledger line is untouched.
+    expect(carriesAuditMarker("Scoreboard changes to 2-1.")).toBe(false);
+  });
+
+  it("closes the card bypass: an accepted card cannot carry the marker into `reason`", () => {
+    // The card gate is where `storedReason = card.caption` comes from, so it
+    // applies the same source bar the letter's post-condition does.
+    for (const raw of [ROW_8830_A, ROW_8830_B]) {
+      const card = storedCardSurface({
+        gated: raw,
+        raw,
+        quiet: false,
+        corroborated: GROUNDING_8830.corroborated,
+        verdict: GROUNDING_8830.verdict,
+      });
+      expect(card.caption).toBe("");
+      expect(card.cardTitles).toEqual([]);
+    }
+  });
+
+  it("serves the row's own attested fact instead (the 8411 deletion lane)", () => {
+    // The marker and the ASR citation are deleted, the measured scoreline stays:
+    // no model call, no word invented, and the string is not the audit sentence.
+    expect(attestationDetailCopy(ROW_8830_A, { verdict: "scoring_play", eventType: "GOAL" })).toBe(
+      "The scoreboard changes to 2-1."
+    );
+    expect(attestationDetailCopy(ROW_8830_B, { verdict: "scoring_play", eventType: "GOAL" })).toBe(
+      "Scoreboard changes to 2-2."
+    );
+  });
+
+  it("refuses the same shapes at the quiet seam (no copy is owed a machine sentence)", () => {
+    expect(quietStoredCopy(ROW_8830_A, GROUNDING_8830)).toBe("");
+    expect(quietStoredCopy(ROW_8830_B, GROUNDING_8830)).toBe("");
+  });
+
+  it("stops a row ALREADY STORED that way from serving it (legacy read gate)", () => {
+    // The graded leg is already persisted, so the read projection mirrors the
+    // write gate; the row keeps an attested fact line, never `reason_raw` prose.
+    const legacy = {
+      id: "8d521507",
+      caption: ROW_8830_A,
+      reason: ROW_8830_A,
+      reasonRaw: ROW_8830_A,
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      postTitle: "Midfielder scores",
+      localizedTs: 102.595,
+    };
+    const served = projectAnnouncerCaption(legacy as never, "Midfielder scores");
+    expect(served).not.toBe(ROW_8830_A);
+    expect(carriesAuditMarker(served)).toBe(false);
+    expect(served.toLowerCase()).not.toContain("asr");
+    expect(served).toBe("The scoreboard changes to 2-1.");
+  });
+
+  it("keeps ADAAAA-8209's sanctioned trailing attribution (the bar reads the LEAD)", () => {
+    // A real beat with a provenance TAIL stays stored byte-identically — this
+    // ticket narrows nothing that 8209 pinned.
+    const line = "Scoreboard changes to 2-1 and commentary confirms the shot on the left.";
+    expect(captionSourceViolation(line)).toBe("");
+    expect(storedReasonViolations(line, [line])).toEqual([]);
+    // A line whose LEAD is the citation is provenance, not copy.
+    expect(captionSourceViolation("ASR confirms a goal.")).toBe("attestation-cite");
   });
 });
