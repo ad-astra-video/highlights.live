@@ -116,11 +116,17 @@ describe("AC3 — the highlight-row derivation IS the decide-note derivation", (
       const note = deriveConfirmation(candidate);
       expect(note?.lane).toBe(lane);
       const served = confirmationForHighlightRow({ status: "accepted", trigger: candidate.trigger }, candidate);
-      // Byte-equal projection: the card states exactly the note's lane + label.
-      expect(served).toEqual({ lane: note!.lane, label: note!.label });
+      // Byte-equal projection: the card states exactly the note's lane + label,
+      // plus ADAAAA-8721's skip reason (a card-surface field too).
+      expect(served).toEqual({
+        lane: note!.lane,
+        label: note!.label,
+        ...(note!.skipReason ? { skipReason: note!.skipReason } : {}),
+      });
       // …and NOTHING from the inspector half rides along (the same gate
-      // `stripWindowInspection()` applies to the decide note).
-      expect(Object.keys(served ?? {}).sort()).toEqual(["label", "lane"]);
+      // `stripWindowInspection()` applies to the decide note). The allowed card
+      // surface is exactly lane + label + skipReason.
+      for (const key of Object.keys(served ?? {})) expect(["label", "lane", "skipReason"]).toContain(key);
     });
   }
 
@@ -137,7 +143,12 @@ describe("AC3 — the highlight-row derivation IS the decide-note derivation", (
     // A non-accepted row with no dive: `deriveConfirmation` returns undefined, so
     // a legacy/rejected row never states a lane the pipeline did not derive.
     expect(confirmationForHighlightRow({ status: "rejected" })).toBeUndefined();
-    expect(confirmationForHighlightRow({ status: "pending" as any })).toBeUndefined();
+    // ADAAAA-8678 (which landed after this file): a PENDING row is a publish
+    // state, not a rejection, so it states its lane — worded as the approve
+    // queue — instead of serving no block at all.
+    const pending = confirmationForHighlightRow({ status: "pending" as any });
+    expect(pending?.lane).toBe("unconfirmed");
+    expect(pending?.label).toMatch(/Awaiting approval/);
   });
 
   it("a legacy accepted row derives honestly from its own stored status", () => {
@@ -228,11 +239,14 @@ describe("AC3 — GET /jobs/:id/detail carries the lane on EVERY served row", ()
       expect(served(goalId)?.confirmation).toEqual({
         lane: "measured",
         label: deriveConfirmation(MEASURED)!.label,
+        // ADAAAA-8721 (D3): this fixture's confirm gate is off, so the served
+        // card names that as the reason no dive ran.
+        skipReason: "dive_disabled",
       });
       // A legacy row is served, and its honest lane is `unconfirmed`.
       expect(served(legacyId)?.confirmation?.lane).toBe("unconfirmed");
       for (const row of highlights) {
-        expect(Object.keys(row.confirmation).sort()).toEqual(["label", "lane"]);
+        for (const key of Object.keys(row.confirmation)) expect(["label", "lane", "skipReason"]).toContain(key);
       }
 
       const notable = (body.notableHighlights as any[]).find((m) => m.id === notableId);
