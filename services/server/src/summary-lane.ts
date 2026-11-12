@@ -200,11 +200,6 @@ export async function runSummaryForRow(
   let lastReason: SummaryDropReason | null = null;
   /** The last refusal, so the drop path can keep its reply as `summaryRaw`. */
   let lastGate: ReturnType<typeof gateSummaryDetail> | null = null;
-  /** ADAAAA-8791: the refused draft's word count, when the refusal was
-   *  `too-few-words`. The retry prompt names it (prompt first, gate backstop) so
-   *  the one remaining sample aims at the band's floor instead of re-sampling
-   *  the same short shape. Cleared on any non-length refusal. */
-  let repairWords: number | undefined;
   const started = now();
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
     // AC8 prompt-first: the regeneration (and any retry) is asked to avoid the
@@ -213,7 +208,6 @@ export async function runSummaryForRow(
     const prompt = buildSummaryPrompt({
       ...evidence,
       ...(servedOpenings && servedOpenings.size > 0 ? { avoidOpenings: [...servedOpenings] } : {}),
-      ...(repairWords ? { repairWords } : {}),
     });
     const body: SummaryCallBody = {
       prompt,
@@ -233,11 +227,6 @@ export async function runSummaryForRow(
     if (!decision.summary) {
       lastGate = decision;
       lastReason = "gate";
-      // ADAAAA-8791: a short draft is a NON-deterministic refusal — another
-      // sample can be longer — so the retry prompt names its length. The gate's
-      // VOD floor is the band's target, so this is what closes the 36-word depth
-      // FAIL instead of serving sub-target copy as `accepted`.
-      repairWords = decision.violations.includes("too-few-words") ? decision.words : undefined;
       // ADAAAA-8773 / spec §13.2 (rev 7): a DETERMINISTIC refusal ends the row on
       // ONE call. The row's fact menu is fixed and the same prompt cannot repair a
       // clock anchor, an invented name or an enum-shaped token; the served VOD job
