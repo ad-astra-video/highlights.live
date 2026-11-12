@@ -44,6 +44,11 @@
 //      duplicate lane with `duplicateOf`. A true non-goal notable (near miss, a
 //      score-steady big play, the clip-loop tail reads) keeps its own row: only
 //      the narrow, goal-bounded class above is absorbable.
+//   6. ADAAAA-8733 (GT-2): two GOAL-class moments whose SCOREBUG MATCH CLOCK
+//      reads prove they are the same game moment collapse into ONE moment even
+//      when their clip windows do not overlap; two whose clocks prove they are
+//      distinct are never collapsed. See the clock lane below for R1-R6.
+
 import {
   MAX_NOTABLE_ALTERNATIVES_PER_HIGHLIGHT,
   NOTABLE_MOMENT_GAP_S,
@@ -340,11 +345,19 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
 
   const collapsed = collapseOverlappingWindows(candidates);
   counts.merged = collapsed.merged;
+  // ADAAAA-8733 (GT-2): combine the surviving moments on the SCOREBUG MATCH
+  // CLOCK. This runs AFTER the precision gate and the overlap collapse, so the
+  // clock can never add, confirm, demote or re-lane a GOAL (R3) — it can only
+  // recognise that two already-postable moments are one game moment. The job's
+  // own rows decide whether the lane is live at all (R5: no clock / frozen bug
+  // => disabled => byte-identical delivery).
+  const clockLane = clockCombineForJob(collapsed.moments, visible);
+  counts.merged += clockLane.merged;
   // ADAAAA-8199: absorb the goal-shaped celebration lane into the confirmed GOAL
   // it overlaps, so one transition never ships as a GOAL card PLUS a celebration
   // card. The rows are NOT mutated or deleted (the persisted audit trail keeps
   // both); the read-side projection is what the board and the counts show.
-  const absorbed = absorbGoalCelebrations(collapsed.moments, notable);
+  const absorbed = absorbGoalCelebrations(clockLane.moments, notable);
   counts.merged += absorbed.absorbed;
   // ADAAAA-8155: a demoted row that survives the overlap absorb can still be the
   // SAME transition as an accepted GOAL when its judged instant sits inside that
@@ -352,21 +365,21 @@ export function buildPostableHighlights(list: HighlightRecord[]): PostableHighli
   // the windows no longer overlap and the absorb rule cannot see it. Clear the
   // marker there too, or the board prints "GOAL (unconfirmed)" beside the
   // accepted card for one goal. Marker only: the fail-closed invariant stands.
-  const notableRows = suppressCoveredProvisionalMarkers(collapsed.moments, absorbed.notable);
+  const notableRows = suppressCoveredProvisionalMarkers(clockLane.moments, absorbed.notable);
   // The absorbed rows leave the "not scoring" drop bucket and join the merged
   // one, so the count identity `raw - postable = merged + rejected + notScoring +
   // contradicting` still holds (nothing is counted twice or lost).
   counts.notScoring = Math.max(0, counts.notScoring - absorbed.absorbed);
-  const duplicates = [...collapsed.duplicates, ...absorbed.duplicates].sort((a, b) => a.start - b.start);
-  counts.postable = collapsed.moments.length;
+  const duplicates = [...clockLane.duplicates, ...collapsed.duplicates, ...absorbed.duplicates].sort((a, b) => a.start - b.start);
+  counts.postable = clockLane.moments.length;
   // ADAAAA-8422 (N1): the surviving notable rows grouped into moments. Pure
   // presentation over the SAME rows — counts above are already final and never
   // read this projection.
   const notableMoments = clusterNotableWindows(notableRows);
   // ADAAAA-8542 (AC3): account every persisted row against exactly this served
   // projection — one pass, so the accounting can never disagree with the page.
-  const rowAccounting = accountHighlightRows(list, { highlights: collapsed.moments, duplicates, notableMoments });
-  return { highlights: collapsed.moments, notable: notableRows, notableMoments, duplicates, counts, rowAccounting };
+  const rowAccounting = accountHighlightRows(list, { highlights: clockLane.moments, duplicates, notableMoments });
+  return { highlights: clockLane.moments, notable: notableRows, notableMoments, duplicates, counts, rowAccounting };
 }
 
 /**
@@ -685,6 +698,227 @@ export function collapseOverlappingWindows(candidates: HighlightRecord[]): Colla
   moments.sort((a, b) => a.start - b.start);
   duplicates.sort((a, b) => a.start - b.start);
   return { moments, duplicates, merged: mergedCount };
+}
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8733 (GT-2): combine GOAL moments on the SCOREBUG MATCH CLOCK
+// ---------------------------------------------------------------------------
+//
+// Every lane that combines clips today guesses about the STREAM, not the GAME:
+// footage overlap (`collapseOverlappingWindows` above), the 30 s burst window,
+// the 60 s duplicate reach and the 120 s same-transition horizon. Measured cost
+// of guessing: live job `9a6b1d8f` shipped ONE `1-1 -> 2-1` goal THREE times, 37 s
+// and 82 s apart — every row honestly attested by a legible forward score read.
+//
+// When the clock is legible it is the only on-screen signal that says "this is
+// the same game moment" without needing a score transition to parse. The rules
+// below are the GT-1 census's verdict turned into a lane, and they only ever
+// REMOVE duplicates from the postable list — the persisted rows are untouched:
+//
+//   R1 same moment  — two GOAL-class moments whose clocks agree within
+//                     `CLOCK_SAME_MOMENT_S` (same period, coherent with content
+//                     time) are one event even when their windows do not overlap
+//                     and their transition keys disagree or are null.
+//   R2 distinct     — clocks separated by >= `CLOCK_DISTINCT_S` are distinct
+//                     events and are never absorbed.
+//   R3 never attestation — the lane runs AFTER the precision gate, so a clock
+//                     can never add, confirm, demote or re-lane a GOAL. Where
+//                     the clock and the score disagree, the SCORE wins; a null
+//                     clock is a no-op.
+//   R4 coherence    — a clock participates only when it advances with content
+//                     time. A REWOUND read is a replay inset, not a same-moment
+//                     proof, so it never combines (it keeps riding the existing
+//                     replay/alternative lane).
+//   R5 frozen bug   — a job whose bug shows an unchanging clock while content
+//                     time advances has NO clock lane, so a placeholder graphic
+//                     can never merge genuinely distinct goals.
+//   R6 no new clip budget — nothing is re-cut or lengthened: the owner's clip
+//                     stays as delivered and the others are absorbed as
+//                     duplicates, exactly like the overlap collapse.
+//
+// The tolerances are GT-1's measurements, not intuition: the largest |Δclock|
+// between two re-reads of the SAME event was 7 s (=> CLOCK_SAME_MOMENT_S = 10),
+// and the smallest |Δclock| between genuinely distinct goals on one coherent
+// segment was 309 s with nothing measured between 10 s and 309 s (=> 30 s as a
+// safe floor, 3x the same-moment spread).
+
+/** GT-1: two clock reads this close (seconds) are the SAME game moment. */
+export const CLOCK_SAME_MOMENT_S = 10;
+/** GT-1: two legible clocks this far apart (seconds) are DISTINCT events. */
+export const CLOCK_DISTINCT_S = 30;
+/** GT-1 coherence: |Δclock - Δcontent| within this is a coherent read. The
+ * measured same-event re-read ticked +7 s of clock over +4 s of content. */
+export const CLOCK_COHERENCE_TOLERANCE_S = 3;
+/** R5: a clock that does not move while content advances this far is a frozen
+ * (static/placeholder) bug, measured as Δclock=0 over >20 s in the census. */
+export const CLOCK_FROZEN_SPAN_S = 20;
+
+/** How a pair of clock readings relates, for the merge decision. */
+export type ClockPairRelation =
+  /** R1: agree within CLOCK_SAME_MOMENT_S on one coherent segment. */
+  | "same_moment"
+  /** R2: both legible, >= CLOCK_DISTINCT_S apart, coherent. */
+  | "distinct"
+  /** R4: the clock went BACKWARDS against content time (a replay inset). */
+  | "rewound"
+  /** R4: the clock does not advance with content (a graphic/match cut). */
+  | "jumping"
+  /** Between the two tolerances, or two reads at the same content instant that
+   * disagree: neither rule applies, so the lane is a no-op. */
+  | "inconclusive"
+  /** At least one side carries no legible clock: nothing to combine on. */
+  | "unknown";
+
+/** The clock fields the lane reads. Structural so a bare fixture row works. */
+type ClockBearing = {
+  matchClock?: { seconds: number | null; period?: string | null; legible?: boolean; ts?: number };
+  start?: number;
+  end?: number;
+  localizedTs?: number;
+};
+
+/** The legible clock of a row, or undefined (a null/unreadable clock never
+ * participates — R3's no-op). A period-less reading is allowed: the census's
+ * FOX Euro bug shows none. */
+function legibleClock(h: ClockBearing): { seconds: number; period: string | null; ts: number } | undefined {
+  const c = h.matchClock;
+  if (!c || c.legible === false) return undefined;
+  if (typeof c.seconds !== "number" || !Number.isFinite(c.seconds) || c.seconds < 0) return undefined;
+  return { seconds: c.seconds, period: c.period ?? null, ts: clockContentTs(h) };
+}
+
+/** The content instant a row's clock was read at: the reading's own frame ts
+ * when it has one, else the row's localized instant, else its window centre. */
+function clockContentTs(h: ClockBearing): number {
+  if (typeof h.matchClock?.ts === "number" && Number.isFinite(h.matchClock.ts)) return h.matchClock.ts;
+  if (typeof h.localizedTs === "number" && Number.isFinite(h.localizedTs)) return h.localizedTs;
+  const start = typeof h.start === "number" ? h.start : 0;
+  const end = typeof h.end === "number" ? h.end : start;
+  return (start + end) / 2;
+}
+
+/**
+ * ADAAAA-8733: how a PAIR of moments relates on the clock. Pure and symmetric —
+ * the order of the two rows never changes the answer.
+ *
+ * R4 is the segment gate GT-1 says is mandatory: every incoherent pair in the
+ * census was a graphic/match cut (a bumper, a studio cut-away, a quarter edit),
+ * never an OCR error, so requiring the clock to track content time is what stops
+ * one match's bug from merging another match's goals.
+ */
+export function clockPairRelation(a: ClockBearing, b: ClockBearing): ClockPairRelation {
+  const ca = legibleClock(a);
+  const cb = legibleClock(b);
+  if (!ca || !cb) return "unknown";
+  // A different period (1H vs 2H, Q3 vs Q4) is a different moment, never a
+  // duplicate. Two period-less readings (many bugs show none) stay comparable.
+  if (ca.period && cb.period && ca.period !== cb.period) return "distinct";
+  const [first, second] = ca.ts <= cb.ts ? [ca, cb] : [cb, ca];
+  const deltaClock = second.seconds - first.seconds;
+  const deltaContent = second.ts - first.ts;
+  const skew = Math.abs(deltaClock - deltaContent);
+  if (deltaContent <= 0) {
+    // Two reads at the same content instant: agreeing clocks are one moment.
+    return Math.abs(deltaClock) <= CLOCK_SAME_MOMENT_S ? "same_moment" : "inconclusive";
+  }
+  if (skew > CLOCK_COHERENCE_TOLERANCE_S) {
+    // Incoherent: the clock moved independently of content time. Backwards is a
+    // replay inset (R4); forwards is a cut to another graphic/match.
+    return deltaClock < 0 ? "rewound" : "jumping";
+  }
+  if (Math.abs(deltaClock) <= CLOCK_SAME_MOMENT_S) return "same_moment";
+  if (Math.abs(deltaClock) >= CLOCK_DISTINCT_S) return "distinct";
+  return "inconclusive";
+}
+
+/**
+ * ADAAAA-8733 (R5): is the clock lane live for THIS job?
+ *
+ * Disabled when the job carries fewer than two legible clock readings (nothing
+ * to combine on), and disabled when any two reads show an UNCHANGING clock while
+ * content time advances past `CLOCK_FROZEN_SPAN_S` — a static/placeholder bug,
+ * which would otherwise merge genuinely distinct goals. Deliberately conservative:
+ * a job with no clock keeps byte-identical delivery (AC-GT5).
+ */
+export function clockLaneEnabledForJob(rows: ReadonlyArray<ClockBearing>): boolean {
+  const clocks = rows.map((h) => legibleClock(h)).filter((c): c is { seconds: number; period: string | null; ts: number } => !!c);
+  if (clocks.length < 2) return false;
+  for (let i = 0; i < clocks.length; i++) {
+    for (let j = i + 1; j < clocks.length; j++) {
+      const a = clocks[i];
+      const b = clocks[j];
+      if (a.seconds === b.seconds && Math.abs(b.ts - a.ts) > CLOCK_FROZEN_SPAN_S) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * ADAAAA-8733 (R1/R2/R6): collapse moments whose clocks prove they are the SAME
+ * game moment, and never collapse two whose clocks prove they are distinct.
+ *
+ * Membership is a pairwise `same_moment` test against EVERY member of an open
+ * cluster (and a hard spread bound of `CLOCK_SAME_MOMENT_S`), so a chain of
+ * reads cannot drift one cluster across a longer span. The winner is the same
+ * ranking the overlap collapse uses (best corroboration, then score, then the
+ * earlier window), its delivered window is unchanged — nothing is re-cut or
+ * lengthened (R6) — and every loser moves to the duplicate lane with
+ * `duplicateOf`, exactly like the overlap collapse.
+ */
+export function combineClockMoments(moments: PostableHighlight[]): CollapsedMoments {
+  const ordered = [...moments].sort((a, b) => clockContentTs(a) - clockContentTs(b) || a.start - b.start);
+  const clusters: PostableHighlight[][] = [];
+  for (const m of ordered) {
+    const mine = legibleClock(m);
+    // R3: a moment with no legible clock never participates — it opens its own
+    // cluster and can be neither a merge owner nor a merge target.
+    if (!mine) {
+      clusters.push([m]);
+      continue;
+    }
+    const joined = clusters.find((cluster) => {
+      const spread = (seconds: number[]) => Math.max(...seconds) - Math.min(...seconds);
+      const memberClocks = cluster.map((h) => legibleClock(h)!.seconds);
+      if (spread([...memberClocks, mine.seconds]) > CLOCK_SAME_MOMENT_S) return false;
+      return cluster.every((member) => clockPairRelation(member, m) === "same_moment");
+    });
+    if (joined) joined.push(m);
+    else clusters.push([m]);
+  }
+  const outMoments: PostableHighlight[] = [];
+  const duplicates: PostableHighlight[] = [];
+  let merged = 0;
+  for (const cluster of clusters) {
+    if (cluster.length === 1) {
+      outMoments.push({ ...cluster[0] });
+      continue;
+    }
+    const winner = cluster.reduce((best, h) => betterMoment(best, h));
+    const losers = cluster.filter((h) => h.id !== winner.id).sort((a, b) => a.start - b.start);
+    outMoments.push({
+      ...winner,
+      duplicateCount: (winner.duplicateCount ?? 0) + losers.length,
+      mergedIds: [...(winner.mergedIds ?? []), ...losers.map((h) => h.id)],
+    });
+    for (const l of losers) duplicates.push({ ...l, duplicateOf: winner.id });
+    merged += losers.length;
+  }
+  outMoments.sort((a, b) => a.start - b.start);
+  duplicates.sort((a, b) => a.start - b.start);
+  return { moments: outMoments, duplicates, merged };
+}
+
+/**
+ * ADAAAA-8733: the clock lane's read-side entry point. A no-op (returns the same
+ * rows, zero merged) when the job has no usable clock, which is what keeps a
+ * clock-less / static-bug job byte-identical to master (AC-GT4 / AC-GT5).
+ */
+export function clockCombineForJob(
+  moments: PostableHighlight[],
+  jobRows: ReadonlyArray<ClockBearing>
+): CollapsedMoments {
+  if (!clockLaneEnabledForJob(jobRows)) return { moments, duplicates: [], merged: 0 };
+  return combineClockMoments(moments);
 }
 
 // ---------------------------------------------------------------------------
