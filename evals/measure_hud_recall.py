@@ -349,13 +349,19 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         "producer": "hud-event/hud_reader (measure_hud_recall grid cell)",
         "fps": fps,
         "cell": {
-            "changeSensitivity": sensitivity,
-            "minDwellFrames": dwell,
-            "quietFrames": 2,
-            "cell": 8,
-            "referenceFrames": REFERENCE_FRAMES,
-            "maxLatchFrames": MAX_LATCH_FRAMES,
-            "bands": [{"name": n, "rect": list(r), "kind": k} for n, r, k in STK_BANDS],
+            # Recorded from the model the cell actually ran, not from this
+            # module's constants: a constant that drifts from the constructed
+            # HudModel must show up in the artifact instead of being echoed
+            # back. `HudModel.max_latch_frames` has its own default (60), so
+            # the recorded bound is the constructed value, not the default.
+            "changeSensitivity": model.change_sensitivity,
+            "minDwellFrames": model.min_dwell_frames,
+            "quietFrames": model.quiet_frames,
+            "cell": model.cell,
+            "referenceFrames": model.reference_frames,
+            "maxLatchFrames": model.max_latch_frames,
+            "bands": [{"name": b.name, "rect": list(b.rect), "kind": b.kind}
+                      for b in model.bands],
         },
         "frames_observed": reader.frames_observed,
         "flickers_suppressed": reader.flickers_suppressed,
@@ -405,11 +411,17 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
     }
     p95_cpu = latency["eventToCandidateCpuS"]["p95"]
     # A4 is judged on the volume the trigger emits inside the DECODED window (the plan's
-    # 1351 s window), which is the same denominator the audio measurement used. The
-    # oracle's own `candidates_per_minute` divides by its narrower label coverage, so the
-    # two are reported separately and neither hides a candidate.
+    # 1351 s window), which is the same denominator the audio measurement used. A second
+    # rate is reported over the LABEL COVERAGE (the union of the +/-pre/post windows the
+    # oracle scores recall in), because that is the denominator the oracle's own
+    # `candidates_per_minute` uses when it is not overridden — the two must not be
+    # confused, and neither hides a candidate.
     in_decoded = overall["candidates_in_window"] + overall["outside_labelled_window"]
     volume_per_min = in_decoded / (span_s / 60.0) if span_s > 0 else 0.0
+    cov_start, cov_end = oracle.labelled_window(manifest)
+    coverage_s = cov_end - cov_start
+    in_window_per_min = (overall["candidates_in_window"] / (coverage_s / 60.0)
+                         if coverage_s > 0 else 0.0)
     row = {
         "cell": tag,
         "changeSensitivity": sensitivity,
@@ -426,7 +438,10 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         "silentWindows": int(result["negatives"]["silent_windows"]),
         "nonEventWindows": int(result["negatives"]["windows"]),
         "candidatesPerMinute": round(volume_per_min, 3),
-        "candidatesPerMinuteLabelCoverage": round(float(overall["candidates_per_minute"]), 3),
+        # Denominator is the label coverage (1269.33 s), not the 1351 s frame
+        # window — the two rates answer different questions and used to share
+        # the frame-window denominator by accident.
+        "candidatesPerMinuteLabelCoverage": round(in_window_per_min, 3),
         "candidatesInDecodedWindow": int(in_decoded),
         "frameCostP95Ms": round(p95, 3),
         "livePath": bool(stage_a is not None),

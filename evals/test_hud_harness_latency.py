@@ -207,3 +207,65 @@ def test_a5_bar_and_trigger_id_are_pinned():
     assert m.LATENCY_CPU_P95_BAR_S == 0.5
     assert m.INADMISSIBLE_EXIT == 4
     assert m.TRIGGER_HUD_EVENT == "hud-event"
+
+
+# ------------------------------------------- record integrity (reviewer caveats) ---
+
+def test_the_cell_export_records_the_model_it_ran(tmp_path):
+    """The artifact echoes the constructed `HudModel`, not this module's constants.
+
+    `HudModel.max_latch_frames` has its own default (60) while the measured
+    cells run 30, so a reader of the export cannot tell "the bound the cell
+    ran" from "the model's default" unless the record comes from the model the
+    reader was built with. A constant drifting away from the model must show up
+    in the artifact instead of being echoed back.
+    """
+    m.load_reader_module()
+    game_profile = sys.modules[f"{m.READER_PKG}.game_profile"]
+    default_bound = game_profile.HudModel(
+        bands=tuple(game_profile.HudBand(name=n, rect=r, kind=k) for n, r, k in m.STK_BANDS)
+    ).max_latch_frames
+    assert default_bound != 7, "the pin needs a bound that differs from the dataclass default"
+
+    saved = (m.MAX_LATCH_FRAMES, m.REFERENCE_FRAMES)
+    m.MAX_LATCH_FRAMES, m.REFERENCE_FRAMES = 7, 2
+    try:
+        row, model, _ = _run(tmp_path)
+    finally:
+        m.MAX_LATCH_FRAMES, m.REFERENCE_FRAMES = saved
+
+    export = json.loads((tmp_path / f"cell_{row['cell']}.json").read_text())
+    # The record follows the constructed model (the patched constants) and the
+    # dataclass default is visibly not what ran — drift is detectable.
+    assert export["cell"]["maxLatchFrames"] == 7 != default_bound
+    assert export["cell"]["referenceFrames"] == 2
+    assert export["cell"]["quietFrames"] == 2
+    assert export["cell"]["bands"] == [
+        {"name": n, "rect": list(r), "kind": k} for n, r, k in m.STK_BANDS]
+
+
+def test_label_coverage_rate_divides_by_label_coverage_not_the_frame_window(tmp_path):
+    """`candidatesPerMinuteLabelCoverage` is per label-coverage minute.
+
+    The oracle is scored with the plan's frame window (60 s here), which is the
+    A4 denominator; the label-coverage rate answers the other question and must
+    not silently reuse the frame window (the reviewer's 4.26 vs 4.54 mix-up).
+    """
+    oracle = m.load_oracle_module()
+    real_loader = m.load_oracle_module
+
+    def _narrow_loader():
+        mod = real_loader()
+        setattr(mod, "labelled_window", lambda manifest: (10.0, 50.0))
+        return mod
+
+    assert oracle is not None
+    m.load_oracle_module = _narrow_loader
+    try:
+        row, _, _ = _run(tmp_path)
+    finally:
+        m.load_oracle_module = real_loader
+
+    assert row["candidatesInWindow"] == 1
+    assert row["candidatesPerMinute"] == round(1 / (60.0 / 60.0), 3)
+    assert row["candidatesPerMinuteLabelCoverage"] == round(1 / (40.0 / 60.0), 3)
