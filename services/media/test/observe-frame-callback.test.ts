@@ -51,6 +51,15 @@ class FakeOrch {
     return 200;
   }
   async readObservation(_p: ProvisionedSession, seq: number) {
+    // The node tails the live edge (`GET {events-out}/-1`) for a queued frame, so
+    // the fake has to answer it with the NEWEST observation, the way the deployed
+    // runner does. Without it the push relay can never pair a frame, the observe
+    // callback never fires, and this test read as "no anchor frame" (pre-existing
+    // red on master; the relay's read index is the publish index — ADAAAA-8817).
+    if (seq === -1) {
+      const keys = [...this.obsBySeq.keys()];
+      return keys.length ? this.obsBySeq.get(Math.max(...keys)) : null;
+    }
     return this.obsBySeq.get(seq) ?? null;
   }
   async releaseSession() {}

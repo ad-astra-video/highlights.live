@@ -70,6 +70,15 @@ class FakeOrch {
     return 200;
   }
   async readObservation(p: ProvisionedSession, seq: number) {
+    // The media node tails the live edge (`GET {events-out}/-1`) once a frame is
+    // queued, so the fake runner has to answer it the way the deployed runner
+    // does: the NEWEST observation it has published (ADAAAA-8817). Without this
+    // the push relay could never pair a frame and every observation-dependent
+    // test below timed out on a fake that only knew index-addressed reads.
+    if (seq === -1) {
+      const keys = [...this.obsBySeq.keys()];
+      return keys.length ? this.obsBySeq.get(Math.max(...keys)) : null;
+    }
     return this.obsBySeq.get(seq) ?? null;
   }
   async closeSession(controlUrl: string) {
@@ -134,12 +143,20 @@ describe("media server handshake (b)", () => {
     const msgP = new Promise<any>((res) => {
       ws.on("message", (data: any) => res(JSON.parse(String(data))));
     });
+    const before = fake.publishes.length;
     ws.send(JSON.stringify({ seq: 7, image: jpegB64, timestamp: 7.5 }));
     const obs = await msgP;
-    expect(fake.publishes.some((p) => p.seq === 7)).toBe(true);
-    expect(fake.publishes.find((p) => p.seq === 7)!.jpeg.toString()).toBe("fake-jpeg-bytes");
+    // ADAAAA-8817: the node owns the trickle index. The WS client's `seq` is
+    // evidence only, so the FIRST frame of a session publishes at index 0 (a
+    // client that restarts its own numbering cannot rewind video-in). The
+    // client's timestamp still travels with the frame.
+    const pub = fake.publishes.slice(before);
+    expect(pub.length).toBe(1);
+    expect(pub[0].seq).toBe(0);
+    expect(pub[0].ts).toBe(7.5);
+    expect(pub[0].jpeg.toString()).toBe("fake-jpeg-bytes");
     expect(obs.type).toBe("observation");
-    expect(obs.observation.seq).toBe(7);
+    expect(obs.observation.seq).toBe(pub[0].seq);
     ws.close();
     await new Promise((r) => setTimeout(r, 50));
   });
@@ -1047,10 +1064,18 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
       return 200;
     }
     async readObservation(_p: ProvisionedSession, seq: number) {
-      const first = this.publishWindows.get(1);
+      // Frames are published dense from 0 (ADAAAA-8817), so the serial runner's
+      // clock starts at index 0 and one runner step produces one observation.
+      const first = this.publishWindows.get(0);
       if (first === undefined) return null;
-      // seq's observation lands after the runner has stepped seq-1 frames.
-      if (Date.now() - first < seq * this.stepMs) return null;
+      const landed = (s: number) => Date.now() - first >= (s + 1) * this.stepMs;
+      if (seq === -1) {
+        // Live-edge read: the newest observation the runner has produced so far.
+        const ready = [...this.publishWindows.keys()].filter(landed);
+        if (!ready.length) return null;
+        return { type: "observation", seq: Math.max(...ready), tracks: [] };
+      }
+      if (!landed(seq)) return null;
       return { type: "observation", seq, tracks: [] };
     }
   }
@@ -1094,8 +1119,8 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
       // subscriber — measured session 0251b715, 3 observations in 300 s), and
       // every published frame ends `delivered` because a slow runner delays
       // delivery instead of cancelling it.
-      expect(g.publishes.map((p) => p.seq)).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
-      expect(seen).toEqual(Array.from({ length: 12 }, (_, i) => i + 1));
+      expect(g.publishes.map((p) => p.seq)).toEqual(Array.from({ length: 12 }, (_, i) => i));
+      expect(seen).toEqual(Array.from({ length: 12 }, (_, i) => i));
 
       // Close and read the ledger line AC1 reads.
       ws.close();
