@@ -23,6 +23,8 @@ import {
   quietShape,
   quietStoredCopy,
   restoreTerminalPunctuation,
+  attestedBallActionFrom,
+  captionAssertsUnattestedAction,
   storedReasonViolations,
   storedCardSurface,
   stripInternalTokens,
@@ -7335,6 +7337,11 @@ export function storedSurfaceFor(
     const quiet = quietShape(decision.reason ?? "");
     const zone = (grounding.place ?? "").trim();
     gatedReason = quiet && zone && !placePhraseOf(quiet) ? `${quiet} ${zone}` : quiet || "";
+    // ADAAAA-8806: the quiet shape is `quietShape`'s claim removal, which
+    // SUBSTITUTES an outcome verb. On a row whose attestation recorded no ball
+    // outcome that substitute is an invented fact ("The ball shoots on the
+    // right." on job `3740585f` row `6ff00ac9`), so the row serves no copy.
+    if (gatedReason && captionAssertsUnattestedAction(gatedReason, grounding)) gatedReason = "";
   }
   // ADAAAA-8027 (§2, card clause): the card is derived through the store-time
   // post-condition — the gated line as candidate, the stored raw sentence as its
@@ -7423,8 +7430,20 @@ export function storedSurfaceFor(
   // store-time post-condition applied, a scoreline only when this window's
   // prompt carries it). No copy source is added and no gate is loosened: the
   // words are the row's own and the sentence is one the gates accept.
-  const storedCaption =
-    card.caption || (grounding ? storedReason : "") || (grounding ? attestationDetailCopy(rawSurface, grounding) : "");
+  // ADAAAA-8806 (AC9, final bar): EVERY derivation above can substitute the
+  // claim's outcome verb (`groundCaption`'s rewrite, `quietShape`'s substitution,
+  // `attestationDetailCopy`'s clause pick), so the assembled surfaces are checked
+  // ONE more time against the row's own attestation. A row that measured no ball
+  // outcome stores neither a `reason` nor a `caption` that says what the ball did
+  // — it keeps its headline and its clock. Measured defect: job `3740585f` row
+  // `6ff00ac9` served "The ball shoots on the right." with
+  // `ballOutcome: null` / `goalCrossed: false`.
+  const actionHonest = (text: string | undefined): string =>
+    text && captionAssertsUnattestedAction(text, grounding) ? "" : text ?? "";
+  const safeReason = actionHonest(storedReason);
+  const storedCaption = actionHonest(
+    card.caption || (grounding ? safeReason : "") || (grounding ? attestationDetailCopy(rawSurface, grounding) : "")
+  );
   // ADAAAA-8318 (ADAAAA-8302 Option 2): the CARD'S COPY TARGET. The model writes
   // the title in the same reply as the announcer line; it crosses the same v9
   // grounding gate here (goal claim on this row's verdict, names from this
@@ -7452,8 +7471,8 @@ export function storedSurfaceFor(
   );
   const postTitle = postTitleGate.title ?? undefined;
   return {
-    ...(storedReason ? { reason: storedReason } : {}),
-    ...(grounding?.colourSignal && captionColour(storedReason) ? { colour: grounding.colourSignal } : {}),
+    ...(safeReason ? { reason: safeReason } : {}),
+    ...(grounding?.colourSignal && captionColour(safeReason) ? { colour: grounding.colourSignal } : {}),
     ...(storedCaption ? { caption: storedCaption } : {}),
     ...(card.caption ? { cardTitles: card.cardTitles } : {}),
     ...(postTitle ? { postTitle } : {}),
@@ -9775,7 +9794,10 @@ export function decisionPromptText(
 export function captionGroundingForDecision(
   decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis"> &
     Partial<Pick<DecisionResult, "audit">>,
-  extras: Pick<CaptionGroundingContext, "corroborated" | "colourSignal" | "absenceEvidence" | "place"> = {}
+  extras: Pick<
+    CaptionGroundingContext,
+    "corroborated" | "colourSignal" | "absenceEvidence" | "place" | "attestedBallAction"
+  > = {}
 ): CaptionGroundingContext {
   return {
     verdict: decision.outcome ?? null,
@@ -9960,6 +9982,11 @@ export function captionGroundingForWindow(
     colourSignal: colour.signal,
     ...(colour.reason !== "ok" ? { colourSignalReason: colour.reason } : {}),
     absenceEvidence: windowAbsenceEvidence(attest ?? {}, decision.outcome),
+    // ADAAAA-8806 (AC9): did this window MEASURE a ball outcome at all? `false`
+    // means the attestation recorded `ballOutcome: none` / `goalCrossed: false`,
+    // so no caption may assert what the ball did. `null` (no attestation object)
+    // keeps the legacy/VOD behaviour byte-identical.
+    attestedBallAction: attestedBallActionFrom(attest ?? null),
     // §3.2: ALWAYS resolved on the fast rail. `""` means "resolved to nothing",
     // which makes a place-less play lead drop instead of shipping.
     place: windowPlace(run, centerTs, cfg),

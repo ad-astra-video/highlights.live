@@ -276,6 +276,52 @@ export class MediaOrchestrator {
   }
 
   /**
+   * Stop one perceive session on the orchestrator and REPORT the outcome.
+   *
+   * `releaseSession` below is the fire-and-forget form teardown uses. The boot
+   * reconcile (ADAAAA-8813) needs the reporting form: when the process that
+   * held the session is gone, this stop call is the ONLY thing that ends the
+   * orchestrator's `Accounted payment` loop and frees the capacity-1 perceive
+   * slot, so `/health` has to prove each leftover was actually stopped rather
+   * than merely attempted.
+   *
+   * Targets, in order:
+   *   1. the session's own `control_url` (the exact orchestrator that issued the
+   *      reserve — correct even when discovery picked a non-`orchBase` one),
+   *   2. `{fallbackBase|orchBase}/apps/{app}/session/{sid}/stop`.
+   * A 404/410 from a target means THAT target no longer knows the session, so
+   * the next one is still tried (a stale/wrong control URL must never mask a
+   * live leak); when every target answers 404/410 the session is already gone —
+   * the harmless no-op AC4 requires — and the call still reports success.
+   */
+  async stopSession(
+    sessionId: string,
+    controlUrl?: string,
+    fallbackBase?: string
+  ): Promise<{ ok: boolean; status: number; target: string }> {
+    const targets: string[] = [];
+    if (controlUrl) targets.push(`${controlUrl.replace(/\/$/, "")}/stop`);
+    if (sessionId) {
+      const base = (fallbackBase || this.orchBase).replace(/\/$/, "");
+      targets.push(`${base}/apps/${this.app}/session/${sessionId}/stop`);
+    }
+    let last = { ok: false, status: 0, target: targets[0] ?? "" };
+    let goneOnEveryTarget = targets.length > 0;
+    for (const target of targets) {
+      try {
+        const r = await this._req("POST", target, {});
+        last = { ok: r.status >= 200 && r.status < 300, status: r.status, target };
+        if (last.ok) return last;
+        goneOnEveryTarget = goneOnEveryTarget && (r.status === 404 || r.status === 410);
+      } catch {
+        goneOnEveryTarget = false;
+        last = { ok: false, status: 0, target };
+      }
+    }
+    return goneOnEveryTarget ? { ...last, ok: true } : last;
+  }
+
+  /**
    * Idempotent release of a perceive slot on the orchestrator that issued it.
    * `controlUrl` (a `{control_url}` from the reserve) targets the exact
    * orchestrator + session; `fallbackBase` is the reserve base used when no
@@ -283,14 +329,7 @@ export class MediaOrchestrator {
    * is a no-op on the orchestrator, so this is safe to call repeatedly.
    */
   async releaseSession(sessionId: string, controlUrl: string, fallbackBase?: string): Promise<void> {
-    if (controlUrl) {
-      await this._req("POST", `${controlUrl.replace(/\/$/, "")}/stop`, {}).catch(() => {});
-      return;
-    }
-    if (sessionId) {
-      const base = (fallbackBase || this.orchBase).replace(/\/$/, "");
-      await this._req("POST", `${base}/apps/${this.app}/session/${sessionId}/stop`, {}).catch(() => {});
-    }
+    await this.stopSession(sessionId, controlUrl, fallbackBase).catch(() => {});
   }
 
   /** Seed the runner so it opens channels; tolerate the (expected) bad-image error

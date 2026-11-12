@@ -71,10 +71,13 @@ describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => 
     });
     expect(result.outcome).toBe("stored");
     expect(result.calls).toBe(2);
-    // The 36-word draft is refused as non-deterministic length, so the same
-    // prompt is sampled once more and the short shape is never stored.
-    expect(f.bodies).toHaveLength(2);
-    expect(f.bodies[1]).toContain("at least 40 words");
+    // ADAAAA-8803: the retry no longer re-reads the first-pass line. It is told
+    // the measured shape of the refused draft and asks for the floor plus a
+    // margin, so a boundary draft cannot re-land under it.
+    expect(f.bodies[0]).toContain("aim for 45-55 words");
+    expect(f.bodies[1]).toContain("RETRY: the previous draft measured");
+    expect(f.bodies[1]).toContain("this copy must reach at least 45 words");
+    expect(f.bodies[1]).toContain("too-few-words");
     const stored = patches.find((p) => typeof p.patch.summary === "string");
     expect(stored?.patch.summary).toBe(LONG);
     expect(String(stored?.patch.summary).split(/\s+/).length).toBeGreaterThanOrEqual(40);
@@ -100,17 +103,42 @@ describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => 
     expect(final.summaryRaw).toBe(SHORT);
   });
 
-  it("keeps a deterministic refusal on ONE call (a short fact-poor draft is not repaired)", async () => {
+  it("keeps a deterministic refusal on ONE call when the ROW cannot nourish a second fact", async () => {
+    // ADAAAA-8806 refined the rule this test pins: `too-few-facts` is
+    // deterministic only when the row's own evidence attests fewer than two fact
+    // types. Here the evidence carries no score transition and no attested actor,
+    // so the menu is ONE kind (the clock) and a second sample cannot repair it.
     const { store } = stubStore();
-    // Clock-only body: the fact menu is fixed, so a second sample cannot repair it.
+    const factPoor: SummaryEvidence = {
+      ...EVIDENCE,
+      scoreTransition: null,
+      matchContext: null,
+      transcript: null,
+    };
     const clockOnly = "The clip lands at the 1:27 mark of the sequence and nothing else is attested here at all.";
     const f = stubFetch([ok(clockOnly)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
       jobId: "a200d2bd",
       highlightId: "x",
-      evidence: EVIDENCE,
+      evidence: factPoor,
     });
     expect(result.calls).toBe(1);
     expect(result.outcome).toBe("dropped");
+  });
+
+  it("spends the retry slot when the row DOES attest two facts (ADAAAA-8806)", async () => {
+    // The measured case: a clock-only draft on a row whose `matchContext` attests
+    // Barcelona is a sampling miss, not a property of the row.
+    const { store } = stubStore();
+    const clockOnly = "The clip lands at the 1:27 mark of the sequence and nothing else is attested here at all.";
+    const f = stubFetch([ok(clockOnly), ok(LONG)]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
+      jobId: "a200d2bd",
+      highlightId: "y",
+      evidence: EVIDENCE,
+    });
+    expect(result.calls).toBe(2);
+    expect(result.outcome).toBe("stored");
+    expect(f.bodies[1]).toContain("fact-poor");
   });
 });
