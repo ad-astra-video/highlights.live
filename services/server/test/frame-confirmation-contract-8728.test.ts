@@ -281,6 +281,32 @@ describe("AC-5 / R7 — a delivered GOAL must name a non-none authority", () => 
   });
 });
 
+describe("AC-1 stored-row replay — job 08516607 / row aec39938 (read-only, $0)", () => {
+  it("a DELIVERED GOAL whose only named corroboration is audio_text no longer attests", () => {
+    // Read from `highlights` on livepeer-ai-x99 (no deploy, no call): window
+    // 38-53 s, eventType GOAL, `attestationUsed` absent (pre-8134 row),
+    // `confirmAttestation` absent, top-level `corroborationSource: "audio_text"`.
+    const used = liveGoalAttestationUsed({
+      attribution: { scoreBoardChanged: false, goalCrossed: false },
+      corroborated: true,
+      corroborationSource: "audio_text",
+      frameRefCount: 0,
+    });
+    expect(used.authority).toBe("none");
+    expect(
+      liveGoalHasMeasuredEvidence({
+        scoreBoardChanged: used.scoreBoardChanged,
+        goalCrossed: used.goalCrossed,
+        ballOutcome: used.ballOutcome,
+        corroborated: used.corroborated,
+        goalConfirmed: used.goalConfirmed,
+        corroborationSource: "audio_text",
+        frameRefCount: 0,
+      })
+    ).toBe(false);
+  });
+});
+
 describe("seam falsifiers — the three pre-fix authorities", () => {
   it("seam 1: corroborated=true alone no longer counts as MEASURED evidence", () => {
     const contradicted = { scoreReads: 8, preSamples: 4, postSamples: 4, need: 2 } as any;
