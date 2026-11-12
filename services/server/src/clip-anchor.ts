@@ -145,6 +145,11 @@ export interface AnchorCutInput {
   /** Log prefix, e.g. `live-ingest:<jobId>`. */
   tag?: string;
   log?: (message: string) => void;
+  /** ADAAAA-8714: the cue is the card's END (a celebration-tail placement), so a
+   * score flip found BEFORE the evidence picture must NOT re-centre the card —
+   * that would put the goal at the cue's slot and push the reaction off the end.
+   * The evidence picture stays the anchor; the flip audit fields stay null. */
+  cueTail?: boolean;
 }
 
 /** Basis the delivered flip offset was measured on (logged, never graded):
@@ -322,8 +327,12 @@ export async function anchorCutOnEvidence(
   // The accepted picture is not the goal instant — the rail re-emits a stale
   // pre-score picture around the transition. Locate the flip in the recording's
   // own scorebug pixels and center on THAT when it resolves.
+  //
+  // ADAAAA-8714: EXCEPT on a celebration-tail row, where the cue (this evidence
+  // picture) is the card's END by ruling — re-centring on the flip would ship
+  // `[goal - 7, goal + 8]` again and put the reaction off the card.
   let flip = null;
-  if (centered.mode === "frame_match" && centered.fileTs != null) {
+  if (!input.cueTail && centered.mode === "frame_match" && centered.fileTs != null) {
     flip = await locateScoreboardFlip(ffmpegPath, source, evidenceFramePath, {
       anchorFileTs: centered.fileTs,
       maxLookbackS: CLIP_FLIP_LOOKBACK_S,

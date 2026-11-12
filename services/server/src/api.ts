@@ -10,6 +10,8 @@ import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { clipWindow, validateClipWindow } from "./config";
 import type { ServerConfig } from "./config";
+import type { ClipCutWindow } from "./clip-placement";
+import { placeLiveClipWindow } from "./clip-placement";
 import { Store } from "./store";
 import {
   analyzeJob,
@@ -1369,7 +1371,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
    * failure or an incomplete (truncated) window so the caller can decide. */
   async function cutBrowserHighlightClip(
     jobId: string,
-    h: { start: number; end: number; localizedTs?: number },
+    h: { start: number; end: number; localizedTs?: number; clipPlacementReason?: string },
     recPath: string,
     cw: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec: number },
     opts: { requireFullWindow?: boolean } = {}
@@ -1381,6 +1383,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const out = path.join(outDir, `${name}.mp4`);
     const span = browserClipSpan(h, cw);
     const dur = span.dur;
+    // ADAAAA-8714: a celebration-tail row's window ENDS on the cue, so the score
+    // flip must not re-centre the card (that ships `[goal - 7, goal + 8]` and
+    // pushes the reaction off the end). The evidence picture stays the anchor.
+    const cueTail = h.clipPlacementReason === "celebration_tail";
     const evidenceTs = Number.isFinite(h.localizedTs as number) ? Number(h.localizedTs) : span.start;
     const before = Math.max(0, Math.min(dur, evidenceTs - span.start));
     const framePath = browserEvidenceFramePath(jobId, evidenceTs);
@@ -1415,7 +1421,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // the recording's own scorebug pixels and center on THAT; fall back to the
       // evidence picture, then to the content clock, and say which ran.
       let flip: ScoreFlipProbe | null = null;
-      if (centered.mode === "frame_match" && centered.fileTs != null) {
+      if (!cueTail && centered.mode === "frame_match" && centered.fileTs != null) {
         flip = await locateScoreboardFlip(cfg.ffmpegPath, recPath, framePath, {
           anchorFileTs: centered.fileTs,
           maxLookbackS: CLIP_FLIP_LOOKBACK_S,
@@ -1828,7 +1834,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // `ingest.cut` owns the flush watermark wait + the whole-window guard; on
       // the live rail a window that never flushes is a refusal (throws), which
       // the caller turns into `clipError`.
-      const rec = await ingest.cut(ts);
+      // ADAAAA-8714: cut the row's OWN delivered window (a celebration-tail row's
+      // window ENDS on the cue); re-deriving it here from `ts` would re-centre
+      // the card on the reaction and drop the play.
+      const rec = await ingest.cut(ts, {
+        window: {
+          start: Number.isFinite(cur.start) ? cur.start : ts,
+          end: Number.isFinite(cur.end) ? cur.end : ts,
+          cueTail: cur.clipPlacementReason === "celebration_tail",
+        },
+      });
       const still = store.getHighlight(highlightId);
       if (!still || still.clipUri) return;
       await store.patchHighlight(highlightId, {
@@ -1877,7 +1892,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         : Number(h.trigger?.timestamp);
       if (!Number.isFinite(ts)) continue;
       try {
-        const rec = await ingest.cut(ts, { requireFullWindow: false });
+        // ADAAAA-8714: the row's own delivered window (celebration-tail rows end
+        // on the cue); absent/invalid => the nominal centred window.
+        const rec = await ingest.cut(ts, {
+          requireFullWindow: false,
+          ...(Number.isFinite(h.start) && Number.isFinite(h.end)
+            ? {
+                window: {
+                  start: h.start,
+                  end: h.end,
+                  cueTail: h.clipPlacementReason === "celebration_tail",
+                },
+              }
+            : {}),
+        });
         await store.patchHighlight(h.id, {
           clipUri: rec.clipUri,
           ...(rec.clipAudit ? rec.clipAudit : {}),
@@ -2894,7 +2922,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Bind `ingest.cut` (it reads `this.cfg`): analyzeJob and the observer
       // receive it as a plain function reference, so an unbound method loses
       // `this` and throws (job->failed) the moment a highlight needs a clip.
-      const cut = (ts: number) => ingest.cut(ts);
+      // ADAAAA-8714: the analyzer hands the PLACED window (celebration-tail rows
+      // cut the cue at the card's end); absent => the nominal centred window.
+      const cut = (ts: number, window?: ClipCutWindow) => ingest.cut(ts, window ? { window } : {});
       // ADAAAA-8408 (W2): the live rail's match-context writer (see the media
       // rail above for the shape). Session read lazily: the pass may re-reserve.
       const matchWriter = matchContextEnabled()
@@ -7111,6 +7141,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             // per-company clip window (it wins over the bare env default).
             const cw = await resolveClipWindow();
             const win = clipWindow(timestamp, cw.clipBeforeS, cw.clipAfterS, cw.clipWindowMinSec);
+            // ADAAAA-8714 (AC2): this rail accepts on the decide read alone — no
+            // localization, no measured goal instant — so its cue is a reaction
+            // cue and the cue ENDS the card instead of being centred on it. Same
+            // ONE decision the analyzer path uses, so both browser rails place a
+            // 15 s card the same way.
+            const placed = placeLiveClipWindow({ localizedTs: timestamp, window: win, live: true });
             highlight = {
               id: randomUUID(),
               jobId: job.id,
@@ -7120,8 +7156,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               // same candidate highlight.
               idempotencyKey: highlightIdempotencyKey(job.id, Math.round(timestamp), d.eventType),
               clipUri: "",
-              start: win.start,
-              end: win.end,
+              // ADAAAA-8714: the accept instant is the row's own cue, so the cut
+              // can anchor the evidence picture on it (and the placement audit is
+              // readable from the row).
+              localizedTs: timestamp,
+              localizeAnchorReason: "trigger_evidence",
+              clipPlacementReason: placed.reason,
+              ...(placed.celebrationOffsetSec != null
+                ? { clipCelebrationOffsetSec: Math.round(placed.celebrationOffsetSec * 1000) / 1000 }
+                : {}),
+              clipWindowSec: placed.end - placed.start,
+              clipGoalOffsetSec: Math.round(placed.cueOffsetSec * 1000) / 1000,
+              start: placed.start,
+              end: placed.end,
               eventType: d.eventType,
               score: d.score,
               reason: d.reason,

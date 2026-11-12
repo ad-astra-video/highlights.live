@@ -577,4 +577,89 @@ describe("browser rail: the clip is cut DURING the share (ADAAAA-8032)", () => {
     expect(offset).toBeLessThanOrEqual(10);
     await app.close();
   }, 60_000);
+
+  it("cuts a celebration-tail row with the cue at the END and never re-anchors on the flip (ADAAAA-8714)", async () => {
+    // The board report's shape: the accept cue is a reaction and the row can name
+    // no goal instant, so the cue ENDS the card — `[cue - 13, cue + 2]` on a 15 s
+    // card. Pre-fix the browser rail centred on the cue (`[cue - 7, cue + 8]`), so
+    // a goal > 7 s before the roar was not in the clip at all.
+    const CUE = 15;
+    const adapter = fakePipeline();
+    const inner = adapter.analyze.bind(adapter);
+    adapter.analyze = async (...a: any[]) => {
+      const r: any = await inner(...a);
+      // The candidate/observation happen at the reaction instant in the footage.
+      r.observation.timestamp = CUE;
+      if (r.candidate) r.candidate.timestamp = CUE;
+      return r;
+    };
+    const { app, cfg, store, db } = await buildTestApp({}, { adapter });
+    const token = await register(app, "lc8714@test.dev", "password123");
+    await db.setClipWindowSettings({ clipBeforeS: 7, clipAfterS: 8 });
+    const jobId = await startBrowserJob(app, token);
+    const mime = "video/webm;codecs=vp9";
+    const fixturePath = path.join(tmp, "distinct-20s.webm");
+    writeFileSync(fixturePath, distinctWebm);
+    await postRecordingChunk(app, token, jobId, distinctWebm, mime);
+
+    const evJpeg = path.join(tmp, "ev-15s.jpg");
+    execFileSync("ffmpeg", ["-y", "-v", "error", "-i", fixturePath, "-ss", String(CUE), "-frames:v", "1", "-q:v", "2", evJpeg]);
+    const frameDir = path.join(cfg.dataDir, "live", jobId, "frames");
+    execFileSync("mkdir", ["-p", frameDir]);
+    writeFileSync(path.join(frameDir, "frame_000001.jpg"), readFileSync(evJpeg));
+    await store.recordObservation(jobId, { seq: 1, timestamp: CUE, tracks: [] } as any);
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: { seq: 1, timestamp: CUE, image: readFileSync(evJpeg).toString("base64") },
+    });
+    expect(accepted.statusCode).toBe(200);
+    const highlightId = accepted.json().highlight?.id as string;
+    expect(highlightId).toBeTruthy();
+
+    // AC2: the ACCEPT PATH itself placed the window — no test patching, so this
+    // grades the analyzer's ONE placement decision end to end.
+    const placed = store.getHighlight(highlightId) as any;
+    expect(placed.clipPlacementReason).toBe("celebration_tail");
+    expect(placed.clipWindowSec).toBeCloseTo(15, 6);
+    expect(placed.clipGoalOffsetSec).toBeCloseTo(13, 6);
+    expect(placed.clipCelebrationOffsetSec).toBeCloseTo(13, 6);
+    expect(placed.start).toBeCloseTo(CUE - 13, 6);
+    expect(placed.end).toBeCloseTo(CUE + 2, 6);
+
+    await ingest(app, token, jobId, 2, CUE + 6);
+
+    let uri = "";
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20_000 && !uri) {
+      uri = await clipUriFor(app, token, jobId);
+      if (!uri) await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(uri).toMatch(/^\/clips\/.+\.mp4$/);
+
+    const row = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } }))
+      .json()
+      .highlights.find((h: any) => h.id === highlightId);
+    // The placement audit survives the cut and names the ruling.
+    expect(row.clipPlacementReason).toBe("celebration_tail");
+    expect(row.clipCelebrationOffsetSec).toBeCloseTo(13, 6);
+    expect(row.clipError).toBeUndefined();
+    // AC2: the delivered file is the full >= 15 s card ...
+    expect(row.clipDeliveredSec).toBeGreaterThanOrEqual(15);
+    // ... the cue sits at the END (13 of 15, measured on the delivered file) and
+    // the score-flip probe never re-centred the card.
+    expect(row.clipAnchorMethod).toBe("frame_match");
+    expect(row.clipAnchorDeliveredOffsetSec).toBeGreaterThanOrEqual(11);
+    expect(row.clipAnchorDeliveredOffsetSec).toBeLessThanOrEqual(15);
+
+    // Independent footage check: the cue picture is at the END of what ships.
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(uri));
+    const inFile = await locateImageInSource(cfg.ffmpegPath, clipFile, evJpeg, 0, 15);
+    expect(inFile).not.toBeNull();
+    const offset = (inFile as any).fileTs - (inFile as any).firstTs;
+    expect(offset).toBeGreaterThanOrEqual(11);
+    await app.close();
+  }, 90_000);
 });
