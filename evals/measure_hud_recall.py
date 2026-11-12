@@ -658,6 +658,22 @@ def fidelity_rows(audio, candidate_times: list[float], manifest: dict, pre: floa
         scored.update({"id": cls["id"], "clip": cls.get("clip"),
                        "measured": bool(cls.get("clip")), "sr": round(fps, 3),
                        "gate": TRIGGER_HUD_EVENT})
+        # Same row shape as the audio harness, negatives row included: a verified
+        # non-event window that carries a fire is the false trigger A3 bounds. Counted
+        # on THIS pass (one stream, one reader), which is the honest reading for a
+        # single-clip pass — the audio harness re-runs a fresh gate per window because
+        # its classes span several clips.
+        windows = cls.get("negatives") or []
+        if windows:
+            fired = [w for w in windows
+                     if any(float(w["start"]) <= t <= float(w["end"]) for t in candidate_times)]
+            scored["negatives"] = {
+                "windows": len(windows), "fp_windows": len(fired),
+                "fp_window_rate": len(fired) / len(windows),
+                "candidates": sum(1 for t in candidate_times
+                                  for w in windows
+                                  if float(w["start"]) <= t <= float(w["end"])),
+            }
         rows.append(scored)
     return rows
 
