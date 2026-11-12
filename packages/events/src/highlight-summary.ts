@@ -75,16 +75,22 @@ export const SUMMARY_LIVE_BAND: SummaryDepthBand = {
   hardMaxChars: 420,
 };
 
-/** VOD: 3-5 sentences / 40-90 words, hard reject > 120 words / 700 chars. The
- *  floor is the same 0.72x ratio the live band uses (40 * 0.72 ≈ 29 -> 30), so a
- *  VOD row that answers in two long sentences is still refused as thin. */
+/** VOD: 3-5 sentences / 40-90 words, hard reject > 120 words / 700 chars.
+ *
+ *  ADAAAA-8791: the floor IS the target. It used to sit at 0.72x (30), which let
+ *  a 36-word body serve as `accepted` on promoted row `0526c296` of job
+ *  `a200d2bd` — a depth FAIL on the VOD band even though the fact menu was
+ *  correct. A draft under `targetMinWords` is now a `too-few-words` refusal, so
+ *  the lane spends its one retry slot on length repair (a non-deterministic
+ *  refusal: another sample can be longer) and a row that never reaches the
+ *  target drops instead of serving thin copy. */
 export const SUMMARY_VOD_BAND: SummaryDepthBand = {
   rail: "vod",
   minSentences: 3,
   maxSentences: 5,
   targetMinWords: 40,
   targetMaxWords: 90,
-  floorWords: 30,
+  floorWords: 40,
   hardMaxWords: 120,
   hardMaxChars: 700,
 };
@@ -1244,6 +1250,10 @@ export interface SummaryPromptInput extends SummaryEvidence {
    *  for a different opening instead of relying on the gate to reject a repeat —
    *  prompt first, gate as the backstop. */
   avoidOpenings?: string[];
+  /** ADAAAA-8791: the word count of the draft the gate refused for
+   *  `too-few-words`. The retry prompt names it so the regenerated body aims at
+   *  the band's floor instead of sampling the same short shape again. */
+  repairWords?: number;
 }
 
 /** ADAAAA-8773: the placeholder a match-clock stamp is replaced with in the
@@ -1321,6 +1331,14 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "Rules:",
     "- State only what the evidence below supports.",
     `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the competition or venue, or a named attested actor's action.`,
+    // ADAAAA-8791: a retry after a `too-few-words` refusal names the refused
+    // draft's length, so the second sample is steered at the floor instead of
+    // repeating the same short shape.
+    ...(typeof input.repairWords === "number" && input.repairWords > 0
+      ? [
+          `- Your previous draft was ${input.repairWords} words, under the ${band.targetMinWords}-word floor for this rail. Write at least ${band.targetMinWords} words this time by adding detail the evidence supports (the clock, the competition or venue, a named attested actor's action); do not repeat the short draft.`,
+        ]
+      : []),
     `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
     "- The clock fact is the `Window:` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.",
