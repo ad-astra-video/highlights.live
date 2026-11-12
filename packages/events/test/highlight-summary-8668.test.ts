@@ -410,11 +410,16 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
   // attested facts. Its faithful rev-2 body is now a `too-few-facts` refusal —
   // stated here rather than dropped from the sample, because that row IS the
   // clock-only shape AC9 exists to refuse.
-  const CLOCK_ONLY_ROW = 1;
+  //
+  // AC9 (rev 4, ADAAAA-8735): row fa7ac224 is the same class. Its evidence carries
+  // no matchContext and no transcript, so `action` is no longer available off the
+  // sentence-initial capital of `Ball` — the row attests the clock only, and its
+  // (faithful, non-restating) body is refused for fact density, not for novelty.
+  const NO_FACT_ROWS = [0, 1];
 
   it("accepts a faithful deeper body for every one of them", () => {
-    for (const row of shipped) {
-      if (row === shipped[CLOCK_ONLY_ROW]) continue;
+    shipped.forEach((row, i) => {
+      if (NO_FACT_ROWS.includes(i)) return;
       const decision = gateSummaryDetail(row.body, row.evidence);
       expect({ caption: row.caption, violations: decision.violations }).toEqual({ caption: row.caption, violations: [] });
       expect(decision.summary).toBe(row.body);
@@ -422,14 +427,18 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.targetMinWords);
       expect(decision.words).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.hardMaxWords);
       expect(decision.sentences).toBe(SUMMARY_LIVE_BAND.minSentences);
-    }
+    });
   });
 
-  it("refuses the clock-only celebration row on fact density (AC9)", () => {
-    const row = shipped[CLOCK_ONLY_ROW];
-    const decision = gateSummaryDetail(row.body, row.evidence);
-    expect(decision.summary).toBeNull();
-    expect(decision.violations).toContain("too-few-facts");
+  it("refuses the rows whose evidence attests only the clock on fact density (AC9)", () => {
+    for (const i of NO_FACT_ROWS) {
+      const row = shipped[i];
+      const decision = gateSummaryDetail(row.body, row.evidence);
+      expect({ caption: row.caption, summary: decision.summary }).toEqual({ caption: row.caption, summary: null });
+      expect(decision.violations).toContain("too-few-facts");
+      // The ADAAAA-8687 bars are untouched: the body is NOT refused for restating.
+      expect(decision.violations).not.toContain("restates-caption");
+    }
   });
 
   it("still refuses a body that answers each caption with a copy", () => {
@@ -461,8 +470,8 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
         "The closing stages open up as both sides press forward again.",
     ];
     shipped.forEach((row, i) => {
-      // AC9: the clock-only row cannot carry a compliant VOD body either.
-      if (i === CLOCK_ONLY_ROW) return;
+      // AC9: a row attesting only the clock cannot carry a compliant VOD body either.
+      if (NO_FACT_ROWS.includes(i)) return;
       const evidence: SummaryEvidence = { ...row.evidence, rail: "vod" };
       const decision = gateSummaryDetail(vodBodies[i], evidence);
       expect({ caption: row.caption, violations: decision.violations }).toEqual({ caption: row.caption, violations: [] });
@@ -473,13 +482,13 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       expect(decision.sentences).toBeLessThanOrEqual(SUMMARY_VOD_BAND.maxSentences);
       expect(vodBodies[i].length).toBeLessThanOrEqual(SUMMARY_VOD_BAND.hardMaxChars);
     });
-    // AC9 on the VOD rail too: the clock-only row's VOD body is refused for fact
+    // AC9 on the VOD rail too: a clock-only row's VOD body is refused for fact
     // density, not for length or novelty.
-    const clockOnly = gateSummaryDetail(vodBodies[CLOCK_ONLY_ROW], {
-      ...shipped[CLOCK_ONLY_ROW].evidence,
-      rail: "vod",
-    });
-    expect(clockOnly.violations).toContain("too-few-facts");
+    for (const i of NO_FACT_ROWS) {
+      const clockOnly = gateSummaryDetail(vodBodies[i], { ...shipped[i].evidence, rail: "vod" });
+      expect(clockOnly.violations).toContain("too-few-facts");
+      expect(clockOnly.violations).not.toContain("restates-caption");
+    }
     // R4 on the VOD rail: the confirmed-GOAL body reuses the caption's own
     // `scoreboard` / `2-2` tokens (coverage sits AT the retired 0.5 bar) and is
     // still stored — overlap is an observation, never a drop reason.

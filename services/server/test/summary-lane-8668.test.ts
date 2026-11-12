@@ -198,18 +198,35 @@ describe("runSummaryForRow — the promoted row's copy", () => {
 
   it("stores copy for a shipped one-line caption shape instead of refusing it (ADAAAA-8687)", async () => {
     // The QA-B live-leg shapes: a 3-token announcer line, and a 2-token one.
-    const cases: { caption: string; body: string }[] = [
+    // Rev 4 (ADAAAA-8735): the first row's own evidence carried no matchContext,
+    // so `action` is no longer available off the word `Ball`; its faithful body
+    // is refused for fact density (never for restating). The GOAL row still
+    // serves on clock + attested score, which is the ADAAAA-8687 non-restatement
+    // proof at the lane seam.
+    const cases: {
+      caption: string;
+      body: string;
+      outcome: string;
+      reason?: string;
+      scoreTransition?: { from: string; to: string };
+    }[] = [
       {
         caption: "Ball shoots in midfield",
         body:
           "The crowd erupts as the ball shoots through midfield in the opening exchanges. " +
           "A burst of noise near 2:38 marks the move that breaks forward again.",
+        outcome: "dropped",
+        reason: "gate",
       },
       {
         caption: "Scoreboard changes to 2-2.",
         body:
           "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
           "The near post is beaten low and the crowd behind the net is up before the restart.",
+        outcome: "stored",
+        // The shipped row's own measured transition (2-1 -> 2-2); the lane's
+        // default fixture transition is 1-2 -> 2-2, which this body does not assert.
+        scoreTransition: { from: "2-1", to: "2-2" },
       },
     ];
     for (const c of cases) {
@@ -221,12 +238,24 @@ describe("runSummaryForRow — the promoted row's copy", () => {
         {
           jobId: "j1",
           highlightId: "h1",
-          evidence: { ...evidence(), caption: c.caption, reason: c.caption },
+          evidence: {
+            ...evidence(),
+            caption: c.caption,
+            reason: c.caption,
+            ...(c.scoreTransition ? { scoreTransition: c.scoreTransition } : {}),
+          },
         }
       );
-      expect({ caption: c.caption, outcome: result.outcome }).toEqual({ caption: c.caption, outcome: "stored" });
-      expect(stub.patches[0].patch.summary).toBe(c.body);
-      expect(stub.patches[0].patch.summaryDropped).toBe(0);
+      expect({ caption: c.caption, outcome: result.outcome }).toEqual({ caption: c.caption, outcome: c.outcome });
+      if (c.outcome === "stored") {
+        expect(stub.patches[0].patch.summary).toBe(c.body);
+        expect(stub.patches[0].patch.summaryDropped).toBe(0);
+      } else {
+        expect(result.reason).toBe(c.reason);
+        expect(stub.patches[0].patch.summary).toBeUndefined();
+        // The candidate is kept for replay, and the copy is NOT dropped as a restatement.
+        expect(stub.patches[0].patch.summaryRaw).toBe(c.body);
+      }
     }
   });
 
