@@ -257,4 +257,46 @@ describe("MediaOrchestrator on-chain: 402 -> paid reserve -> open channels", () 
     const released = calls.filter((c) => c.url.endsWith("/control/stop") && c.method === "POST");
     expect(released).toHaveLength(1);
   });
+
+  // ADAAAA-8813: the boot reconcile's reporting stop. `releaseSession` swallows
+  // everything, so the reconcile needs a form that says whether the paid slot is
+  // actually gone — including the case where a recorded control URL is stale and
+  // the canonical session-stop route is the one that still knows the session.
+  it("stopSession falls back to the canonical session-stop route when the recorded controlUrl is stale", async () => {
+    const calls: string[] = [];
+    const fn = vi.fn(async (input: any) => {
+      const url = String(input);
+      calls.push(url);
+      if (url === "http://stale/apps/highlights-perceive/session/sess-a/stop") return jsonResponse(404, { error: "nf" });
+      if (url === "http://orch/apps/highlights-perceive/session/sess-a/stop") return jsonResponse(200, { ok: true });
+      return jsonResponse(404, { error: "nf" });
+    });
+    vi.stubGlobal("fetch", fn);
+
+    const orch = new MediaOrchestrator({ orchBase: "http://orch" });
+    const r = await orch.stopSession("sess-a", "http://stale/apps/highlights-perceive/session/sess-a");
+    expect(r).toEqual({ ok: true, status: 200, target: "http://orch/apps/highlights-perceive/session/sess-a/stop" });
+    expect(calls).toEqual([
+      "http://stale/apps/highlights-perceive/session/sess-a/stop",
+      "http://orch/apps/highlights-perceive/session/sess-a/stop",
+    ]);
+  });
+
+  it("stopSession reports success when every target says the session is already gone (expired no-op)", async () => {
+    const fn = vi.fn(async () => jsonResponse(404, { error: "nf" }));
+    vi.stubGlobal("fetch", fn);
+    const orch = new MediaOrchestrator({ orchBase: "http://orch" });
+    const r = await orch.stopSession("sess-gone", "http://orch/apps/highlights-perceive/session/sess-gone/control");
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe(404);
+  });
+
+  it("stopSession reports failure (not success) when the orchestrator answers 5xx", async () => {
+    const fn = vi.fn(async () => jsonResponse(503, { error: "unavailable" }));
+    vi.stubGlobal("fetch", fn);
+    const orch = new MediaOrchestrator({ orchBase: "http://orch" });
+    const r = await orch.stopSession("sess-busy", "http://orch/apps/highlights-perceive/session/sess-busy/control");
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe(503);
+  });
 });

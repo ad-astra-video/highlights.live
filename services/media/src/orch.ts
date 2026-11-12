@@ -289,9 +289,10 @@ export class MediaOrchestrator {
    *   1. the session's own `control_url` (the exact orchestrator that issued the
    *      reserve — correct even when discovery picked a non-`orchBase` one),
    *   2. `{fallbackBase|orchBase}/apps/{app}/session/{sid}/stop`.
-   * A stop on a session the orchestrator no longer holds answers 404 and bills
-   * nothing, so `ok` treats 404/410 as the harmless no-op AC4 requires and the
-   * call is safe to repeat.
+   * A 404/410 from a target means THAT target no longer knows the session, so
+   * the next one is still tried (a stale/wrong control URL must never mask a
+   * live leak); when every target answers 404/410 the session is already gone —
+   * the harmless no-op AC4 requires — and the call still reports success.
    */
   async stopSession(
     sessionId: string,
@@ -305,19 +306,19 @@ export class MediaOrchestrator {
       targets.push(`${base}/apps/${this.app}/session/${sessionId}/stop`);
     }
     let last = { ok: false, status: 0, target: targets[0] ?? "" };
+    let goneOnEveryTarget = targets.length > 0;
     for (const target of targets) {
       try {
         const r = await this._req("POST", target, {});
-        const okStatus = r.status >= 200 && r.status < 300;
-        // 404/410: the orchestrator already dropped the session (balance
-        // expired or a previous stop landed). Nothing is billing -> success.
-        last = { ok: okStatus || r.status === 404 || r.status === 410, status: r.status, target };
-        if (last.ok || (r.status >= 400 && r.status < 500)) return last;
+        last = { ok: r.status >= 200 && r.status < 300, status: r.status, target };
+        if (last.ok) return last;
+        goneOnEveryTarget = goneOnEveryTarget && (r.status === 404 || r.status === 410);
       } catch {
+        goneOnEveryTarget = false;
         last = { ok: false, status: 0, target };
       }
     }
-    return last;
+    return goneOnEveryTarget ? { ...last, ok: true } : last;
   }
 
   /**
