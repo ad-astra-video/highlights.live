@@ -283,7 +283,7 @@ describe("gateSummaryDetail", () => {
     expect(gateSummaryDetail(twoSentences, vod).violations).toContain("too-few-sentences");
     const three =
       "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner. " +
-      "The visitors restart from the centre with the clock running down.";
+      "The visitors restart from the centre with the clock running down. Both sides settle into shape as the closing minutes wear on.";
     expect(gateSummaryDetail(three, vod).summary).not.toBeNull();
   });
 });

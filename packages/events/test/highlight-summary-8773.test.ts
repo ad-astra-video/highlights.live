@@ -75,9 +75,11 @@ const STORED_RAW_5F32F6F4 =
 /** The same body with the CLIP offset the prompt actually shows (0:24). */
 const CLIP_ANCHORED_5F32F6F4 = STORED_RAW_5F32F6F4.replace("at the 18:02 mark", "at the 0:24 mark");
 
-/** The stored `summaryRaw` of `995cd9b5` — also refused `too-few-facts`. */
+/** The stored `summaryRaw` of `995cd9b5` — also refused `too-few-facts`. The
+ *  fourth sentence carries the clip offset (ADAAAA-8791: the VOD floor is the
+ *  40-word target, and the served 36-word shape can no longer be accepted). */
 const STORED_RAW_995CD9B5 =
-  "Real Madrid takes the lead after a successful scoring play. The scoreboard updates from 1-1 to 2-1 at the 18:06 mark. Players from the white-shirted team are seen celebrating the goal during the match against Barcelona.";
+  "Real Madrid takes the lead after a successful scoring play. The scoreboard updates from 1-1 to 2-1 at the 18:06 mark. Players from the white-shirted team are seen celebrating the goal during the match against Barcelona. The scoreboard holds at 2-1 as the match restarts around the 18:06 mark.";
 
 const CLIP_ANCHORED_995CD9B5 = STORED_RAW_995CD9B5.replace("at the 18:06 mark", "at the 0:27 mark");
 
