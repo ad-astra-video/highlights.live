@@ -3273,6 +3273,16 @@ const NAME_STOPWORDS = new Set(
     "centerback","centre-back","center-back","fullback","full-back","wingback",
     "wing-back","defenders","midfielders","strikers","wingers","keepers","children",
     "kids","boys","girls","teammate","teammates","squad",
+    // ADAAAA-8831: an ADJECTIVE of nationality is not a name. Live leg
+    // `27bd816f` row `8d521507` wrote "in favor of the Spanish side"; the gate
+    // read `Spanish` as an unsourced proper name, so `roleFor` rewrote it to
+    // `the No. 9` (nonsense copy) and the row was refused `ungrounded-name` with
+    // the attested score line intact. These words describe a side, they never
+    // identify one — the same class as `home`/`away` above.
+    "spanish","french","italian","german","english","dutch","portuguese","brazilian",
+    "argentine","argentinian","uruguayan","mexican","american","catalan","belgian",
+    "croatian","serbian","polish","swedish","norwegian","danish","swiss","austrian",
+    "turkish","greek","scottish","welsh","irish","japanese","korean","african","european",
     "team","teams","player","players","coach","manager","fans","keeper's","saturday",
     "sunday","monday","tuesday","wednesday","thursday","friday","january","february",
     "march","april","may","june","july","august","september","october","november",
@@ -3304,8 +3314,80 @@ function promptHas(prompt: string, needle: string): boolean {
   return stripDiacritics(prompt).includes(stripDiacritics(needle));
 }
 
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8831: the ROLE-NOUN vocabulary, shared by the copy targets that must
+ * agree about what a role noun is.
+ *
+ * It lived in `highlight-summary` (the AC10 body neutraliser) and the post
+ * TITLE had no access to it, which is how a served `postTitle` came to assert
+ * `Midfielder scores` / `Defender scores` on a row whose attested actor was
+ * `Barcelona` (AC9/AC10 FAIL on 2/2 promoted rows of live leg `27bd816f`): the
+ * write seam's name gate treats a role noun as a non-name, so nothing refused
+ * an unattested role subject. The vocabulary belongs beside the name gate that
+ * shares the same judgement, so both seams read ONE table.
+ * ------------------------------------------------------------------------- */
+
+/** One role noun a copy surface uses, with the phrase that carries it. */
+export interface SummaryRoleNoun {
+  /** The canonical role ("midfielder", "goalkeeper", ...). */
+  canonical: string;
+  /** The matched phrase, e.g. "the midfielder". */
+  text: string;
+}
+
+/** AC10 (spec ADAAAA-8665 rev 3): the role nouns a body may only use when the
+ *  row's own evidence attests the role. Each group is one ATTESTATION UNIT: the
+ *  evidence saying "keeper" attests "the goalkeeper" for the same row, because it
+ *  is the same role. A bare `forward` is deliberately NOT matched unless a
+ *  determiner precedes it — "drives forward" is an adverb, not a claim about a
+ *  person. */
+export const SUMMARY_ROLE_NOUN_GROUPS: readonly { canonical: string; forms: readonly string[] }[] = [
+  {
+    canonical: "midfielder",
+    forms: ["midfielder", "midfielders", "midfield player", "central midfielder", "holding midfielder"],
+  },
+  {
+    canonical: "goalkeeper",
+    forms: ["goalkeeper", "goalkeepers", "keeper", "keepers", "goalie", "netminder"],
+  },
+  {
+    canonical: "striker",
+    forms: ["striker", "strikers", "forward", "forwards", "attacker", "attackers", "frontman", "poacher", "marksman", "number 9"],
+  },
+  {
+    canonical: "defender",
+    forms: [
+      "defender",
+      "defenders",
+      "centre-back",
+      "centre back",
+      "center-back",
+      "center back",
+      "fullback",
+      "full-back",
+      "wing-back",
+      "wing back",
+    ],
+  },
+  { canonical: "winger", forms: ["winger", "wingers"] },
+  { canonical: "playmaker", forms: ["playmaker", "playmakers"] },
+  { canonical: "captain", forms: ["captain", "captains", "skipper"] },
+  { canonical: "sweeper", forms: ["sweeper", "sweepers"] },
+];
+
+const roleEscapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Every role form as one regex alternation, longest first so "central
+ *  midfielder" wins over "midfielder". Shared so a title and a body can never
+ *  disagree about which words are role nouns. */
+export const ROLE_NOUN_FORM_ALT: string = [...SUMMARY_ROLE_NOUN_GROUPS]
+  .flatMap((g) => g.forms)
+  .sort((a, b) => b.length - a.length)
+  .map(roleEscapeRe)
+  .join("|");
+
 /** Roles a grounded name is replaced with, shortest-first so the rewrite can
- * never lengthen the line more than the name it replaced. */
+ *  never lengthen the line more than the name it replaced. */
 const ROLE_FOR_ACTION: [RegExp, string][] = [
   [/\b(?:save|saves|saved|keeper|parr(?:y|ies)|tip(?:s)? over)\b/i, "the No. 1"],
   [/\b(?:shot|shoots|shooting|strike|strikes|fires|header|volley|curler)\b/i, "the striker"],
