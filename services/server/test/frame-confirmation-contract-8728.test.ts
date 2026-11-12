@@ -150,6 +150,14 @@ describe("AC-3 / R5 — the recall guard: a frame attestation WITH a ref still p
     expect((a.patch.attestationUsed as any).authority).toBe("frame");
   });
 
+  it("a promotion clears the accept lane's refusal on the same disclosure object", () => {
+    const a = confirmDiveAdoption(row({ ...DEAD_LANE, authority: "none", refusalReason: "recap_window_open_play" }), verdict(), meta);
+    expect(a.kind).toBe("promoted");
+    const used = a.patch.attestationUsed as any;
+    expect(used.authority).toBe("frame");
+    expect(used.refusalReason).toBeUndefined();
+  });
+
   it("does NOT widen the guard to a lane that WAS read (8239 hold survives)", () => {
     const a = confirmDiveAdoption(row({ ...READ_NO_TRANSITION }), verdict(), meta);
     expect(a.kind).not.toBe("promoted");
