@@ -81,6 +81,23 @@ export interface CaptionGroundingContext {
    */
   absenceEvidence?: boolean | null;
   /**
+   * ADAAAA-8806 (AC9 on the served body): whether this window's MEASURED
+   * attestation records a ball OUTCOME at all — `goal` / `out` / `off_target` /
+   * `wide` / `saved` / `blocked` / `cleared` / `cross` from the decide's
+   * `ballOutcome`, or a measured `goalCrossed`.
+   *
+   * - `false` => the attestation recorded NO outcome (`ballOutcome: "none"` /
+   *   null, `goalCrossed: false`). No caption may assert what the ball did: the
+   *   claim-removal path's synthesised outcome verb ("The ball shoots on the
+   *   right." on job `3740585f` row `6ff00ac9`, whose own attestation reads
+   *   `ballOutcome: none` / `goalCrossed: false`) is the epic's headline
+   *   complaint, and it is an unattested fact.
+   * - `true` => an outcome is attested; the existing claim rewrite may name it.
+   * - absent / null => no attestation on this surface (VOD and legacy rows), so
+   *   behaviour is byte-identical to today.
+   */
+  attestedBallAction?: boolean | null;
+  /**
    * ADAAAA-7962 (contract v4 §3.4, extended by v5 §3.2): the window's stored
    * zone/place, used when the model's line names none (§3.2 place injection) and
    * when a rewrite would otherwise drop the place. Resolved at the write seam
@@ -330,6 +347,44 @@ export function outcomeVerbFor(text: string): string {
   if (/\b(?:clear(?:s|ed)?|hoof(?:s|ed)?)\b/i.test(text)) return "is cleared";
   if (/\b(?:wide|off\s+target|over\s+the\s+bar|past\s+the\s+post)\b/i.test(text)) return "goes wide";
   return "shoots";
+}
+
+/**
+ * ADAAAA-8806 (AC9): a caption that asserts what the BALL did. The shot verbs
+ * above plus the outcome shapes `outcomeVerbFor` can synthesise and the
+ * net-crossing family — every one of them is a fact about the ball, so it needs
+ * the row's own attestation to say so.
+ */
+export const BALL_OUTCOME_ASSERTION =
+  /\b(?:shoots?|shot|strikes?|struck|fires?|fired|drills?|curls?|curled|hooks?|hooked|hammers?|smashes?|volleys?|heads?|headed|nods?|nodded|pokes?|prods?|bundles?|blasts?|flashes?|squeezes?|goes?\s+wide|went\s+wide|is\s+(?:saved|blocked|cleared|deflected)|was\s+(?:saved|blocked|cleared|deflected)|enters?\s+the\s+net|is\s+in\s+the\s+net)\b/i;
+
+/**
+ * ADAAAA-8806: does this window's measurement record a ball OUTCOME at all?
+ * Pure, so the write seam and the caption contract cannot disagree.
+ *
+ * Returns `null` when the surface carries no attestation (legacy / VOD rows):
+ * the caller then keeps today's behaviour, byte-identically.
+ */
+export function attestedBallActionFrom(
+  attest?: { ballOutcome?: string | null; goalCrossed?: boolean | null } | null
+): boolean | null {
+  if (!attest) return null;
+  if (attest.goalCrossed === true) return true;
+  const outcome = String(attest.ballOutcome ?? "").trim().toLowerCase();
+  if (outcome && outcome !== "none" && outcome !== "null" && outcome !== "false") return true;
+  // The attestation was READ (it carries its own flags) and recorded no outcome.
+  // A recorded `ballOutcome: null` beside `goalCrossed: false` IS a measurement
+  // ("nothing measured", `refusalReason: no_measured_authority`); an object with
+  // neither field is not, so legacy callers keep the old behaviour.
+  if (attest.ballOutcome !== undefined || attest.goalCrossed !== undefined) return false;
+  return null;
+}
+
+/** ADAAAA-8806: a caption candidate that asserts a ball outcome the row's own
+ *  attestation does not record. `attestedBallAction` absent => never fires. */
+export function captionAssertsUnattestedAction(text: string, ctx?: CaptionGroundingContext): boolean {
+  if (ctx?.attestedBallAction !== false) return false;
+  return BALL_OUTCOME_ASSERTION.test(text ?? "");
 }
 
 /**
@@ -601,6 +656,33 @@ export function quietShape(text: string, verb?: string): string {
  */
 const INTERNAL_REASON_TAIL =
   /\s*\|\s*(?:celebration of an already-delivered|no independent|dedupe|suppressed|burst|downgraded|anchor\s|live scoring lane:)[^|]*/gi;
+/**
+ * ADAAAA-8806: the PROVISIONAL-goal marker tail (`| provisional goal: …` /
+ * `| provisional shot: …`) is DIAGNOSTIC text, and it stays on the row's stored
+ * `reason` / `reason_raw` on purpose (ADAAAA-8139: a reader of the reason alone
+ * learns the row is waiting on a score read). It is never copy.
+ *
+ * Measured defect (job `3740585f`, row `2d8e9521`, served build `cdf6445`):
+ * `attestationDetailCopy` split this tail's own sentence at its em dash and
+ * served the refusal fragment **"No measured scoreboard change yet."** as the
+ * card caption, contradicting the same row's `reason_raw` (which says the
+ * scoreboard changed to 2-1).
+ *
+ * So every CAPTION source strips it first. This is deliberately NOT folded into
+ * `stripInternalTokens`: that function also feeds the stored `reason`, whose
+ * provisional marker is the audit value ADAAAA-8139 pinned. A caption-only strip
+ * is the narrow fix.
+ */
+const CAPTION_DIAGNOSTIC_TAIL = /\s*\|\s*provisional (?:goal|shot):[^|]*/gi;
+
+/** The text a CAPTION surface may derive from: internal tokens AND the
+ *  diagnostic marker tails removed. `stripInternalTokens` stays the single
+ *  definition of the token strip; this adds only the caption-only tail. */
+export function captionSourceText(text: string | null | undefined): string {
+  const input = text ?? "";
+  return stripInternalTokens(input.replace(CAPTION_DIAGNOSTIC_TAIL, ""));
+}
+
 /** Evidence tags the pipeline appends to a decide reason ("; scoreboard score
  * change confirmed"). Not copy — removed before any other rule runs. */
 const EVIDENCE_TAG =
@@ -2561,7 +2643,9 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
  * never a card surface (a card title is still earned only by corroboration).
  */
 export function quietStoredCopy(raw: string | null | undefined, ctx?: CaptionGroundingContext): string {
-  const src = stripInternalTokens(raw ?? "").trim();
+  // ADAAAA-8806: the CAPTION source, not the audit reason — the provisional-goal
+  // marker tail is diagnostic text and can never become copy.
+  const src = captionSourceText(raw).trim();
   if (!src) return "";
   const storedSentence = wholeStoredSentence(src);
   // The quiet shape is `quietShape`'s claim removal when this row's own sentence
@@ -2949,7 +3033,7 @@ export function attestationDetailCopy(
   raw: string | null | undefined,
   ctx?: CaptionGroundingContext
 ): string {
-  const src = stripInternalTokens(raw ?? "").trim();
+  const src = captionSourceText(raw).trim();
   if (!src) return "";
   // ONLY the clock-bracketed attestation shape: a sentence that cites its own
   // window-relative marker. Every other sentence is the card gate's business.
@@ -2992,6 +3076,9 @@ export function attestationDetailCopy(
         continue;
       }
     }
+    // ADAAAA-8806: an extractive clause that says what the ball did is only
+    // honest when the row's own attestation recorded an outcome.
+    if (captionAssertsUnattestedAction(candidate, ctx)) continue;
     if (storedReasonViolations(candidate, [wholeStoredSentence(src)]).length > 0) continue;
     return candidate;
   }
@@ -3062,6 +3149,14 @@ function serveQuietCandidate(
   // A quote is an OCR label the model quoted, never copy
   // (`… the stadium displays 'GOAL' …` reduced to `displays '`).
   if (/['"‘’“”]/.test(out)) return "";
+  // ADAAAA-8806 (AC9): the row's own attestation recorded NO ball outcome, so a
+  // line that says what the ball did is invented. Measured defect on job
+  // `3740585f` row `6ff00ac9`: `quietShape` removed the net-crossing claim and
+  // substituted its own generic shot verb, serving "The ball shoots on the
+  // right." while the row's attestation read `ballOutcome: none` /
+  // `goalCrossed: false`. Deleting the claim (and, when nothing honest remains,
+  // the copy) is the contract; never a substitute the row cannot attest.
+  if (captionAssertsUnattestedAction(out, ctx)) return "";
   return out;
 }
 

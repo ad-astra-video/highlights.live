@@ -22,6 +22,8 @@ import {
   quietShape,
   quietStoredCopy,
   restoreTerminalPunctuation,
+  attestedBallActionFrom,
+  captionAssertsUnattestedAction,
   storedReasonViolations,
   storedCardSurface,
   stripInternalTokens,
@@ -7329,6 +7331,11 @@ export function storedSurfaceFor(
     const quiet = quietShape(decision.reason ?? "");
     const zone = (grounding.place ?? "").trim();
     gatedReason = quiet && zone && !placePhraseOf(quiet) ? `${quiet} ${zone}` : quiet || "";
+    // ADAAAA-8806: the quiet shape is `quietShape`'s claim removal, which
+    // SUBSTITUTES an outcome verb. On a row whose attestation recorded no ball
+    // outcome that substitute is an invented fact ("The ball shoots on the
+    // right." on job `3740585f` row `6ff00ac9`), so the row serves no copy.
+    if (gatedReason && captionAssertsUnattestedAction(gatedReason, grounding)) gatedReason = "";
   }
   // ADAAAA-8027 (§2, card clause): the card is derived through the store-time
   // post-condition — the gated line as candidate, the stored raw sentence as its
@@ -9769,7 +9776,10 @@ export function decisionPromptText(
 export function captionGroundingForDecision(
   decision: Pick<DecisionResult, "outcome" | "eventType" | "analysis"> &
     Partial<Pick<DecisionResult, "audit">>,
-  extras: Pick<CaptionGroundingContext, "corroborated" | "colourSignal" | "absenceEvidence" | "place"> = {}
+  extras: Pick<
+    CaptionGroundingContext,
+    "corroborated" | "colourSignal" | "absenceEvidence" | "place" | "attestedBallAction"
+  > = {}
 ): CaptionGroundingContext {
   return {
     verdict: decision.outcome ?? null,
@@ -9954,6 +9964,11 @@ export function captionGroundingForWindow(
     colourSignal: colour.signal,
     ...(colour.reason !== "ok" ? { colourSignalReason: colour.reason } : {}),
     absenceEvidence: windowAbsenceEvidence(attest ?? {}, decision.outcome),
+    // ADAAAA-8806 (AC9): did this window MEASURE a ball outcome at all? `false`
+    // means the attestation recorded `ballOutcome: none` / `goalCrossed: false`,
+    // so no caption may assert what the ball did. `null` (no attestation object)
+    // keeps the legacy/VOD behaviour byte-identical.
+    attestedBallAction: attestedBallActionFrom(attest ?? null),
     // §3.2: ALWAYS resolved on the fast rail. `""` means "resolved to nothing",
     // which makes a place-less play lead drop instead of shipping.
     place: windowPlace(run, centerTs, cfg),

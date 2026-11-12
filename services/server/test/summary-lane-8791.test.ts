@@ -103,17 +103,42 @@ describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => 
     expect(final.summaryRaw).toBe(SHORT);
   });
 
-  it("keeps a deterministic refusal on ONE call (a short fact-poor draft is not repaired)", async () => {
+  it("keeps a deterministic refusal on ONE call when the ROW cannot nourish a second fact", async () => {
+    // ADAAAA-8806 refined the rule this test pins: `too-few-facts` is
+    // deterministic only when the row's own evidence attests fewer than two fact
+    // types. Here the evidence carries no score transition and no attested actor,
+    // so the menu is ONE kind (the clock) and a second sample cannot repair it.
     const { store } = stubStore();
-    // Clock-only body: the fact menu is fixed, so a second sample cannot repair it.
+    const factPoor: SummaryEvidence = {
+      ...EVIDENCE,
+      scoreTransition: null,
+      matchContext: null,
+      transcript: null,
+    };
     const clockOnly = "The clip lands at the 1:27 mark of the sequence and nothing else is attested here at all.";
     const f = stubFetch([ok(clockOnly)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
       jobId: "a200d2bd",
       highlightId: "x",
-      evidence: EVIDENCE,
+      evidence: factPoor,
     });
     expect(result.calls).toBe(1);
     expect(result.outcome).toBe("dropped");
+  });
+
+  it("spends the retry slot when the row DOES attest two facts (ADAAAA-8806)", async () => {
+    // The measured case: a clock-only draft on a row whose `matchContext` attests
+    // Barcelona is a sampling miss, not a property of the row.
+    const { store } = stubStore();
+    const clockOnly = "The clip lands at the 1:27 mark of the sequence and nothing else is attested here at all.";
+    const f = stubFetch([ok(clockOnly), ok(LONG)]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
+      jobId: "a200d2bd",
+      highlightId: "y",
+      evidence: EVIDENCE,
+    });
+    expect(result.calls).toBe(2);
+    expect(result.outcome).toBe("stored");
+    expect(f.bodies[1]).toContain("fact-poor");
   });
 });
