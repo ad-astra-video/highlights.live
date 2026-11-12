@@ -184,7 +184,7 @@ describe("caption overlap bar", () => {
 describe("gateSummaryDetail", () => {
   it("accepts an in-band, grounded, non-restating summary", () => {
     const decision = gateSummaryDetail(
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box beats the keeper at the near post.",
+      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.",
       live()
     );
     expect(decision.summary).toContain("2-2");
@@ -195,7 +195,7 @@ describe("gateSummaryDetail", () => {
 
   it("clamps an over-long reply and reports `trimmed`", () => {
     const long =
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box beats the keeper. " +
+      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner. " +
       "The crowd is up and the bench is on its feet. Northbridge restart from the centre.";
     const decision = gateSummaryDetail(long, live());
     expect(decision.gate).toBe("trimmed");
@@ -255,16 +255,19 @@ describe("gateSummaryDetail", () => {
     expect(decision.gate).toBe("absent");
   });
 
-  it("accepts when NO name is attested, on score/clock/action facts alone (ADAAAA-8456)", () => {
+  it("accepts when NO name is attested, on clock + competition facts alone (ADAAAA-8456 / AC9)", () => {
+    // Rev 3 (AC9) keeps the no-name rule but drops the CLOCK-ONLY body: the
+    // second fact must come from another channel the row attests. No name here —
+    // the clock plus the competition carries it.
     const ev = live({
-      matchContext: null,
+      matchContext: { competition: "Champions League" },
       transcript: "",
       reason: "",
       scoreTransition: null,
       caption: "Shot saved at the near post.",
     });
     const decision = gateSummaryDetail(
-      "A low drive from the edge of the box beats the keeper to level it at 2-2. The second half restarts with the visitors pressing high.",
+      "The move develops at 2:40 in the second half of the Champions League tie. The crowd keeps its shape through the next few passes.",
       ev
     );
     expect(decision.summary).not.toBeNull();
@@ -274,12 +277,12 @@ describe("gateSummaryDetail", () => {
   it("enforces the VOD band (3-5 sentences / 120-word, 700-char hard ceiling)", () => {
     const vod: SummaryEvidence = { ...live({ caption: "Shot saved." }), rail: "vod" };
     const twoSentences =
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box beats the keeper at the near post.";
+      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.";
     // Two sentences pass the LIVE band (2-3) and fail the VOD band (3-5).
     expect(gateSummaryDetail(twoSentences, live()).summary).not.toBeNull();
     expect(gateSummaryDetail(twoSentences, vod).violations).toContain("too-few-sentences");
     const three =
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box beats the keeper at the near post. " +
+      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner. " +
       "The visitors restart from the centre with the clock running down.";
     expect(gateSummaryDetail(three, vod).summary).not.toBeNull();
   });
@@ -361,8 +364,8 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
         transcript: "",
       }),
       body:
-        "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
-        "A burst of noise and motion around 0:12 marks the move that briefly lifts the ground.",
+        "The crowd erupts as the ball shoots through midfield in the opening exchanges. " +
+        "A burst of noise near 0:12 marks the move that breaks forward again.",
     },
     {
       // row f647c078 — provisional celebration, caption is the absence line
@@ -398,12 +401,20 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       }),
       body:
         "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
-        "The keeper is beaten low and the crowd behind the net is up before the restart.",
+        "The near post is beaten low and the crowd behind the net is up before the restart.",
     },
   ];
 
+  // AC9 (rev 3): row f647c078's own evidence attests ONLY the clock (no name, no
+  // score change, no competition), so a body for that row can never carry two
+  // attested facts. Its faithful rev-2 body is now a `too-few-facts` refusal —
+  // stated here rather than dropped from the sample, because that row IS the
+  // clock-only shape AC9 exists to refuse.
+  const CLOCK_ONLY_ROW = 1;
+
   it("accepts a faithful deeper body for every one of them", () => {
     for (const row of shipped) {
+      if (row === shipped[CLOCK_ONLY_ROW]) continue;
       const decision = gateSummaryDetail(row.body, row.evidence);
       expect({ caption: row.caption, violations: decision.violations }).toEqual({ caption: row.caption, violations: [] });
       expect(decision.summary).toBe(row.body);
@@ -412,6 +423,13 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       expect(decision.words).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.hardMaxWords);
       expect(decision.sentences).toBe(SUMMARY_LIVE_BAND.minSentences);
     }
+  });
+
+  it("refuses the clock-only celebration row on fact density (AC9)", () => {
+    const row = shipped[CLOCK_ONLY_ROW];
+    const decision = gateSummaryDetail(row.body, row.evidence);
+    expect(decision.summary).toBeNull();
+    expect(decision.violations).toContain("too-few-facts");
   });
 
   it("still refuses a body that answers each caption with a copy", () => {
@@ -432,17 +450,19 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
   // would leave AC1-VOD at 0% coverage.
   it("accepts a VOD-length faithful body for the same captions (AC1-VOD)", () => {
     const vodBodies = [
-      "The crowd erupts as the ball is worked through midfield in the opening exchanges. " +
+      "The crowd erupts as the ball shoots through midfield in the opening exchanges. " +
         "A short burst of noise around 0:12 marks the move that briefly lifts the ground. " +
         "Play resumes quickly with both sides still holding their shape through the next few passes.",
       "The audio feed carries a loud call near 1:42 and the crowd answers it at once. " +
         "Both benches are up and the near touchline fills with movement. " +
         "No scoreboard read inside the window backs the moment up, so the clip stays a celebration.",
       "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
-        "The keeper is beaten low and the crowd behind the net rises before the restart. " +
-        "The closing stages open up as both sides push forward again.",
+        "The near post is beaten low and the crowd behind the net rises before the restart. " +
+        "The closing stages open up as both sides press forward again.",
     ];
     shipped.forEach((row, i) => {
+      // AC9: the clock-only row cannot carry a compliant VOD body either.
+      if (i === CLOCK_ONLY_ROW) return;
       const evidence: SummaryEvidence = { ...row.evidence, rail: "vod" };
       const decision = gateSummaryDetail(vodBodies[i], evidence);
       expect({ caption: row.caption, violations: decision.violations }).toEqual({ caption: row.caption, violations: [] });
@@ -453,6 +473,13 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       expect(decision.sentences).toBeLessThanOrEqual(SUMMARY_VOD_BAND.maxSentences);
       expect(vodBodies[i].length).toBeLessThanOrEqual(SUMMARY_VOD_BAND.hardMaxChars);
     });
+    // AC9 on the VOD rail too: the clock-only row's VOD body is refused for fact
+    // density, not for length or novelty.
+    const clockOnly = gateSummaryDetail(vodBodies[CLOCK_ONLY_ROW], {
+      ...shipped[CLOCK_ONLY_ROW].evidence,
+      rail: "vod",
+    });
+    expect(clockOnly.violations).toContain("too-few-facts");
     // R4 on the VOD rail: the confirmed-GOAL body reuses the caption's own
     // `scoreboard` / `2-2` tokens (coverage sits AT the retired 0.5 bar) and is
     // still stored — overlap is an observation, never a drop reason.
@@ -471,7 +498,11 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       "This goal occurs at the 2:40 mark of the match.";
     const decision = gateSummaryDetail(reply, served);
     expect(decision.violations).toEqual([]);
-    expect(decision.summary).toBe(reply);
+    // AC10 (rev 3): `the midfielder` is a role claim the row's evidence does not
+    // attest (postTitle/reason/caption are copy, not evidence), so the gate
+    // neutralises the subject and still serves the body.
+    expect(decision.summary).toBe(reply.replace("The midfielder", "The shot"));
+    expect(decision.gate).toBe("neutralised");
     // The pipeline's snake_case enum shape is still refused outright …
     const enumBody =
       "The move ends as a scoring_play in the second half. The crowd answers it around 2:40 at the near post.";
@@ -519,7 +550,7 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
     // there. Snapshot the branch so a prompt edit is a reviewed change.
     const celebration = buildSummaryPrompt({ ...shipped[0].evidence, postTitle: null });
     expect(celebration).toContain("This is NOT a scoring play");
-    expect(celebration).toContain("Include at least one fact the headline does not carry: the clock or spell");
+    expect(celebration).toContain("Carry at least TWO different facts from the evidence, not just the clock");
     expect(celebration).toMatchSnapshot();
     const scoring = buildSummaryPrompt({ ...shipped[2].evidence, postTitle: "Midfielder scores" });
     expect(scoring).toContain("the score line, the clock or spell");

@@ -137,7 +137,16 @@ export const SUMMARY_RAW_MAX_CHARS = 2_000;
 
 /** Why a promoted row carries no `summary`. Named (never a free-form sentence)
  *  so a stored-row read can attribute a drop without a log join (AC6). */
-export type SummaryDropReason = "pool_busy" | "timeout" | "transport_failure" | "parse" | "gate";
+export type SummaryDropReason =
+  | "pool_busy"
+  | "timeout"
+  | "transport_failure"
+  | "parse"
+  | "gate"
+  /** AC8 (rev 3): the body's opening run repeated another served body in the
+   *  same job, and the ONE regeneration repeated too. The card still serves on
+   *  its headline. */
+  | "repeat";
 
 export const SUMMARY_DROP_REASONS: readonly SummaryDropReason[] = [
   "pool_busy",
@@ -145,6 +154,7 @@ export const SUMMARY_DROP_REASONS: readonly SummaryDropReason[] = [
   "transport_failure",
   "parse",
   "gate",
+  "repeat",
 ];
 
 /** Resolve the per-call fee: `override` when finite and positive, otherwise the
@@ -240,6 +250,21 @@ export function summaryWords(text?: string | null): string[] {
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
   return folded ? folded.split(" ").filter(Boolean) : [];
+}
+
+// --- AC8: distinct openings ------------------------------------------------
+
+/** AC8 (spec ADAAAA-8665 rev 3): the normalized opening run compared ACROSS a
+ *  job's served bodies. Four words is the spec's bar, and the run is built with
+ *  the same normalized WORD sequence the caption-echo bar uses (`summaryWords`),
+ *  so "The midfielder drives forward" and "the MIDFIELDER drives, forward"
+ *  collide instead of hiding behind punctuation. */
+export const SUMMARY_OPENING_RUN_WORDS = 4;
+
+/** The opening run of a body ("the midfielder drives forward"), or "" when the
+ *  body is empty. Shorter bodies compare on whatever they have. */
+export function summaryOpeningRun(text: string, words = SUMMARY_OPENING_RUN_WORDS): string {
+  return summaryWords(text).slice(0, Math.max(1, words)).join(" ");
 }
 
 /** Longest contiguous run of words shared by `a` and `b` (classic DP, O(n*m)). */
@@ -443,7 +468,11 @@ export type SummaryViolation =
   | "speculative-verb"
   | "restates-caption"
   | "no-new-fact"
-  | "no-attested-entity";
+  | "no-attested-entity"
+  /** AC10 (rev 3): a role noun the row's evidence does not attest. */
+  | "unattested-role"
+  /** AC9 (rev 3): fewer than two DISTINCT attested fact types. */
+  | "too-few-facts";
 
 /** The evidence a summary is gated against. Everything is the ROW's own
  *  evidence; a missing field fails closed (never invents). */
@@ -563,6 +592,292 @@ export function summaryGroundingContext(evidence: SummaryEvidence): CaptionGroun
   };
 }
 
+// --- AC10: role nouns are attestation claims -------------------------------
+
+/** One role noun the body uses, with the phrase that carries it. */
+export interface SummaryRoleNoun {
+  /** The canonical role ("midfielder", "goalkeeper", ...). */
+  canonical: string;
+  /** The matched phrase, e.g. "the midfielder". */
+  text: string;
+}
+
+/** AC10 (spec ADAAAA-8665 rev 3): the role nouns a body may only use when the
+ *  row's own evidence attests the role. Each group is one ATTESTATION UNIT: the
+ *  evidence saying "keeper" attests "the goalkeeper" for the same row, because it
+ *  is the same role. A bare `forward` is deliberately NOT matched unless a
+ *  determiner precedes it — "drives forward" is an adverb, not a claim about a
+ *  person. */
+export const SUMMARY_ROLE_NOUN_GROUPS: readonly { canonical: string; forms: readonly string[] }[] = [
+  {
+    canonical: "midfielder",
+    forms: ["midfielder", "midfielders", "midfield player", "central midfielder", "holding midfielder"],
+  },
+  {
+    canonical: "goalkeeper",
+    forms: ["goalkeeper", "goalkeepers", "keeper", "keepers", "goalie", "netminder"],
+  },
+  {
+    canonical: "striker",
+    forms: ["striker", "strikers", "forward", "forwards", "attacker", "attackers", "frontman", "poacher", "marksman", "number 9"],
+  },
+  {
+    canonical: "defender",
+    forms: [
+      "defender",
+      "defenders",
+      "centre-back",
+      "centre back",
+      "center-back",
+      "center back",
+      "fullback",
+      "full-back",
+      "wing-back",
+      "wing back",
+    ],
+  },
+  { canonical: "winger", forms: ["winger", "wingers"] },
+  { canonical: "playmaker", forms: ["playmaker", "playmakers"] },
+  { canonical: "captain", forms: ["captain", "captains", "skipper"] },
+  { canonical: "sweeper", forms: ["sweeper", "sweepers"] },
+];
+
+const ROLE_DETERMINER = "(?:the|a|an|their|its|his|her)";
+const escapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Every role form, longest first so "central midfielder" wins over "midfielder". */
+const ROLE_ALT = [...SUMMARY_ROLE_NOUN_GROUPS]
+  .flatMap((g) => g.forms)
+  .sort((a, b) => b.length - a.length)
+  .map(escapeRe)
+  .join("|");
+const ROLE_PHRASE_SOURCE = `\\b${ROLE_DETERMINER}\\s+(${ROLE_ALT})\\b`;
+/** Any determiner+role phrase in a body. */
+const ROLE_PHRASE_RE = new RegExp(ROLE_PHRASE_SOURCE, "gi");
+/** The same phrase ANCHORED at a sentence start: the only shape AC10 can
+ *  neutralise into a different subject. */
+const ROLE_SUBJECT_RE = new RegExp(`^\\s*${ROLE_PHRASE_SOURCE}`, "i");
+
+function roleGroupOf(form: string): string {
+  const key = form.toLowerCase();
+  for (const group of SUMMARY_ROLE_NOUN_GROUPS) if (group.forms.includes(key)) return group.canonical;
+  return key;
+}
+
+/** Every determiner+role-noun phrase in `text`, canonicalised. */
+export function roleNounClaims(text: string): SummaryRoleNoun[] {
+  const body = text ?? "";
+  const out: SummaryRoleNoun[] = [];
+  for (const match of body.matchAll(ROLE_PHRASE_RE)) {
+    const form = match[1];
+    if (!form) continue;
+    out.push({ canonical: roleGroupOf(form), text: match[0] });
+  }
+  return out;
+}
+
+/** The raw match context as text: `renderSummaryContext` renders names only, and
+ *  a roster entry's `position` is exactly the attestation AC10 needs. */
+function matchContextRawText(matchContext: unknown): string {
+  if (!matchContext || typeof matchContext !== "object") return "";
+  try {
+    return JSON.stringify(matchContext);
+  } catch {
+    return "";
+  }
+}
+
+/** The evidence text that can ATTEST a role: the row's own sources. The served
+ *  caption is excluded on purpose — it is generated copy, so a role noun in the
+ *  announcer line is a claim, not evidence for another claim. */
+export function roleAttestationText(evidence: SummaryEvidence): string {
+  return [
+    renderSummaryContext(evidence.matchContext),
+    matchContextRawText(evidence.matchContext),
+    evidence.transcript ?? "",
+    evidence.reason ?? "",
+    evidence.adjacentScoreCue ?? "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** The role groups (canonical names) the row's evidence attests. */
+export function attestedRoleNouns(evidence: SummaryEvidence): Set<string> {
+  const text = roleAttestationText(evidence);
+  const attested = new Set<string>();
+  if (!text) return attested;
+  for (const group of SUMMARY_ROLE_NOUN_GROUPS) {
+    const re = new RegExp(`\\b(?:${group.forms.map(escapeRe).join("|")})\\b`, "i");
+    if (re.test(text)) attested.add(group.canonical);
+  }
+  return attested;
+}
+
+/** The role nouns in `text` the row does NOT attest. Empty => every role noun is
+ *  grounded. */
+export function unattestedRoleNouns(text: string, evidence: SummaryEvidence): SummaryRoleNoun[] {
+  const attested = attestedRoleNouns(evidence);
+  return roleNounClaims(text).filter((claim) => !attested.has(claim.canonical));
+}
+
+const SHOT_VERB_RE =
+  /\b(?:shoots?|shot|fires?|fired|volleys?|volleyed|heads?|headed|strikes?|struck|curls?|curled|lobs?|lobbed|taps?|tapped|finishes?|finished|converts?|converted|scores?|scored|buries|buried|nests?|netted|finds?|finds)\b/i;
+const MOVE_VERB_RE =
+  /\b(?:drives?|drove|runs?|ran|breaks?|broke|carries|carried|advances?|advanced|surges?|surged|moves?|moved|attacks?|attacked|bursts?|burst|cuts?|cut|chases?|chased|presses?|pressed)\b/i;
+
+/** The neutral subject a role-noun SENTENCE is rewritten to, chosen from the verb
+ *  that follows it: a shot verb keeps "the shot", a movement verb "the move",
+ *  anything else "the play". Deterministic, so a stored body can be reproduced. */
+export function neutralRoleSubject(sentence: string): string {
+  const after = sentence.replace(ROLE_SUBJECT_RE, " ");
+  if (SHOT_VERB_RE.test(after)) return "The shot";
+  if (MOVE_VERB_RE.test(after)) return "The move";
+  return "The play";
+}
+
+export interface SummaryRoleNeutralisation {
+  text: string;
+  /** Phrases rewritten to a neutral subject. */
+  neutralised: SummaryRoleNoun[];
+  /** Sentences deleted because a role noun sat somewhere a subject rewrite
+   *  cannot reach (an object or a modifier). Deleting is the clamp's rule: this
+   *  never rewrites a claim into a different one. */
+  droppedSentences: number;
+}
+
+/**
+ * AC10: remove unattested role nouns from a body WITHOUT inventing a claim.
+ *
+ * Two deterministic moves, in this order:
+ *  1. a role noun opening its sentence is the SUBJECT: rewrite the subject to a
+ *     neutral event noun ("the move", "the shot", "the play") and keep the verb,
+ *     so the sentence still says what the evidence attests;
+ *  2. a role noun anywhere else (object, modifier) cannot be rewritten without
+ *     changing what the sentence claims, so the SENTENCE is deleted. If that
+ *     takes the body under the depth band the gate refuses it and the lane
+ *     regenerates/drops — never a fabricated repair.
+ */
+export function neutraliseRoleNouns(text: string, evidence: SummaryEvidence): SummaryRoleNeutralisation {
+  const body = (text ?? "").trim();
+  const claims = unattestedRoleNouns(body, evidence);
+  if (!body || claims.length === 0) return { text: body, neutralised: [], droppedSentences: 0 };
+  const kept: string[] = [];
+  const neutralised: SummaryRoleNoun[] = [];
+  let droppedSentences = 0;
+  for (const sentence of body.split(/(?<=[.!?…])\s+/).filter(Boolean)) {
+    const offending = unattestedRoleNouns(sentence, evidence);
+    if (offending.length === 0) {
+      kept.push(sentence);
+      continue;
+    }
+    const leading = sentence.match(ROLE_SUBJECT_RE);
+    // Only a role phrase that IS the sentence's subject can be neutralised.
+    if (leading) {
+      const subject = neutralRoleSubject(sentence);
+      const rewritten = `${subject}${sentence.slice(leading[0].length)}`;
+      if (unattestedRoleNouns(rewritten, evidence).length === 0) {
+        kept.push(rewritten);
+        neutralised.push({ canonical: roleGroupOf(leading[1] ?? ""), text: leading[0].trim() });
+        continue;
+      }
+    }
+    droppedSentences++;
+  }
+  return { text: kept.join(" ").trim(), neutralised, droppedSentences };
+}
+
+// --- AC9: fact density -----------------------------------------------------
+
+/** AC9 (spec ADAAAA-8665 rev 3): a served body relays at least TWO DISTINCT fact
+ *  types from the row's own evidence channels. A clock-only body is filler. */
+export const SUMMARY_MIN_FACT_KINDS = 2;
+
+/** A body clock may differ from the window anchor by at most this much (a body
+ *  that says "at the 2:40 mark" for a 2:38 window is anchoring the same moment;
+ *  "at 9:12" is a fabricated timestamp). */
+export const SUMMARY_CLOCK_ANCHOR_TOLERANCE_S = 90;
+
+/** The competition / venue strings the match context actually carries. */
+export function matchContextVenueText(matchContext: unknown): string {
+  if (!matchContext || typeof matchContext !== "object") return "";
+  const mc = matchContext as Record<string, any>;
+  const parts: string[] = [];
+  for (const key of ["competition", "tournament", "league", "venue", "stadium", "ground", "arena"]) {
+    const value = mc[key];
+    if (typeof value === "string" && value.trim()) parts.push(value.trim());
+    else if (value && typeof value === "object" && typeof value.name === "string" && value.name.trim()) parts.push(value.name.trim());
+  }
+  return parts.join(" · ");
+}
+
+function scoreDigits(text: string): string {
+  return (text ?? "").replace(/[^\d]/g, "");
+}
+
+function sameScore(a: string, b: string): boolean {
+  return scoreDigits(a) === scoreDigits(b) && scoreDigits(a) !== "";
+}
+
+/** AC9: which fact TYPES the ROW can attest. A type the evidence does not carry
+ *  is never available, so a body can never earn it by asserting it. */
+export function attestedFactKinds(evidence: SummaryEvidence): SummaryFactKind[] {
+  const kinds: SummaryFactKind[] = [];
+  if (typeof evidence.windowTs === "number" && Number.isFinite(evidence.windowTs)) kinds.push("clock");
+  const from = (evidence.scoreTransition?.from ?? "").trim();
+  const to = (evidence.scoreTransition?.to ?? "").trim();
+  // A score line is a fact only when the row attests the CHANGE (from -> to).
+  if (from && to && scoreDigits(from) && scoreDigits(to) && !sameScore(from, to)) kinds.push("score");
+  // An action needs an attested actor/entity (ADAAAA-8456: a name shortage must
+  // not starve depth, so a team name is an entity too).
+  if (attestedEntityNames(summaryEvidenceText(evidence)).length > 0) kinds.push("action");
+  if (matchContextVenueText(evidence.matchContext).length > 0) kinds.push("venue");
+  return kinds;
+}
+
+function clockSeconds(text: string): number | null {
+  const m = (text ?? "").match(/^(\d{1,3}):(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+function scoreFactGrounded(factText: string, evidence: SummaryEvidence): boolean {
+  const from = evidence.scoreTransition?.from ?? "";
+  const to = evidence.scoreTransition?.to ?? "";
+  return sameScore(factText, to) || sameScore(factText, from);
+}
+
+function venueFactGrounded(factText: string, evidence: SummaryEvidence): boolean {
+  const venue = matchContextVenueText(evidence.matchContext);
+  if (!venue) return false;
+  const venueTokens = new Set(normalizeSummaryTokens(venue));
+  const factTokens = normalizeSummaryTokens(factText);
+  return factTokens.length > 0 && factTokens.every((t) => venueTokens.has(t));
+}
+
+function clockFactGrounded(factText: string, evidence: SummaryEvidence): boolean {
+  const windowsTs = evidence.windowTs;
+  if (typeof windowsTs !== "number" || !Number.isFinite(windowsTs)) return false;
+  const seconds = clockSeconds(factText);
+  // A spell ("second half") is a clock fact the row's window anchor carries; an
+  // explicit m:ss must anchor THIS window, not a fabricated instant.
+  if (seconds === null) return true;
+  return Math.abs(seconds - windowsTs) <= SUMMARY_CLOCK_ANCHOR_TOLERANCE_S;
+}
+
+/** AC9 read: the DISTINCT fact types the body relays that the row attests. */
+export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence): SummaryFactKind[] {
+  const available = new Set(attestedFactKinds(evidence));
+  const out = new Set<SummaryFactKind>();
+  for (const fact of summaryFacts(text)) {
+    if (!available.has(fact.kind)) continue;
+    if (fact.kind === "score" && !scoreFactGrounded(fact.text, evidence)) continue;
+    if (fact.kind === "venue" && !venueFactGrounded(fact.text, evidence)) continue;
+    if (fact.kind === "clock" && !clockFactGrounded(fact.text, evidence)) continue;
+    out.add(fact.kind);
+  }
+  return [...out];
+}
+
 /** ADAAAA-8687: the taxonomy table's entries that are ordinary prose in body
  *  copy. The internal-token bar exists to keep the pipeline's OWN event labels
  *  off the served surface (`scoring_play`, `BIG_PLAY`, `big play`, `near miss`),
@@ -674,6 +989,12 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   // Depth bars — a name is NOT required (ADAAAA-8456 lesson).
   if (newSummaryFacts(body, evidence.postTitle).length === 0) out.push("no-new-fact");
   if (!hasAttestedEntity(body, summaryEvidenceText(evidence))) out.push("no-attested-entity");
+  // Rev 3 (AC8-AC10). The gate neutralises unattested role nouns BEFORE judging
+  // (`gateSummaryDetail`), so `unattested-role` is the backstop for a shape the
+  // deterministic neutraliser cannot reach. `too-few-facts` is the fact-density
+  // bar: two DISTINCT attested channels, never a clock on its own.
+  if (unattestedRoleNouns(body, evidence).length > 0) out.push("unattested-role");
+  if (attestedSummaryFactKinds(body, evidence).length < SUMMARY_MIN_FACT_KINDS) out.push("too-few-facts");
   return out;
 }
 
@@ -715,16 +1036,22 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
   const refused: SummaryViolation[] = [];
   for (const candidate of candidates) {
     if (!candidate.text) continue;
-    const violations = summaryViolations(candidate.text, evidence);
+    // AC10 (rev 3): an unattested role noun is removed BEFORE judging, so a body
+    // that names "the midfielder" without attestation still serves with a
+    // neutralised subject ("the move") instead of dropping the card's copy.
+    const neutralised = neutraliseRoleNouns(candidate.text, evidence);
+    const judged = neutralised.text;
+    if (!judged) continue;
+    const violations = summaryViolations(judged, evidence);
     if (violations.length === 0) {
       return {
-        summary: candidate.text,
-        gate: candidate.trimmed ? "trimmed" : "accepted",
+        summary: judged,
+        gate: neutralised.neutralised.length > 0 ? "neutralised" : candidate.trimmed ? "trimmed" : "accepted",
         violations: [],
-        words: summaryWordCount(candidate.text),
-        sentences: summarySentenceCount(candidate.text),
+        words: summaryWordCount(judged),
+        sentences: summarySentenceCount(judged),
         raw: stripped,
-        captionOverlap: captionTokenOverlap(candidate.text, evidence.caption),
+        captionOverlap: captionTokenOverlap(judged, evidence.caption),
       };
     }
     for (const v of violations) if (!refused.includes(v)) refused.push(v);
@@ -749,6 +1076,10 @@ export interface SummaryPromptInput extends SummaryEvidence {
   /** The card's served headline, when one exists (so the prompt can ask for a
    *  DIFFERENT fact rather than a restatement). */
   postTitle?: string | null;
+  /** AC8 (rev 3): the opening runs already SERVED in this job. The prompt asks
+   *  for a different opening instead of relying on the gate to reject a repeat —
+   *  prompt first, gate as the backstop. */
+  avoidOpenings?: string[];
 }
 
 /** Deterministic prompt. Snapshot-tested (`summary-prompt.test.ts`) so a prompt
@@ -780,15 +1111,20 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "Rules:",
     "- State only what the evidence below supports.",
     `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the competition or venue, or an attested action from the evidence.`,
-    `- Include at least one fact the headline does not carry: ${factMenu}.`,
-    "- A name is optional. If the evidence names nobody, carry the depth with clock and action facts.",
+    `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
+    "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
+    "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue, plus an attested action of the play.",
     attestsScoring
       ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
       : "- This is NOT a scoring play: the words 'goal', 'scoring', 'score' and 'net' are off limits. Do not describe a goal or a scoring chance, do not name the net, and do not state a score or whether it changed.",
-    "- Never invent a name, a team, a venue or a statistic. When the evidence names nobody, describe roles only ('the midfielder', 'the keeper') and do not capitalize a made-up name.",
+    "- Never invent a name, a team, a venue or a statistic. A role noun ('the midfielder', 'the keeper', 'the striker', 'the defender', 'the winger') is a claim: use it ONLY when the evidence below uses that word. Otherwise describe the play, the move or the shot, or name an attested team.",
     ...(attestsScoring
       ? []
-      : ["- Name the clock in your copy (the window label, e.g. `0:12`): with no score fact, the clock is the fact this card can carry."]),
+      : ["- Name the clock in your copy (the window label, e.g. `0:12`), but the clock alone is not enough: pair it with the competition/venue or an attested action."]),
+    "- Do not open with the same words as another card in this job: vary your first four words.",
+    ...(input.avoidOpenings && input.avoidOpenings.length > 0
+      ? [`- Do not open with any of these already-served runs: ${input.avoidOpenings.slice(0, 8).map((o) => `'${o}'`).join(", ")}.`]
+      : []),
     "- Do not restate the headline or the announcer line.",
     "- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').",
     "Evidence:",

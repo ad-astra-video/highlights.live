@@ -29,6 +29,7 @@ import {
   buildSummaryPrompt,
   gateSummaryDetail,
   resolveSummaryFee,
+  summaryOpeningRun,
   type SummaryDropReason,
   type SummaryEvidence,
   type SummaryRail,
@@ -58,6 +59,23 @@ export interface SummaryRowDescriptor {
   highlightId: string;
   /** The row's own evidence — see `SummaryEvidence` in `@highlights/events`. */
   evidence: SummaryEvidence;
+}
+
+/**
+ * AC8 (rev 3): the state the opening guard needs, scoped to ONE JOB.
+ *
+ * The set holds every normalized opening run already SERVED in this job — the
+ * scope is the job, not the row, because the defect is two cards on the same
+ * video opening the same way. Two different jobs may legitimately reuse an
+ * opening; the lane owns one instance per job (`SummaryLane`), so that scope is
+ * structural, not a convention a caller can forget.
+ */
+export interface SummaryJobState {
+  servedOpenings: Set<string>;
+}
+
+export function newSummaryJobState(): SummaryJobState {
+  return { servedOpenings: new Set<string>() };
 }
 
 export interface SummaryLaneConfig {
@@ -158,27 +176,41 @@ export interface SummaryLaneRunResult {
  * Generate, gate, store. ONE inference plus at most one retry; a failure writes
  * the meter only. The row's status, verdict, caption, title and clip fields are
  * never touched — only the six `summary*` fields.
+ *
+ * AC8 (rev 3): `state` carries the JOB's already-served opening runs. A body
+ * whose opening repeats one of them is regenerated ONCE (the retry slot the
+ * contract already allows, so the row still bills at most two calls, AC5); a
+ * regeneration that repeats too drops with `repeat`, stores the candidate body as
+ * `summaryRaw` and leaves the card on its headline.
  */
 export async function runSummaryForRow(
   store: SummaryLaneStore,
   cfg: SummaryLaneConfig,
-  descriptor: SummaryRowDescriptor
+  descriptor: SummaryRowDescriptor,
+  state?: SummaryJobState
 ): Promise<SummaryLaneRunResult> {
   const now = cfg.now ?? (() => Date.now());
   const log = cfg.log ?? ((line: string) => console.log(line));
   const evidence = descriptor.evidence;
-  const prompt = buildSummaryPrompt(evidence);
-  const body: SummaryCallBody = {
-    prompt,
-    rail: evidence.rail,
-    maxWords: evidence.rail === "vod" ? 120 : 70,
-  };
+  const servedOpenings = state?.servedOpenings;
   let calls = 0;
   let lastReason: SummaryDropReason | null = null;
   /** The last refusal, so the drop path can keep its reply as `summaryRaw`. */
   let lastGate: ReturnType<typeof gateSummaryDetail> | null = null;
   const started = now();
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
+    // AC8 prompt-first: the regeneration (and any retry) is asked to avoid the
+    // openings already served in this job, so the gate is a backstop, not the
+    // only defence.
+    const prompt = buildSummaryPrompt({
+      ...evidence,
+      ...(servedOpenings && servedOpenings.size > 0 ? { avoidOpenings: [...servedOpenings] } : {}),
+    });
+    const body: SummaryCallBody = {
+      prompt,
+      rail: evidence.rail,
+      maxWords: evidence.rail === "vod" ? 120 : 70,
+    };
     calls++;
     const reply = await requestSummaryCall(cfg, body);
     if ("reason" in reply) {
@@ -189,7 +221,6 @@ export async function runSummaryForRow(
       continue;
     }
     const decision = gateSummaryDetail(reply.text, evidence);
-    const latencyMs = Math.max(0, Math.round(now() - started));
     if (!decision.summary) {
       lastGate = decision;
       lastReason = "gate";
@@ -208,6 +239,26 @@ export async function runSummaryForRow(
       }
       break;
     }
+    // AC8: a repeated opening is regenerated once (prompt asks for a different
+    // one); a second repeat drops the body rather than serving two identical
+    // openings in one job.
+    const opening = summaryOpeningRun(decision.summary);
+    if (opening && servedOpenings?.has(opening)) {
+      if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
+        log(
+          `[summary:${descriptor.jobId}] repeat-opening highlight=${descriptor.highlightId} opening=${JSON.stringify(opening)} — regenerating once`
+        );
+        continue;
+      }
+      lastGate = decision;
+      lastReason = "repeat";
+      log(
+        `[summary:${descriptor.jobId}] repeat-opening highlight=${descriptor.highlightId} opening=${JSON.stringify(opening)} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+      );
+      break;
+    }
+    servedOpenings?.add(opening);
+    const latencyMs = Math.max(0, Math.round(now() - started));
     await store.patchHighlightSummary(descriptor.highlightId, {
       summary: decision.summary,
       summaryGate: decision.gate,
@@ -217,7 +268,7 @@ export async function runSummaryForRow(
       summaryP95Ms: latencyMs,
     });
     log(
-      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${decision.words} sentences=${decision.sentences} gate=${decision.gate} calls=${calls} ms=${latencyMs}`
+      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${decision.words} sentences=${decision.sentences} gate=${decision.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)}`
     );
     return { outcome: "stored", gate: decision.gate, calls, latencyMs };
   }
@@ -254,6 +305,9 @@ export class SummaryLane {
   private draining = false;
   private readonly samples: number[] = [];
   private meter: SummaryMeterSnapshot = emptyMeter();
+  /** AC8 (rev 3): the openings already served in THIS job. The lane is one per
+   *  job, so the guard's scope is the job by construction. */
+  private readonly jobState: SummaryJobState = newSummaryJobState();
   /** Rows that could not even be queued (ring full / lane inert). */
   private droppedAtEnqueue = 0;
 
@@ -318,7 +372,7 @@ export class SummaryLane {
         const next = this.pending.shift()!;
         this.inFlight = true;
         try {
-          const result = await runSummaryForRow(this.store, this.cfg, next);
+          const result = await runSummaryForRow(this.store, this.cfg, next, this.jobState);
           this.meter.summaryCalls += result.calls;
           this.samples.push(result.latencyMs);
           if (result.outcome === "dropped") {
