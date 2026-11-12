@@ -17,6 +17,7 @@
 import { describe, expect, it } from "vitest";
 import {
   attestationDetailCopy,
+  captionAssertsUnattestedAction,
   captionSourceText,
   groundCaption,
   quietStoredCopy,
@@ -125,6 +126,27 @@ describe("ADAAAA-8806 — the diagnostic tail is never caption copy", () => {
 });
 
 describe("ADAAAA-8806 — no ball outcome the attestation does not record", () => {
+  it("refuses the SERVED string itself (the exact caption QA graded)", () => {
+    // The final bar the write seam applies to every assembled surface.
+    expect(captionAssertsUnattestedAction("The ball shoots on the right.", groundingFor(ROW_2, "on the right"))).toBe(
+      true
+    );
+    // … and it does not fire on a row whose attestation recorded an outcome, nor
+    // on a surface with no attestation at all.
+    expect(
+      captionAssertsUnattestedAction("The ball shoots on the right.", {
+        ...groundingFor(ROW_2, "on the right"),
+        attestedBallAction: true,
+      })
+    ).toBe(false);
+    expect(
+      captionAssertsUnattestedAction("The ball shoots on the right.", {
+        ...groundingFor(ROW_2, "on the right"),
+        attestedBallAction: null,
+      })
+    ).toBe(false);
+  });
+
   it("refuses the substituted shot verb on a row with no measured outcome", () => {
     expect(groundCaption(ROW_2.reason, groundingFor(ROW_2, "on the right"))).not.toBe("The ball shoots on the right.");
     expect(quietStoredCopy(ROW_2.reason, groundingFor(ROW_2, "on the right"))).toBe("");
