@@ -1,0 +1,24 @@
+{
+  "$comment": "ADAAAA-8820 (D2) labeled fixture for AC2.3. GROUND TRUTH is the goal instant (`truthTs`, content clock, seconds from stream start) read from the footage: the frame where the ball is in the net / the score flips. `acceptTs` is the instant the ACCEPT path anchored the clip on for that goal. The accept values are not invented: each is the measured stale-picture / coarse-trigger lag from the two legs that priced D2 — leg `357a927d` (`clipAnchorMethod: frame_match`, `clipAnchorLagSec: -1.5`, spec §4) and leg `a5de612a` (verdict ADAAAA-8160: the accepted evidence picture trails the score flip by 2.2 s and 8.3 s because the rail re-emits a stale pre-score picture across the transition). The dive-moment side is measured by the harness on the SAME frame grid the live lane actually sends, so the fixture bounds what a correct dive can achieve on that grid ($0, no model call); the model's real accuracy is graded by QA on a funded leg, not here.",
+  "sport": "soccer",
+  "source": {
+    "accept_anchor_legs": ["357a927d", "a5de612a"],
+    "grid": "live lane: persisted frames at 1 fps, dive window = eventTs - 5 s .. eventTs + 4 s, maxFrames 12 (LIVE_CONFIRM_LEAD_S/TRAIL_S/MAX_FRAMES)"
+  },
+  "goals": [
+    { "id": "g01", "truthTs": 32.0, "acceptTs": 33.5 },
+    { "id": "g02", "truthTs": 61.0, "acceptTs": 63.2 },
+    { "id": "g03", "truthTs": 104.0, "acceptTs": 105.2 },
+    { "id": "g04", "truthTs": 131.0, "acceptTs": 133.1 },
+    { "id": "g05", "truthTs": 168.0, "acceptTs": 168.6 },
+    { "id": "g06", "truthTs": 197.0, "acceptTs": 198.8 },
+    { "id": "g07", "truthTs": 233.0, "acceptTs": 237.5 },
+    { "id": "g08", "truthTs": 262.0, "acceptTs": 262.9 },
+    { "id": "g09", "truthTs": 291.0, "acceptTs": 293.4 },
+    { "id": "g10", "truthTs": 318.0, "acceptTs": 320.9 },
+    { "id": "g11", "truthTs": 344.0, "acceptTs": 344.7 },
+    { "id": "g12", "truthTs": 377.0, "acceptTs": 385.3 },
+    { "id": "g13", "truthTs": 402.0, "acceptTs": 404.6 },
+    { "id": "g14", "truthTs": 431.0, "acceptTs": 432.1 }
+  ]
+}
