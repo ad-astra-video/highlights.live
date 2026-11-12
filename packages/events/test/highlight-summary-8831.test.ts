@@ -19,6 +19,9 @@
 import { describe, expect, it } from "vitest";
 import {
   SUMMARY_LIVE_BAND,
+  attestedActorNames,
+  attestedFactKinds,
+  bodyNamesAttestedActor,
   buildSummaryPrompt,
   gateSummaryDetail,
   neutraliseRoleNouns,
@@ -106,6 +109,25 @@ describe("ADAAAA-8831 AC12 — the match context trail grounds the teams it meas
   it("reads the trail names the resolved `teams` list does not carry", () => {
     expect(matchContextTrailNames(JOB_CONTEXT)).toEqual(["Barcelona", "Real Madrid"]);
     expect(summaryEvidenceText(ROW_8D52_EV)).toContain("Real Madrid");
+  });
+
+  it("counts a trail-measured side as an ATTESTED ACTOR, not just a groundable name", () => {
+    // The two readers must agree: a name the evidence grounds is a name the body
+    // can credit. On this row `teams` carries Barcelona only, so without the
+    // trail the served body named a measured team and still read
+    // `bodyNamesAttestedActor=false`.
+    expect(attestedActorNames(ROW_8D52_EV)).toEqual(["Barcelona", "Real Madrid"]);
+    const decision = gateSummaryDetail(DRAFT_8D52, ROW_8D52_EV);
+    expect(decision.summary).toBeTruthy();
+    expect(bodyNamesAttestedActor(decision.summary!, ROW_8D52_EV)).toBe(true);
+  });
+
+  it("does not let a trail entry invent an actor for a body that names nobody", () => {
+    // The 8735 bar is unchanged where there is no trail: no teams, no transcript
+    // => no attested actor, so no `action` fact is available.
+    const bare: SummaryEvidence = { ...ROW_8D52_EV, matchContext: null, transcript: null };
+    expect(attestedActorNames(bare)).toEqual([]);
+    expect(attestedFactKinds(bare)).not.toContain("action");
   });
 
   it("serves the entity-bearing 29-word body that carried the attested score", () => {
