@@ -331,4 +331,29 @@ describe("ADAAAA-8830 — the audit marker is never served copy", () => {
     // A line whose LEAD is the citation is provenance, not copy.
     expect(captionSourceViolation("ASR confirms a goal.")).toBe("attestation-cite");
   });
+
+  it("matches and DELETES the match-clock marker form (`t=22:13`)", () => {
+    // 20 stored rows on the 10-day corpus carry the model's match clock rather
+    // than a window-relative second (`t=22:13`, `t=3:30`, `t=0:41`). Detection
+    // already fired on the old pattern (`t=22` + a word boundary), but DELETION
+    // stopped at the colon and served the residue INSIDE the scoreline —
+    // `The scoreboard changes to 2-1:13.` — so the marker source has to read the
+    // whole clock.
+    for (const marker of ["at t=22:13", "at t=3:30", "t=0:41", "at t = 09:49"]) {
+      expect(carriesAuditMarker(`Scoreboard changes to 2-1 ${marker}.`)).toBe(true);
+    }
+    expect(
+      attestationDetailCopy("The scoreboard changes to 2-1 at t=22:13.", {
+        verdict: "scoring_play",
+        eventType: "GOAL",
+      })
+    ).toBe("The scoreboard changes to 2-1.");
+    // The same clock on a non-ledger beat: the beat survives, the clock does not.
+    expect(
+      attestationDetailCopy("The keeper is beaten at t=0:41 and the crowd erupts.", {
+        verdict: "scoring_play",
+        eventType: "GOAL",
+      })
+    ).toBe("The crowd erupts.");
+  });
 });
