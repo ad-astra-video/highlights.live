@@ -386,3 +386,90 @@ describe("GET /jobs/:id/acceptance-lane (ADAAAA-8286)", () => {
     expect(entry.detail.counts.accepted).toBe(liveBody.counts.accepted);
   });
 });
+
+describe("GET /jobs/:id/acceptance-lane serves the DELIVERED authority (ADAAAA-8774)", () => {
+  const tmp = mkdtempSync(path.join(tmpdir(), "hl-lane-auth-"));
+  const videoPath = path.join(tmp, "vod.mp4");
+
+  beforeAll(() => {
+    execFileSync("ffmpeg", [
+      "-y", "-f", "lavfi", "-i", "testsrc=duration=1:size=320x180:rate=2",
+      "-pix_fmt", "yuv420p", videoPath,
+    ]);
+  });
+  afterAll(() => rmSync(tmp, { recursive: true, force: true }));
+
+  it("agrees with the card on the live lane and keeps that disclosure in the tombstone", async () => {
+    const { app, store } = await buildTestApp({}, { adapter: fakePipeline() });
+    const token = await register(app, "lane-auth@test.dev", "password123");
+    const hdr = (t: string) => ({ authorization: `Bearer ${t}` });
+
+    const res = await app.inject({
+      method: "POST", url: "/jobs",
+      headers: hdr(token),
+      payload: { videoPath, gameHint: "valorant" },
+    });
+    expect(res.statusCode).toBe(202);
+    const jobId = res.json().job.id as string;
+    const done = await waitForJob(app, jobId, token);
+    expect(done.job.status).toBe("done");
+
+    // The ADAAAA-8768 seed shape: a motion-only candidate the decide record
+    // cannot attest, beside a delivered card whose own disclosure says `frame`.
+    await store.recordJobCandidate({
+      ...makeCandidate(jobId, { id: "lane-motion", timestamp: 17 }),
+      trigger: { kind: "motion", timestamp: 17, eventType: "GOAL" },
+      confirm: {
+        request: { prompt: "P", dataItems: [], frames: [], keyframes: [], trajectories: [], audioLevels: [] },
+        decision: { goalConfirmed: "confirmed_goal", confidence: 0.8 },
+      },
+    } as any);
+    await store.addHighlight({
+      ...makeHighlight(jobId, "h-lane-motion", 16),
+      status: "accepted",
+      eventType: "GOAL",
+      outcome: "scoring_play",
+      candidateId: "lane-motion",
+      corroborationSource: "frame_attestation",
+      attestationUsed: {
+        scoreBoardChanged: false,
+        goalCrossed: true,
+        ballOutcome: "in_net",
+        corroborated: true,
+        goalConfirmed: "confirmed_goal",
+        authority: "frame",
+        frameRefCount: 1,
+      },
+    });
+
+    const live = await app.inject({ method: "GET", url: `/jobs/${jobId}/acceptance-lane`, headers: hdr(token) });
+    expect(live.statusCode).toBe(200);
+    const liveBody = live.json();
+    const row = (liveBody.candidates as any[]).find((c) => c.id === "lane-motion");
+    expect(row.authority).toBe("frame");
+    expect(row.authoritySource).toBe("row");
+    expect(row.candidateAuthority).toBe("none");
+    // The falsifier is computed from the same projection: it must agree with a
+    // recomputation over the rows it serves (no lane/card divergence).
+    const recomputed = (liveBody.candidates as any[]).filter(
+      (c) =>
+        c.status === "accepted" &&
+        /^(GOAL|GOL)$/i.test(c.eventType ?? "") &&
+        c.authority !== "scoreboard" &&
+        c.authority !== "frame"
+    ).length;
+    expect(liveBody.counts.goalsWithNoAuthority).toBe(recomputed);
+
+    const del = await app.inject({ method: "DELETE", url: `/jobs/${jobId}`, headers: hdr(token) });
+    expect(del.statusCode).toBe(200);
+    const after = await app.inject({ method: "GET", url: `/jobs/${jobId}/acceptance-lane`, headers: hdr(token) });
+    expect(after.statusCode).toBe(200);
+    const afterBody = after.json();
+    expect(afterBody.deleted).toBe(true);
+    // The tombstone outlives the highlight row, so it must carry the disclosure
+    // it inherited — otherwise a deleted job's lane would contradict its card.
+    expect(afterBody.candidates).toEqual(liveBody.candidates);
+    expect(afterBody.counts).toEqual(liveBody.counts);
+    expect((afterBody.candidates as any[]).find((c) => c.id === "lane-motion").authority).toBe("frame");
+  });
+});
