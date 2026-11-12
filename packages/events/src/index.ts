@@ -575,6 +575,14 @@ export const ObserveMetricsSnapshotSchema = z.object({
        *  ADAAAA-7865 repeat-goal downgrade). They ship; the legacy counter
        *  refuses them, which is half of the accepted-vs-delivered gap. */
       demotedCelebrations: z.number().int().min(0),
+      /** ADAAAA-8740 (§6.3 rule 3): a DELIVERED cue-tail card retracted because
+       *  the same event's goal row shipped beside it (one event, one card). The
+       *  demotion that produced the row stays counted, so the identity reads
+       *  `persistedRows === servedCards === acceptedWindows +
+       *  demotedCelebrations − retractedCards`. Additive optional: absent on a
+       *  run that withdrew nothing, so the pre-8740 row shape is unchanged.
+       *  Declared here because a zod object STRIPS undeclared keys. */
+      retractedCards: z.number().int().min(0).optional(),
       /** ADAAAA-8588 (AC4): score transitions refused because their POST state
        *  sat behind the state this run had already committed (a replay/montage
        *  re-read). Additive optional: absent when none was refused, so a run
@@ -1878,8 +1886,14 @@ export const HighlightRecordSchema = z.object({
    *   judged window carries no goal instant, so the cue is the card's END
    *   (`[cue - (window - tail), cue + tail]`, length unchanged);
    * - `evidence_anchor` — no judged live window (the VOD rail): nominal centre.
+   * ADAAAA-8740 (§6.3 rule 2): `goal_anchor_over_leading_cue` — the EVENT
+   * GROUP names a goal instant that does not fit the cue's tail window, so goal
+   * containment wins: the card is goal-anchored at the same fixed length and
+   * the cue keeps its actual position (`clipCelebrationOffsetSec`).
    * Additive optional — legacy rows carry none. */
-  clipPlacementReason: z.enum(["goal_anchor", "celebration_tail", "evidence_anchor"]).optional(),
+  clipPlacementReason: z
+    .enum(["goal_anchor", "celebration_tail", "evidence_anchor", "goal_anchor_over_leading_cue"])
+    .optional(),
   /** ADAAAA-8714 (AC2): on a `celebration_tail` row, the second number that
    * grades the ruling — the cue's offset inside the delivered window
    * (`localizedTs - start`, `>= clipWindowSec - 2.5`). Absent on every other
