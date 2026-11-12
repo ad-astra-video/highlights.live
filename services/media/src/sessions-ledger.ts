@@ -15,6 +15,10 @@
 // `reason: "media-node-restart"` for every leftover session, which the control
 // plane turns into `status: failed, failureReason: media-session-lost`.
 //
+// ADAAAA-8813: the record also carries the reserve's `controlUrl`, because
+// reporting the job does not stop the PAID live-runner session on the
+// orchestrator — the boot reconcile has to stop that itself, by session id.
+//
 // Persistence dir is `MEDIA_STATE_DIR` (the `media-state` volume in compose), so
 // the leftover list survives the recreate that creates it in the first place.
 
@@ -34,6 +38,15 @@ export type OpenSessionRecord = {
   transport: "webrtc" | "ws" | "none";
   /** true once any client (RTC peer or WS socket) attached to the session */
   everAttached: boolean;
+  /**
+   * ADAAAA-8813: the reserve's `control_url` — the EXACT per-session stop
+   * target on the orchestrator that issued it. Persisted because the boot
+   * reconcile has to release the session's live-runner slot (billing + the
+   * capacity-1 slot) and the orchestrator may be a DISCOVERED one, not the
+   * configured `orchBase`. "" when the reserve returned none, in which case
+   * the configured base `/apps/highlights-perceive/session/{sid}/stop` applies.
+   */
+  controlUrl: string;
 };
 
 const OPEN_FILE = "highlights-media-open-sessions.json";
@@ -56,6 +69,7 @@ export function loadOpenSessions(dir?: string): OpenSessionRecord[] {
         startedAt: typeof s.startedAt === "number" ? s.startedAt : 0,
         transport: s.transport === "webrtc" || s.transport === "ws" ? s.transport : "none",
         everAttached: !!s.everAttached,
+        controlUrl: typeof s.controlUrl === "string" ? s.controlUrl : "",
       }));
   } catch {
     return [];
@@ -79,10 +93,11 @@ function writeOpenSessions(dir: string | undefined, sessions: OpenSessionRecord[
 /** Record (or refresh) one open session. Called on every session open/adopt. */
 export function recordOpenSession(
   dir: string | undefined,
-  rec: Omit<OpenSessionRecord, "startedAt" | "transport" | "everAttached"> & {
+  rec: Omit<OpenSessionRecord, "startedAt" | "transport" | "everAttached" | "controlUrl"> & {
     startedAt?: number;
     transport?: OpenSessionRecord["transport"];
     everAttached?: boolean;
+    controlUrl?: string;
   }
 ): void {
   const sessions = loadOpenSessions(dir).filter((s) => s.sessionId !== rec.sessionId);
@@ -92,6 +107,7 @@ export function recordOpenSession(
     startedAt: rec.startedAt ?? Date.now(),
     transport: rec.transport ?? "none",
     everAttached: !!rec.everAttached,
+    controlUrl: rec.controlUrl ?? "",
   });
   writeOpenSessions(dir, sessions);
 }

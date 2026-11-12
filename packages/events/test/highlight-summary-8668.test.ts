@@ -63,8 +63,11 @@ describe("depth band constants", () => {
     expect(SUMMARY_VOD_BAND).toMatchObject({
       minSentences: 3,
       maxSentences: 5,
-      targetMinWords: 40,
-      targetMaxWords: 90,
+      // ADAAAA-8803: the VOD TARGET band moved above the 40-word serve floor
+      // (was 40-90) so a compliant draft is not a one-word boundary case.
+      targetMinWords: 45,
+      targetMaxWords: 55,
+      floorWords: 40,
       hardMaxWords: 120,
       hardMaxChars: 700,
     });
@@ -610,7 +613,7 @@ describe("prompt contract (snapshot)", () => {
       scoreTransition: null,
       adjacentScoreCue: null,
     });
-    expect(prompt).toContain("Rail: vod. Write 3-5 sentences, 40-90 words.");
+    expect(prompt).toContain("Rail: vod. Write 3-5 sentences, 45-55 words.");
     expect(prompt).toContain("Match context:\n(none)");
     expect(prompt).toContain("ASR transcript: (none)");
     expect(prompt).toMatchSnapshot();

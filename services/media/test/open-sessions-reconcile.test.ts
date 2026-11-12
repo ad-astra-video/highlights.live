@@ -16,13 +16,17 @@ import { drainOpenSessions, forgetOpenSession, loadOpenSessions, recordOpenSessi
 
 class StubOrch {
   n = 0;
+  /** ADAAAA-8813: every orchestrator stop the boot reconcile issued. */
+  stopCalls: Array<{ sessionId: string; controlUrl?: string; fallbackBase?: string }> = [];
+  /** Set to a non-2xx-ish result to exercise the failure counter. */
+  stopResult: { ok: boolean; status: number } = { ok: true, status: 200 };
   async provision(): Promise<ProvisionedSession> {
     this.n += 1;
     const sessionId = `sess-${this.n}`;
     return {
       sessionId,
       appUrl: "http://fake",
-      controlUrl: "http://fake",
+      controlUrl: `http://orch/control/${sessionId}`,
       videoIn: `http://orch/video-in/${sessionId}`,
       eventsOut: `http://orch/events-out/${sessionId}`,
       control: `http://orch/control/${sessionId}`,
@@ -47,6 +51,10 @@ class StubOrch {
   }
   async releaseSession() {}
   async closeSession() {}
+  async stopSession(sessionId: string, controlUrl?: string, fallbackBase?: string) {
+    this.stopCalls.push({ sessionId, controlUrl, fallbackBase });
+    return { ok: this.stopResult.ok, status: this.stopResult.status, target: controlUrl || fallbackBase || "" };
+  }
 }
 
 const dirs: string[] = [];
@@ -138,15 +146,16 @@ describe("boot reconcile of lost sessions (ADAAAA-7700)", () => {
     recordOpenSession(dir, { sessionId: "sess-a", jobId: "job-a", transport: "webrtc", everAttached: true });
     recordOpenSession(dir, { sessionId: "sess-b", jobId: "job-b", transport: "none", everAttached: false });
 
+    const orch = new StubOrch();
     const ms = new MediaServer(
       { orchBase: "http://orch", provisionNoClientMs: 0, stateDir: dir, callbackBase: cp.base, nodeId: "media-0" },
-      new StubOrch() as any
+      orch as any
     );
     const app: FastifyInstance = await ms.build();
     cleanups.push(() => app.close());
 
     const r = await ms.reconcileLostSessions();
-    expect(r).toEqual({ reported: 2, leftover: 2 });
+    expect(r).toEqual({ reported: 2, leftover: 2, released: 2, releaseFailed: 0 });
     const posts = cp.calls.filter((c) => c.url?.endsWith("/media/session-closed"));
     expect(posts.map((c) => c.body.jobId).sort()).toEqual(["job-a", "job-b"]);
     for (const p of posts) {
@@ -158,11 +167,111 @@ describe("boot reconcile of lost sessions (ADAAAA-7700)", () => {
     expect(posts.find((c) => c.body.jobId === "job-a").body).toMatchObject({ neverAttached: false, transport: "webrtc" });
     expect(posts.find((c) => c.body.jobId === "job-b").body).toMatchObject({ neverAttached: true });
 
+    // ADAAAA-8813: the orchestrator's paid live-runner session is released for
+    // every leftover, keyed by session id (jobId is not part of the key).
+    expect(orch.stopCalls.map((c) => c.sessionId).sort()).toEqual(["sess-a", "sess-b"]);
+    expect(orch.stopCalls.every((c) => c.fallbackBase === "http://orch")).toBe(true);
+
     // Draining is exactly-once: a second boot has nothing left to report.
-    expect(await ms.reconcileLostSessions()).toEqual({ reported: 0, leftover: 0 });
+    expect(await ms.reconcileLostSessions()).toEqual({ reported: 0, leftover: 0, released: 0, releaseFailed: 0 });
+    expect(orch.stopCalls).toHaveLength(2);
 
     // The node's own /health carries the evidence counter.
     const health = (await app.inject({ method: "GET", url: "/health" })).json();
     expect(health.cost.sessionsLostReported).toBe(2);
+    expect(health.cost.sessionsReleasedAtBoot).toBe(2);
+    expect(health.cost.sessionsReleaseFailedAtBoot).toBe(0);
+  });
+});
+
+// ADAAAA-8813 — a media restart must stop the ORCHESTRATOR's live-runner
+// session, not just finalize the job record. The pre-fix reconcile skipped the
+// whole body for a `jobId: ""` ledger row (`if (!this.opts.callbackBase ||
+// !rec.jobId) continue;`) and never called the stop endpoint at all, so lost
+// sessions kept `Accounted payment` and held the capacity-1 perceive slot until
+// balance expiry. These cover the release path on its own.
+describe("boot reconcile releases the orchestrator session (ADAAAA-8813)", () => {
+  it("releases a session that carries no jobId, and does not depend on it", async () => {
+    const dir = tmpStateDir();
+    const cp = await controlPlaneStub();
+    cleanups.push(() => cp.close());
+    // A session provisioned straight on the node (`POST /sessions {}`) — the
+    // shape of all four sessions leaked in the 2026-11-12 16:30Z incident.
+    recordOpenSession(dir, { sessionId: "sess-nojob", jobId: "", transport: "webrtc", everAttached: true });
+
+    const orch = new StubOrch();
+    const ms = new MediaServer(
+      { orchBase: "http://orch", provisionNoClientMs: 0, stateDir: dir, callbackBase: cp.base, nodeId: "media-0" },
+      orch as any
+    );
+    const app: FastifyInstance = await ms.build();
+    cleanups.push(() => app.close());
+
+    const r = await ms.reconcileLostSessions();
+    // Nothing to report (no job), but the paid slot IS released.
+    expect(r).toEqual({ reported: 0, leftover: 1, released: 1, releaseFailed: 0 });
+    expect(orch.stopCalls).toEqual([
+      { sessionId: "sess-nojob", controlUrl: "", fallbackBase: "http://orch" },
+    ]);
+    expect(cp.calls.filter((c) => c.url?.endsWith("/media/session-closed"))).toHaveLength(0);
+    const health = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(health.cost.sessionsReleasedAtBoot).toBe(1);
+  });
+
+  it("stops on the session's own controlUrl when the ledger recorded one", async () => {
+    const dir = tmpStateDir();
+    const orch = new StubOrch();
+    recordOpenSession(dir, {
+      sessionId: "sess-ctl",
+      jobId: "",
+      controlUrl: "http://orch-discovered/apps/highlights-perceive/session/sess-ctl/control",
+    });
+    const ms = new MediaServer({ orchBase: "http://orch", provisionNoClientMs: 0, stateDir: dir }, orch as any);
+    const app: FastifyInstance = await ms.build();
+    cleanups.push(() => app.close());
+
+    await ms.reconcileLostSessions();
+    expect(orch.stopCalls[0].controlUrl).toBe(
+      "http://orch-discovered/apps/highlights-perceive/session/sess-ctl/control"
+    );
+  });
+
+  it("records the controlUrl of every session it opens", async () => {
+    const dir = tmpStateDir();
+    const orch = new StubOrch();
+    const ms = new MediaServer({ orchBase: "http://orch", provisionNoClientMs: 0, stateDir: dir }, orch as any);
+    const app: FastifyInstance = await ms.build();
+    cleanups.push(() => app.close());
+
+    const r = await app.inject({ method: "POST", url: "/sessions", payload: { jobId: "job-ctl" } });
+    const sid = r.json().sessionId as string;
+    expect(loadOpenSessions(dir)).toEqual([
+      expect.objectContaining({ sessionId: sid, jobId: "job-ctl", controlUrl: `http://orch/control/${sid}` }),
+    ]);
+    // That persisted target is what the NEXT boot stops on.
+    await ms.reconcileLostSessions();
+    expect(orch.stopCalls).toEqual([
+      { sessionId: sid, controlUrl: `http://orch/control/${sid}`, fallbackBase: "http://orch" },
+    ]);
+  });
+
+  it("counts a failed release instead of silently dropping it", async () => {
+    const dir = tmpStateDir();
+    recordOpenSession(dir, { sessionId: "sess-fail", jobId: "" });
+    const orch = new StubOrch();
+    orch.stopResult = { ok: false, status: 0 }; // orchestrator unreachable
+    const ms = new MediaServer({ orchBase: "http://orch", provisionNoClientMs: 0, stateDir: dir }, orch as any);
+    const app: FastifyInstance = await ms.build();
+    cleanups.push(() => app.close());
+
+    expect(await ms.reconcileLostSessions()).toEqual({
+      reported: 0,
+      leftover: 1,
+      released: 0,
+      releaseFailed: 1,
+    });
+    const health = (await app.inject({ method: "GET", url: "/health" })).json();
+    expect(health.cost.sessionsReleaseFailedAtBoot).toBe(1);
+    expect(health.cost.sessionsReleasedAtBoot).toBe(0);
   });
 });
