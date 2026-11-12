@@ -45,18 +45,21 @@ const evidence = (extra: Partial<SummaryEvidence> = {}): SummaryEvidence => ({
   ...extra,
 });
 
-/** Two different bodies whose served form opens with the same four words. */
+/** Two different bodies whose served form opens with the same four words.
+ *  Rev 4 (ADAAAA-8735): each names the match context's team, because AC9 now
+ *  credits `action` only off a NAMED attested actor; the opening collision is
+ *  unchanged. */
 const SAME_OPENING_A =
-  "The midfielder drives forward at 0:12 as the move builds through midfield. The crowd answers it before the restart.";
+  "The midfielder drives forward for Northbridge at 0:12 as the move builds through midfield. The crowd answers it before the restart.";
 const SAME_OPENING_B =
-  "The midfielder drives forward at 0:12 and the move opens up on the left. The crowd answers it before the restart.";
+  "The midfielder drives forward for Northbridge at 0:12 and the move opens up on the left. The crowd answers it before the restart.";
 /** The SERVED form of `SAME_OPENING_A`: AC10 neutralises the unattested
  *  "the midfielder" subject, and the repeat guard compares served openings. */
 const NEUTRALISED_A =
-  "The move drives forward at 0:12 as the move builds through midfield. The crowd answers it before the restart.";
+  "The move drives forward for Northbridge at 0:12 as the move builds through midfield. The crowd answers it before the restart.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT_OPENING =
-  "A low shot from the edge of the box is blocked at 0:12. The crowd answers it before the restart.";
+  "A low shot from the edge of the box is blocked by Northbridge at 0:12. The crowd answers it before the restart.";
 
 function stubStore() {
   const patches: { id: string; patch: Record<string, unknown> }[] = [];

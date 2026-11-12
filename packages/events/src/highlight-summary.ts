@@ -261,10 +261,22 @@ export function summaryWords(text?: string | null): string[] {
  *  collide instead of hiding behind punctuation. */
 export const SUMMARY_OPENING_RUN_WORDS = 4;
 
+/** AC8 rev 4 (ADAAAA-8735): a LEADING clock/timestamp is not part of an opening.
+ *  On job `9891ff33` six of ten served bodies opened `At <m:ss>, …`, so the
+ *  four-word run began with the clock and two bodies whose prose was otherwise
+ *  identical ("the ball shoots on the right side of the field…") compared
+ *  DISTINCT — the as-built scan reported 0 duplicate pairs where a
+ *  clock-stripped scan reports 18. Strip the prefix (bare `m:ss`, `At m:ss,`,
+ *  `At the m:ss mark`, `T+…`) BEFORE taking the run; a clock in the middle of a
+ *  body is not an opening and is left alone. */
+const OPENING_CLOCK_PREFIX_RE =
+  /^\s*[\[(]?\s*(?:(?:at|around|by|near|on)\s+)?(?:the\s+)?(?:(?:t\s*\+\s*(?:\d{1,3}:\d{2}(?::\d{2})?|\d+(?:\.\d+)?\s*s?))|(?:\d{1,3}:\d{2}(?::\d{2})?))\s*(?:s(?:ec(?:onds?)?)?)?\s*(?:mark)?\s*[\])]?\s*[,.;:—–-]*\s*/i;
+
 /** The opening run of a body ("the midfielder drives forward"), or "" when the
  *  body is empty. Shorter bodies compare on whatever they have. */
 export function summaryOpeningRun(text: string, words = SUMMARY_OPENING_RUN_WORDS): string {
-  return summaryWords(text).slice(0, Math.max(1, words)).join(" ");
+  const body = (text ?? "").replace(OPENING_CLOCK_PREFIX_RE, "");
+  return summaryWords(body).slice(0, Math.max(1, words)).join(" ");
 }
 
 /** Longest contiguous run of words shared by `a` and `b` (classic DP, O(n*m)). */
@@ -383,14 +395,142 @@ export function newSummaryFacts(summary: string, title?: string | null): { kind:
   });
 }
 
-/** The name-like strings an evidence blob attests: capitalized multi-token runs
- *  (teams, players) from matchContext + the window transcript, NOT from the
- *  model's own sentence. Used only to decide whether an entity is attested; the
- *  name GATE stays `groundNames`. */
+/** ADAAAA-8735: the evidence renderer's own KEY LABELS are not entities. The
+ *  served defect read `Teams:` as a team name and glued the next line onto it
+ *  (`"Barcelona\nBall"`). */
+const SUMMARY_CONTEXT_LABEL_RE =
+  /^\s*(?:teams?|sides?|players?|roster|kit\s*colou?rs?|kits|competition|tournament|league|venue|stadium|ground|arena|match\s*context)\s*:\s*/i;
+
+/** ADAAAA-8735: words that are capitalized only because they OPEN A SENTENCE (or
+ *  are a card label), never because they name a team or a player. The measured
+ *  defect credited `action` off the sentence-initial capital of `Ball` in the
+ *  decide reason `"Ball shoots on the left."`: `ball` is the sport's common noun,
+ *  not an actor. A real single-token entity (`Barcelona`, `Northbridge`) is not
+ *  in this set and still attests. */
+const SUMMARY_NON_ENTITY_WORDS = new Set([
+  "a", "an", "the", "this", "that", "it", "he", "she", "they", "his", "her", "their", "there", "here",
+  "then", "when", "while", "after", "before", "and", "but", "so", "as", "at", "in", "on", "of", "to",
+  "for", "from", "with", "by", "near", "far", "left", "right", "centre", "center",
+  "ball", "balls", "shot", "shots", "goal", "goals", "play", "plays", "move", "moves", "match", "game",
+  "crowd", "keeper", "goalkeeper", "goalie", "referee", "striker", "midfielder", "defender", "winger",
+  "captain", "player", "players", "team", "teams", "side", "sides", "score", "scoreboard",
+  "net", "post", "box", "wing", "midfield", "half", "minute", "minutes", "second", "first", "third",
+  "fourth", "final", "opening", "closing", "added", "stoppage", "kick", "pass", "cross", "header",
+  "save", "corner", "penalty", "foul", "attack", "counter", "soccer", "football", "basketball",
+  "sport", "sports", "action", "highlight", "moment", "sequence", "field", "pitch", "court",
+  "stadium", "arena", "venue", "competition", "league", "cup", "matchday",
+]);
+
+/** Capitalized runs on ONE line. A run never crosses a newline: the served defect
+ *  rendered `Teams:` + `Barcelona` + `Ball` on three lines and the regex joined
+ *  the last two into one "name". */
+function capitalizedRuns(line: string): string[] {
+  return (
+    line.match(
+      /\b[A-ZÀ-Ý][a-zà-ÿ'’.-]+(?:\s+(?:de|van|der|dos|da|di|del)\s+)?(?:\s+[A-ZÀ-Ý][a-zà-ÿ'’.-]+)*\b/g
+    ) ?? []
+  );
+}
+
+/** One capitalized run -> an entity name, or null when every word in it is a
+ *  common noun / label word (i.e. the capital is only sentence position). The
+ *  whole run is kept once any token survives, so a competition name keeps both
+ *  of its words ("Champions League"). */
+function entityNameOf(run: string): string | null {
+  const words = run.split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const kept = words.filter((w) => !SUMMARY_NON_ENTITY_WORDS.has(w.toLowerCase().replace(/[^a-zà-ÿ'’-]/g, "")));
+  if (kept.length === 0 || run.trim().length <= 2) return null;
+  return run.trim();
+}
+
+/** The name-like strings a text attests: capitalized runs from structured
+ *  sources (teams, players, transcript), NOT from the model's own sentence.
+ *  Renderer labels (`Teams:`) and sentence-initial common nouns (`Ball`) are
+ *  filtered, so this cannot manufacture an attested actor. The name GATE stays
+ *  `groundNames`; this only decides whether an entity is attested. */
 export function attestedEntityNames(evidence?: string | null): string[] {
   const body = evidence ?? "";
-  const runs = body.match(/\b[A-ZÀ-Ý][a-zà-ÿ'’.-]+(?:\s+(?:de|van|der|dos|da|di|del)\s+)?(?:\s+[A-ZÀ-Ý][a-zà-ÿ'’.-]+)*\b/g) ?? [];
-  return [...new Set(runs.map((r) => r.trim()).filter((r) => r.split(/\s+/).length >= 1 && r.length > 2))];
+  if (!body) return [];
+  const out: string[] = [];
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.replace(SUMMARY_CONTEXT_LABEL_RE, "");
+    for (const run of capitalizedRuns(line)) {
+      const name = entityNameOf(run);
+      if (name) out.push(name);
+    }
+  }
+  return [...new Set(out)];
+}
+
+/** The team/player names the job's matchContext STRUCTURALLY carries. Read from
+ *  the fields rather than from the rendered text, so a label can never be read
+ *  as a name. */
+export function matchContextEntityNames(matchContext: unknown): string[] {
+  if (!matchContext || typeof matchContext !== "object") return [];
+  const mc = matchContext as Record<string, any>;
+  const out: string[] = [];
+  const push = (value: unknown): void => {
+    if (typeof value === "string" && value.trim()) out.push(value.trim());
+    else if (value && typeof value === "object") {
+      const obj = value as Record<string, any>;
+      for (const key of ["name", "team", "label"]) {
+        if (typeof obj[key] === "string" && obj[key].trim()) {
+          out.push(obj[key].trim());
+          return;
+        }
+      }
+    }
+  };
+  for (const key of ["teams", "sides"]) {
+    const teams = mc[key];
+    if (Array.isArray(teams)) teams.forEach(push);
+    else push(teams);
+  }
+  for (const key of ["players", "roster"]) {
+    const players = mc[key];
+    if (Array.isArray(players)) players.forEach(push);
+  }
+  return [...new Set(out)];
+}
+
+/** ADAAAA-8735: the ACTORS a row can legitimately name — the match context's
+ *  teams/players plus names the ASR transcript carries. The decide `reason` and
+ *  the announcer `caption` are GENERATED copy, so they are deliberately not
+ *  sources: that is exactly how `Ball` came to attest itself. */
+export function attestedActorNames(evidence: SummaryEvidence): string[] {
+  return [
+    ...new Set([
+      ...matchContextEntityNames(evidence.matchContext),
+      ...attestedEntityNames(evidence.transcript ?? ""),
+    ]),
+  ];
+}
+
+/** True when `body` NAMES one of `names`. Whole-phrase match on the normalized
+ *  word sequence; a multi-token roster name ("Virgil van Dijk") is also matched
+ *  by any of its distinctive tokens ("van Dijk", "Dijk"). */
+export function bodyNamesEntity(body: string, names: string[]): boolean {
+  const words = summaryWords(body);
+  if (words.length === 0) return false;
+  const haystack = ` ${words.join(" ")} `;
+  for (const name of names) {
+    const parts = summaryWords(name);
+    if (parts.length === 0) continue;
+    if (haystack.includes(` ${parts.join(" ")} `)) return true;
+    if (parts.length > 1) {
+      for (const part of parts) {
+        if (part.length >= 3 && haystack.includes(` ${part} `)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** ADAAAA-8735: the body names an attested team/player. Action is a CREDITED
+ *  fact only when this holds — a bare verb with no named actor is not one. */
+export function bodyNamesAttestedActor(body: string, evidence: SummaryEvidence): boolean {
+  return bodyNamesEntity(body, attestedActorNames(evidence));
 }
 
 /** True when the summary carries at least one attested entity: a name the
@@ -827,9 +967,11 @@ export function attestedFactKinds(evidence: SummaryEvidence): SummaryFactKind[] 
   const to = (evidence.scoreTransition?.to ?? "").trim();
   // A score line is a fact only when the row attests the CHANGE (from -> to).
   if (from && to && scoreDigits(from) && scoreDigits(to) && !sameScore(from, to)) kinds.push("score");
-  // An action needs an attested actor/entity (ADAAAA-8456: a name shortage must
-  // not starve depth, so a team name is an entity too).
-  if (attestedEntityNames(summaryEvidenceText(evidence)).length > 0) kinds.push("action");
+  // An action needs an attested ACTOR (ADAAAA-8456: a name shortage must not
+  // starve depth, so a team name is an entity too). ADAAAA-8735: only the row's
+  // STRUCTURED sources attest one — a sentence-initial capital of a common noun
+  // in the decide reason (`Ball`) and the renderer's own `Teams:` label do not.
+  if (attestedActorNames(evidence).length > 0) kinds.push("action");
   if (matchContextVenueText(evidence.matchContext).length > 0) kinds.push("venue");
   return kinds;
 }
@@ -873,6 +1015,10 @@ export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence
     if (fact.kind === "score" && !scoreFactGrounded(fact.text, evidence)) continue;
     if (fact.kind === "venue" && !venueFactGrounded(fact.text, evidence)) continue;
     if (fact.kind === "clock" && !clockFactGrounded(fact.text, evidence)) continue;
+    // ADAAAA-8735: an ACTION fact is credited only when the body NAMES the
+    // attested team/player. A verb alone ("the ball shoots on the left") is a
+    // bare action, not a fact the row attests — the measured rev-3 defect.
+    if (fact.kind === "action" && !bodyNamesAttestedActor(text, evidence)) continue;
     out.add(fact.kind);
   }
   return [...out];
@@ -1102,18 +1248,18 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // unchanged". So a celebration row is offered the clock/venue/action facts only.
   const attestsScoring = String(input.verdict ?? "") === "scoring_play";
   const factMenu = attestsScoring
-    ? "the score line, the clock or spell, the competition or venue, or a named player's attested action"
-    : "the clock or spell, the competition or venue, or a named player's attested action";
+    ? "the score line, the clock or spell, the competition or venue, or an attested team's or player's action"
+    : "the clock or spell, the competition or venue, or an attested team's or player's action";
   const lines = [
     "You write the BODY copy under a highlight clip's short headline.",
     "The headline is already on the card; your copy sits underneath it and must add detail.",
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the competition or venue, or an attested action from the evidence.`,
+    `- Hit the length target: at least ${band.targetMinWords} words. If the copy runs short, add the clock, the competition or venue, or a named attested actor's action.`,
     `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
-    "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue, plus an attested action of the play.",
+    "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.",
     attestsScoring
       ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
       : "- This is NOT a scoring play: the words 'goal', 'scoring', 'score' and 'net' are off limits. Do not describe a goal or a scoring chance, do not name the net, and do not state a score or whether it changed.",

@@ -83,7 +83,10 @@ describe("AC9 — fact density, not filler", () => {
   it("serves a body that relays the clock plus the attested score change", () => {
     const body = "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.";
     const ev = live();
-    expect(attestedSummaryFactKinds(body, ev)).toEqual(["score", "clock", "action"]);
+    // Rev 4 (ADAAAA-8735): the context names Northbridge/Riverside but the body
+    // names nobody, so `action` is NOT credited — the score line plus the clock
+    // is what earns this row's place.
+    expect(attestedSummaryFactKinds(body, ev)).toEqual(["score", "clock"]);
     expect(attestedSummaryFactKinds(body, ev).length).toBeGreaterThanOrEqual(SUMMARY_MIN_FACT_KINDS);
     expect(gateSummaryDetail(body, ev).summary).toBe(body);
   });
@@ -118,7 +121,9 @@ describe("AC9 — fact density, not filler", () => {
   it("counts the competition only when the match context carries it", () => {
     const ev = live({ matchContext: { competition: "Champions League" }, scoreTransition: null });
     const body = "The move develops at 2:38 in the Champions League tie. A low drive from the edge of the box finds the far corner.";
-    expect(attestedSummaryFactKinds(body, ev)).toEqual(["clock", "venue", "action"]);
+    // Rev 4 (ADAAAA-8735): action needs the body to NAME an attested actor, and
+    // this body does not — clock + venue are the two facts it carries.
+    expect(attestedSummaryFactKinds(body, ev)).toEqual(["clock", "venue"]);
     expect(gateSummaryDetail(body, ev).summary).toBe(body);
   });
 });
