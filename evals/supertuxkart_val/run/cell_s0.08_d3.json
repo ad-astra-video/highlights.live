@@ -2,69 +2,83 @@
  "band_state_at_end": {
   "centre-banner": {
    "baselineNull": false,
-   "lastScore": 0.27751,
-   "latched": true
+   "lastScore": 0.00386,
+   "latched": false
   },
   "grand-prix-panel": {
    "baselineNull": false,
-   "lastScore": 0.29038,
-   "latched": true
+   "lastScore": 0.00803,
+   "latched": false
   },
   "race-clock": {
    "baselineNull": false,
-   "lastScore": 0.30999,
-   "latched": true
+   "lastScore": 0.00147,
+   "latched": false
   }
  },
  "candidates": [
   {
    "band": "centre-banner",
-   "coincidentBands": [],
+   "coincidentBands": [
+    "grand-prix-panel"
+   ],
    "kind": "banner",
-   "score": 0.10533,
-   "t": 4432.0
+   "score": 0.3402,
+   "t": 4392.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "kind": "clock",
+   "score": 0.12065,
+   "t": 4425.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [
+    "grand-prix-panel",
+    "race-clock"
+   ],
+   "kind": "banner",
+   "score": 0.46697,
+   "t": 4759.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [
+    "grand-prix-panel",
+    "race-clock"
+   ],
+   "kind": "banner",
+   "score": 0.5473,
+   "t": 5121.0
   },
   {
    "band": "grand-prix-panel",
    "coincidentBands": [],
    "kind": "counter",
-   "score": 0.13652,
-   "t": 4436.0
+   "score": 0.10312,
+   "t": 5308.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [
+    "grand-prix-panel",
+    "race-clock"
+   ],
+   "kind": "banner",
+   "score": 0.35031,
+   "t": 5337.0
   },
   {
    "band": "race-clock",
-   "coincidentBands": [],
+   "coincidentBands": [
+    "grand-prix-panel",
+    "centre-banner"
+   ],
    "kind": "clock",
-   "score": 0.14442,
-   "t": 4446.0
-  },
-  {
-   "band": "race-clock",
-   "coincidentBands": [],
-   "kind": "clock",
-   "score": 0.14038,
-   "t": 4459.0
-  },
-  {
-   "band": "race-clock",
-   "coincidentBands": [],
-   "kind": "clock",
-   "score": 0.11391,
-   "t": 4571.0
-  },
-  {
-   "band": "race-clock",
-   "coincidentBands": [],
-   "kind": "clock",
-   "score": 0.15607,
-   "t": 4601.0
-  },
-  {
-   "band": "grand-prix-panel",
-   "coincidentBands": [],
-   "kind": "counter",
-   "score": 0.28713,
-   "t": 5663.0
+   "score": 0.19222,
+   "t": 5540.0
   }
  ],
  "cell": {
@@ -105,9 +119,9 @@
   "minDwellFrames": 3,
   "quietFrames": 2
  },
- "flickers_suppressed": 9,
+ "flickers_suppressed": 0,
  "fps": 1,
- "frames_observed": 1269,
+ "frames_observed": 1351,
  "producer": "hud-event/hud_reader (measure_hud_recall grid cell)",
  "video": {
   "duration_s": 5950.549,

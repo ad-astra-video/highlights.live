@@ -189,8 +189,8 @@ def decode_frames(clip_path: str, start_s: float, end_s: float, width: int, heig
 # --- one grid cell -------------------------------------------------------------------------
 
 def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell: int,
-             out_dir: str, manifest: dict, manifest_path: str, match_pre=None,
-             match_post=None, fps: int = 1) -> dict:
+             out_dir: str, manifest: dict, manifest_path: str, span_s: float,
+             match_pre=None, match_post=None, fps: int = 1) -> dict:
     """Run the reader over the labelled window at one (sensitivity, dwell) cell."""
     # Build the model from the profile contract's own dataclasses so the reader sees
     # exactly the objects it is shipped with (no local reimplementation of HudBand).
@@ -265,12 +265,19 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         candidates_path=export_path,
         match_pre=match_pre,
         match_post=match_post,
+        labelled_window_s=span_s,
     )
     if result["sha_before"] != result["sha_after"]:
         raise Voided("manifest changed during the cell — run voided")
 
     overall = result["overall"]
     p95 = float(np.percentile(wall_ms, 95)) if wall_ms else 0.0
+    # A4 is judged on the volume the trigger emits inside the DECODED window (the plan's
+    # 1351 s window), which is the same denominator the audio measurement used. The
+    # oracle's own `candidates_per_minute` divides by its narrower label coverage, so the
+    # two are reported separately and neither hides a candidate.
+    in_decoded = overall["candidates_in_window"] + overall["outside_labelled_window"]
+    volume_per_min = in_decoded / (span_s / 60.0) if span_s > 0 else 0.0
     row = {
         "cell": tag,
         "changeSensitivity": sensitivity,
@@ -286,14 +293,16 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         "fpRate": round(float(overall["fp_rate"]), 4),
         "silentWindows": int(result["negatives"]["silent_windows"]),
         "nonEventWindows": int(result["negatives"]["windows"]),
-        "candidatesPerMinute": round(float(overall["candidates_per_minute"]), 3),
+        "candidatesPerMinute": round(volume_per_min, 3),
+        "candidatesPerMinuteLabelCoverage": round(float(overall["candidates_per_minute"]), 3),
+        "candidatesInDecodedWindow": int(in_decoded),
         "frameCostP95Ms": round(p95, 3),
         "flickersSuppressed": int(reader.flickers_suppressed),
         "exportPath": export_path,
         "a1": bool(overall["recall"] >= BAR_RECALL),
         "a2": bool(overall["fp_rate"] <= BAR_FP_RATE),
         "a3": bool(result["negatives"]["silent_windows"] >= BAR_SILENT_WINDOWS),
-        "a4": bool(overall["candidates_per_minute"] <= BAR_CANDIDATES_PER_MIN),
+        "a4": bool(volume_per_min <= BAR_CANDIDATES_PER_MIN),
         "result": result,
     }
     row["clears"] = row["a1"] and row["a2"] and row["a3"] and row["a4"]
@@ -436,6 +445,11 @@ def main(argv=None) -> int:
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     ap.add_argument("--sensitivities", default=",".join(f"{v:g}" for v in DEFAULT_SENSITIVITIES))
     ap.add_argument("--dwells", default=",".join(str(v) for v in DEFAULT_DWELLS))
+    ap.add_argument("--window-start", type=float, default=None,
+                    help="decode/scoring window start (default: the manifest's own labelled "
+                         "window). The plan's measured window for this clip is 4380-5731 s; "
+                         "the labels' own coverage is narrower and is reported separately.")
+    ap.add_argument("--window-end", type=float, default=None)
     ap.add_argument("--match-pre", type=float, default=None)
     ap.add_argument("--match-post", type=float, default=None)
     ap.add_argument("--diagnose", action="store_true",
@@ -457,19 +471,25 @@ def main(argv=None) -> int:
     sha_before = check_manifest(args.manifest, oracle)
     clip_sha_before = check_clip(args.clip, oracle.load_manifest(args.manifest))
     manifest = oracle.load_manifest(args.manifest)
-    win_start, win_end = oracle.labelled_window(manifest)
+    label_start, label_end = oracle.labelled_window(manifest)
+    win_start = label_start if args.window_start is None else float(args.window_start)
+    win_end = label_end if args.window_end is None else float(args.window_end)
+    if win_end <= win_start:
+        raise SystemExit("window-end must be after window-start")
     video = manifest.get("video") or {}
     width, height = int(video.get("width") or 426), int(video.get("height") or 240)
 
     frames, span = decode_frames(args.clip, win_start, win_end, width, height)
     print(f"decoded {frames.shape[0]} frames at 1 fps over {span} s "
-          f"({win_start:g}-{win_end:g} s) from {video.get('path')}")
+          f"({win_start:g}-{win_end:g} s) from {video.get('path')} "
+          f"(label coverage {label_start:g}-{label_end:g} s)")
 
     rows: list[dict] = []
     for s in sens:
         for d in dwells:
             row = run_cell(reader_mod, oracle, frames, int(win_start), s, d, args.out_dir,
-                           manifest, args.manifest, args.match_pre, args.match_post)
+                           manifest, args.manifest, float(span), args.match_pre,
+                           args.match_post)
             rows.append(row)
             print(f"cell s{s:g}/d{d}: candidates={row['candidatesInWindow']} "
                   f"recall={row['recall']:.2f} fpRate={row['fpRate']:.4f} "
@@ -530,7 +550,8 @@ def main(argv=None) -> int:
         "manifestSha256Before": sha_before,
         "manifestSha256After": sha_after,
         "manifestPinned": oracle.MANIFEST_SHA256,
-        "labelledWindow": [round(win_start, 2), round(win_end, 2)],
+        "window": [round(win_start, 2), round(win_end, 2)],
+        "labelCoverage": [round(label_start, 2), round(label_end, 2)],
         "labelledWindowS": round(span, 2),
         "frames": int(frames.shape[0]),
         "matchWindow": {"pre": rows[0]["result"]["matchPre"],
@@ -554,8 +575,9 @@ def main(argv=None) -> int:
         fh.write(f"- clip sha256: `{clip_sha_before}` (checked before and after)\n")
         fh.write(f"- manifest sha256: `{sha_before}` (pinned `{oracle.MANIFEST_SHA256}`, "
                  f"checked before and after)\n")
-        fh.write(f"- labelled window: {win_start:g}-{win_end:g} s ({span} s), "
+        fh.write(f"- measured window: {win_start:g}-{win_end:g} s ({span} s), "
                  f"{frames.shape[0]} frames at 1 fps\n")
+        fh.write(f"- label coverage inside it: {label_start:g}-{label_end:g} s\n")
         fh.write(f"- match window: -{rows[0]['result']['matchPre']:g} s / "
                  f"+{rows[0]['result']['matchPost']:g} s (oracle default)\n\n")
         fh.write("## Grid\n\n")
