@@ -25,6 +25,24 @@ replaces the hand-held stop and the hand-held gate check with two hard rules:
      `7d99d651`: shape read `actualCostUsd 0.0` while the leg metered
      $0.55-0.58). The clock projection is readable from the first second.
 
+     ADAAAA-8832: the projection is priced in the unit the BUILD BILLS, not a
+     single per-second rate. The billing identity is
+     `costUsd = decideFee x (decideCalls + confirmCalls) + summaryFee x
+     summaryCalls + perceiveSessionS/3600 x PERCEIVE_PER_HOUR_USD`
+     (`packages/events/src/decide-knob.ts`, `services/server/src/api.ts`), so a
+     decide-billed leg's clock projection is `elapsed x (decideFee/cadence +
+     perceive accrual)`. Leg `27bd816f` (a 540 s browser share) was stopped at
+     357 s because the guard projected wall clock at the $0.0011381/perceive-s
+     rate instead: $0.4414 against a $0.414 abort point, while the leg's real
+     spend at that instant was ~$0.2353 (71 decides at $0.0033324). A leg that
+     bills by the decide must not be priced by the perceive second.
+
+     Second rule from the same defect: a projection never overrides a READABLE
+     billed figure. When the record discloses a positive `costUsd`, the guard
+     runs on it (plus any record-disclosed billed units); the clock is a
+     fallback for a dark record only. A clock extrapolation that disagrees with
+     the money already accounted must not stop a leg.
+
 Every run writes an evidence JSON whose `shape` block carries the
 authorized-vs-actual duration and cost side by side, so an overshoot is a field
 in the evidence rather than something a reader has to discover.
@@ -79,7 +97,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 
 #: ADAAAA-8529 item 2: the four files a live leg is served from. A leg graded on
 #: an unrecorded build is a grade of an unknown artifact, so the harness records
@@ -103,7 +121,22 @@ DEFAULT_DECIDE_CONFIG_KEYS = (
     "GEMMA_MODEL",             # the model the decide workers serve
     "LIVE_DECIDE_KEEP_RATIO",  # the live window keep-ratio
     "LIVE_OBSERVE_MAX_FRAMES", # the frame budget the window is sent at
+    "LIVE_OBSERVE_CADENCE_S",  # the decide cadence the projection is priced at
 )
+
+#: ADAAAA-8832: the build's billed unit, mirrored from the shipped contract so a
+#: decide-billed leg is priced by the decide. These four constants are the whole
+#: `costUsd` identity (`services/server/src/api.ts`,
+#: `packages/events/src/decide-knob.ts`, `packages/events/src/highlight-summary.ts`);
+#: the harness prices the projection with them instead of guessing one $/s rate
+#: for every rail.
+DECIDE_USD_PER_DECIDE = 0.0033324
+DECIDE_CADENCE_DEFAULT_S = 5.0
+SUMMARY_FEE_RATIO = 1.5
+PERCEIVE_PER_HOUR_USD = 0.01
+
+#: The two metering bases the guard can price a leg in.
+BILLING_BASES = ("decide", "perceive")
 
 #: Decide pool containers whose session markers count against the gate.
 #: On the box the pool is proxied by `decide-pool-8183` (x99) to the workers on
@@ -491,16 +524,39 @@ class StubApi:
                    a `session=cyc-` line on the pool — the 8483 shape.
       stop-stuck   gate idle, but `/jobs/{id}/stop` never takes: proves the
                    unconfirmed-stop exit path.
+      clean-no-cost  costUsd stays 0 mid-leg while perceiveSessionS advances
+                   (the ADAAAA-8529 projection path).
+      decide-dark  the ADAAAA-8832 shape: a decide-billed leg whose record
+                   discloses neither costUsd nor perceiveSessionS nor a decide
+                   count, so the guard has only the meter's clock.
+      decide-record  as `decide-dark` plus the record's own `decideCalls`
+                   (a leg on a build that discloses its billed count mid-leg).
+      live-cost-dark-session  costUsd is READABLE while perceiveSessionS is
+                   dark: the billed figure must win over any clock projection.
+      no-cost-source  both cost and metered time unreadable: the leg must be
+                   refused.
     """
 
     def __init__(self, scenario: str, cost_per_s: float = 0.0016) -> None:
         self.scenario = scenario
         self.cost_per_s = cost_per_s
-        # `clean-no-cost` models a leg whose billed costUsd stays 0 mid-leg while
-        # perceiveSessionS advances (the projection path). `no-cost-source`
-        # models both being unreadable: the leg must be refused.
-        self.live_cost = scenario not in ("clean-no-cost", "no-cost-source")
-        self.metered = scenario != "no-cost-source"
+        self.live_cost = scenario not in (
+            "clean-no-cost",
+            "no-cost-source",
+            "decide-dark",
+            "decide-record",
+        )
+        self.metered = scenario not in (
+            "no-cost-source",
+            "decide-dark",
+            "decide-record",
+            "live-cost-dark-session",
+        )
+        # ADAAAA-8832: a decide-billed leg's guard prices the meter's clock at
+        # `decideFee / cadence`, so the stub advances the recorded decide count
+        # at that same cadence when the scenario says the record discloses it.
+        self.decide_cadence_s = 5.0
+        self.decide_live = scenario == "decide-record"
         busy = scenario == "busy"
         self.gate = {
             "nonterminal": 1 if busy else 0,
@@ -585,6 +641,8 @@ class StubApi:
                             "_t0": time.monotonic(),
                             "_stoppedAt": None,
                         }
+                        if stub.decide_live:
+                            stub.job["decideCalls"] = 0
                     self._send(201, {"job": stub.job})
                 elif path == "/sessions":
                     with stub._lock:
@@ -626,6 +684,8 @@ class StubApi:
         if self.job["status"] == "running":
             self.job["costUsd"] = round(elapsed * self.cost_per_s, 6) if self.live_cost else 0.0
             self.job["perceiveSessionS"] = round(elapsed, 1) if self.metered else 0.0
+            if self.decide_live:
+                self.job["decideCalls"] = int(elapsed / self.decide_cadence_s)
         out = {k: v for k, v in self.job.items() if not k.startswith("_")}
         return out
 
@@ -678,6 +738,182 @@ class Config:
     decide_config_keys: Sequence[str] = DEFAULT_DECIDE_CONFIG_KEYS
     clips_container: str = "highlights-server"
     clips_dir: str = "/data/clips"
+    # ADAAAA-8832: the unit the build bills, and the terms of its price.
+    billing_basis: str = "decide"
+    decide_fee_usd: float = DECIDE_USD_PER_DECIDE
+    decide_cadence_s: float = DECIDE_CADENCE_DEFAULT_S
+    summary_fee_ratio: float = SUMMARY_FEE_RATIO
+    perceive_usd_per_hour: float = PERCEIVE_PER_HOUR_USD
+
+
+@dataclass
+class BillingBasis:
+    """The unit the served build bills, and the $/s its clock projection uses.
+
+    ADAAAA-8832. `decide` prices a leg the way the shipped `costUsd` does — a
+    per-decide fee every `cadence` seconds plus the perceive accrual — so a
+    540 s browser share projects to ~$0.36 instead of the ~$0.61 the
+    perceive-second rate claims. `perceive` keeps the 8515/8529 cells working:
+    metered (perceive) seconds x their own authorized rate.
+    """
+
+    basis: str = "decide"
+    decide_fee_usd: float = DECIDE_USD_PER_DECIDE
+    decide_cadence_s: float = DECIDE_CADENCE_DEFAULT_S
+    summary_fee_ratio: float = SUMMARY_FEE_RATIO
+    perceive_usd_per_hour: float = PERCEIVE_PER_HOUR_USD
+    perceive_rate_usd_per_s: float = 0.0011381
+    source: str = "authorized"
+
+    def usd_per_s(self) -> float:
+        if self.basis == "decide":
+            if self.decide_cadence_s <= 0:
+                return 0.0
+            return self.decide_fee_usd / self.decide_cadence_s + (
+                self.perceive_usd_per_hour / 3600.0
+            )
+        return self.perceive_rate_usd_per_s
+
+    def summary_fee_usd(self) -> float:
+        return self.decide_fee_usd * self.summary_fee_ratio
+
+    def line(self) -> str:
+        if self.basis == "decide":
+            return (
+                f"decide ${self.decide_fee_usd:.7f}/decide at a "
+                f"{self.decide_cadence_s:g} s cadence + "
+                f"${self.perceive_usd_per_hour:g}/perceive-hour accrual = "
+                f"${self.usd_per_s():.7f}/s ({self.source})"
+            )
+        return (
+            f"perceive ${self.perceive_rate_usd_per_s:.7f}/perceive-s ({self.source})"
+        )
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "basis": self.basis,
+            "decideFeeUsd": self.decide_fee_usd,
+            "decideCadenceS": self.decide_cadence_s,
+            "summaryFeeUsdPerCall": round(self.summary_fee_usd(), 8),
+            "summaryFeeRatio": self.summary_fee_ratio,
+            "perceiveUsdPerHour": self.perceive_usd_per_hour,
+            "perceiveRateUsdPerS": self.perceive_rate_usd_per_s,
+            "usdPerS": round(self.usd_per_s(), 10),
+            "source": self.source,
+            "line": self.line(),
+        }
+
+
+def unit_cost_usd(
+    billing: BillingBasis,
+    decide_calls: Optional[int] = None,
+    confirm_calls: Optional[int] = None,
+    summary_calls: Optional[int] = None,
+    perceive_session_s: float = 0.0,
+) -> Optional[float]:
+    """Price the record's own billed units; None when it discloses none.
+
+    `confirm_calls` is the dive/confirm lane: the shipped `costUsd` bills it at
+    the same decide fee (`billableConfirmCalls` in
+    `services/server/src/job-settlement.ts`), so a record that discloses it is
+    priced for it. Omitting the term would under-price exactly the legs that
+    promote clips mid-leg.
+
+    `None` is "the record told us nothing" and never a zero — a zero here would
+    read as a leg that billed nothing, which is how the 8816 estimate went wrong
+    in the first place.
+    """
+    if decide_calls is None and summary_calls is None and confirm_calls is None:
+        return None
+    decides = max(0, int(decide_calls or 0))
+    confirms = max(0, int(confirm_calls or 0))
+    summaries = max(0, int(summary_calls or 0))
+    return (
+        billing.decide_fee_usd * (decides + confirms)
+        + billing.summary_fee_usd() * summaries
+        + (max(0.0, perceive_session_s) / 3600.0) * billing.perceive_usd_per_hour
+    )
+
+
+def billing_basis_from_config(cfg: Config) -> BillingBasis:
+    """Resolve the config into the billing basis the guard prices in."""
+    return BillingBasis(
+        basis=cfg.billing_basis,
+        decide_fee_usd=cfg.decide_fee_usd,
+        decide_cadence_s=cfg.decide_cadence_s,
+        summary_fee_ratio=cfg.summary_fee_ratio,
+        perceive_usd_per_hour=cfg.perceive_usd_per_hour,
+        perceive_rate_usd_per_s=cfg.metered_rate_usd_per_s,
+    )
+
+
+def _int_or_none(value: Any) -> Optional[int]:
+    """A non-negative int, or None when the field is absent/unparseable."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        out = int(value)
+    except (TypeError, ValueError):
+        return None
+    return out if out >= 0 else None
+
+
+def project_metered_cost(
+    billing: BillingBasis,
+    clock_s: float,
+    record_perceive_session_s: float = 0.0,
+    record_decide_calls: Optional[int] = None,
+    record_confirm_calls: Optional[int] = None,
+    record_summary_calls: Optional[int] = None,
+) -> Dict[str, Any]:
+    """The mid-leg spend projection, priced in the unit the build bills.
+
+    ADAAAA-8832. Two readings, both on the billed unit:
+
+      * the meter's clock x the basis rate — readable from job create, and the
+        only reading a dark live record offers;
+      * the record's own counts (`decideCalls`/`confirmCalls`/`summaryCalls`),
+        priced exactly, when the record discloses them.
+
+    The larger is the guard, and `projectedFrom` names which reading it came
+    from. The clock is an upper bound only while the cadence holds, so an exact
+    count that exceeds it wins; a count that reads lower never prices the
+    projection BELOW the clock, because a leg that has metered longer than its
+    counts claim still has to be held to its projection.
+    """
+    rate = billing.usd_per_s()
+    projection_s = max(0.0, clock_s)
+    projected_from = "clock"
+    if billing.basis == "perceive" and record_perceive_session_s > projection_s:
+        projection_s = record_perceive_session_s
+        projected_from = "record_perceiveSessionS"
+    clock_usd = projection_s * rate
+    units = unit_cost_usd(
+        billing,
+        decide_calls=record_decide_calls,
+        confirm_calls=record_confirm_calls,
+        summary_calls=record_summary_calls,
+        perceive_session_s=record_perceive_session_s,
+    )
+    if units is not None and units > clock_usd:
+        return {
+            "usd": units,
+            "projectedFrom": "record_units",
+            "fromBasis": billing.basis,
+            "rateUsdPerS": rate,
+            "clockUsd": round(clock_usd, 6),
+            "recordUnitsUsd": round(units, 6),
+            "projectionS": round(projection_s, 3),
+        }
+    return {
+        "usd": clock_usd,
+        "projectedFrom": projected_from,
+        "fromBasis": billing.basis,
+        "rateUsdPerS": rate,
+        "clockUsd": round(clock_usd, 6),
+        "recordUnitsUsd": round(units, 6) if units is not None else None,
+        "projectionS": round(projection_s, 3),
+    }
 
 
 def sample_gate(runner: Any, cfg: Config, quiet_since: datetime) -> GateSample:
@@ -816,6 +1052,15 @@ class LegResult:
     # create), and which source the projection was taken from.
     metered_projection_s: float = 0.0
     projected_from: str = "none"
+    # ADAAAA-8832: the unit the projection was priced in, the $/s that unit
+    # implies, and the priced reading the guard actually stopped on.
+    projected_basis: str = "decide"
+    metered_usd_per_s: float = 0.0
+    record_units_usd: Optional[float] = None
+    record_decide_calls: Optional[int] = None
+    record_confirm_calls: Optional[int] = None
+    record_summary_calls: Optional[int] = None
+    guard_source: str = "none"
     # ADAAAA-8529 item 1: what the record itself disclosed mid-leg. `dark` is the
     # live rail's normal state (costUsd/perceiveSessionS land only at settlement),
     # and it must stay visible instead of reading as a zero cost.
@@ -831,6 +1076,22 @@ def _job_field(body: Any, key: str, default: Any = None) -> Any:
         if isinstance(job, dict):
             return job.get(key, default)
     return default
+
+
+def _record_count(record: Any, key: str) -> Optional[int]:
+    """A billed count the record discloses at top level or under observeMetrics.
+
+    ADAAAA-8832: `None` means the field is absent — the live rail is dark on
+    these counts mid-leg — and must stay distinguishable from a real 0.
+    """
+    if not isinstance(record, dict):
+        return None
+    if key in record:
+        return _int_or_none(record.get(key))
+    observe = record.get("observeMetrics")
+    if isinstance(observe, dict) and key in observe:
+        return _int_or_none(observe.get(key))
+    return None
 
 
 def mint_token(cfg: Config, runner: Any) -> str:
@@ -919,6 +1180,7 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
     t0 = time.monotonic()
     window_started = _now()
     deadline = t0 + cfg.authorized_duration_s
+    billing = billing_basis_from_config(cfg)
     done_event = threading.Event()
     stop_issued: Optional[float] = None
     stop_confirmed = False
@@ -933,6 +1195,12 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         "record_cost_source": "dark",
         "projected": 0.0,
         "projected_from": "none",
+        "projection_basis": billing.basis,
+        "record_units_usd": None,
+        "record_decide_calls": None,
+        "record_confirm_calls": None,
+        "record_summary_calls": None,
+        "guard_source": "none",
         "metered_projection_s": 0.0,
         "live_readable": False,
         "record": {},
@@ -951,17 +1219,32 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         state["perceive_session_s"] = float(
             _job_field(res.body, "perceiveSessionS", 0.0) or 0.0
         )
-        # ADAAAA-8529 item 1: the clock projection. The record's own metered
-        # figure wins once it exists (it is the billed quantity); until then the
-        # meter's clock IS the readable metered time.
-        state["metered_projection_s"] = max(0.0, time.monotonic() - t_create)
+        # ADAAAA-8529 item 1 / ADAAAA-8832: the clock projection, priced in the
+        # unit the build bills. The record's own metered figure wins once it
+        # exists (it is the billed quantity); a record that also discloses its
+        # decide/summary counts is priced exactly and takes the larger reading.
+        #
+        # It is a MID-LEG reading: once the stop is issued the leg's metered time
+        # is fixed, so settlement must not keep advancing it (that inflated the
+        # graded projection on an already-stopped leg).
         record_s = state["perceive_session_s"] if has_session_field else 0.0
-        if record_s > state["metered_projection_s"]:
-            projection_s, projected_from = record_s, "record_perceiveSessionS"
-        else:
-            projection_s, projected_from = state["metered_projection_s"], "clock"
-        state["projected_from"] = projected_from
-        state["projected"] = round(projection_s * cfg.metered_rate_usd_per_s, 6)
+        state["record_decide_calls"] = _record_count(raw, "decideCalls")
+        state["record_confirm_calls"] = _record_count(raw, "confirmCalls")
+        state["record_summary_calls"] = _record_count(raw, "summaryCalls")
+        if stop_issued is None and status not in ("done", "failed", "cancelled"):
+            state["metered_projection_s"] = max(0.0, time.monotonic() - t_create)
+            projection = project_metered_cost(
+                billing,
+                state["metered_projection_s"],
+                record_perceive_session_s=record_s,
+                record_decide_calls=state["record_decide_calls"],
+                record_confirm_calls=state["record_confirm_calls"],
+                record_summary_calls=state["record_summary_calls"],
+            )
+            state["projected_from"] = projection["projectedFrom"]
+            state["projection_basis"] = projection["fromBasis"]
+            state["projected"] = round(projection["usd"], 6)
+            state["record_units_usd"] = projection["recordUnitsUsd"]
         if state["cost"] > 0:
             state["cost_source"] = "live_cost"
             state["record_cost_source"] = "live"
@@ -1034,29 +1317,35 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
                 # thread having run, and never on a stop moment.
                 issue_stop("authorized_duration")
                 break
-            # CEO A1 / ADAAAA-8529 item 1: a wall-clock stop alone cannot hold
-            # the cap when metered seconds inflate (8483: 544.5 s metered inside a
-            # 300 s window). Abort on whichever source is higher: the billed
-            # figure the record discloses, or the metered projection — and the
-            # projection is the METER'S CLOCK, which is readable from job create
-            # even though the record discloses neither costUsd nor
-            # perceiveSessionS until settlement.
-            effective = max(state["cost"], state["projected"])
+            # CEO A1 / ADAAAA-8529 item 1 / ADAAAA-8832: the guard prices the
+            # unit the build bills. A READABLE costUsd is the money already
+            # accounted, so no clock extrapolation may override it — a
+            # projection that fires with costUsd at half the cap must not stop a
+            # leg (leg 27bd816f stopped at 357 s of 540 s that way, leaving
+            # $0.2247 of the cap unspent). A dark record falls back to the
+            # projection: clock x the decide unit rate, or the perceive-second
+            # rate for a perceive-billed cell, plus any record-disclosed billed
+            # units.
+            if state["cost"] > 0:
+                effective = max(state["cost"], state["record_units_usd"] or 0.0)
+                guard_source = "live_cost"
+            else:
+                effective = max(state["cost"], state["projected"])
+                guard_source = "projected_cost"
+            state["guard_source"] = guard_source
             if effective >= cfg.abort_at_usd:
-                source = (
-                    "live_cost"
-                    if state["cost"] >= state["projected"]
-                    else "projected_cost"
-                )
                 log(
-                    f"metered ceiling {cfg.abort_at_usd:.4f} reached on {source} "
+                    f"metered ceiling {cfg.abort_at_usd:.4f} reached on {guard_source} "
                     f"(live=${state['cost']:.4f}, projected="
-                    f"${state['projected']:.4f} from {state['projected_from']} "
-                    f"{state['metered_projection_s']:.1f} s metered at "
-                    f"{cfg.metered_rate_usd_per_s:.7f}/s, record "
-                    f"{state['record_cost_source']}) — stopping"
+                    f"${state['projected']:.4f} from {state['projected_from']} on the "
+                    f"{state['projection_basis']} unit at "
+                    f"{billing.usd_per_s():.7f}/s = {billing.line()}, "
+                    f"{state['metered_projection_s']:.1f} s metered, record "
+                    f"{state['record_cost_source']}, record decideCalls "
+                    f"{state['record_decide_calls']}, record units "
+                    f"${state['record_units_usd'] or 0.0:.4f}) — stopping"
                 )
-                issue_stop(source)
+                issue_stop(guard_source)
                 break
             time.sleep(cfg.poll_s)
     finally:
@@ -1076,6 +1365,15 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         # One last bounded retry, then declare the stop unconfirmed.
         issue_stop(stop_reason, allow_retry=True)
         status = poll_state()
+    # ADAAAA-8832: the terminal patch carries the settled `costUsd`, and it can
+    # land a beat after the status flips. Re-read once, bounded, so the evidence
+    # names the money actually billed instead of a mid-leg zero (leg 27bd816f
+    # published `costUsd 0.0` on a leg that settled at $0.2353).
+    if state["cost"] <= 0:
+        settled_by = time.monotonic() + min(2.0, cfg.settle_timeout_s)
+        while state["cost"] <= 0 and time.monotonic() < settled_by:
+            time.sleep(min(0.5, cfg.poll_s))
+            poll_state()
     stop_time = stop_issued or time.monotonic()
     duration_s = max(0.0, stop_time - t0)
     rows = (
@@ -1108,6 +1406,17 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         driver_output_tail=driver_tail,
         metered_projection_s=float(state["metered_projection_s"]),
         projected_from=state["projected_from"],
+        projected_basis=state["projection_basis"],
+        metered_usd_per_s=float(billing.usd_per_s()),
+        record_units_usd=(
+            float(state["record_units_usd"])
+            if state["record_units_usd"] is not None
+            else None
+        ),
+        record_decide_calls=state["record_decide_calls"],
+        record_confirm_calls=state["record_confirm_calls"],
+        record_summary_calls=state["record_summary_calls"],
+        guard_source=state["guard_source"],
         record_cost_source=state["record_cost_source"],
         delivered_rows=list(rows),
     )
@@ -1130,6 +1439,9 @@ def compare_shape(
     gpu_hours: Optional[float] = None,
     abort_source: Optional[str] = None,
     metered_projection_s: Optional[float] = None,
+    billing_basis: Optional[str] = None,
+    projected_basis: Optional[str] = None,
+    cost_readable: bool = False,
 ) -> Dict[str, Any]:
     """Grade the leg against its authorization.
 
@@ -1143,6 +1455,12 @@ def compare_shape(
     projection is no longer blind on a live leg, where the record discloses
     neither figure until settlement. The block names which source it used, so a
     reviewer never has to guess what a cost headroom was measured from.
+
+    ADAAAA-8832: `metered_rate_usd_per_s` is the rate of the unit the leg BILLS
+    (decide fee / cadence, or the perceive-second rate), and
+    `projected_basis`/`billing_basis` name it on the line and in the block. A
+    shape graded at the wrong basis is what made the 8816 leg look like it had
+    $0.0186 of cost headroom while it really had $0.2247.
     """
     over_duration = max(0.0, actual_duration_s - authorized_duration_s)
     ratio = (
@@ -1171,7 +1489,7 @@ def compare_shape(
     # this evidence block exists to close (8515 A1 item 4).
     graded_cost = (
         max(actual_cost_usd, projected)
-        if projected is not None
+        if projected is not None and not cost_readable
         else actual_cost_usd
     )
     over_cost = max(0.0, graded_cost - cap_usd)
@@ -1185,11 +1503,12 @@ def compare_shape(
             + (f" ({ratio:.3f}x wall)" if ratio is not None else "")
         )
     if projected is not None:
+        basis_note = f" on the {projected_basis or billing_basis} unit" if (projected_basis or billing_basis) else ""
         metered_bits += (
             f", projected ${projected:.4f} from {projected_from}"
             + (
-                f" ({clock_s:.1f} s metered at ${metered_rate_usd_per_s:.7f}/s)"
-                if projected_from == "clock"
+                f" ({clock_s:.1f} s metered at ${metered_rate_usd_per_s:.7f}/s{basis_note})"
+                if projected_from in ("clock", "record_units")
                 else ""
             )
         )
@@ -1233,8 +1552,14 @@ def compare_shape(
             f"\n| mid-leg metered clock | - | {metered_projection_s:.1f} s | - |"
         )
     if projected is not None:
+        basis_note = (
+            f", {projected_basis or billing_basis} unit"
+            if (projected_basis or billing_basis)
+            else ""
+        )
         table += (
-            f"\n| projected cost @ ${metered_rate_usd_per_s:.7f}/s ({projected_from}) | "
+            f"\n| projected cost @ ${metered_rate_usd_per_s:.7f}/s "
+            f"({projected_from}{basis_note}) | "
             f"<= ${cap_usd:.4f} | "
             f"${projected:.4f} | {'+' if projected > cap_usd else ''}"
             f"${projected - cap_usd:.4f} |"
@@ -1261,6 +1586,9 @@ def compare_shape(
         ),
         "projectedCostUsd": round(projected, 6) if projected is not None else None,
         "projectedFrom": projected_from,
+        "billingBasis": billing_basis,
+        "meteredRateBasis": projected_basis or billing_basis,
+        "costReadable": cost_readable,
         "projectedOverCap": bool(projected is not None and projected > cap_usd + 1e-9),
         "gpuHours": gpu_hours,
         "abortSource": abort_source,
@@ -1434,7 +1762,8 @@ def decide_config_block(probe: Dict[str, Any], cfg: Config) -> Dict[str, Any]:
     line = (
         f"DECIDE-CONFIG: pool {show('DECIDE_URL')} | model {show('GEMMA_MODEL')} | "
         f"window keep-ratio {show('LIVE_DECIDE_KEEP_RATIO')} | "
-        f"frame budget {show('LIVE_OBSERVE_MAX_FRAMES')}"
+        f"frame budget {show('LIVE_OBSERVE_MAX_FRAMES')} | "
+        f"cadence {show('LIVE_OBSERVE_CADENCE_S')}"
     )
     if verdict != "recorded":
         parts: List[str] = []
@@ -1634,8 +1963,26 @@ def build_parser() -> argparse.ArgumentParser:
                    help="stop early at this metered cost (default: cap - $0.05, "
                         "i.e. $0.60 on the $0.65 cap)")
     p.add_argument("--metered-rate-usd-per-s", type=float, default=0.0011381,
-                   help="authorized $/perceive-second for the cost projection "
-                        "(default 0.0011381, the 8515 rate)")
+                   help="authorized $/perceive-second, used by the 'perceive' "
+                        "billing basis (default 0.0011381, the 8515 rate)")
+    p.add_argument("--billing-basis", default="decide", choices=list(BILLING_BASES),
+                   help="the unit the served build bills, and the basis the guard "
+                        "prices the clock projection in: 'decide' (default — "
+                        "decideFee / cadence, the shipped costUsd identity) or "
+                        "'perceive' (perceive-seconds x --metered-rate-usd-per-s)")
+    p.add_argument("--decide-fee-usd", type=float, default=DECIDE_USD_PER_DECIDE,
+                   help=f"per-decide fee the build bills "
+                        f"(default {DECIDE_USD_PER_DECIDE})")
+    p.add_argument("--decide-cadence-s", type=float, default=None,
+                   help="decide cadence the projection is priced at; default reads "
+                        "LIVE_OBSERVE_CADENCE_S from the decide-config probe, else "
+                        f"{DECIDE_CADENCE_DEFAULT_S:g} s")
+    p.add_argument("--summary-fee-ratio", type=float, default=SUMMARY_FEE_RATIO,
+                   help=f"summary fee as a multiple of the decide fee "
+                        f"(default {SUMMARY_FEE_RATIO})")
+    p.add_argument("--perceive-usd-per-hour", type=float, default=PERCEIVE_PER_HOUR_USD,
+                   help=f"perceive list price per hour accrued into costUsd "
+                        f"(default {PERCEIVE_PER_HOUR_USD})")
     p.add_argument("--cost-source-grace-s", type=float, default=None,
                    help="deprecated (ADAAAA-8529): the metered clock is always a "
                         "cost source, so a leg is never refused for a dark record")
@@ -1701,7 +2048,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true",
                    help="run against the in-process stub; no box, no metered call")
     p.add_argument("--stub-scenario", default="clean",
-                   choices=["clean", "clean-no-cost", "no-cost-source", "busy", "stop-stuck"])
+                   choices=["clean", "clean-no-cost", "decide-dark", "decide-record",
+                            "live-cost-dark-session", "no-cost-source", "busy",
+                            "stop-stuck"])
     p.add_argument("--preflight-only", action="store_true",
                    help="run the quiet-window preflight and exit; creates nothing "
                         "(the $0 way to verify the real probes)")
@@ -1718,10 +2067,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.authorized_duration_s <= 0 or args.cap_usd <= 0:
         print("refusing: duration and cap must be positive", file=sys.stderr)
         return 5
-    if args.metered_rate_usd_per_s <= 0:
-        print("refusing: --metered-rate-usd-per-s must be positive; the "
-              "session-time projection is a required cost source", file=sys.stderr)
-        return 5
+    if args.billing_basis == "perceive":
+        if args.metered_rate_usd_per_s <= 0:
+            print("refusing: --metered-rate-usd-per-s must be positive on the "
+                  "perceive basis; the session-time projection is a required "
+                  "cost source", file=sys.stderr)
+            return 5
+    else:
+        # ADAAAA-8832: the decide basis needs a positive fee and a positive
+        # cadence to derive one $/s; without them there is no readable cost
+        # source for the clock fallback, and a wall-clock stop alone cannot hold
+        # a metered cap.
+        if args.decide_fee_usd <= 0:
+            print("refusing: --decide-fee-usd must be positive on the decide "
+                  "basis; the decide unit is the cost source", file=sys.stderr)
+            return 5
+        if args.decide_cadence_s is not None and args.decide_cadence_s <= 0:
+            print("refusing: --decide-cadence-s must be positive on the decide "
+                  "basis; the decide unit is the cost source", file=sys.stderr)
+            return 5
     abort_at_usd = (
         args.abort_at_usd
         if args.abort_at_usd is not None
@@ -1763,6 +2127,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         email=args.email,
         mint_token_container=args.mint_token_container,
         metered_rate_usd_per_s=args.metered_rate_usd_per_s,
+        billing_basis=args.billing_basis,
+        decide_fee_usd=args.decide_fee_usd,
+        decide_cadence_s=(
+            args.decide_cadence_s
+            if args.decide_cadence_s is not None
+            else DECIDE_CADENCE_DEFAULT_S
+        ),
+        summary_fee_ratio=args.summary_fee_ratio,
+        perceive_usd_per_hour=args.perceive_usd_per_hour,
         gpu_hours=args.gpu_hours,
         repo_root=args.repo_root,
         build_sha=args.build_sha,
@@ -1798,11 +2171,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             shell_cwd=args.repo_root,
         )
 
+    _billing_rate = billing_basis_from_config(cfg).usd_per_s()
     evidence: Dict[str, Any] = {
         "harness": {
             "name": "funded_leg",
             "version": VERSION,
             "issue": "ADAAAA-8489",
+            "followUps": ["ADAAAA-8832"],
             "dryRun": bool(args.dry_run),
             "stubScenario": args.stub_scenario if args.dry_run else None,
         },
@@ -1811,22 +2186,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "capUsd": cfg.cap_usd,
             "abortAtUsd": round(cfg.abort_at_usd, 6),
             "abortMarginUsd": round(cfg.cap_usd - cfg.abort_at_usd, 6),
+            # ADAAAA-8832: the billing basis the guard priced in, beside the
+            # rate it implies. `meteredRateUsdPerS` stays for readers of the
+            # older bundles; it is the perceive-basis rate only.
+            "billing": billing_basis_from_config(cfg).as_dict(),
+            "billingBasis": cfg.billing_basis,
+            "decideFeeUsd": cfg.decide_fee_usd,
+            "decideCadenceS": cfg.decide_cadence_s,
             "meteredRateUsdPerS": cfg.metered_rate_usd_per_s,
             "abortAtMeteredS": (
-                round(cfg.abort_at_usd / cfg.metered_rate_usd_per_s, 2)
-                if cfg.metered_rate_usd_per_s > 0
-                else None
+                round(cfg.abort_at_usd / _billing_rate, 2) if _billing_rate > 0 else None
             ),
             "capMeteredS": (
-                round(cfg.cap_usd / cfg.metered_rate_usd_per_s, 2)
-                if cfg.metered_rate_usd_per_s > 0
-                else None
+                round(cfg.cap_usd / _billing_rate, 2) if _billing_rate > 0 else None
             ),
             "hardStopSlackS": cfg.hard_stop_slack_s,
             "quietWindowS": cfg.quiet_window_s,
             "guard": (
-                "max(costUsd, metered x meteredRateUsdPerS) where metered = "
-                "max(record perceiveSessionS, seconds since job create)"
+                "max(costUsd, projection) where projection = metered x the billed "
+                "unit rate, metered = max(record perceiveSessionS, seconds since "
+                "job create); a READABLE costUsd beats the projection"
             ),
         },
         "probeCommands": [],
@@ -1835,6 +2214,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     def finish(code: int, extra: Optional[Dict[str, Any]] = None) -> int:
         if extra:
             evidence.update(extra)
+        # ADAAAA-8832: the billing basis can move after `authorized` is built —
+        # the decide-config probe names the cadence actually in force — so the
+        # authorized block is re-derived from the final config here rather than
+        # published from an assumption.
+        auth = evidence["authorized"]
+        billing_now = billing_basis_from_config(cfg)
+        rate_now = billing_now.usd_per_s()
+        auth["billing"] = billing_now.as_dict()
+        auth["billingBasis"] = cfg.billing_basis
+        auth["decideFeeUsd"] = cfg.decide_fee_usd
+        auth["decideCadenceS"] = cfg.decide_cadence_s
+        auth["abortAtMeteredS"] = (
+            round(cfg.abort_at_usd / rate_now, 2) if rate_now > 0 else None
+        )
+        auth["capMeteredS"] = (
+            round(cfg.cap_usd / rate_now, 2) if rate_now > 0 else None
+        )
         if stub is not None:
             evidence["stub"] = stub.snapshot()
         evidence["probeCommands"] = list(getattr(runner, "commands", []))
@@ -1893,6 +2289,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             decide_cfg = decide_config_block(probe_decide_config(runner, cfg), cfg)
             evidence["decideConfig"] = decide_cfg
             log(decide_cfg["line"])
+            # ADAAAA-8832: price the projection at the cadence the server is
+            # actually running. A 3 s cadence bills 1.67x what a 5 s one does,
+            # so the harness must not assume the default it was written against.
+            if cfg.billing_basis == "decide" and args.decide_cadence_s is None:
+                probed = (decide_cfg.get("values") or {}).get("LIVE_OBSERVE_CADENCE_S")
+                try:
+                    cadence = float(probed) if probed is not None else 0.0
+                except (TypeError, ValueError):
+                    cadence = 0.0
+                if cadence > 0:
+                    cfg.decide_cadence_s = cadence
+                    log(
+                        f"decide cadence {cadence:g} s read from "
+                        f"LIVE_OBSERVE_CADENCE_S; projection priced on it"
+                    )
+                else:
+                    log(
+                        f"decide cadence unreadable on the box "
+                        f"({probed!r}); projection priced at the "
+                        f"{cfg.decide_cadence_s:g} s default"
+                    )
         else:
             # Short-circuit: do not spend a probe on a leg already refused.
             decide_cfg = {
@@ -1982,10 +2399,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         result.cost_usd,
         duration_tolerance_s=cfg.hard_stop_slack_s,
         metered_session_s=result.perceive_session_s,
-        metered_rate_usd_per_s=cfg.metered_rate_usd_per_s,
+        metered_rate_usd_per_s=result.metered_usd_per_s,
         gpu_hours=cfg.gpu_hours,
         abort_source=result.stop_reason,
         metered_projection_s=result.metered_projection_s,
+        billing_basis=cfg.billing_basis,
+        projected_basis=result.projected_basis,
+        # ADAAAA-8832: a readable billed figure is the money accounted, so the
+        # shape is graded on it rather than on a clock extrapolation of it.
+        cost_readable=result.record_cost_source == "live",
     )
     within_slack = shape["durationOvershootS"] <= cfg.hard_stop_slack_s
     clips_probe = (
@@ -2016,6 +2438,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "meteredProjectionS": round(result.metered_projection_s, 3),
         "projectedFrom": result.projected_from,
         "projectedCostUsd": round(result.projected_cost_usd, 6),
+        # ADAAAA-8832: the basis the projection was priced in, and the guard
+        # reading the stop actually used.
+        "projectedBasis": result.projected_basis,
+        "billingBasis": cfg.billing_basis,
+        "meteredUsdPerS": round(result.metered_usd_per_s, 10),
+        "recordUnitsUsd": (
+            round(result.record_units_usd, 6)
+            if result.record_units_usd is not None
+            else None
+        ),
+        "recordDecideCalls": result.record_decide_calls,
+        "recordConfirmCalls": result.record_confirm_calls,
+        "recordSummaryCalls": result.record_summary_calls,
+        "guardSource": result.guard_source,
         "meteredRateUsdPerS": cfg.metered_rate_usd_per_s,
         "gpuHours": cfg.gpu_hours,
         "driverRc": result.driver_rc,
