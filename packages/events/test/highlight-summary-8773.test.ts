@@ -26,6 +26,7 @@ import {
   SUMMARY_MIN_FACT_KINDS,
   attestedFactKinds,
   attestedSummaryFactKinds,
+  bodyNamesAttestedActor,
   buildSummaryPrompt,
   gateSummaryDetail,
   redactUngroundedPromptClocks,
@@ -170,6 +171,44 @@ describe("gate — the clock is what starved the row (replayed on the stored bod
     expect(kinds.sort()).toEqual(["clock", "score"]);
     const decision = gateSummaryDetail(CLIP_ANCHORED_995CD9B5, ROW_995CD9B5);
     expect(decision.summary).toBe(CLIP_ANCHORED_995CD9B5);
+  });
+
+  it("serves the AC11-VOD value bar on both clip-anchored rows", () => {
+    // spec §13.4: a VOD body that clears `too-few-facts` by dropping its clock and
+    // still reads "the ball shoots..." is not value. Both repaired bodies name an
+    // attested actor (Ordoñez / Real Madrid, from the row's ASR transcript) and the
+    // scoreboard row also carries its grounded 1-1 -> 2-1 line.
+    const frameBody = CLIP_ANCHORED_5F32F6F4;
+    const frameDecision = gateSummaryDetail(frameBody, ROW_5F32F6F4);
+    expect(frameDecision.summary).not.toBeNull();
+    expect(bodyNamesAttestedActor(frameBody, ROW_5F32F6F4)).toBe(true);
+
+    const scoreBody = CLIP_ANCHORED_995CD9B5;
+    const scoreKinds = attestedSummaryFactKinds(scoreBody, ROW_995CD9B5);
+    expect(bodyNamesAttestedActor(scoreBody, ROW_995CD9B5) || scoreKinds.includes("score")).toBe(true);
+  });
+
+  it("serves a body that names the VOD rail's matchContext team (Barcelona)", () => {
+    // QA-F4's `$0` replay clause: "a body naming an attested team (e.g. Barcelona
+    // from matchContext.teams) serves". The team is the only entity the VOD rail
+    // attests on row 5f32f6f4 besides the ASR names, so it must carry the copy.
+    const body =
+      "Barcelona work the ball down the left at the 0:24 mark of this clip. A low cross is cut out at the near post and cleared away. The loose ball is recycled back into the box under pressure.";
+    const decision = gateSummaryDetail(body, ROW_5F32F6F4);
+    expect(decision.violations).toEqual([]);
+    expect(decision.summary).toBe(body);
+    expect(bodyNamesAttestedActor(body, ROW_5F32F6F4)).toBe(true);
+    expect(attestedSummaryFactKinds(body, ROW_5F32F6F4).length).toBeGreaterThanOrEqual(SUMMARY_MIN_FACT_KINDS);
+  });
+
+  it("still refuses a `Ball`-shaped body with no attested actor", () => {
+    // AC9/AC11: a bare verb with no named actor is not a fact, and the clock alone
+    // is under the density bar — the gate must not be loosened into passing it.
+    const body = "The ball shoots on the left and is saved at the 0:24 mark of this clip.";
+    const decision = gateSummaryDetail(body, ROW_5F32F6F4);
+    expect(decision.summary).toBeNull();
+    expect(bodyNamesAttestedActor(body, ROW_5F32F6F4)).toBe(false);
+    expect(attestedSummaryFactKinds(body, ROW_5F32F6F4)).not.toContain("action");
   });
 
   it("does NOT widen grounding: a match clock stays ungrounded even though the reason carries it", () => {
