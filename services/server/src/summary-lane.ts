@@ -224,6 +224,18 @@ export async function runSummaryForRow(
     if (!decision.summary) {
       lastGate = decision;
       lastReason = "gate";
+      // ADAAAA-8773: `too-few-facts` is DETERMINISTIC, not a property of one
+      // sample. The row's fact menu is fixed, and a body that anchors its clock
+      // outside the window cannot earn a second kind by resampling — the measured
+      // VOD job `70400b1d` spent 2 calls on both promoted rows and dropped both.
+      // Spending the retry here bills 2 x the 1.5x ceiling = 2.0x DECIDE_FEE per
+      // row, over the AC5 envelope, so the refusal ends the row on ONE call.
+      if (decision.violations.includes("too-few-facts")) {
+        log(
+          `[summary:${descriptor.jobId}] deterministic-refusal highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+        );
+        break;
+      }
       // ADAAAA-8687: a refusal is retried ONCE, inside the contract's existing
       // bound (`SUMMARY_MAX_CALLS_PER_ROW`, so a row still bills at most two
       // calls, AC5) and inside the post-promotion p95 budget. A gate refusal is

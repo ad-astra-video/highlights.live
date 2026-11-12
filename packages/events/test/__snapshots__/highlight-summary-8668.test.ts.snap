@@ -9,6 +9,7 @@ Rules:
 - Hit the length target: at least 25 words. If the copy runs short, add the clock, the competition or venue, or a named attested actor's action.
 - Carry at least TWO different facts from the evidence, not just the clock: the clock or spell, the competition or venue, or an attested team's or player's action. A body whose only fact is the clock does not count.
 - Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.
+- The clock fact is the \`Window:\` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.
 - A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.
 - This is NOT a scoring play: the words 'goal', 'scoring', 'score' and 'net' are off limits. Do not describe a goal or a scoring chance, do not name the net, and do not state a score or whether it changed.
 - Never invent a name, a team, a venue or a statistic. A role noun ('the midfielder', 'the keeper', 'the striker', 'the defender', 'the winger') is a claim: use it ONLY when the evidence below uses that word. Otherwise describe the play, the move or the shot, or name an attested team.
@@ -21,7 +22,7 @@ Verdict: big_play
 Reason: Ball shoots in midfield
 Headline: (none)
 Announcer line: Ball shoots in midfield
-Window: 0:12 (+12 s)
+Window: 0:12 (+12 s) — clip offset
 Score transition: (none measured)
 Match context:
 (none)
@@ -39,6 +40,7 @@ Rules:
 - Hit the length target: at least 40 words. If the copy runs short, add the clock, the competition or venue, or a named attested actor's action.
 - Carry at least TWO different facts from the evidence, not just the clock: the score line, the clock or spell, the competition or venue, or an attested team's or player's action. A body whose only fact is the clock does not count.
 - Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.
+- The clock fact is the \`Window:\` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.
 - A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.
 - Never claim a goal unless the evidence attests one; never invent a statistic.
 - Never invent a name, a team, a venue or a statistic. A role noun ('the midfielder', 'the keeper', 'the striker', 'the defender', 'the winger') is a claim: use it ONLY when the evidence below uses that word. Otherwise describe the play, the move or the shot, or name an attested team.
@@ -68,6 +70,7 @@ Rules:
 - Hit the length target: at least 25 words. If the copy runs short, add the clock, the competition or venue, or a named attested actor's action.
 - Carry at least TWO different facts from the evidence, not just the clock: the score line, the clock or spell, the competition or venue, or an attested team's or player's action. A body whose only fact is the clock does not count.
 - Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.
+- The clock fact is the \`Window:\` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.
 - A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.
 - Never claim a goal unless the evidence attests one; never invent a statistic.
 - Never invent a name, a team, a venue or a statistic. A role noun ('the midfielder', 'the keeper', 'the striker', 'the defender', 'the winger') is a claim: use it ONLY when the evidence below uses that word. Otherwise describe the play, the move or the shot, or name an attested team.
@@ -79,11 +82,11 @@ Verdict: scoring_play
 Reason: Scoreboard changes to 2-2 and the ball enters the net.
 Headline: GOAL · 2:38
 Announcer line: Ball enters the net at the near post.
-Window: 2:38 (+12 s)
+Window: 2:38 (+12 s) — clip offset
 Score transition: 1-2 -> 2-2
 Match context:
 Teams: Northbridge vs Riverside
 ASR transcript: the equaliser, and it is level again
-Adjacent scoring cue: Northbridge had scored the opener on 12:04.
+Adjacent scoring cue: Northbridge had scored the opener on the window moment.
 Body copy:"
 `;
