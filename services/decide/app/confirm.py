@@ -784,6 +784,7 @@ def build_confirm_prompt(
     goal_crossed: Optional[bool],
     scoreboard_changed: bool,
     scoreboard_delta: Optional[dict] = None,
+    frame_times: Optional[list] = None,
 ) -> str:
     """Build the confirmation-pass prompt.
 
@@ -851,6 +852,20 @@ def build_confirm_prompt(
     if traj_lines:
         meta.append("object / ball trajectory tracks:")
         meta.extend("  " + ln for ln in traj_lines)
+    # ADAAAA-8820 (D2/AC2.1): label the dense frame grid with its CONTENT-CLOCK
+    # instants, in the order the images appear. Without this the model can only
+    # say "the ball is in the net in one of these" — the answer the clip cut
+    # cannot use. Bounded to 16 instants: the dense cell is 12 frames, and a
+    # longer list only spends prompt tokens to restate the same grid.
+    instants = [float(t) for t in (frame_times or []) if isinstance(t, (int, float))]
+    grid_line = ""
+    if instants:
+        grid_line = (
+            "dense frame instants (content clock, seconds from stream start; "
+            "the frames are given in THIS order): "
+            + ", ".join(f"{t:.2f}" for t in instants[:16])
+        )
+        meta.append(grid_line)
 
     return (
         "You are a sports highlight CONFIRMATION judge performing a DEEP "
@@ -903,6 +918,13 @@ def build_confirm_prompt(
         "open play) call it a near miss (close call that did not convert) or not "
         "a goal. "
         "If they show nothing scoring, call it not a goal.\\n"
+        "STEP 4 — NAME THE MOMENT. Independently of the verdict, say WHICH dense "
+        "frame carries the moment the clip should be cut on — the frame where the "
+        "ball/object crosses the line or enters the net/uprights (never the "
+        "celebration, the replay, or the restart). Answer with the instant of that "
+        "frame, copied EXACTLY from the 'dense frame instants' line above. If no "
+        "frame shows it, or that line is absent, answer null — do NOT estimate a "
+        "time.\\n"
         "===== PENALTY SHOOTOUT EXCEPTION =====\\\\n"
         "During a penalty shootout the AGGREGATE score is FIXED (it stays, e.g., 2-2) — "
         "only the PENALTIES tally (a separate PENALTIS line on the scoreboard, e.g. 4-5) "
@@ -927,7 +949,10 @@ def build_confirm_prompt(
         "\"penaltyShootout\": true|false|null, "
         "\"penaltyTallyChanged\": true|false|null}, "
         "\"outcome\": \"scoring_play|near_miss|big_play|not_highlight\", "
-        "\"score\": 0..100, \"eventType\": \"<type>\"}"
+        "\"score\": 0..100, \"eventType\": \"<type>\", "
+        "\"momentTs\": <the instant (seconds, copied from the dense frame "
+        "instants line) of the frame carrying the moment, or null>, "
+        "\"momentConfidence\": 0.0..1.0}"
     )
 
 
@@ -979,6 +1004,104 @@ def parse_confirm(text: str) -> dict | None:
         conf = 0.0
     data["confidence"] = max(0.0, min(1.0, conf))
     return data
+
+
+# --- works: the dive's MOMENT (ADAAAA-8820 / D2) ----------------------------
+#
+# The board's ask on ADAAAA-8712: "the deep dives also help get the right moment
+# for the clip." The dive already sees the densest frames around the goal; the
+# only thing missing was a way to say WHICH of them carries the moment. The
+# answer is a frame-grid quantity, not a free-hand clock: the server labels every
+# frame it sends with its content-clock instant (``frames[i]["ts"]``) and the
+# model copies the instant of the frame that shows the conversion. ``moment_ts``
+# therefore can never be an invented absolute time — it is snapped onto the grid
+# the pass was actually shown, and it is ``None`` whenever the caller sent no
+# grid (an unlabelled request must not fabricate a clip anchor).
+
+#: A moment whose snapped instant sits further than this outside the grid the
+#: pass was shown is a guess about a frame that was never sent — refused.
+MOMENT_MAX_GRID_GAP_S = 2.0
+
+#: Frame labels the model may answer with instead of an instant ("f3",
+#: "frame 3", "frame3"). Kept narrow so a bare "3" stays an INSTANT, not an index.
+_MOMENT_FRAME_LABEL = re.compile(r"^\s*(?:f|frame|image)\s*#?\s*(\d+)\s*$", re.IGNORECASE)
+
+
+def frame_instants(frames: list | None) -> list[float]:
+    """The content-clock instant of each dense frame, in the order the model sees
+    it. Empty when the caller did not label EVERY frame (a partial grid cannot be
+    snapped against — absent evidence is never invented)."""
+    out: list[float] = []
+    for f in frames or []:
+        ts = f.get("ts") if isinstance(f, dict) else None
+        if ts is None:
+            return []
+        try:
+            v = float(ts)
+        except (TypeError, ValueError):  # noqa: BLE001
+            return []
+        if not (v >= 0.0) or v != v:  # NaN / negative is not a content instant
+            return []
+        out.append(v)
+    return out
+
+
+def snap_moment(value, instants: list[float]) -> Optional[float]:
+    """Snap the model's moment answer onto the frame grid the pass was shown.
+
+    Accepts an absolute content instant (``37.5``) or a frame label (``"f7"``)
+    and returns the instant of the NEAREST frame that was actually sent. Returns
+    ``None`` when there is no grid, when the answer is not a moment at all, or
+    when it sits further than :data:`MOMENT_MAX_GRID_GAP_S` outside the grid —
+    a moment about a frame the dive never saw is not a measurement.
+    """
+    if not instants:
+        return None
+    grid = sorted(float(x) for x in instants)
+    idx: Optional[int] = None
+    if isinstance(value, str):
+        m = _MOMENT_FRAME_LABEL.match(value)
+        if m:
+            idx = int(m.group(1))
+        else:
+            try:
+                value = float(value.strip())
+            except (TypeError, ValueError):  # noqa: BLE001
+                return None
+    if idx is not None:
+        return grid[idx] if 0 <= idx < len(grid) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    wanted = float(value)
+    if wanted != wanted:  # NaN
+        return None
+    nearest = min(grid, key=lambda t: abs(t - wanted))
+    if abs(nearest - wanted) > MOMENT_MAX_GRID_GAP_S:
+        return None
+    return nearest
+
+
+def parse_moment(parsed: dict | None, instants: list[float]) -> Tuple[Optional[float], float]:
+    """``(momentTs, momentConfidence)`` from a parsed confirm reply.
+
+    ``momentTs`` is nullable by contract: a refutation, a reply that names no
+    moment, or a pass with no frame grid yields ``None`` (the clip then keeps its
+    accept anchor). The confidence is clamped into 0..1 and is only reported when
+    a moment was actually named — a confidence about nothing is not a number a
+    re-cut may act on.
+    """
+    if not isinstance(parsed, dict):
+        return None, 0.0
+    moment_ts = snap_moment(parsed.get("momentTs"), instants)
+    if moment_ts is None:
+        return None, 0.0
+    try:
+        conf = float(parsed.get("momentConfidence") or 0.0)
+    except (TypeError, ValueError):  # noqa: BLE001
+        conf = 0.0
+    if conf != conf:  # NaN
+        conf = 0.0
+    return moment_ts, max(0.0, min(1.0, conf))
 
 
 # --- reconcile / disagreement ----------------------------------------------
@@ -1169,6 +1292,9 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
 
     frames = req.get("frames") or []
     keyframes = req.get("keyframes") or []
+    # ADAAAA-8820 (D2): the content-clock grid the dive is shown, so a moment it
+    # names can be snapped onto a frame that was actually sent.
+    instants = frame_instants(frames)
     prompt = build_confirm_prompt(
         event_type=req.get("eventType", ""),
         game_hint=req.get("gameHint", ""),
@@ -1184,6 +1310,7 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         goal_crossed=req.get("goalCrossed"),
         scoreboard_changed=bool(req.get("scoreBoardChanged")),
         scoreboard_delta=req.get("scoreBoardDelta"),
+        frame_times=instants,
     )
     u = url or os.environ.get("GEMMA_URL", DEFAULT_GEMMA_URL)
     # ADAAAA-8395: this pass's own token meter (additive; empty when the call
@@ -1210,6 +1337,10 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         )
 
     goal = parsed.get("goalConfirmed", "")
+    # ADAAAA-8820 (D2): the moment the dive named, snapped onto the frame grid it
+    # was actually shown. `None` when it named none — the clip then keeps its
+    # accept anchor and no re-cut happens.
+    moment_ts, moment_conf = parse_moment(parsed, instants)
     comment = _as_text(parsed.get("reason"))
     # ADAAAA-7510: scoreboard corroboration requires a MEASURED pre->post numeric
     # scoreboard change OR goal-calling audio/commentary text) to accept a
@@ -1336,6 +1467,12 @@ def run_confirmation_pass(req: dict, *, url: str | None = None) -> dict:
         "corroborated": confirmed,
         "corroborationSource": corroboration_source,
         "corroborationRequired": confirm_requires_corroboration(),
+        # ADAAAA-8820 (D2/AC2.1): the moment rides THIS reply — no extra decide
+        # call. `momentTs` is nullable by contract and is present on every
+        # verdict, so a client can always tell "no moment named" from "an old
+        # service" (which omits the key entirely).
+        "momentTs": moment_ts,
+        "momentConfidence": moment_conf,
         # ADAAAA-7844: the measured delta the "scoreboard" label rests on (null
         # when no legible delta was measured).
         "scoreboardDelta": scoreboard_delta if measured_scoreboard else None,
@@ -1397,6 +1534,10 @@ def _passthrough(req: dict, *, enabled: bool, reason: str, prompt: str = "",
         "reason": reason,
         "evidence": {},
         "stage1Disagreed": False,
+        # ADAAAA-8820 (D2/AC2.1): a pass that produced no verdict names no
+        # moment — the nullable half of the contract, present on every reply.
+        "momentTs": None,
+        "momentConfidence": 0.0,
         "decision": stage1,
     }
     # ADAAAA-8395: additive token meter (see the docstring) — stamped BEFORE the

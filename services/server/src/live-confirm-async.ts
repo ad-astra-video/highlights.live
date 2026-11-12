@@ -140,7 +140,10 @@ export type DegradedSignal = "motion_trajectories" | "optical_flow" | "audio_cli
 
 /** What the dive sends, assembled from persisted artifacts only. */
 export interface ConfirmDiveContext {
-  frames: { role: string; base64: string }[];
+  /** ADAAAA-8820 (D2): `ts` is the frame's CONTENT-CLOCK instant, sent so the
+   *  dive can name the moment the clip should be cut on (and so the decide side
+   *  can snap that answer onto a frame that was really sent). */
+  frames: { role: string; base64: string; ts?: number }[];
   keyframes: { role: string; base64: string }[];
   /** ADAAAA-8728 (R3): the persisted INVENTORY the `frames` above were sampled
    * from — each entry is a frame that actually loaded and was sent, with its
@@ -169,6 +172,10 @@ export interface ConfirmDiveVerdict {
    *  declaring them lets the recap discriminator read the dive's own frame
    *  verdict instead of re-deriving one. Absent = unknown, never a denial. */
   evidence?: Record<string, boolean | null>;
+  /** ADAAAA-8820 (D2/AC2.1): the content instant the dive named for the clip
+   *  moment (see `ConfirmDecision.momentTs`). `null`/absent = no moment named. */
+  momentTs?: number | null;
+  momentConfidence?: number;
 }
 
 /** ADAAAA-8728 (R3): a frame a goal attestation CITES — the persisted seq plus
@@ -224,6 +231,13 @@ export interface ConfirmAttestation {
   authority?: GoalAuthority;
   /** ADAAAA-8728 (R7): why a GOAL was refused, when it was. */
   refusalReason?: ConfirmHoldReason;
+  /** ADAAAA-8820 (D2/AC2.2): the content instant the dive named for the clip
+   *  moment, plus its confidence. Persisted so the deferred cut can re-anchor
+   *  without re-reading the decide audit, and so a grader can tell a
+   *  dive-anchored row from an accept-anchored one. Absent when the dive named
+   *  no moment (never fabricated). */
+  momentTs?: number;
+  momentConfidence?: number;
 }
 
 /**
@@ -532,7 +546,7 @@ export function buildPersistedConfirmContext(input: {
   if (!audioLevels.length) degraded.push("audio_levels");
 
   return {
-    frames: sampled.map((f) => ({ role: "full", base64: f.base64 })),
+    frames: sampled.map((f) => ({ role: "full", base64: f.base64, ts: f.ts })),
     keyframes: selectConfirmDiveKeyframes(sampled, eventTs, leadS, trailS),
     // ADAAAA-8728 (R3): the CITE-able inventory — exactly the loaded frames that
     // were sampled into this dive, as static {seq, ts} (never the bytes).
@@ -788,6 +802,66 @@ export function frameOnlyCorroborationNeedsTransition(
   return !rowMeasuredScoreTransition(row);
 }
 
+/** ADAAAA-8820 (D2): the dive's named moment as a USABLE content instant, or
+ *  null. A null/absent/non-finite/negative value names nothing — the row keeps
+ *  its accept anchor rather than inventing one, and no re-cut is scheduled. */
+export function momentOf(verdict: ConfirmDiveVerdict | undefined | null): number | null {
+  const ts = verdict?.momentTs;
+  return typeof ts === "number" && Number.isFinite(ts) && ts >= 0 ? ts : null;
+}
+
+/** ADAAAA-8820 (D2): the drift the dive must clear before it may move a clip's
+ *  anchor. Below it the accept anchor already sits inside the AC2 tolerance and a
+ *  re-cut would spend an ffmpeg for a sub-frame improvement. */
+export const DIVE_REANCHOR_MIN_DRIFT_S = 1.0;
+
+/**
+ * ADAAAA-8820 (D2): may this dive moment move this row's clip anchor?
+ *
+ * ONE gate for every rail that re-anchors a deferred cut (browser re-cut, ingest
+ * deferred cut, the labeled fixture harness), so "the dive moved the clip" cannot
+ * mean three different things:
+ *  - only a `confirmed_goal` verdict names a usable moment (a refutation keeps its
+ *    card and its clip);
+ *  - a celebration-tail card ENDS on the cue, so re-centring it on the goal would
+ *    push the reaction off the end (ADAAAA-8714) — never moved;
+ *  - the moment must be a finite, non-negative content instant;
+ *  - the drift off the accept anchor must be >= `minDriftS` (default 1 s). With no
+ *    accept anchor to compare against, the moment is used (there is nothing better
+ *    to rest on) and the drift is reported as null.
+ */
+export function diveReanchorDecision(input: {
+  goalConfirmed?: string | null;
+  momentTs?: number | null;
+  /**The instant the row was accepted on (`localizedTs`, else its trigger). */
+  acceptTs?: number | null;
+  cueTail?: boolean;
+  minDriftS?: number;
+}): { apply: boolean; driftSec: number | null; reason: string } {
+  const momentTs = momentOf({ momentTs: input.momentTs });
+  if (!momentTs) return { apply: false, driftSec: null, reason: "no moment named" };
+  if (input.goalConfirmed !== "confirmed_goal") {
+    return { apply: false, driftSec: null, reason: `verdict is ${input.goalConfirmed ?? "absent"}, not confirmed_goal` };
+  }
+  if (input.cueTail === true) {
+    return { apply: false, driftSec: null, reason: "celebration-tail card — the cue stays the anchor" };
+  }
+  const acceptRaw = input.acceptTs;
+  const acceptTs = typeof acceptRaw === "number" && Number.isFinite(acceptRaw) ? acceptRaw : null;
+  const driftSec = acceptTs != null ? momentTs - acceptTs : null;
+  const minDriftS = Number.isFinite(input.minDriftS as number)
+    ? Math.abs(Number(input.minDriftS))
+    : DIVE_REANCHOR_MIN_DRIFT_S;
+  if (driftSec != null && Math.abs(driftSec) < minDriftS) {
+    return {
+      apply: false,
+      driftSec,
+      reason: `moment is ${driftSec.toFixed(3)}s off the accept anchor — under the ${minDriftS}s bar`,
+    };
+  }
+  return { apply: true, driftSec, reason: "dive moment moves the anchor" };
+}
+
 /** The store patch a verdict produces, and which lane the row ends in. */
 export interface ConfirmDiveAdoption {
   kind: "promoted" | "refuted" | "unchanged";
@@ -886,6 +960,13 @@ export function confirmDiveAdoption(
     // produced a verdict, so a passthrough/dropped shape stays byte-identical.
     ...(goalConfirmed && frameRefs.length ? { frameRefs } : {}),
     ...(goalConfirmed ? { authority } : {}),
+    // ADAAAA-8820 (D2): the moment the dive named. Persisted on every verdict
+    // that named one (the re-anchor gate downstream still requires
+    // `confirmed_goal`) so the deferred cut and a grader both read it off the row.
+    ...(goalConfirmed && momentOf(verdict) != null ? { momentTs: momentOf(verdict) as number } : {}),
+    ...(goalConfirmed && momentOf(verdict) != null && Number.isFinite(verdict?.momentConfidence)
+      ? { momentConfidence: Math.max(0, Math.min(1, Number(verdict!.momentConfidence))) }
+      : {}),
   };
   // A row that already left the provisional lane (e.g. a later scoreboard read
   // re-attested it first) is not rewritten by a late dive: one verdict move.

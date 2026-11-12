@@ -371,7 +371,7 @@ export class LiveIngest {
    * decide/perceive call and no extra clip debit either way. */
   async cut(
     ts: number,
-    opts: { maxFlushWaitMs?: number; requireFullWindow?: boolean; window?: ClipCutWindow } = {}
+    opts: { maxFlushWaitMs?: number; requireFullWindow?: boolean; window?: ClipCutWindow; anchorTs?: number } = {}
   ): Promise<ClipCut> {
     const { mkdir } = await import("node:fs/promises");
     const outDir = path.join(this.cfg.dataDir, "clips");
@@ -402,7 +402,12 @@ export class LiveIngest {
           `a truncated live clip is not published`
       );
     }
-    const evidenceFramePath = this.evidenceFramePath(ts);
+    const evidenceFramePath = this.evidenceFramePath(opts.anchorTs ?? ts);
+    // ADAAAA-8820 (D2): the deferred ingest cut anchors on the instant the Stage-2
+    // dive named when the row carries one (`anchorTs`), falling back to the accept
+    // anchor. The window itself is unchanged — the moment only moves which frame
+    // inside it is centered, exactly like the browser rail.
+    const anchorTs = Number.isFinite(opts.anchorTs as number) ? Number(opts.anchorTs) : ts;
     const cutNow = () =>
       anchorCutOnEvidence({
         ffmpegPath: this.cfg.ffmpegPath,
@@ -413,7 +418,7 @@ export class LiveIngest {
         // The ROW promises `needDur`; a cut that lands shorter than that is
         // re-cut exactly instead of shipping a short card (ADAAAA-8170).
         minDur: needDur,
-        evidenceTs: ts,
+        evidenceTs: anchorTs,
         evidenceFramePath,
         tag: `live-ingest:${this.jobId}`,
         // ADAAAA-8714: on a celebration-tail row the cue IS the anchor — a score

@@ -2953,6 +2953,17 @@ export interface ConfirmDecision {
   /** The reconciled HighlightDecision-shaped dict to adopt in place of the
    * Stage-1 verdict. On passthrough it is the (unchanged) Stage-1 verdict. */
   decision: DecisionResult;
+  /** ADAAAA-8820 (D2/AC2.1): the content-clock instant (seconds from stream
+   * start) of the dense frame that carries the MOMENT the clip should be cut on,
+   * snapped by the decide service onto the frame grid it was shown. NULLABLE by
+   * contract and present on every verdict: `null` means "the dive named no
+   * moment" (a refutation, an unlabelled request, a dropped dive), never "an old
+   * service" — an older service omits the key entirely. Absent = the key was not
+   * returned (pre-D2 decide service), so nothing downstream may re-anchor on it. */
+  momentTs?: number | null;
+  /** The dive's own confidence in the moment it named (0..1). Only reported when
+   * `momentTs` is non-null. */
+  momentConfidence?: number;
   /** ADAAAA-8395 (LFR-1 AC-4): the confirmation pass's OWN gemma token meter
    * (`{prompt_tokens, completion_tokens, total_tokens}`) and its provenance
    * (`"vllm"` when the upstream reply carried a usage block, `"absent"` when it
@@ -2978,8 +2989,12 @@ export interface ConfirmRequest {
   gameHint: string;
   /** Stage-1 primary-pass verdict, presented back to the model. */
   stage1: DecisionResult;
-  /** Denser temporal frame window (~10-15 fps) around the event instant. */
-  frames: { role: string; base64: string }[];
+  /** Denser temporal frame window (~10-15 fps) around the event instant.
+   *  ADAAAA-8820 (D2): each frame carries its CONTENT-CLOCK instant (`ts`, seconds
+   *  from stream start) so the deep dive can name the moment the clip should be
+   *  cut on. Optional: an unlabelled frame list leaves the dive with no grid to
+   *  snap against, and it then (correctly) reports no moment. */
+  frames: { role: string; base64: string; ts?: number }[];
   /** Precise pre-event / event-instant / post-event keyframes. */
   keyframes: { role: string; base64: string }[];
   /** Object/ball trajectory tracks: { label, trackId, path: [[t,x,y],..] }. */
@@ -10729,7 +10744,7 @@ export async function buildConfirmContext(
   // raw 8 fps burst) — a dense burst makes the pass lose the crossing instant and
   // refute a genuine goal.
   const sampled = downsampleConfirmFrames(dense);
-  const frames = sampled.map((f) => ({ role: "full", base64: f.imageB64 }));
+  const frames = sampled.map((f) => ({ role: "full", base64: f.imageB64, ts: f.timestamp }));
   const keyframes = selectConfirmKeyframes(
     sampled,
     center,
@@ -10840,6 +10855,12 @@ export interface InlineConfirmAttestation {
   diveLatencyMs: number;
   contextDegraded: string[];
   dropReason?: string;
+  /** ADAAAA-8820 (D2): the content instant the dive named for the clip moment (and
+   *  its confidence). Absent when the dive named none — a VOD row records the
+   *  moment on the SAME verdict field the live lane uses, so the two rails do not
+   *  diverge on the contract. */
+  momentTs?: number;
+  momentConfidence?: number;
 }
 
 /** ADAAAA-8796 (D1): which context signals the inline dive could not build.
@@ -10873,6 +10894,17 @@ function inlineConfirmAttestation(input: {
   contextDegraded?: readonly string[];
 }): InlineConfirmAttestation {
   const verdict = input.confirm?.goalConfirmed;
+  // ADAAAA-8820 (D2): the dive's named moment rides the same verdict field (the
+  // adapter returns the decide reply whole). Only a finite, non-negative instant
+  // is carried — a null moment is not stamped as 0.
+  const momentTs =
+    typeof input.confirm?.momentTs === "number" && Number.isFinite(input.confirm.momentTs) && input.confirm.momentTs >= 0
+      ? input.confirm.momentTs
+      : null;
+  const momentConfidence =
+    momentTs != null && Number.isFinite(input.confirm?.momentConfidence)
+      ? Math.max(0, Math.min(1, Number(input.confirm!.momentConfidence)))
+      : null;
   return {
     goalConfirmed: verdict ?? (input.droppedReason ? "dropped" : "passthrough"),
     corroborated: input.confirm?.corroborated === true,
@@ -10880,6 +10912,7 @@ function inlineConfirmAttestation(input: {
     diveAt: input.diveAt,
     diveLatencyMs: Math.max(0, Math.round(input.latencyMs)),
     contextDegraded: [...(input.contextDegraded ?? [])],
+    ...(momentTs != null ? { momentTs: momentTs, ...(momentConfidence != null ? { momentConfidence } : {}) } : {}),
     ...(input.droppedReason ? { dropReason: input.droppedReason } : {}),
   };
 }
@@ -11081,6 +11114,10 @@ export function confirmAuditDescriptor(
     verdicts: {
       runConfirmationPass: true,
       goalConfirmed: confirm?.goalConfirmed ?? null,
+      // ADAAAA-8820 (D2): the moment the dive named rides its own audit row, so a
+      // grader can read a dive's moment without replaying the model call.
+      momentTs: confirm?.momentTs ?? null,
+      momentConfidence: confirm?.momentConfidence ?? null,
       corroborated: confirm?.corroborated ?? false,
       corroborationSource: confirm?.corroborationSource ?? null,
       // ADAAAA-7844: persist the measured delta behind a "scoreboard" label so
