@@ -13,79 +13,81 @@
   "rows": [
    {
     "band": "race-clock",
-    "frames": 1268,
-    "max": 0.4887867569923401,
-    "p50": 0.06685049086809158,
-    "p95": 0.21090686321258545,
+    "frames": 1350,
+    "max": 0.5120097994804382,
+    "p50": 0.061213234439492226,
+    "p95": 0.2311550237238406,
     "scope": "whole window (frame-to-frame)"
    },
    {
     "band": "race-clock",
-    "frames": 38,
-    "max": 0.3422794044017792,
-    "p50": 0.0963541679084301,
-    "p95": 0.2803737744688987,
+    "frames": 41,
+    "max": 0.4058823585510254,
+    "p50": 0.10870098322629929,
+    "p95": 0.2544730305671692,
     "scope": "within +/-1 s of a labelled instant"
    },
    {
     "band": "centre-banner",
-    "frames": 1268,
-    "max": 0.45477941632270813,
-    "p50": 0.10496323555707932,
-    "p95": 0.23824754953384392,
+    "frames": 1350,
+    "max": 0.6279411911964417,
+    "p50": 0.09984681382775307,
+    "p95": 0.23713235557079315,
     "scope": "whole window (frame-to-frame)"
    },
    {
     "band": "centre-banner",
-    "frames": 38,
-    "max": 0.23216912150382996,
-    "p50": 0.11881127208471298,
-    "p95": 0.1710968159139156,
+    "frames": 41,
+    "max": 0.2550857961177826,
+    "p50": 0.10765931010246277,
+    "p95": 0.19687500596046448,
     "scope": "within +/-1 s of a labelled instant"
    },
    {
     "band": "grand-prix-panel",
-    "frames": 1268,
-    "max": 0.517401933670044,
-    "p50": 0.07803308963775635,
-    "p95": 0.1737224228680133,
+    "frames": 1350,
+    "max": 0.5357843041419983,
+    "p50": 0.0726102963089943,
+    "p95": 0.16745404526591298,
     "scope": "whole window (frame-to-frame)"
    },
    {
     "band": "grand-prix-panel",
-    "frames": 38,
-    "max": 0.14185048639774323,
-    "p50": 0.08780637383460999,
-    "p95": 0.1280851759016514,
+    "frames": 41,
+    "max": 0.22089460492134094,
+    "p50": 0.08210784196853638,
+    "p95": 0.17444853484630585,
     "scope": "within +/-1 s of a labelled instant"
    }
   ]
  },
- "frames": 1269,
+ "frames": 1351,
  "grid": [
   {
    "a1": false,
    "a2": false,
    "a3": true,
    "a4": true,
-   "candidates": 5,
+   "candidates": 7,
+   "candidatesInDecodedWindow": 7,
    "candidatesInWindow": 5,
-   "candidatesPerMinute": 0.236,
+   "candidatesPerMinute": 0.311,
+   "candidatesPerMinuteLabelCoverage": 0.222,
    "cell": "s0.08_d2",
    "changeSensitivity": 0.08,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d2.json",
-   "flickersSuppressed": 1,
-   "fp": 4,
-   "fpRate": 0.8,
-   "frameCostP95Ms": 0.272,
-   "frames": 1269,
+   "flickersSuppressed": 0,
+   "fp": 5,
+   "fpRate": 1.0,
+   "frameCostP95Ms": 0.24,
+   "frames": 1351,
    "minDwellFrames": 2,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.0667,
-   "recalled": 1,
+   "outsideWindow": 2,
+   "recall": 0.0,
+   "recalled": 0,
    "silentWindows": 13
   },
   {
@@ -94,24 +96,26 @@
    "a3": true,
    "a4": true,
    "candidates": 7,
-   "candidatesInWindow": 7,
-   "candidatesPerMinute": 0.331,
+   "candidatesInDecodedWindow": 7,
+   "candidatesInWindow": 5,
+   "candidatesPerMinute": 0.311,
+   "candidatesPerMinuteLabelCoverage": 0.222,
    "cell": "s0.08_d3",
    "changeSensitivity": 0.08,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d3.json",
-   "flickersSuppressed": 9,
-   "fp": 7,
+   "flickersSuppressed": 0,
+   "fp": 5,
    "fpRate": 1.0,
-   "frameCostP95Ms": 0.287,
-   "frames": 1269,
+   "frameCostP95Ms": 0.236,
+   "frames": 1351,
    "minDwellFrames": 3,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
+   "outsideWindow": 2,
    "recall": 0.0,
    "recalled": 0,
-   "silentWindows": 12
+   "silentWindows": 13
   },
   {
    "a1": false,
@@ -119,271 +123,291 @@
    "a3": true,
    "a4": true,
    "candidates": 7,
-   "candidatesInWindow": 7,
-   "candidatesPerMinute": 0.331,
+   "candidatesInDecodedWindow": 7,
+   "candidatesInWindow": 5,
+   "candidatesPerMinute": 0.311,
+   "candidatesPerMinuteLabelCoverage": 0.222,
    "cell": "s0.08_d4",
    "changeSensitivity": 0.08,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d4.json",
-   "flickersSuppressed": 9,
-   "fp": 7,
+   "flickersSuppressed": 0,
+   "fp": 5,
    "fpRate": 1.0,
-   "frameCostP95Ms": 0.242,
-   "frames": 1269,
+   "frameCostP95Ms": 0.219,
+   "frames": 1351,
    "minDwellFrames": 4,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
+   "outsideWindow": 2,
    "recall": 0.0,
    "recalled": 0,
-   "silentWindows": 11
+   "silentWindows": 13
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": false,
-   "candidates": 55,
-   "candidatesInWindow": 55,
-   "candidatesPerMinute": 2.6,
+   "a4": true,
+   "candidates": 25,
+   "candidatesInDecodedWindow": 25,
+   "candidatesInWindow": 23,
+   "candidatesPerMinute": 1.11,
+   "candidatesPerMinuteLabelCoverage": 1.021,
    "cell": "s0.12_d2",
    "changeSensitivity": 0.12,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d2.json",
-   "flickersSuppressed": 31,
-   "fp": 53,
-   "fpRate": 0.9636,
-   "frameCostP95Ms": 0.244,
-   "frames": 1269,
+   "flickersSuppressed": 11,
+   "fp": 22,
+   "fpRate": 0.9565,
+   "frameCostP95Ms": 0.218,
+   "frames": 1351,
    "minDwellFrames": 2,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.1333,
-   "recalled": 2,
-   "silentWindows": 3
+   "outsideWindow": 2,
+   "recall": 0.0667,
+   "recalled": 1,
+   "silentWindows": 9
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": false,
-   "candidates": 47,
-   "candidatesInWindow": 47,
-   "candidatesPerMinute": 2.222,
+   "a4": true,
+   "candidates": 27,
+   "candidatesInDecodedWindow": 27,
+   "candidatesInWindow": 25,
+   "candidatesPerMinute": 1.199,
+   "candidatesPerMinuteLabelCoverage": 1.11,
    "cell": "s0.12_d3",
    "changeSensitivity": 0.12,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d3.json",
-   "flickersSuppressed": 35,
-   "fp": 45,
-   "fpRate": 0.9574,
-   "frameCostP95Ms": 0.244,
-   "frames": 1269,
+   "flickersSuppressed": 28,
+   "fp": 24,
+   "fpRate": 0.96,
+   "frameCostP95Ms": 0.22,
+   "frames": 1351,
    "minDwellFrames": 3,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.1333,
-   "recalled": 2,
-   "silentWindows": 3
+   "outsideWindow": 2,
+   "recall": 0.0667,
+   "recalled": 1,
+   "silentWindows": 7
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": false,
-   "candidates": 43,
-   "candidatesInWindow": 43,
-   "candidatesPerMinute": 2.033,
+   "a4": true,
+   "candidates": 24,
+   "candidatesInDecodedWindow": 24,
+   "candidatesInWindow": 22,
+   "candidatesPerMinute": 1.066,
+   "candidatesPerMinuteLabelCoverage": 0.977,
    "cell": "s0.12_d4",
    "changeSensitivity": 0.12,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d4.json",
-   "flickersSuppressed": 54,
-   "fp": 40,
-   "fpRate": 0.9302,
-   "frameCostP95Ms": 0.243,
-   "frames": 1269,
+   "flickersSuppressed": 33,
+   "fp": 20,
+   "fpRate": 0.9091,
+   "frameCostP95Ms": 0.228,
+   "frames": 1351,
    "minDwellFrames": 4,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.2,
-   "recalled": 3,
-   "silentWindows": 4
+   "outsideWindow": 2,
+   "recall": 0.1333,
+   "recalled": 2,
+   "silentWindows": 7
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
    "a4": false,
-   "candidates": 43,
-   "candidatesInWindow": 43,
-   "candidatesPerMinute": 2.033,
+   "candidates": 39,
+   "candidatesInDecodedWindow": 39,
+   "candidatesInWindow": 36,
+   "candidatesPerMinute": 1.732,
+   "candidatesPerMinuteLabelCoverage": 1.599,
    "cell": "s0.18_d2",
    "changeSensitivity": 0.18,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d2.json",
-   "flickersSuppressed": 36,
-   "fp": 42,
-   "fpRate": 0.9767,
-   "frameCostP95Ms": 0.245,
-   "frames": 1269,
+   "flickersSuppressed": 34,
+   "fp": 33,
+   "fpRate": 0.9167,
+   "frameCostP95Ms": 0.239,
+   "frames": 1351,
    "minDwellFrames": 2,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.0667,
-   "recalled": 1,
+   "outsideWindow": 3,
+   "recall": 0.2,
+   "recalled": 3,
    "silentWindows": 5
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": false,
-   "candidates": 36,
-   "candidatesInWindow": 36,
-   "candidatesPerMinute": 1.702,
+   "a4": true,
+   "candidates": 30,
+   "candidatesInDecodedWindow": 30,
+   "candidatesInWindow": 27,
+   "candidatesPerMinute": 1.332,
+   "candidatesPerMinuteLabelCoverage": 1.199,
    "cell": "s0.18_d3",
    "changeSensitivity": 0.18,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d3.json",
-   "flickersSuppressed": 48,
-   "fp": 34,
-   "fpRate": 0.9444,
-   "frameCostP95Ms": 0.245,
-   "frames": 1269,
+   "flickersSuppressed": 47,
+   "fp": 27,
+   "fpRate": 1.0,
+   "frameCostP95Ms": 0.237,
+   "frames": 1351,
    "minDwellFrames": 3,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.1333,
-   "recalled": 2,
+   "outsideWindow": 3,
+   "recall": 0.0667,
+   "recalled": 1,
    "silentWindows": 6
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": false,
-   "candidates": 33,
-   "candidatesInWindow": 33,
-   "candidatesPerMinute": 1.56,
+   "a4": true,
+   "candidates": 26,
+   "candidatesInDecodedWindow": 26,
+   "candidatesInWindow": 23,
+   "candidatesPerMinute": 1.155,
+   "candidatesPerMinuteLabelCoverage": 1.021,
    "cell": "s0.18_d4",
    "changeSensitivity": 0.18,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d4.json",
-   "flickersSuppressed": 54,
-   "fp": 31,
-   "fpRate": 0.9394,
-   "frameCostP95Ms": 0.242,
-   "frames": 1269,
+   "flickersSuppressed": 55,
+   "fp": 23,
+   "fpRate": 1.0,
+   "frameCostP95Ms": 0.247,
+   "frames": 1351,
    "minDwellFrames": 4,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.1333,
-   "recalled": 2,
-   "silentWindows": 6
+   "outsideWindow": 3,
+   "recall": 0.0,
+   "recalled": 0,
+   "silentWindows": 7
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
    "a4": true,
-   "candidates": 28,
-   "candidatesInWindow": 28,
-   "candidatesPerMinute": 1.324,
+   "candidates": 30,
+   "candidatesInDecodedWindow": 30,
+   "candidatesInWindow": 27,
+   "candidatesPerMinute": 1.332,
+   "candidatesPerMinuteLabelCoverage": 1.199,
    "cell": "s0.25_d2",
    "changeSensitivity": 0.25,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d2.json",
-   "flickersSuppressed": 21,
-   "fp": 26,
-   "fpRate": 0.9286,
-   "frameCostP95Ms": 0.243,
-   "frames": 1269,
+   "flickersSuppressed": 22,
+   "fp": 25,
+   "fpRate": 0.9259,
+   "frameCostP95Ms": 0.257,
+   "frames": 1351,
    "minDwellFrames": 2,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.0667,
-   "recalled": 1,
-   "silentWindows": 8
+   "outsideWindow": 3,
+   "recall": 0.1333,
+   "recalled": 2,
+   "silentWindows": 7
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
    "a4": true,
-   "candidates": 22,
-   "candidatesInWindow": 22,
-   "candidatesPerMinute": 1.04,
+   "candidates": 25,
+   "candidatesInDecodedWindow": 25,
+   "candidatesInWindow": 23,
+   "candidatesPerMinute": 1.11,
+   "candidatesPerMinuteLabelCoverage": 1.021,
    "cell": "s0.25_d3",
    "changeSensitivity": 0.25,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d3.json",
-   "flickersSuppressed": 26,
-   "fp": 20,
-   "fpRate": 0.9091,
-   "frameCostP95Ms": 0.242,
-   "frames": 1269,
+   "flickersSuppressed": 31,
+   "fp": 21,
+   "fpRate": 0.913,
+   "frameCostP95Ms": 0.229,
+   "frames": 1351,
    "minDwellFrames": 3,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.0667,
-   "recalled": 1,
-   "silentWindows": 9
+   "outsideWindow": 2,
+   "recall": 0.1333,
+   "recalled": 2,
+   "silentWindows": 7
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
    "a4": true,
-   "candidates": 21,
-   "candidatesInWindow": 21,
-   "candidatesPerMinute": 0.993,
+   "candidates": 25,
+   "candidatesInDecodedWindow": 25,
+   "candidatesInWindow": 23,
+   "candidatesPerMinute": 1.11,
+   "candidatesPerMinuteLabelCoverage": 1.021,
    "cell": "s0.25_d4",
    "changeSensitivity": 0.25,
    "clears": false,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d4.json",
-   "flickersSuppressed": 30,
-   "fp": 20,
-   "fpRate": 0.9524,
-   "frameCostP95Ms": 0.243,
-   "frames": 1269,
+   "flickersSuppressed": 31,
+   "fp": 21,
+   "fpRate": 0.913,
+   "frameCostP95Ms": 0.231,
+   "frames": 1351,
    "minDwellFrames": 4,
    "nonEventWindows": 13,
-   "outsideWindow": 0,
-   "recall": 0.0667,
-   "recalled": 1,
-   "silentWindows": 9
+   "outsideWindow": 2,
+   "recall": 0.1333,
+   "recalled": 2,
+   "silentWindows": 7
   }
  ],
  "harness": "evals/measure_hud_recall.py",
- "labelledWindow": [
+ "labelCoverage": [
   4429.67,
   5699.0
  ],
- "labelledWindowS": 1269,
+ "labelledWindowS": 1351,
  "latchTrace": {
-  "dwell": 2,
+  "dwell": 4,
   "events": [
    {
     "event": "A-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.0935,
-     "grand-prix-panel": 0.0447,
-     "race-clock": 0.1061
+     "centre-banner": 0.0795,
+     "grand-prix-panel": 0.0535,
+     "race-clock": 0.0974
     },
     "states": {
-     "centre-banner": "armed",
-     "grand-prix-panel": "armed",
+     "centre-banner": "latched",
+     "grand-prix-panel": "latched",
      "race-clock": "armed"
     },
     "t": 4429.67
@@ -392,9 +416,9 @@
     "event": "A-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.1254,
-     "grand-prix-panel": 0.0679,
-     "race-clock": 0.1137
+     "centre-banner": 0.0805,
+     "grand-prix-panel": 0.0795,
+     "race-clock": 0.07
     },
     "states": {
      "centre-banner": "latched",
@@ -407,9 +431,9 @@
     "event": "A-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.1827,
-     "grand-prix-panel": 0.1219,
-     "race-clock": 0.1331
+     "centre-banner": 0.1408,
+     "grand-prix-panel": 0.1177,
+     "race-clock": 0.0837
     },
     "states": {
      "centre-banner": "latched",
@@ -422,9 +446,9 @@
     "event": "B-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.1584,
-     "grand-prix-panel": 0.0809,
-     "race-clock": 0.2192
+     "centre-banner": 0.0512,
+     "grand-prix-panel": 0.0116,
+     "race-clock": 0.0062
     },
     "states": {
      "centre-banner": "latched",
@@ -437,9 +461,9 @@
     "event": "B-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.2366,
-     "grand-prix-panel": 0.0944,
-     "race-clock": 0.2051
+     "centre-banner": 0.1341,
+     "grand-prix-panel": 0.0668,
+     "race-clock": 0.1896
     },
     "states": {
      "centre-banner": "latched",
@@ -452,9 +476,9 @@
     "event": "B-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.2305,
-     "grand-prix-panel": 0.1699,
-     "race-clock": 0.0784
+     "centre-banner": 0.1954,
+     "grand-prix-panel": 0.151,
+     "race-clock": 0.1225
     },
     "states": {
      "centre-banner": "latched",
@@ -467,9 +491,9 @@
     "event": "C-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.1251,
-     "grand-prix-panel": 0.0809,
-     "race-clock": 0.1481
+     "centre-banner": 0.0628,
+     "grand-prix-panel": 0.018,
+     "race-clock": 0.0304
     },
     "states": {
      "centre-banner": "latched",
@@ -482,9 +506,9 @@
     "event": "C-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.1672,
-     "grand-prix-panel": 0.1336,
-     "race-clock": 0.042
+     "centre-banner": 0.111,
+     "grand-prix-panel": 0.092,
+     "race-clock": 0.0809
     },
     "states": {
      "centre-banner": "latched",
@@ -497,9 +521,9 @@
     "event": "C-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.1235,
-     "grand-prix-panel": 0.0866,
-     "race-clock": 0.0765
+     "centre-banner": 0.1121,
+     "grand-prix-panel": 0.0703,
+     "race-clock": 0.0915
     },
     "states": {
      "centre-banner": "latched",
@@ -512,9 +536,9 @@
     "event": "D-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.2349,
-     "grand-prix-panel": 0.0951,
-     "race-clock": 0.2492
+     "centre-banner": 0.09,
+     "grand-prix-panel": 0.0593,
+     "race-clock": 0.1102
     },
     "states": {
      "centre-banner": "latched",
@@ -527,9 +551,9 @@
     "event": "D-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.2592,
-     "grand-prix-panel": 0.2251,
-     "race-clock": 0.1406
+     "centre-banner": 0.1935,
+     "grand-prix-panel": 0.0852,
+     "race-clock": 0.0883
     },
     "states": {
      "centre-banner": "latched",
@@ -542,14 +566,14 @@
     "event": "D-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.2941,
-     "grand-prix-panel": 0.176,
-     "race-clock": 0.2306
+     "centre-banner": 0.2721,
+     "grand-prix-panel": 0.1722,
+     "race-clock": 0.2513
     },
     "states": {
      "centre-banner": "latched",
      "grand-prix-panel": "latched",
-     "race-clock": "latched"
+     "race-clock": "armed"
     },
     "t": 5490.0
    },
@@ -557,9 +581,9 @@
     "event": "E-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.083,
-     "grand-prix-panel": 0.0938,
-     "race-clock": 0.068
+     "centre-banner": 0.0457,
+     "grand-prix-panel": 0.0789,
+     "race-clock": 0.0631
     },
     "states": {
      "centre-banner": "latched",
@@ -572,14 +596,14 @@
     "event": "E-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.1752,
-     "grand-prix-panel": 0.2083,
-     "race-clock": 0.1518
+     "centre-banner": 0.0822,
+     "grand-prix-panel": 0.0828,
+     "race-clock": 0.1143
     },
     "states": {
      "centre-banner": "latched",
      "grand-prix-panel": "latched",
-     "race-clock": "latched"
+     "race-clock": "armed"
     },
     "t": 5649.0
    },
@@ -587,13 +611,13 @@
     "event": "E-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.1833,
-     "grand-prix-panel": 0.0756,
-     "race-clock": 0.0873
+     "centre-banner": 0.1604,
+     "grand-prix-panel": 0.1087,
+     "race-clock": 0.1872
     },
     "states": {
      "centre-banner": "latched",
-     "grand-prix-panel": "latched",
+     "grand-prix-panel": "armed",
      "race-clock": "latched"
     },
     "t": 5698.0
@@ -601,52 +625,147 @@
   ],
   "fires": [
    {
+    "band": "centre-banner",
+    "score": 0.3444,
+    "t": 4393.0
+   },
+   {
     "band": "race-clock",
-    "score": 0.1204,
-    "t": 4431.0
+    "score": 0.1588,
+    "t": 4461.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.2409,
+    "t": 4475.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1528,
+    "t": 4647.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.467,
+    "t": 4760.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.5473,
+    "t": 5122.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.3503,
+    "t": 5338.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.2591,
+    "t": 5371.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2882,
+    "t": 5386.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.2968,
+    "t": 5391.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1642,
+    "t": 5423.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2537,
+    "t": 5429.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.3143,
+    "t": 5477.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.3241,
+    "t": 5491.0
    },
    {
     "band": "grand-prix-panel",
-    "score": 0.1216,
-    "t": 4435.0
-   },
-   {
-    "band": "race-clock",
-    "score": 0.1896,
-    "t": 4442.0
-   },
-   {
-    "band": "race-clock",
-    "score": 0.1374,
-    "t": 4446.0
+    "score": 0.1751,
+    "t": 5541.0
    },
    {
     "band": "grand-prix-panel",
-    "score": 0.2871,
-    "t": 5662.0
+    "score": 0.5411,
+    "t": 5559.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.198,
+    "t": 5584.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.3657,
+    "t": 5605.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1718,
+    "t": 5618.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1564,
+    "t": 5631.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.3393,
+    "t": 5655.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1915,
+    "t": 5669.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1993,
+    "t": 5697.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.318,
+    "t": 5713.0
    }
   ],
   "perBand": [
    {
     "band": "race-clock",
-    "firstLatchT": 4431,
-    "frames": 1269,
-    "latchedFrames": 1256
+    "firstLatchT": 4461,
+    "frames": 1351,
+    "latchedFrames": 1125
    },
    {
     "band": "centre-banner",
-    "firstLatchT": 4431,
-    "frames": 1269,
-    "latchedFrames": 1267
+    "firstLatchT": 4393,
+    "frames": 1351,
+    "latchedFrames": 1022
    },
    {
     "band": "grand-prix-panel",
-    "firstLatchT": 4435,
-    "frames": 1269,
-    "latchedFrames": 1259
+    "firstLatchT": 4393,
+    "frames": 1351,
+    "latchedFrames": 933
    }
   ],
-  "sensitivity": 0.08
+  "sensitivity": 0.12
  },
  "manifest": "/tmp/hl8744repo/evals/supertuxkart_val/label-manifest.json",
  "manifestPinned": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
@@ -656,5 +775,9 @@
   "post": 2.0,
   "pre": 3.0
  },
- "verdict": "park"
+ "verdict": "park",
+ "window": [
+  4380.0,
+  5731.0
+ ]
 }
