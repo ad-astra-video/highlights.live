@@ -1,0 +1,84 @@
+{
+ "band_state_at_end": {
+  "centre-banner": {
+   "baselineNull": false,
+   "lastScore": 0.27751,
+   "latched": true
+  },
+  "grand-prix-panel": {
+   "baselineNull": false,
+   "lastScore": 0.28627,
+   "latched": true
+  },
+  "race-clock": {
+   "baselineNull": false,
+   "lastScore": 0.33836,
+   "latched": true
+  }
+ },
+ "candidates": [
+  {
+   "band": "race-clock",
+   "coincidentBands": [
+    "centre-banner"
+   ],
+   "kind": "clock",
+   "score": 0.1204,
+   "t": 4431.0
+  },
+  {
+   "band": "grand-prix-panel",
+   "coincidentBands": [],
+   "kind": "counter",
+   "score": 0.09185,
+   "t": 4432.0
+  }
+ ],
+ "cell": {
+  "bands": [
+   {
+    "kind": "clock",
+    "name": "race-clock",
+    "rect": [
+     364,
+     30,
+     426,
+     56
+    ]
+   },
+   {
+    "kind": "banner",
+    "name": "centre-banner",
+    "rect": [
+     120,
+     60,
+     320,
+     110
+    ]
+   },
+   {
+    "kind": "counter",
+    "name": "grand-prix-panel",
+    "rect": [
+     60,
+     50,
+     170,
+     180
+    ]
+   }
+  ],
+  "cell": 8,
+  "changeSensitivity": 0.05,
+  "minDwellFrames": 2,
+  "quietFrames": 2
+ },
+ "flickers_suppressed": 0,
+ "fps": 1,
+ "frames_observed": 1269,
+ "producer": "hud-event/hud_reader (measure_hud_recall grid cell)",
+ "video": {
+  "duration_s": 5950.549,
+  "id": "onfoss-2023-09-23-stk-tournament",
+  "path": "sh_onfoss_20230923_tournament.mp4"
+ }
+}

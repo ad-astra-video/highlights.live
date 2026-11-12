@@ -1,0 +1,224 @@
+{
+ "band_state_at_end": {
+  "centre-banner": {
+   "baselineNull": false,
+   "lastScore": 0.07151,
+   "latched": false
+  },
+  "grand-prix-panel": {
+   "baselineNull": false,
+   "lastScore": 0.04559,
+   "latched": false
+  },
+  "race-clock": {
+   "baselineNull": false,
+   "lastScore": 0.04804,
+   "latched": false
+  }
+ },
+ "candidates": [
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.33683,
+   "t": 4652.0
+  },
+  {
+   "band": "grand-prix-panel",
+   "coincidentBands": [],
+   "kind": "counter",
+   "score": 0.40582,
+   "t": 4759.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.42145,
+   "t": 5004.0
+  },
+  {
+   "band": "grand-prix-panel",
+   "coincidentBands": [],
+   "kind": "counter",
+   "score": 0.40172,
+   "t": 5121.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.31501,
+   "t": 5276.0
+  },
+  {
+   "band": "grand-prix-panel",
+   "coincidentBands": [],
+   "kind": "counter",
+   "score": 0.31317,
+   "t": 5337.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "kind": "clock",
+   "score": 0.37494,
+   "t": 5347.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.46973,
+   "t": 5358.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "kind": "clock",
+   "score": 0.37488,
+   "t": 5390.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.41317,
+   "t": 5394.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [
+    "race-clock"
+   ],
+   "kind": "banner",
+   "score": 0.46097,
+   "t": 5410.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.55888,
+   "t": 5455.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.48499,
+   "t": 5465.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "kind": "clock",
+   "score": 0.2799,
+   "t": 5474.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.38327,
+   "t": 5489.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "kind": "clock",
+   "score": 0.34669,
+   "t": 5497.0
+  },
+  {
+   "band": "race-clock",
+   "coincidentBands": [],
+   "kind": "clock",
+   "score": 0.34779,
+   "t": 5506.0
+  },
+  {
+   "band": "grand-prix-panel",
+   "coincidentBands": [
+    "race-clock"
+   ],
+   "kind": "counter",
+   "score": 0.41397,
+   "t": 5559.0
+  },
+  {
+   "band": "centre-banner",
+   "coincidentBands": [],
+   "kind": "banner",
+   "score": 0.42047,
+   "t": 5564.0
+  },
+  {
+   "band": "grand-prix-panel",
+   "coincidentBands": [
+    "race-clock"
+   ],
+   "kind": "counter",
+   "score": 0.53695,
+   "t": 5605.0
+  },
+  {
+   "band": "grand-prix-panel",
+   "coincidentBands": [
+    "centre-banner",
+    "race-clock"
+   ],
+   "kind": "counter",
+   "score": 0.48542,
+   "t": 5654.0
+  }
+ ],
+ "cell": {
+  "bands": [
+   {
+    "kind": "clock",
+    "name": "race-clock",
+    "rect": [
+     364,
+     30,
+     426,
+     56
+    ]
+   },
+   {
+    "kind": "banner",
+    "name": "centre-banner",
+    "rect": [
+     120,
+     60,
+     320,
+     110
+    ]
+   },
+   {
+    "kind": "counter",
+    "name": "grand-prix-panel",
+    "rect": [
+     60,
+     50,
+     170,
+     180
+    ]
+   }
+  ],
+  "cell": 8,
+  "changeSensitivity": 0.25,
+  "minDwellFrames": 4,
+  "quietFrames": 2
+ },
+ "flickers_suppressed": 30,
+ "fps": 1,
+ "frames_observed": 1269,
+ "producer": "hud-event/hud_reader (measure_hud_recall grid cell)",
+ "video": {
+  "duration_s": 5950.549,
+  "id": "onfoss-2023-09-23-stk-tournament",
+  "path": "sh_onfoss_20230923_tournament.mp4"
+ }
+}
