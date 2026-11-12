@@ -163,6 +163,7 @@ import { extractVodAudioChunks } from "./vod-audio";
 import {
   createLiveMatchContextWriter,
   createVodMatchContextResolver,
+  liveMatchContextSession,
   matchContextEnabled,
   type LiveMatchContextWriter,
   type MatchContextResolver,
@@ -2242,7 +2243,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       ? createLiveMatchContextWriter({
           jobId: job.id,
           client: adapter,
-          getSessionId: () => bj.sessionId ?? job.perceiveSessionId ?? "",
+          // ADAAAA-8736: resolve the fold session from the RAIL's own session
+          // fields (`mediaSessionId` on a media-node share, `sessionId` on the WS
+          // ingest rail). Reading only `sessionId` + the record's
+          // `perceiveSessionId` posted every browser fold at `""` and dropped it,
+          // which is why 0/11 browser jobs carried a `matchContext`.
+          getSessionId: () => liveMatchContextSession(bj, job),
           hints: { title: store.getJob(job.id)?.title, gameHint: job.gameHint || cfg.gameHintDefault },
           getJob: (id) => store.getJob(id),
           patchJob: (id, patch) => store.patchJob(id, patch),

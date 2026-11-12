@@ -1041,6 +1041,37 @@ export interface LiveMatchContextWriter {
 }
 
 /**
+ * ADAAAA-8736: the session a LIVE match-context fold must post to.
+ *
+ * The `browser` source runs two rails and they carry the perceive session in
+ * DIFFERENT fields:
+ *
+ *  - the media-node share (`POST /jobs/:id/media` -> `bj.mediaSessionId`) relays
+ *    every frame through the media node and never calls `/jobs/:id/ingest`, so
+ *    `bj.sessionId` stays undefined and the record persists no
+ *    `perceiveSessionId`;
+ *  - the WS `/jobs/:id/ingest` rail reserves its own perceive session into
+ *    `bj.sessionId` and has no media session.
+ *
+ * The fold target is the session perceive accumulated this share's scorebug OCR /
+ * kit samples / frame seeds under, i.e. the session the rail itself passes to
+ * `observeOnDecide` / `observeDecideOnly`. Reading only `bj.sessionId` +
+ * `perceiveSessionId` (the pre-fix expression) therefore posted every browser
+ * fold at session `""` and dropped it silently: measured 0/11 browser jobs with
+ * a `matchContext` against 10/18 rtmp jobs on the same build (ADAAAA-8736).
+ *
+ * `bj.sessionId` keeps precedence so the ingest rail is untouched; the media
+ * session is the added fallback; the persisted `perceiveSessionId` (the rtmp
+ * shape) stays last.
+ */
+export function liveMatchContextSession(
+  bj: { sessionId?: string; mediaSessionId?: string } | undefined | null,
+  job?: { perceiveSessionId?: string } | undefined | null
+): string {
+  return bj?.sessionId || bj?.mediaSessionId || job?.perceiveSessionId || "";
+}
+
+/**
  * Build the live rail's once-per-run match-context writer.
  *
  * Wiring: constructed next to the live analyzer config (`ensureMediaRail` /
@@ -1070,6 +1101,17 @@ export function createLiveMatchContextWriter(deps: LiveMatchContextWriterDeps): 
 
   const resolveOnce = async (checkpoint: number): Promise<void> => {
     if (!deps.client.postMatchContext) return;
+    // ADAAAA-8736: a fold with no session would post at `""`, get a null back
+    // and leave the record silently untouched (the browser-rail defect). Name it
+    // in the log instead, so the next "job has no matchContext" grade has a
+    // signal rather than a best-effort dead end.
+    const sessionId = deps.getSessionId();
+    if (!sessionId) {
+      log(
+        `[match-context:live:${deps.jobId}] no perceive session at ${checkpoint}s — fold skipped (matchContext stays as stored)`
+      );
+      return;
+    }
     const job = deps.getJob(deps.jobId);
     const previous = job?.matchContext as MatchContext | undefined;
     const progressPct = progressFor(checkpoint);
@@ -1086,7 +1128,7 @@ export function createLiveMatchContextWriter(deps: LiveMatchContextWriterDeps): 
     let result: { matchContext: Record<string, unknown>; evidenceStatus?: Record<string, unknown> } | null = null;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        result = await deps.client.postMatchContext(deps.getSessionId(), body);
+        result = await deps.client.postMatchContext(sessionId, body);
         if (result?.matchContext) break;
       } catch (e: any) {
         log(`[match-context:live:${deps.jobId}] fold at ${checkpoint}s failed: ${String(e?.message || e)}`);
