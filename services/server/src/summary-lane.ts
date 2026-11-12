@@ -16,6 +16,8 @@
 //    decide (the decide pool is the priority lane, this one is lowest);
 //  - the reply is gated by `gateSummaryDetail` from `@highlights/events`, the ONE
 //    summary contract (depth bands, clamp, grounding reuse, caption overlap);
+//    a DETERMINISTIC refusal ends the row on one call and only the AC8 repeat
+//    path may spend a second one (AC5 / spec §13.2);
 //  - a drop writes ONLY the meter (`summaryDropped`, `summaryDroppedByReason`)
 //    and never a `summary` value, so a failed generation can never blank the card
 //    or emit a placeholder (AC6);
@@ -23,6 +25,7 @@
 //    `summaryDroppedByReason`, `summaryP95Ms`), which is what QA reads.
 import {
   SUMMARY_CALL_TIMEOUT_MS,
+  SUMMARY_DETERMINISTIC_REFUSALS,
   SUMMARY_FEE_RATIO,
   SUMMARY_MAX_CALLS_PER_ROW,
   SUMMARY_RAW_MAX_CHARS,
@@ -224,13 +227,13 @@ export async function runSummaryForRow(
     if (!decision.summary) {
       lastGate = decision;
       lastReason = "gate";
-      // ADAAAA-8773: `too-few-facts` is DETERMINISTIC, not a property of one
-      // sample. The row's fact menu is fixed, and a body that anchors its clock
-      // outside the window cannot earn a second kind by resampling — the measured
-      // VOD job `70400b1d` spent 2 calls on both promoted rows and dropped both.
-      // Spending the retry here bills 2 x the 1.5x ceiling = 2.0x DECIDE_FEE per
-      // row, over the AC5 envelope, so the refusal ends the row on ONE call.
-      if (decision.violations.includes("too-few-facts")) {
+      // ADAAAA-8773 / spec §13.2 (rev 7): a DETERMINISTIC refusal ends the row on
+      // ONE call. The row's fact menu is fixed and the same prompt cannot repair a
+      // clock anchor, an invented name or an enum-shaped token; the served VOD job
+      // `70400b1d` spent 2 calls on both promoted rows to reach the identical
+      // `too-few-facts` refusal, which billed 2 x the 1.5x ceiling = 2.0x
+      // DECIDE_FEE per row. The second call is now the AC8 repeat path's alone.
+      if (decision.violations.some((v) => SUMMARY_DETERMINISTIC_REFUSALS.includes(v))) {
         log(
           `[summary:${descriptor.jobId}] deterministic-refusal highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
         );

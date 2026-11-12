@@ -616,6 +616,22 @@ export type SummaryViolation =
   /** AC9 (rev 3): fewer than two DISTINCT attested fact types. */
   | "too-few-facts";
 
+/**
+ * ADAAAA-8773 / spec §13.2 (rev 7): the refusals a SECOND sample cannot repair.
+ *
+ * The same prompt, re-sampled, cannot fix a deterministic defect: the row's fact
+ * menu is fixed, its own evidence does not carry the name the body invented, and
+ * the enum shape of an internal token does not change. QA measured the retry
+ * buying `$0.0049986` to reach the identical `too-few-facts` refusal on both VOD
+ * rows of job `70400b1d`. The lane keeps the retry slot for the AC8 repeat path
+ * only, where a different opening is plausible by construction.
+ */
+export const SUMMARY_DETERMINISTIC_REFUSALS: readonly SummaryViolation[] = [
+  "too-few-facts",
+  "ungrounded-name",
+  "internal-token",
+];
+
 /** The evidence a summary is gated against. Everything is the ROW's own
  *  evidence; a missing field fails closed (never invents). */
 export interface SummaryEvidence {
