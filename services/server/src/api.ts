@@ -624,10 +624,20 @@ export function requestHighlightSummary(
   try {
     const lane = summaryLaneFor(deps, record.jobId);
     if (!lane) return;
+    // ADAAAA-8735: the row's OWN record carries no matchContext — it lives on the
+    // job (ADAAAA-8736 now folds it on the browser rail too). Hand it to the
+    // summary evidence so an attested team/player is available to the AC9 action
+    // fact; without this the live rail can only ever attest the clock and every
+    // body refuses `too-few-facts`.
+    const matchContext = deps.store.getJob(record.jobId)?.matchContext ?? null;
     lane.enqueue({
       jobId: record.jobId,
       highlightId: record.id,
-      evidence: summaryEvidenceForRow(record as any, rail, adjacentScoreCue ?? null),
+      evidence: summaryEvidenceForRow(
+        { ...(record as any), ...(matchContext ? { matchContext } : {}) },
+        rail,
+        adjacentScoreCue ?? null
+      ),
     });
   } catch (e: any) {
     // A lane failure is never a card failure.
