@@ -3376,6 +3376,14 @@ export function groundCaption(text: string, ctx?: CaptionGroundingContext): stri
   out = gateQuietWindow(out, ctx);
   if (typeof prompt === "string") out = gateScores(out, prompt);
   if (!(out ?? "").trim()) return "";
+  // ADAAAA-8806 (AC9): the claim rewrite SUBSTITUTES an outcome verb when it
+  // deletes a net-crossing claim, so a row whose own attestation recorded no
+  // ball outcome can leave this gate with an invented action ("The ball shoots
+  // on the right." on job `3740585f` row `6ff00ac9`, `ballOutcome: null` /
+  // `goalCrossed: false`). Deleting is the contract; the substitution is not
+  // available on a row that measured nothing, so the gated line is refused and
+  // the row keeps its headline plus whatever honest sentence it still owes.
+  if (captionAssertsUnattestedAction(out, ctx)) return "";
   if (out === input) return input;
   return neverLonger(input, out);
 }
@@ -3395,6 +3403,9 @@ export function regateServedSentence(text: string, ctx?: CaptionGroundingContext
   out = gateAbsenceClaims(out, ctx);
   out = groundNames(out, ctx?.promptText);
   if (typeof ctx?.promptText === "string") out = gateScores(out, ctx.promptText);
+  // ADAAAA-8806: the same unattested-action bar as `groundCaption` — a re-gate
+  // must not restore an invented outcome verb either.
+  if (captionAssertsUnattestedAction(out, ctx)) return "";
   return out;
 }
 
