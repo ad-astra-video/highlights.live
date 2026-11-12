@@ -175,6 +175,7 @@ import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribe
 import { reportMonitoring, RELIABILITY_FLOOR } from "./monitoring";
 import { buildMediaNodeReport } from "./media-node";
 import { attributeLiveIngest } from "./media-ingest";
+import { registerAdoptedMediaSession, shouldAdoptMediaSession } from "./media-session-adopt";
 import { AuthService, BetaGateError, adminReadonlyStrictRequired, adminRequired, adminReadonlyRequired, authRequired, type AuthService as AuthSvc } from "./auth";
 import { BillingService, BillingRequiredError, canRetrieveDataset } from "./billing";
 import { EntitlementsService, QuotaExceededError } from "./entitlements";
@@ -1184,7 +1185,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const internalOrigin = cfg.mediaServerUrl.replace(/\/+$/, "");
     const browserOrigin = (cfg.mediaPublicBaseUrl ?? cfg.mediaServerUrl).replace(/\/+$/, "");
     const existing = await db.getMediaSession(jobId);
-    if (existing && existing.status === "active" && (await isMediaHealthy(existing.mediaOrigin))) {
+    // ADAAAA-8776: an ADOPTED row (`registerAdoptedMediaSession`) carries the
+    // node's real session id but no browser endpoint — the node's callbacks do
+    // not report one. Reusing it would answer the reconnect with `wsUrl: ""`, so
+    // only a provisioned row (`wsUrl` set) is reusable; adopted shares
+    // re-provision, exactly as they did when they held no row at all.
+    if (existing && existing.status === "active" && existing.wsUrl && (await isMediaHealthy(existing.mediaOrigin))) {
       // Reconnect to the SAME live session: reuse its cached ICE servers so the
       // browser reconfigures its peer with the relay on every offer.
       return { wsUrl: existing.wsUrl, mediaSessionId: existing.sessionId, mediaOrigin: browserOrigin, iceServers: browserJobs.get(jobId)?.mediaIceServers };
@@ -1242,6 +1248,55 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       bj.rail?.noteServedClockStart();
     }
     return { wsUrl, mediaSessionId: body.sessionId, mediaOrigin: browserOrigin, iceServers: body.iceServers };
+  }
+  /**
+   * ADAAAA-8776: adopt the media-node session a share is carried by when the
+   * control plane never provisioned it.
+   *
+   * `provisionMedia` (above) is the control plane's own handshake, but a client
+   * may open its session directly on the media node (`POST {media}/sessions`
+   * with the job id — what `scripts/rtc-browser-measure.py` does). The node then
+   * relays observations and frame ticks for the job while the control plane
+   * holds no session id, which is what made job `4cd84e86` log
+   * "no perceive session ... fold skipped" on every checkpoint and persist no
+   * `matchContext` (0 `media_sessions` rows against 624 published frames).
+   *
+   * The node's callbacks name that session, so bind it on FIRST sight: the rail's
+   * `mediaSessionId` is what both `observeOnDecide`/`observeDecideOnly` and the
+   * match-context fold read. The `media_sessions` row is registered off the
+   * callback path (best-effort) so a slow DB or an unreachable node can never
+   * delay a frame.
+   *
+   * Returns true when this call bound the session (the caller anchors the
+   * served-clock credit window, the same anchor `provisionMedia` takes).
+   */
+  function adoptNodeMediaSession(
+    jobId: string,
+    bj: { mediaSessionId?: string; rail?: MediaRailObserver },
+    sessionId: unknown
+  ): boolean {
+    const incoming = typeof sessionId === "string" ? sessionId : "";
+    if (!shouldAdoptMediaSession(bj.mediaSessionId, incoming)) return false;
+    const sid = incoming.trim();
+    bj.mediaSessionId = sid;
+    bj.rail?.noteServedClockStart();
+    void registerAdoptedMediaSession({
+      db,
+      mediaServerUrl: cfg.mediaServerUrl,
+      jobId,
+      sessionId: sid,
+    })
+      .then((row) => {
+        if (!row) return;
+        console.log(
+          `[media-session:${jobId}] adopted node session ${row.sessionId} ` +
+            `(node=${row.nodeId ?? "unknown"}) — not provisioned through POST /jobs/:id/media`
+        );
+      })
+      .catch((e: any) =>
+        console.error(`[media-session:${jobId}] adopt failed:`, String(e?.message || e))
+      );
+    return true;
   }
   function browserRecordingPath(jobId: string): string {
     return path.join(cfg.dataDir, "live", jobId, "capture" + (browserJobs.get(jobId)?.recordingExt || ".webm"));
@@ -7404,6 +7459,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const body = req.body;
       if (!body || typeof body !== "object") return reply.code(400).send({ error: "observation required" });
       const { frameB64, ...obs } = body as { frameB64?: string } & Record<string, any>;
+      // ADAAAA-8776: a share whose session was opened on the media node itself
+      // reaches us only through these callbacks; adopt the session it names
+      // before anything reads `bj.mediaSessionId` (the fold target).
+      adoptNodeMediaSession(req.params.id, bj, (body as any).sessionId);
       const seq = typeof obs.seq === "number" ? obs.seq : 0;
       const timestamp = typeof obs.timestamp === "number" ? obs.timestamp : 0;
       bj.evidence.step(obs as any);
@@ -7449,8 +7508,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     if (!job || job.source !== "browser" || !bj) return reply.send({ ok: true, ignored: "not a browser capture job" });
     const frames = Array.isArray(req.body?.frames) ? (req.body.frames as any[]) : [];
     if (!frames.length) return reply.send({ ok: true, recorded: 0 });
+    // ADAAAA-8776: the first frame tick of a share that opened its session on
+    // the media node is the earliest reliable sighting of that session id (it
+    // arrives ~1 s after publishing starts, before the first decide window), so
+    // adopt it here; the fold then posts at a real session instead of "".
+    const adopted = adoptNodeMediaSession(job.id, bj, req.body?.sessionId);
     const rail = await ensureMediaRail(job, bj).catch(() => null);
     if (!rail) return reply.send({ ok: true, recorded: 0, ignored: "no live observe rail" });
+    if (adopted) rail.noteServedClockStart();
     let recorded = 0;
     let newestTs = 0;
     for (const f of frames.slice(0, MEDIA_FRAME_TICK_MAX_PER_BATCH)) {
@@ -7507,6 +7572,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         return reply.code(400).send({ error: "samples must be aligned int16 PCM" });
       }
       const bj = browserJobs.get(req.params.id);
+      // ADAAAA-8776: a chunk carries the session the node paid for ("the live
+      // session id travels with the chunk so the control plane never has to guess
+      // which runner session the media node paid for") — adopt it when the share
+      // was never provisioned through the control plane, so the match-context
+      // fold posts at that session instead of "".
+      if (bj && job.source === "browser") adoptNodeMediaSession(job.id, bj, body.sessionId);
       const sessionId =
         (typeof body.sessionId === "string" && body.sessionId) ||
         bj?.sessionId ||
