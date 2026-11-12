@@ -34,6 +34,10 @@ const meta = {
   diveLatencyMs: 42_000,
   // The falsifier's real context: every non-visual signal degraded, frames only.
   contextDegraded: ["motion_trajectories", "optical_flow", "audio_clip", "audio_levels"] as DegradedSignal[],
+  // ADAAAA-8728 (R3): a frame attestation must CITE an in-window frame. This
+  // falsifier's dive loaded persisted frames, so the hold here is the missing
+  // TRANSITION (8239), not a missing citation.
+  frameRefs: [{ seq: 512, ts: 88.6 }],
 };
 
 /** The accept-time attestation the falsifier row carried at accept. The five
@@ -154,7 +158,7 @@ describe("confirmDiveAdoption — the AV6 falsifier case is NOT promoted", () =>
     });
     expect((a.patch.provisionalGoal as any).note).toMatch(/no score transition/i);
     expect((a.patch.provisionalGoal as any).note).toMatch(/postSamples=0/);
-    expect(a.reason).toMatch(/no measured score transition/i);
+    expect(a.reason).toMatch(/score_lane_read_no_transition|no measured score transition/i);
     // The attempt stays observable and the descriptor is settled (no re-dive).
     expect(a.patch.pendingConfirmDive).toBeUndefined();
     expect(a.patch.confirmAttestation).toMatchObject({
@@ -171,10 +175,22 @@ describe("confirmDiveAdoption — the AV6 falsifier case is NOT promoted", () =>
     expect((a.patch.confirmAttestation as any).corroborationSource).toBe("audio_text");
   });
 
-  it("keeps the six AV10 attestation keys and touches no billing/quota field", () => {
+  it("keeps the AV10 attestation keys (plus the ADAAAA-8728 disclosure) and touches no billing/quota field", () => {
     const a = confirmDiveAdoption(provisionalRow(), frameVerdict(), meta);
     expect(Object.keys(a.patch.confirmAttestation as object).sort()).toEqual(
-      ["contextDegraded", "corroborated", "corroborationSource", "diveAt", "diveLatencyMs", "goalConfirmed"].sort()
+      [
+        "contextDegraded",
+        "corroborated",
+        "corroborationSource",
+        "diveAt",
+        "diveLatencyMs",
+        "goalConfirmed",
+        // ADAAAA-8728 (R3/R7): citation + authority disclosure, and the named
+        // refusal on a row that did not promote.
+        "frameRefs",
+        "authority",
+        "refusalReason",
+      ].sort()
     );
     // AV11: a promotion/refusal never bills. No quota/billing key may appear.
     for (const k of ["costUsd", "quota", "moment", "billing", "chargedDeferred", "confirmCalls"]) {

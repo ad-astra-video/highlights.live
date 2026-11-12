@@ -234,6 +234,9 @@ export interface DeletedJobCounts {
   rejected: number;
   /** Candidates whose Stage-2 (confirm) dive ran — `confirm` present. */
   confirmed: number;
+  /** ADAAAA-8728 (AC-5): accepted GOAL rows whose authority is `none` — the
+   *  contract requires 0, so the lane reports it instead of asserting it. */
+  goalsWithNoAuthority: number;
   highlights: number;
   alternatives: number;
   observations: number;
@@ -270,6 +273,11 @@ export interface AcceptanceLaneRow {
     corroborated: boolean | null;
     corroborationSource: string | null;
   } | null;
+  /** ADAAAA-8728 (R7/AC-5): the measured authority this row used, derived from
+   *  the SAME stored trigger/confirm fields the accept gate read. `none` on a
+   *  delivered GOAL is the defect the contract forbids, so the lane can count
+   *  it without a highlight join. */
+  authority: "scoreboard" | "frame" | "none";
 }
 
 /** Durable tombstone written by `DELETE /jobs/:id`: who deleted which job when,
@@ -3306,6 +3314,7 @@ function rowToJobTombstone(r: any): DeletedJobTombstone {
       suppressed: 0,
       rejected: 0,
       confirmed: 0,
+      goalsWithNoAuthority: 0,
       highlights: 0,
       alternatives: 0,
       observations: 0,

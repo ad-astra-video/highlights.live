@@ -27,8 +27,11 @@ describe("goalHasIndependentTransitionEvidence (ADAAAA-7865)", () => {
     expect(goalHasIndependentTransitionEvidence({ scoreboardDeltaLegible: true })).toBe(true);
   });
 
-  it("credits a goal-calling audio read", () => {
-    expect(goalHasIndependentTransitionEvidence({ corroborationSource: "audio_text" })).toBe(true);
+  it("does NOT credit a goal-calling audio read (ADAAAA-8728 R1/R6)", () => {
+    // Commentary is a CUE, never a transition measurement: an announcer's recap
+    // of the previous goal used to open a NEW scoring event and skip the
+    // repeat-goal downgrade. Only a measured delta may do that.
+    expect(goalHasIndependentTransitionEvidence({ corroborationSource: "audio_text" })).toBe(false);
   });
 
   it("does NOT credit the deep dive's own score-change read (ADAAAA-7938)", () => {

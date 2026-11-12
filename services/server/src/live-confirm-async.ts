@@ -142,6 +142,13 @@ export type DegradedSignal = "motion_trajectories" | "optical_flow" | "audio_cli
 export interface ConfirmDiveContext {
   frames: { role: string; base64: string }[];
   keyframes: { role: string; base64: string }[];
+  /** ADAAAA-8728 (R3): the persisted INVENTORY the `frames` above were sampled
+   * from — each entry is a frame that actually loaded and was sent, with its
+   * global seq and content instant. Static server-side metadata: it never rides
+   * the decide request (the prompt receives `frames`/`keyframes` byte-identically)
+   * and exists so a frame attestation can CITE the frames it rests on. Empty on
+   * a dropped dive. */
+  frameWindow: { seq: number; ts: number }[];
   trajectories: { label: string; trackId: string; path: number[][] }[];
   opticalFlowMagnitude: number;
   flowMagnitudes: number[];
@@ -157,7 +164,33 @@ export interface ConfirmDiveVerdict {
   corroborated?: boolean;
   corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
   reason?: string;
+  /** ADAAAA-8728 (R6): the dive's own per-evidence tri-state frame reads. The
+   *  adapter returns the decide response whole, so these are present at runtime;
+   *  declaring them lets the recap discriminator read the dive's own frame
+   *  verdict instead of re-deriving one. Absent = unknown, never a denial. */
+  evidence?: Record<string, boolean | null>;
 }
+
+/** ADAAAA-8728 (R3): a frame a goal attestation CITES — the persisted seq plus
+ *  the content instant it was taken at. */
+export interface FrameRef {
+  seq: number;
+  ts: number;
+}
+
+/** ADAAAA-8728 (R7): the measured authority a row used, or `none`. */
+export type GoalAuthority = "scoreboard" | "frame" | "none";
+
+/** ADAAAA-8728 (R4/R5/AC-1/AC-2): the machine-readable reason a dive-confirmed
+ *  goal stayed OUT of the scoring lane. Named on the row so a grader reads the
+ *  refusal instead of inferring it. */
+export type ConfirmHoldReason =
+  | "score_lane_read_no_transition"
+  | "text_only_corroboration"
+  | "unnamed_corroboration"
+  | "frame_attestation_uncited"
+  | "recap_window_open_play"
+  | "no_measured_authority";
 
 /** ADAAAA-8205: the row-level attestation stamped by a completed dive. */
 export interface ConfirmAttestation {
@@ -183,6 +216,14 @@ export interface ConfirmAttestation {
    *  unchanged"), so a reader can tell a fallback promotion from a measured one
    *  without re-reading the decide audit. */
   scoreLane?: { scoreReads: number; preSamples: number; postSamples: number; need: number };
+  /** ADAAAA-8728 (R3): the persisted frames the attestation CITES, server-side
+   *  inventory only. Empty/absent = an uncited claim (a text opinion). */
+  frameRefs?: FrameRef[];
+  /** ADAAAA-8728 (R7): the authority this attestation used (`scoreboard` /
+   *  `frame`) or `none` when it rested on commentary. */
+  authority?: GoalAuthority;
+  /** ADAAAA-8728 (R7): why a GOAL was refused, when it was. */
+  refusalReason?: ConfirmHoldReason;
 }
 
 /**
@@ -493,6 +534,9 @@ export function buildPersistedConfirmContext(input: {
   return {
     frames: sampled.map((f) => ({ role: "full", base64: f.base64 })),
     keyframes: selectConfirmDiveKeyframes(sampled, eventTs, leadS, trailS),
+    // ADAAAA-8728 (R3): the CITE-able inventory — exactly the loaded frames that
+    // were sampled into this dive, as static {seq, ts} (never the bytes).
+    frameWindow: sampled.map((f) => ({ seq: f.seq, ts: f.ts })),
     // Persisted artifacts carry no tracker state — empty, and named degraded.
     trajectories: [],
     opticalFlowMagnitude: 0,
@@ -597,6 +641,136 @@ export function describeRowMeasurement(row: RowMeasuredScoreEvidence): string {
 }
 
 /**
+ * ADAAAA-8728 (R3): the frames an attestation may CITE, filtered to the judged
+ * window ± the dive's own lead/trail. Pure: a ref outside that span is not
+ * evidence about this window, and a ref with no finite seq/ts cannot be
+ * resolved to a frame — both are dropped. `[]` means the claim cites nothing.
+ */
+export function inWindowFrameRefs(
+  frames: ReadonlyArray<FrameRef> | null | undefined,
+  window: { lo: number; hi: number } | null | undefined
+): FrameRef[] {
+  if (!frames?.length || !window) return [];
+  if (!Number.isFinite(window.lo) || !Number.isFinite(window.hi) || window.hi < window.lo) return [];
+  const EPS = 1e-9;
+  return frames
+    .filter((f) => Number.isFinite(f?.seq) && Number.isFinite(f?.ts))
+    .filter((f) => f.ts >= window.lo - EPS && f.ts <= window.hi + EPS)
+    .map((f) => ({ seq: Math.floor(f.seq), ts: f.ts }));
+}
+
+/** ADAAAA-8728 (R3): the judged window a row's frame attestation must cite
+ *  inside — the row's own clip window widened by the dive's lead/trail. */
+export function attestationWindow(
+  row: { start?: number; end?: number },
+  leadS: number,
+  trailS: number
+): { lo: number; hi: number } | null {
+  const start = Number(row?.start);
+  const end = Number(row?.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  return { lo: start - Math.max(0, leadS), hi: end + Math.max(0, trailS) };
+}
+
+/**
+ * ADAAAA-8728 (R6): do these frame reads describe OPEN / MID-FIELD play?
+ *
+ * The goal apparatus is "ball at/inside the goal mouth" and "ball crossed the
+ * line between the posts". Only a read that EXPLICITLY denies both (`false`)
+ * while asserting neither (`true` wins) says the window the frames show has no
+ * goal in it. `null`/absent is UNKNOWN — never a denial — so a recall-uncertain
+ * dive keeps its ordinary lane. Unknown is not evidence either way.
+ */
+export function framesReadOpenPlay(
+  reads:
+    | {
+        ballInNet?: boolean | null;
+        ballTrajectoryCrossedLine?: boolean | null;
+        /** The Stage-1 criteria key of the same read. */
+        ballCrossedLineBetweenPosts?: boolean | null;
+      }
+    | null
+    | undefined
+): boolean {
+  if (!reads) return false;
+  const inNet = reads.ballInNet;
+  const crossed = reads.ballTrajectoryCrossedLine ?? reads.ballCrossedLineBetweenPosts;
+  if (inNet === true || crossed === true) return false;
+  return inNet === false && crossed === false;
+}
+
+/**
+ * ADAAAA-8728 (R6): the RECAP discriminator.
+ *
+ * A window whose frames read as open/mid-field play is a HARD REFUSE for a GOAL
+ * even when a commentary goal call, a scoreboard flip inside the window, or the
+ * dive's own `confirmed_goal` says otherwise: broadcast score bugs update while
+ * the game runs, so a flip inside a mid-field window is a display artefact and
+ * an announcer's recap is not the goal. The cue is required so this predicate
+ * only fires where a GOAL claim actually exists (a window with no cue is already
+ * outside the scoring lane); the FRAME READ is the decider.
+ *
+ * Pure, no call, no GPU: it reads the evidence record the window already paid for.
+ */
+export function recapWindowRefusal(input: {
+  frameReads?:
+    | {
+        ballInNet?: boolean | null;
+        ballTrajectoryCrossedLine?: boolean | null;
+        ballCrossedLineBetweenPosts?: boolean | null;
+      }
+    | null;
+  /** A goal call in the window's ASR transcript. */
+  asrGoalCall?: boolean;
+  /** A scoreboard flip inside the window (the display artefact). */
+  scoreBoardChanged?: boolean;
+  corroborationSource?: string | null;
+  corroborated?: boolean;
+  /** The Stage-2 dive answered `confirmed_goal`. */
+  diveConfirms?: boolean;
+}): boolean {
+  if (!framesReadOpenPlay(input.frameReads)) return false;
+  return (
+    input.asrGoalCall === true ||
+    input.scoreBoardChanged === true ||
+    input.diveConfirms === true ||
+    input.corroborationSource === "audio_text" ||
+    (input.corroborated === true && input.corroborationSource === "scoreboard")
+  );
+}
+
+/**
+ * ADAAAA-8728 (R1/R2/R7): which MEASURED authority a corroboration names.
+ *
+ * - `scoreboard`: the dive's corroboration was a measured score transition;
+ * - `frame`: a goal-line / ball-in-net read, or a frame attestation that CITES
+ *   at least one in-window frame (R3);
+ * - `none`: commentary text alone, an uncited frame claim, or no corroboration.
+ *
+ * `none` can never carry a GOAL: `liveGoalHasMeasuredEvidence` refuses it and
+ * `confirmDiveAdoption` never promotes on it.
+ */
+export function corroborationAuthorityOf(input: {
+  corroborationSource?: string | null;
+  corroborated?: boolean;
+  frameRefs?: ReadonlyArray<FrameRef> | null;
+  /** When only the COUNT of cited frames is known (the accept lane's shape). */
+  frameRefCount?: number;
+  goalCrossed?: boolean;
+  ballOutcome?: string | null;
+}): GoalAuthority {
+  const src = input.corroborationSource ?? null;
+  if (src === "scoreboard" && input.corroborated === true) return "scoreboard";
+  if (src === "frame_attestation" && input.corroborated === true) {
+    const cited = input.frameRefs?.length ?? input.frameRefCount ?? 0;
+    return cited > 0 ? "frame" : "none";
+  }
+  if (input.goalCrossed === true) return "frame";
+  if (/^goal$/i.test((input.ballOutcome ?? "").trim())) return "frame";
+  return "none";
+}
+
+/**
  * ADAAAA-8239: does this verdict need the row's own measured transition before
  * it may promote? True when the corroboration is a non-score source
  * (`frame_attestation` / `audio_text`) AND the row recorded no transition.
@@ -652,12 +826,51 @@ export interface ConfirmDiveAdoption {
  * (ADAAAA-8223 B3) instead of inventing a cue/timestamp on the row.
  */
 export function confirmDiveAdoption(
-  row: { outcome?: string; eventType?: string; provisionalGoal?: Record<string, unknown> } & RowMeasuredScoreEvidence,
+  row: {
+    outcome?: string;
+    eventType?: string;
+    provisionalGoal?: Record<string, unknown>;
+    start?: number;
+    end?: number;
+  } & RowMeasuredScoreEvidence,
   verdict: ConfirmDiveVerdict | undefined,
-  meta: { diveAt: string; diveLatencyMs: number; contextDegraded: DegradedSignal[]; droppedReason?: string }
+  meta: {
+    diveAt: string;
+    diveLatencyMs: number;
+    contextDegraded: DegradedSignal[];
+    droppedReason?: string;
+    /** ADAAAA-8728 (R3): the persisted frames this dive actually loaded, already
+     *  filtered to the row's judged window ± lead/trail (`inWindowFrameRefs`).
+     *  Absent/`[]` = the attestation cites NOTHING and is a text opinion. */
+    frameRefs?: readonly FrameRef[] | null;
+  }
 ): ConfirmDiveAdoption {
   const goalConfirmed = verdict?.goalConfirmed ?? null;
   const corroborated = verdict?.corroborated === true;
+  const source = verdict?.corroborationSource ?? null;
+  // R3: a citation must resolve to a real persisted frame (finite seq + ts).
+  const frameRefs: FrameRef[] = (meta.frameRefs ?? [])
+    .filter((f) => Number.isFinite(f?.seq) && Number.isFinite(f?.ts))
+    .map((f) => ({ seq: Math.floor(f.seq), ts: f.ts }));
+  // R2/R7: when the window's own lane measured the transition, that measured
+  // scoreboard IS the authority the row used — whatever the dive said.
+  const rowHasTransition = rowMeasuredScoreTransition(row);
+  // R1/R2/R7: the authority this verdict names. An uncited frame claim and a
+  // commentary-only corroboration both name `none`.
+  const authority: GoalAuthority = rowHasTransition
+    ? "scoreboard"
+    : corroborationAuthorityOf({ corroborationSource: source, corroborated, frameRefs });
+  // R3: a frame attestation is only an attestation when it CITES a frame.
+  const frameAttested = source === "frame_attestation" && corroborated && frameRefs.length >= 1;
+  // R6: the recap discriminator, read off the dive's OWN frame evidence. A dive
+  // that answers `confirmed_goal` while its evidence denies the goal apparatus
+  // is describing a recap, not a goal.
+  const recapRefused = recapWindowRefusal({
+    frameReads: verdict?.evidence,
+    corroborated,
+    corroborationSource: source,
+    diveConfirms: goalConfirmed === "confirmed_goal",
+  });
   const attestation: ConfirmAttestation = {
     // ADAAAA-8506 (AC4): a dropped dive is a settled attempt with a stored
     // verdict field of its own — never a row left `provisional` with nothing to
@@ -669,6 +882,10 @@ export function confirmDiveAdoption(
     diveLatencyMs: Math.max(0, Math.round(meta.diveLatencyMs)),
     contextDegraded: meta.contextDegraded,
     ...(meta.droppedReason ? { dropReason: meta.droppedReason } : {}),
+    // R3/R7: disclose the citation and the authority — but only on a dive that
+    // produced a verdict, so a passthrough/dropped shape stays byte-identical.
+    ...(goalConfirmed && frameRefs.length ? { frameRefs } : {}),
+    ...(goalConfirmed ? { authority } : {}),
   };
   // A row that already left the provisional lane (e.g. a later scoreboard read
   // re-attested it first) is not rewritten by a late dive: one verdict move.
@@ -701,9 +918,14 @@ export function confirmDiveAdoption(
   const needsMeasuredTransition =
     goalConfirmed === "confirmed_goal" && frameOnlyCorroborationNeedsTransition(row, verdict);
   const laneProducedNoSamples = needsMeasuredTransition && scoreLaneProducedNoSamples(row);
-  const promotionAttestation: ConfirmAttestation = laneProducedNoSamples
+  // ADAAAA-8728 (R5): the dead-lane carve-out survives ONLY for a frame
+  // attestation that CITES at least one in-window frame. A dead lane is not a
+  // licence for text (`audio_text`) nor for an uncited frame claim.
+  const deadLaneFramePromotion = laneProducedNoSamples && frameAttested;
+  const promotionAttestation: ConfirmAttestation = deadLaneFramePromotion
     ? {
         ...attestation,
+        authority: "frame",
         promotionBasis: "frame_attestation_over_unread_score_lane",
         scoreLane: {
           scoreReads: row.attestationUsed?.scoreReads ?? 0,
@@ -713,10 +935,14 @@ export function confirmDiveAdoption(
         },
       }
     : attestation;
+  // ADAAAA-8728 (R2/R6/R7): a GOAL needs a named measured authority, the frames
+  // must not read as a recap, and the dead-lane fallback must be frame-cited.
   if (
     goalConfirmed === "confirmed_goal" &&
     corroborated &&
-    (!needsMeasuredTransition || laneProducedNoSamples)
+    !recapRefused &&
+    authority !== "none" &&
+    (!needsMeasuredTransition || deadLaneFramePromotion)
   ) {
     return {
       kind: "promoted",
@@ -726,10 +952,14 @@ export function confirmDiveAdoption(
         provisionalGoal: undefined,
         confirmAttestation: promotionAttestation,
         pendingConfirmDive: undefined,
+        // R7: the row discloses the authority its promotion used, on the same
+        // disclosure object the accept lane wrote (merged, never invented).
+        ...(row.attestationUsed ? { attestationUsed: { ...row.attestationUsed, authority } } : {}),
       },
-      reason: laneProducedNoSamples
+      reason: deadLaneFramePromotion
         ? `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"}) ` +
-          `and the score lane produced no samples at all (${describeRowMeasurement(row)}), ` +
+          `citing ${frameRefs.length} in-window frame(s) and the score lane produced no samples at all ` +
+          `(${describeRowMeasurement(row)}), ` +
           "so the window is promoted on the dive's frame attestation instead of being held forever"
         : `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"})`,
     };
@@ -750,28 +980,56 @@ export function confirmDiveAdoption(
     };
   }
   // Refuted: near_miss / not_goal, a confirmation with no corroboration, or
-  // (ADAAAA-8239) a non-score corroboration over a window that measured none.
+  // (ADAAAA-8239/8728) a corroboration that names no measured authority.
   const prev = row.provisionalGoal;
-  const note = needsMeasuredTransition
-    ? `The deep dive saw a goal in the frames/commentary only (corroboration=${attestation.corroborationSource}) ` +
-      `while this window measured no score transition (${describeRowMeasurement(row)}), so this moment stays ` +
-      "unconfirmed until a later score read measures the transition."
-    : goalConfirmed === "confirmed_goal"
-      ? "The deep dive described a goal but could not corroborate it, so this moment is still unconfirmed."
-      : "The deep dive did not confirm this goal, so this moment stays unconfirmed.";
+  // ADAAAA-8728 (R4/R5/R6): NAME the refusal from the evidence that caused it,
+  // so the stored row explains itself without a replay.
+  const holdReason: ConfirmHoldReason | undefined =
+    goalConfirmed === "confirmed_goal" && corroborated
+      ? recapRefused
+        ? "recap_window_open_play"
+        : source === "audio_text"
+          ? "text_only_corroboration"
+          : source === "frame_attestation"
+            ? frameRefs.length === 0
+              ? "frame_attestation_uncited"
+              : "score_lane_read_no_transition"
+            : "unnamed_corroboration"
+      : undefined;
+  const note = recapRefused
+    ? `The dive's own frame reads say this window is open/mid-field play (no ball in the net, no ball ` +
+      `across the line between the posts), so it is a recap of an earlier goal, not a goal — ` +
+      `(corroboration=${attestation.corroborationSource ?? "none"}).`
+    : holdReason === "text_only_corroboration"
+      ? `Commentary (ASR) is a cue, never an authority: the dive corroborated this window on audio text ` +
+        `(${describeRowMeasurement(row)}) and cited no frame showing the goal apparatus, so this moment ` +
+        "stays unconfirmed."
+      : holdReason === "frame_attestation_uncited"
+        ? `The deep dive claimed a frame attestation but cited NO frame inside the judged window ` +
+          `(${describeRowMeasurement(row)}), so the claim is a text opinion and this moment stays unconfirmed.`
+        : holdReason === "unnamed_corroboration"
+          ? `The deep dive corroborated this window without naming a measured authority ` +
+            `(${describeRowMeasurement(row)}), so this moment stays unconfirmed.`
+          : holdReason === "score_lane_read_no_transition"
+            ? `The deep dive saw a goal in the frames/commentary only (corroboration=${attestation.corroborationSource}) ` +
+              `while this window measured no score transition (${describeRowMeasurement(row)}), so this moment stays ` +
+              "unconfirmed until a later score read measures the transition."
+            : goalConfirmed === "confirmed_goal"
+              ? "The deep dive described a goal but could not corroborate it, so this moment is still unconfirmed."
+              : "The deep dive did not confirm this goal, so this moment stays unconfirmed.";
   // ADAAAA-8542 (AC4): a HELD row is not a REFUTED row. Both keep the
   // provisional marker (AC-A7: the badge is never removed), but the marker now
-  // says which one it is: `held` + `holdReason` for a confirmation waiting on a
-  // measurement, `refuted: true` only when the dive actually went against the
-  // call. The row still does not enter the scoring lane (`kind` stays
-  // `refuted` = "did not promote"), so every existing count/lane rule holds.
-  const provisional = needsMeasuredTransition
+  // says which one it is: `held` + `holdReason` for a confirmation waiting on an
+  // authority, `refuted: true` only when the dive actually went against the call.
+  // The row still does not enter the scoring lane (`kind` stays `refuted` = "did
+  // not promote"), so every existing count/lane rule holds.
+  const provisional = holdReason
     ? {
         ...prev,
         status: "provisional",
         refuted: false,
         held: true,
-        holdReason: "score_lane_read_no_transition",
+        holdReason,
         note,
       }
     : { ...prev, status: "provisional", refuted: true, note };
@@ -779,13 +1037,19 @@ export function confirmDiveAdoption(
     kind: "refuted",
     patch: {
       provisionalGoal: provisional,
-      confirmAttestation: attestation,
+      // R7: a refused row names the authority it did NOT have and why.
+      confirmAttestation: { ...attestation, authority: "none", ...(holdReason ? { refusalReason: holdReason } : {}) },
+      ...(row.attestationUsed
+        ? { attestationUsed: { ...row.attestationUsed, authority: "none", ...(holdReason ? { refusalReason: holdReason } : {}) } }
+        : {}),
       pendingConfirmDive: undefined,
     },
-    reason: needsMeasuredTransition
-      ? `deep dive did NOT promote: non-score corroboration (${attestation.corroborationSource}) over a window ` +
-        `with no measured score transition (${describeRowMeasurement(row)})`
-      : `deep dive did NOT confirm the goal (goalConfirmed=${goalConfirmed}, corroborated=${corroborated})`,
+    reason: recapRefused
+      ? `deep dive REFUSED as a recap: its frames read open/mid-field play (corroboration=${attestation.corroborationSource ?? "none"})`
+      : holdReason
+        ? `deep dive did NOT promote: ${holdReason} (corroboration=${attestation.corroborationSource ?? "none"}, ` +
+          `in-window frameRefs=${frameRefs.length}, ${describeRowMeasurement(row)})`
+        : `deep dive did NOT confirm the goal (goalConfirmed=${goalConfirmed}, corroborated=${corroborated})`,
   };
 }
 
@@ -898,6 +1162,7 @@ export function droppedDiveResult(reason: ConfirmDiveResult["droppedReason"], la
     context: {
       frames: [],
       keyframes: [],
+      frameWindow: [],
       trajectories: [],
       opticalFlowMagnitude: 0,
       flowMagnitudes: [],
@@ -973,6 +1238,7 @@ export async function runConfirmDive(
   const empty: ConfirmDiveContext = {
     frames: [],
     keyframes: [],
+    frameWindow: [],
     trajectories: [],
     opticalFlowMagnitude: 0,
     flowMagnitudes: [],

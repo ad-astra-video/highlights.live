@@ -2028,6 +2028,16 @@ export const HighlightRecordSchema = z.object({
        * can tell "no measurement" apart from "measured and refused". Additive
        * optional — absent on every row the gate did not refuse. */
       scoreRewindRefusal: z.string().optional(),
+      /** ADAAAA-8728 (R7): the MEASURED authority the row used (`scoreboard` /
+       *  `frame`) or `none`. A `GOAL` requires ≠ `none`; every demoted row names
+       *  `none`, so "a delivered GOAL with no authority" is countable from the
+       *  stored row. Additive optional — legacy rows parse as before. */
+      authority: z.enum(["scoreboard", "frame", "none"]).optional(),
+      /** ADAAAA-8728 (R7): why the GOAL was refused on a demoted row
+       *  (`text_only_corroboration`, `frame_attestation_uncited`,
+       *  `recap_window_open_play`, `score_lane_read_no_transition`, …). Absent
+       *  on rows that were not refused. Additive optional. */
+      refusalReason: z.string().optional(),
     })
     .optional(),
   /** ADAAAA-8139 (interim step, CEO ask 2026-11-06): a LIVE goal accept the
@@ -2130,6 +2140,17 @@ export const HighlightRecordSchema = z.object({
           need: z.number().int().min(0),
         })
         .optional(),
+      /** ADAAAA-8728 (R3): the persisted frames the attestation CITES (`seq` +
+       *  content `ts`), filtered to the judged window ± the dive's lead/trail.
+       *  Absent/empty = an uncited claim. Declared here or zod strips it on
+       *  persist and no stored row can prove what the dive rested on. */
+      frameRefs: z
+        .array(z.object({ seq: z.number().int().min(0), ts: z.number() }))
+        .optional(),
+      /** ADAAAA-8728 (R7): the authority the attestation used / refused. */
+      authority: z.enum(["scoreboard", "frame", "none"]).optional(),
+      /** ADAAAA-8728 (R7): why the GOAL was refused, on a refused attestation. */
+      refusalReason: z.string().optional(),
     })
     .optional(),
   deferredAttestation: z

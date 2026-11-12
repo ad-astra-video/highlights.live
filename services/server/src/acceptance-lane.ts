@@ -19,6 +19,38 @@
 import type { Job, JobCandidate } from "@highlights/events";
 import type { AcceptanceLaneRow, DeletedJobCounts, DeletedJobTombstone } from "./db";
 
+/** ADAAAA-8728 (R7): the measured authority one candidate row names. Reads only
+ *  the fields the accept gate itself stored (trigger signals + the dive verdict),
+ *  so the projection cannot disagree with the row it describes. */
+export function laneRowAuthority(c: JobCandidate): "scoreboard" | "frame" | "none" {
+  if (c.trigger?.scoreBoardChanged === true) return "scoreboard";
+  if (c.trigger?.goalCrossed === true) return "frame";
+  if (/^goal$/i.test((c.trigger?.ballOutcome ?? "").trim())) return "frame";
+  const dive = c.confirm?.decision;
+  if (dive?.corroborated === true) {
+    if (dive.corroborationSource === "scoreboard") return "scoreboard";
+    if (dive.corroborationSource === "frame_attestation") return "frame";
+  }
+  return "none";
+}
+
+/** ADAAAA-8728 (AC-5): delivered GOAL rows that name no measured authority. The
+ *  contract requires 0 over a job's acceptance lane; this is the falsifier that
+ *  counts them instead of trusting the gate. Fail-closed: an ABSENT field counts
+ *  too — a delivered GOAL that cannot name its authority is the defect, whether
+ *  it says `none` or says nothing (every row written before R7 landed). */
+export function countDeliveredGoalsWithoutAuthority(
+  rows: ReadonlyArray<{ status: string; eventType?: string | null; authority?: string | null }>
+): number {
+  return rows.filter(
+    (r) =>
+      r.status === "accepted" &&
+      /^(GOAL|GOL)$/i.test((r.eventType ?? "").trim()) &&
+      r.authority !== "scoreboard" &&
+      r.authority !== "frame"
+  ).length;
+}
+
 /**
  * Project one stored candidate onto the compact acceptance-lane row.
  *
@@ -60,6 +92,8 @@ export function acceptanceLaneRow(c: JobCandidate): AcceptanceLaneRow {
           corroborationSource: c.confirm.decision?.corroborationSource ?? null,
         }
       : null,
+    // ADAAAA-8728 (R7/AC-5): the authority the row used, from the same fields.
+    authority: laneRowAuthority(c),
   };
 }
 
@@ -67,7 +101,7 @@ export function acceptanceLaneRow(c: JobCandidate): AcceptanceLaneRow {
  * other artifacts the delete removes (highlights / alternatives /
  * observations), so the tombstone is self-describing. */
 export function acceptanceLaneCounts(
-  rows: { status: string; confirm?: unknown }[],
+  rows: { status: string; eventType?: string | null; authority?: string | null; confirm?: unknown }[],
   extra: { highlights?: number; alternatives?: number; observations?: number } = {}
 ): DeletedJobCounts {
   return {
@@ -76,6 +110,8 @@ export function acceptanceLaneCounts(
     suppressed: rows.filter((r) => r.status === "suppressed").length,
     rejected: rows.filter((r) => r.status === "rejected").length,
     confirmed: rows.filter((r) => r.confirm != null).length,
+    // ADAAAA-8728 (AC-5): the metric the contract pins at 0.
+    goalsWithNoAuthority: countDeliveredGoalsWithoutAuthority(rows),
     highlights: extra.highlights ?? 0,
     alternatives: extra.alternatives ?? 0,
     observations: extra.observations ?? 0,

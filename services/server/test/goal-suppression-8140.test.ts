@@ -120,7 +120,12 @@ describe("liveGoalHasMeasuredEvidence (AC3: no-op / backward produces no GOAL)",
     expect(
       liveGoalHasMeasuredEvidence({ scoreBoardChanged: true, scoreReads: contradicted, goalCrossed: true })
     ).toBe(true);
-    expect(liveGoalHasMeasuredEvidence({ corroborated: true, scoreReads: contradicted })).toBe(true);
+    expect(liveGoalHasMeasuredEvidence({ corroborated: true, scoreReads: contradicted })).toBe(false);
+    // ADAAAA-8728 (R1): only a NAMED measured source attests; the same claim
+    // with a scoreboard corroboration is still MEASURED evidence.
+    expect(
+      liveGoalHasMeasuredEvidence({ corroborated: true, corroborationSource: "scoreboard", scoreReads: contradicted })
+    ).toBe(true);
   });
 });
 

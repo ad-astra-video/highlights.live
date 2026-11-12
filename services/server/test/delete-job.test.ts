@@ -219,6 +219,8 @@ describe("acceptance-lane tombstone on deleteJob (ADAAAA-8286)", () => {
         suppressed: 1,
         rejected: 1,
         confirmed: 1,
+        // ADAAAA-8728 (AC-5): the lane reports delivered GOALs with no authority.
+        goalsWithNoAuthority: 0,
         highlights: 1,
         alternatives: 0,
         observations: 0,

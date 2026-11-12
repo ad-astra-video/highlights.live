@@ -41,9 +41,13 @@ import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
 import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
 import {
   ConfirmDiveDispatcher,
+  LIVE_CONFIRM_LEAD_S,
   LIVE_CONFIRM_LOOKAHEAD_S,
   LIVE_CONFIRM_QUEUE_WAIT_MS,
+  LIVE_CONFIRM_TRAIL_S,
+  attestationWindow,
   confirmDiveAdoption,
+  inWindowFrameRefs,
   runConfirmDiveCall,
   diveCapacityFromProbe,
   runDueConfirmDives,
@@ -842,6 +846,12 @@ export async function attestConfirmDiveHighlight(
     diveAt: meta.diveAt,
     diveLatencyMs: result.latencyMs,
     contextDegraded: result.context.contextDegraded,
+    // ADAAAA-8728 (R3): cite the frames this dive actually loaded, filtered to
+    // the row's judged window ± the dive's lead/trail. No refs = no attestation.
+    frameRefs: inWindowFrameRefs(
+      result.context.frameWindow,
+      attestationWindow(row, LIVE_CONFIRM_LEAD_S, LIVE_CONFIRM_TRAIL_S)
+    ),
     // ADAAAA-8506 (AC4): a dropped dive still writes a terminal verdict field.
     ...(result.droppedReason ? { droppedReason: result.droppedReason } : {}),
   });
