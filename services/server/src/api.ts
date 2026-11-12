@@ -31,6 +31,7 @@ import {
   type AnalyzeOutcome,
   type DecideCapacityLatch,
   type DeferredGoalAttestationUpgrade,
+  type LeadingCueRetraction,
   type GoalLineCalibration,
   type PipelineClient,
 } from "./analyzer";
@@ -2297,6 +2298,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
       // measures the transition just past its judged window (~0 added GPU).
       onDeferredGoalAttested: deferredGoalAttestationHook(job.id, () => shared.delivery),
+      // ADAAAA-8740 (§6.3 rule 3): withdraw the cue card when the same event's
+      // goal row ships beside it (one event, one card).
+      onLeadingCueRetracted: leadingCueRetractionHook(job.id, () => shared.delivery),
       // ADAAAA-8139: the bounded re-read of a demoted window's persisted frames
       // (score-bug OCR only; <= 8 OCR calls/leg, no decide call, no Livepeer
       // debit). Unset when the rail is off or perceive is unreachable.
@@ -2526,6 +2530,41 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
    * accept-time persist uses. `delivery` is a THUNK because the live rail builds
    * this hook while `shared` is still being constructed; it is only invoked once
    * a decide window has been applied, far after the tracker exists. */
+  /**
+   * ADAAAA-8740 (§6.3 rule 3): the live rails' cue-card retraction seam.
+   *
+   * The event group's goal row shipped and a cue-tail card of the SAME event was
+   * already delivered beside it (the graded leg shipped the roar's card 11.5 s
+   * before the transition read landed). The cue card holds no goal and the
+   * duplicate is what confuses the reel, so it is withdrawn: the row is deleted
+   * from the store (memory + DB, which is what every read serves) and its
+   * delivery reading leaves the tracker so `rowAccounting.servedCards` counts
+   * the cards a viewer actually holds. Fire-and-forget: a failed delete logs and
+   * never fails the accept, and no SSE event type is invented — the job detail
+   * already re-fetches on `observation`/`highlight` events during a share.
+   * No decide/perceive call is added (AC4: $0 static).
+   */
+  function leadingCueRetractionHook(jobId: string, delivery?: () => LiveDeliveryTracker | null | undefined) {
+    return (retraction: LeadingCueRetraction) => {
+      delivery?.()?.retractDelivered(retraction.highlightId);
+      store
+        .deleteHighlight(retraction.highlightId)
+        .then((removed) => {
+          if (!removed) return;
+          const job = store.getJob(jobId);
+          if (job) {
+            // The per-job counter is the ABSOLUTE persisted row count, so a
+            // withdrawn row must leave it too (the next insert rewrites it).
+            store
+              .patchJob(jobId, { highlightsFound: Math.max(0, store.highlightsForJob(jobId).length) })
+              .catch(() => {});
+          }
+        })
+        .catch((e: any) =>
+          console.error(`[live-clip-group:${jobId}] retraction delete failed:`, String(e?.message || e))
+        );
+    };
+  }
   function deferredGoalAttestationHook(jobId: string, delivery?: () => LiveDeliveryTracker | null | undefined) {
     return (upgrade: DeferredGoalAttestationUpgrade) => {
       attestDeferredGoalHighlight(
@@ -3000,6 +3039,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-8006: re-attest a demoted LIVE goal when a later scoreboard read
         // measures the transition just past its judged window (~0 added GPU).
         onDeferredGoalAttested: deferredGoalAttestationHook(job.id, () => shared.delivery),
+        // ADAAAA-8740 (§6.3 rule 3): withdraw the cue card when the same event's
+        // goal row ships beside it (one event, one card).
+        onLeadingCueRetracted: leadingCueRetractionHook(job.id, () => shared.delivery),
         // ADAAAA-8139: bounded persisted-frame re-read of a demoted goal window.
         liveFrameReread: buildLiveFrameReread({ cfg, jobId: job.id, store, sessionId: job.perceiveSessionId }),
       // ADAAAA-8205: the async Stage-2 confirm lane's hand-off (runs post-window,
@@ -8368,6 +8410,9 @@ export interface LiveAnalyzerConfigDeps {
   onRunningSummary?: AnalyzerConfig["onRunningSummary"];
   /** ADAAAA-8006: re-attest a demoted LIVE goal from a later scoreboard read. */
   onDeferredGoalAttested?: AnalyzerConfig["onDeferredGoalAttested"];
+  /** ADAAAA-8740 (§6.3 rule 3): withdraw a delivered cue card the event group's
+   *  goal row supersedes (one event, one card). */
+  onLeadingCueRetracted?: AnalyzerConfig["onLeadingCueRetracted"];
   /** ADAAAA-8139: bounded persisted-frame re-read of a demoted goal window. */
   liveFrameReread?: AnalyzerConfig["liveFrameReread"];
   /** ADAAAA-8205: the async confirm lane's pending-dive handoff. */
@@ -8441,6 +8486,7 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     getMatchContext,
     onRunningSummary,
     onDeferredGoalAttested,
+    onLeadingCueRetracted,
     liveFrameReread,
     onConfirmDivePending,
     onObserveWindowEvidence,
@@ -8588,6 +8634,9 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-8006: pass the deferred-attestation persist seam straight through
     // (the live rails re-attest a demoted goal on a later scoreboard read).
     onDeferredGoalAttested,
+    // ADAAAA-8740 (§6.3 rule 3): the cue-card retraction seam (one card per
+    // event). Passed straight through; unset keeps the pre-8740 posture.
+    onLeadingCueRetracted,
     // ADAAAA-8139: the bounded persisted-frame re-read of a demoted goal window.
     liveFrameReread,
     // Increment F / ADAAAA-6465: capped frame-sequence assembly (primary

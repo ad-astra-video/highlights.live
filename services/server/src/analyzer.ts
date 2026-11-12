@@ -33,7 +33,14 @@ import type { TrainArtifact } from "./db";
 import type { PerceiveCalibration } from "./perceive-calibration";
 import { clipWindow } from "./config";
 import type { ClipCut } from "./clip-anchor";
-import { placeLiveClipWindow, type ClipCutWindow } from "./clip-placement";
+import {
+  placeLiveClipWindow,
+  placeLiveEventGroupClipWindows,
+  GOAL_INSTANT_ANCHORS,
+  type ClipCutWindow,
+  type ClipEventGroupRow,
+  type ClipWindowPlacementReason,
+} from "./clip-placement";
 import {
   ObserveDecider,
   LiveObserver,
@@ -1150,6 +1157,57 @@ export interface DeferredGoalAttestationUpgrade extends DeferredGoalAttestation 
    * NOT measure the score change (`postSamples: 0`, `scoreBoardChanged: false`)
    * and therefore attests nothing about the goal the row now claims. */
   attestationUsed?: LiveGoalAttestationUsed;
+}
+
+/** ADAAAA-8740 (§6.3): how far either side of a new accept's nominal window a
+ *  delivered row may sit and still belong to the same event group. One card
+ *  length plus a cadence tick: the group's rows are the windows that judged the
+ *  same footage, never a moment two cards away. */
+export const CELEBRATION_GROUP_REACH_S = 20;
+
+/** ADAAAA-8740 (§6.3): read a DELIVERED row as an event-group row. The group
+ *  decision needs the row's card (what a viewer already holds) plus the anchor it
+ *  was placed on; nothing else is re-derived, so no persisted field is added and
+ *  a pre-8740 row is readable. */
+export function clipEventGroupRowFromHighlight(h: {
+  id?: string;
+  start: number;
+  end: number;
+  localizedTs?: number;
+  localizeAnchorReason?: string | null;
+  clipPlacementReason?: string | null;
+}): ClipEventGroupRow {
+  const cue = Number.isFinite(h.localizedTs as number) ? (h.localizedTs as number) : h.start;
+  return {
+    ...(h.id ? { id: h.id } : {}),
+    localizedTs: cue,
+    anchorReason: h.localizeAnchorReason ?? null,
+    // A delivered row keeps the placement it shipped with, so an event-group
+    // card for it reports the reason a viewer's card was actually placed on.
+    ...(h.clipPlacementReason ? { placementReason: h.clipPlacementReason as ClipWindowPlacementReason } : {}),
+    card: { start: h.start, end: h.end },
+  };
+}
+
+/** ADAAAA-8740 (§6.3 rule 3): a DELIVERED cue-tail row the event group's goal row
+ * superseded. The cue card competed with the goal card (`[start, end)` overlap)
+ * and is retracted rather than served beside it: one event, one card. The rail
+ * deletes the row (store + DB) and drops its delivery sample, so
+ * `rowAccounting` reads the cards a viewer actually holds. */
+export interface LeadingCueRetraction {
+  /** The delivered cue-tail highlight this group's goal row supersedes. */
+  highlightId: string;
+  jobId: string;
+  /** The cue row's own anchor instant (`localizedTs`). */
+  cueTs: number;
+  /** The cue row's card, as delivered. */
+  cueCard: { start: number; end: number };
+  /** The group's measured goal instant (the new goal row's anchor). */
+  goalTs: number;
+  /** The goal row's card. */
+  goalCard: { start: number; end: number };
+  /** Why the card is dropped; the placement reason it shipped with is on the row. */
+  reason: "cue_row_covered_by_goal";
 }
 
 /**
@@ -3831,6 +3889,14 @@ export interface AnalyzerConfig {
    * caught + logged, never a pipeline failure). Unset => the re-emit is audited
    * and dropped (no persistence), which is the VOD/misconfigured-rail posture. */
   onDeferredGoalAttested?: (upgrade: DeferredGoalAttestationUpgrade) => void;
+  /** ADAAAA-8740 (§6.3 rule 3): the event group's goal row shipped and a cue-tail
+   * row of the SAME event was already delivered beside it. The caller retracts
+   * that card (store delete + delivery sample) so one event serves one card —
+   * the cue card holds no goal, and the duplicate is what costs a debit.
+   * Best-effort (a throwing hook is caught + logged, never a pipeline failure).
+   * Unset => the retraction is logged and counted but the row stays (the
+   * VOD/misconfigured-rail posture). */
+  onLeadingCueRetracted?: (retraction: LeadingCueRetraction) => void;
   /** ADAAAA-8139: re-read the ALREADY-PERSISTED frames of a demoted LIVE goal
    * window, once, after the deferred lookahead closes. OCR-only (one score-bug
    * crop pass per frame): no decide call, no perceive pipeline pass, no Livepeer
@@ -4030,6 +4096,13 @@ export interface LiveRowAccountingSnapshot {
    *  and the ADAAAA-7865 repeat-goal downgrade): they ship, and the legacy
    *  `accepted` predicate refuses them, which is half of the observed gap. */
   demotedCelebrations: number;
+  /** ADAAAA-8740 (§6.3 rule 3): a DELIVERED cue-tail card this run retracted
+   *  because the same event's goal row shipped beside it. The row-accounting
+   *  identity therefore reads
+   *  `persistedRows === servedCards === acceptedWindows + demotedCelebrations − retractedCards`
+   *  — a withdrawn card stays visible as a retraction instead of silently
+   *  deleting the demotion that produced it. */
+  retractedCards?: number;
   /** ADAAAA-8588 (AC4): score transitions this run REFUSED because their POST
    *  state sat behind the state the run had already committed (a replay/montage
    *  re-read of a boundary it already credited). Additive optional: absent on a
@@ -5183,6 +5256,17 @@ export class LiveRunShared {
   private acceptedWindowCount = 0;
   private celebrationRowCount = 0;
   private suppressedWindowCount = 0;
+  /** ADAAAA-8740 (§6.3 rule 3): delivered cue-tail cards retracted because the
+   *  same event's goal row shipped. Counted as its own metric so the retraction
+   *  is auditable on the record while `demotedCelebrations` (and therefore the
+   *  row-accounting identity) stays true. */
+  private retractedCueRowCount = 0;
+  /** ADAAAA-8740 (§6.3 rule 1/2): the goal instants this run has MEASURED, oldest
+   *  first and bounded. A cue row whose own row names no instant can still place
+   *  the group's goal when the goal's row did not ship (a burst-deduped or
+   *  repeat-goal-downgraded row), so the containment test runs over this ledger
+   *  instead of the row alone. Fed only from values the run already paid for. */
+  private measuredGoalInstants: number[] = [];
   /** ADAAAA-7988: the live rail's bounded ledger of decided windows (their own
    * content instant + description class), used to cite the attack/shot window
    * that a celebration window follows. Fed on the DECIDE path; read on the
@@ -5814,6 +5898,36 @@ export class LiveRunShared {
   noteSuppressedWindow(): void {
     this.suppressedWindowCount++;
   }
+  /** ADAAAA-8740 (§6.3 rule 3): a DELIVERED cue-tail card was retracted because
+   *  the same event's goal row shipped. The demotion that produced the row DID
+   *  happen, so it stays counted (`demotedCelebrations`); the retraction is its
+   *  own number, which is why the row-accounting identity subtracts it. */
+  noteRetractedCueRow(): void {
+    this.retractedCueRowCount++;
+  }
+  /** ADAAAA-8740: retracted cue-tail cards this run (read-only, audit/tests). */
+  retractedCueRows(): number {
+    return this.retractedCueRowCount;
+  }
+  /** ADAAAA-8740 (§6.3 rule 1/2): remember a MEASURED goal instant (a credited
+   *  transition / an attested frame) so a cue row of the same event group can
+   *  place against it when the goal's own row did not ship. Bounded FIFO; fed
+   *  only from evidence the window already paid for (0 added calls). */
+  noteMeasuredGoalInstant(ts: number): void {
+    if (!Number.isFinite(ts)) return;
+    this.measuredGoalInstants.push(ts);
+    if (this.measuredGoalInstants.length > 16) this.measuredGoalInstants.shift();
+  }
+  /** ADAAAA-8740: the NEWEST measured goal instant inside `[lo, hi]`, or null.
+   *  The span is the cue row's own judged window, so an instant outside it is a
+   *  different event and never reaches the group decision. */
+  measuredGoalInstantIn(lo: number, hi: number): number | null {
+    for (let i = this.measuredGoalInstants.length - 1; i >= 0; i--) {
+      const ts = this.measuredGoalInstants[i];
+      if (ts >= lo && ts <= hi) return ts;
+    }
+    return null;
+  }
   /** ADAAAA-8564 (Fix A): the row-accounting block for `observeMetrics`.
    * `servedCards` is supplied by the caller (the observer owns the delivery
    * tracker), so a run with no delivery tracker reports what it persisted. */
@@ -5824,6 +5938,9 @@ export class LiveRunShared {
       servedCards,
       suppressedWindows: this.suppressedWindowCount,
       demotedCelebrations: this.celebrationRowCount,
+      // ADAAAA-8740 (§6.3 rule 3): only written when a cue card was actually
+      // retracted, so a run that shipped every row keeps the pre-8740 payload.
+      ...(this.retractedCueRowCount > 0 ? { retractedCards: this.retractedCueRowCount } : {}),
       // ADAAAA-8588 (AC4): only written when a transition was actually refused,
       // so a run that admitted every read keeps the pre-8588 payload shape.
       ...(this.scoreFrontierRefusalCount > 0 ? { scoreFrontierRefusals: this.scoreFrontierRefusalCount } : {}),
@@ -7972,6 +8089,74 @@ export async function acceptVideoDecision(
       return;
     }
   }
+  // ADAAAA-8740 (§6.3): ONE decision over the EVENT GROUP. The row-local
+  // placement below cannot see that a SIBLING row of the same event carries the
+  // goal instant — on the graded leg `1b0a3221-e805-452e-a3f5-fdeb6693766e` the
+  // reaction cue @96.500 and the measured transition @102.743 were one goal, and
+  // the cue card ended 4.243 s before it while the goal row shipped a second
+  // overlapping card. §6.3 precedence:
+  //   1. goal containment beats celebration-at-end (tail window holds the goal);
+  //   2. a goal instant that does not fit => `goal_anchor_over_leading_cue`;
+  //   3. one card per event group — a cue row whose card competes with the
+  //      group's goal row is suppressed before it is cut or persisted.
+  // Pure arithmetic over rows the run already holds: 0 added decide/perceive
+  // calls, 0 GPU. The VOD rail never enters here (it has no judged window and
+  // `placeLiveClipWindow(live: false)` stays byte-identical).
+  let group: ReturnType<typeof placeLiveEventGroupClipWindows> | undefined;
+  if (liveWindow) {
+    const reach = Math.max(win.end - win.start, CELEBRATION_GROUP_REACH_S);
+    const incomingGroupRow: ClipEventGroupRow = {
+      localizedTs: loc.ts,
+      anchorReason: loc.anchorReason,
+      window: win,
+    };
+    const namedIncomingGoal = GOAL_INSTANT_ANCHORS.has(String(loc.anchorReason ?? "")) ? loc.ts : null;
+    // A cue row names no instant of its own; the group's instant can still be
+    // known from a MEASURED read this run already paid for (a transition whose
+    // own row was deduped/downgraded). Only inside the judged window: outside it
+    // is a different event.
+    const groupGoalTs =
+      namedIncomingGoal ?? run.measuredGoalInstantIn(liveWindow.lo, liveWindow.hi);
+    const groupPrior = run.highlights
+      .filter((h) => h.status !== "rejected")
+      .filter((h) => h.jobId === cfg.jobId)
+      .filter((h) => h.end >= win.start - reach && h.start <= win.end + reach)
+      .map(clipEventGroupRowFromHighlight);
+    group = placeLiveEventGroupClipWindows({
+      rows: [...groupPrior, incomingGroupRow],
+      goalTs: groupGoalTs,
+      live: true,
+    });
+    const incomingIndex = group.rows.length - 1;
+    if (group.rows[incomingIndex].suppressed) {
+      const goalRow = group.goalRowIndex != null ? group.rows[group.goalRowIndex].row : undefined;
+      const why =
+        `cue row covered by the event group's goal row${goalRow?.id ? ` ${goalRow.id}` : ""} ` +
+        `@${(group.goalTs ?? loc.ts).toFixed(3)}s — §6.3 rule 3: one card per event` +
+        ` (the cue card ends before the goal; the goal row IS the card)`;
+      console.error(`[live-clip-group:${cfg.jobId}] suppressed accept @${loc.ts.toFixed(3)}s — ${why}`);
+      run.noteSuppressedWindow();
+      buildCandidateNote(cfg, candidate, decision, "suppressed", candidateId, trigger, stageAnalysis, confirm?.analysis, {
+        reason: `cue_row_covered_by_goal;${why}`,
+        evidence: {
+          kind: "cue_row_covered_by_goal",
+          ...(goalRow?.id ? { dedupeAgainstHighlightId: goalRow.id } : {}),
+          dedupeAgainstTs: group.goalTs ?? loc.ts,
+          candidateTs: candidate.timestamp,
+          detail: why,
+        },
+      });
+      onEvent?.({
+        seq: emit.seq,
+        timestamp: emit.timestamp,
+        type: "candidateBlocked",
+        candidate: { eventType: highlightEventType(decision, candidate.eventType), timestamp: candidate.timestamp },
+        reason: why,
+      });
+      if (sink) sink.final = decision;
+      return;
+    }
+  }
   // ADAAAA-8714 (AC2/AC3): ONE placement decision for the delivered window,
   // taken from the accept's own anchor. A reaction/celebration cue with NO goal
   // instant ENDS the card (`[cue - (window - tail), cue + tail]`, length
@@ -7980,18 +8165,69 @@ export async function acceptVideoDecision(
   // `win` above stays the NOMINAL window on purpose: every ledger decision
   // (repeat-goal, celebration duplicate, deferred attestation) reads it, so the
   // placement change moves no trigger, span, cadence or dedupe reach.
-  const placed = placeLiveClipWindow({
-    localizedTs: loc.ts,
-    anchorReason: loc.anchorReason,
-    window: win,
-    live: liveWindow !== undefined,
-  });
+  const groupVerdict = group ? group.rows[group.rows.length - 1] : undefined;
+  const placed =
+    groupVerdict?.placed ??
+    placeLiveClipWindow({
+      localizedTs: loc.ts,
+      anchorReason: loc.anchorReason,
+      window: win,
+      live: liveWindow !== undefined,
+    });
   if (placed.reason === "celebration_tail") {
     console.log(
       `[live-clip-place:${cfg.jobId}] celebration_tail @${loc.ts.toFixed(3)}s (${loc.anchorReason}): ` +
         `cut [${placed.start.toFixed(3)}, ${placed.end.toFixed(3)}] — cue at ` +
         `${placed.cueOffsetSec.toFixed(3)}s of ${(placed.end - placed.start).toFixed(3)}s`
     );
+  }
+  if (placed.reason === "goal_anchor_over_leading_cue") {
+    console.log(
+      `[live-clip-place:${cfg.jobId}] goal_anchor_over_leading_cue @${loc.ts.toFixed(3)}s: ` +
+        `goal ${(group?.goalTs ?? 0).toFixed(3)}s inside cut ` +
+        `[${placed.start.toFixed(3)}, ${placed.end.toFixed(3)}], celebration at ` +
+        `${placed.cueOffsetSec.toFixed(3)}s of ${(placed.end - placed.start).toFixed(3)}s`
+    );
+  }
+  // §6.3 rule 3, the DELIVERED half: this row is the group's goal row and a cue
+  // card of the same event already shipped beside it (the graded leg shipped the
+  // roar's card 11.5 s before the transition read landed). Retract it: one event,
+  // one card, and the cue card held no goal. The demote that produced it stays
+  // counted; `retractedCards` discloses the withdrawal.
+  if (group && group.goalRowIndex === group.rows.length - 1 && group.suppressed.length) {
+    for (const s of group.suppressed) {
+      const cueRow = group.rows[s.rowIndex].row;
+      const idx = cueRow.id ? run.highlights.findIndex((h) => h.id === cueRow.id) : -1;
+      if (idx >= 0) run.highlights.splice(idx, 1);
+      run.noteRetractedCueRow();
+      const cueCard = cueRow.card ?? { start: 0, end: 0 };
+      console.error(
+        `[live-clip-group:${cfg.jobId}] retracted cue card${cueRow.id ? ` ${cueRow.id}` : ""} ` +
+          `@${s.localizedTs.toFixed(3)}s: card [${cueCard.start.toFixed(3)}, ${cueCard.end.toFixed(3)}] ` +
+          `competed with the goal row's [${placed.start.toFixed(3)}, ${placed.end.toFixed(3)}] for ` +
+          `goal @${s.goalTs.toFixed(3)}s (§6.3 rule 3, one card per event)`
+      );
+      try {
+        cfg.onLeadingCueRetracted?.({
+          highlightId: cueRow.id ?? "",
+          jobId: cfg.jobId,
+          cueTs: s.localizedTs,
+          cueCard,
+          goalTs: s.goalTs,
+          goalCard: { start: placed.start, end: placed.end },
+          reason: "cue_row_covered_by_goal",
+        });
+      } catch (e: any) {
+        console.error(`[live-clip-group:${cfg.jobId}] retraction hook failed:`, String(e?.message || e));
+      }
+    }
+  }
+  // ADAAAA-8740 (§6.3 rule 1/2): remember the MEASURED goal instants this run has
+  // already paid for. A cue row of the same event group can then place against
+  // the goal even when the goal's own row did not ship (burst-deduped or
+  // downgraded); no call is added — `loc.ts` is this accept's own anchor.
+  if (liveWindow && GOAL_INSTANT_ANCHORS.has(String(loc.anchorReason ?? ""))) {
+    run.noteMeasuredGoalInstant(loc.ts);
   }
   // ADAAAA-8168: a failed cut must never lose the accepted moment. The ingest
   // rail's cut can now refuse to publish (its window was not flushed in time,

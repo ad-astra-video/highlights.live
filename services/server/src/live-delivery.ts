@@ -313,6 +313,8 @@ export function deliveredLatencySummary(rows: LiveDeliveredLatencyRow[]): LiveDe
 export class LiveDeliveryTracker {
   private readonly pending: PendingDelivery[] = [];
   private readonly delivered: LiveDeliveredLatencyRow[] = [];
+  /** ADAAAA-8740: readings withdrawn after delivery (a retracted cue card). */
+  private retracted = 0;
   /** Wall epoch ms of content t=0, frozen off the first fired window. */
   private contentOriginMs: number | null = null;
 
@@ -450,6 +452,33 @@ export class LiveDeliveryTracker {
     // be built yet — `noteAcceptDone` finishes it. A window handed over already
     // accepted (legacy shape) is finalised here, as before.
     if (win.acceptDoneMs != null) this.finalize(idx);
+  }
+
+  /**
+   * ADAAAA-8740 (§6.3 rule 3): RETRACT a row that was delivered and then withdrawn
+   * because the same event's goal row shipped beside it. `samples` is the served
+   * card count, so the retracted reading must leave the ledger — otherwise
+   * `rowAccounting.servedCards` keeps claiming a card a viewer no longer holds.
+   * Idempotent: retracting an id that was never delivered (or already retracted)
+   * is a no-op, so a repeated accept can never decrement twice.
+   */
+  retractDelivered(highlightId: string): boolean {
+    if (!highlightId) return false;
+    const idx = this.delivered.findIndex((r) => r.highlightId === highlightId);
+    if (idx < 0) return false;
+    this.delivered.splice(idx, 1);
+    this.retracted++;
+    // eslint-disable-next-line no-console
+    console.log(
+      `[live-deliver${this.label ? `:${this.label}` : ""}] retracted row ${highlightId} ` +
+        `(cue card withdrawn by its event group's goal row)`
+    );
+    return true;
+  }
+
+  /** ADAAAA-8740: rows retracted after delivery (audit read). */
+  retractedRows(): number {
+    return this.retracted;
   }
 
   /** Materialise one claimed window into a delivered row (splice + emit). */
