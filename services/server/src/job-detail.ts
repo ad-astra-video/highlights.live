@@ -305,6 +305,9 @@ export function stripWindowInspection(sections: Section[]): Section[] {
           label: out.confirmation.label,
           measurement: out.confirmation.measurement,
           ...(out.confirmation.detail ? { detail: out.confirmation.detail } : {}),
+          // ADAAAA-8721 (D3): the skip reason is row-level too (it names why no
+          // dive ran), so it survives the inspection strip exactly like the lane.
+          ...(out.confirmation.skipReason ? { skipReason: out.confirmation.skipReason } : {}),
         };
       }
       return out;

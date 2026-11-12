@@ -6331,8 +6331,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // and a row whose lane cannot be derived carries no `confirmation` at all
     // (the card then reads UNCONFIRMED rather than inventing a lane).
     const candidatesById = new Map(store.candidatesForJob(job.id).map((c) => [c.id, c]));
+    // ADAAAA-8721 (D3): the gate the ACCEPT path actually read for this rail —
+    // the live rails can skip the dive without touching VOD (`LIVE_DECIDE_CONFIRM`),
+    // VOD reads the master gate alone (same expression as the run builder below).
+    const confirmGateFor = (source: string) =>
+      source !== "file" ? cfg.decideConfirmEnabled && cfg.liveDecideConfirm : cfg.decideConfirmEnabled;
     const confirmationFor = (h: HighlightRecord) =>
-      confirmationForHighlightRow(h, h.candidateId ? candidatesById.get(h.candidateId) : undefined);
+      confirmationForHighlightRow(h, h.candidateId ? candidatesById.get(h.candidateId) : undefined, {
+        confirmEnabled: confirmGateFor(job.source),
+      });
     const attachedReplays = partitionAttachedReplays(jobHighlights);
     for (const [ownerId, replays] of attachedReplays.byOwner) {
       const owner = jobHighlights.find((h) => h.id === ownerId);
@@ -6619,8 +6626,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // composite read, so an appended ladder cannot re-introduce a banner that
       // disagrees with the cards.
       const deltaCandidatesById = new Map(candidates.map((c) => [c.id, c]));
+      // ADAAAA-8721 (D3): the delta refresh names the same skip reason the
+      // composite read does, from the same rail gate.
       const deltaConfirmationFor = (h: HighlightRecord) =>
-        confirmationForHighlightRow(h, h.candidateId ? deltaCandidatesById.get(h.candidateId) : undefined);
+        confirmationForHighlightRow(h, h.candidateId ? deltaCandidatesById.get(h.candidateId) : undefined, {
+          confirmEnabled:
+            job.source !== "file" ? cfg.decideConfirmEnabled && cfg.liveDecideConfirm : cfg.decideConfirmEnabled,
+        });
       const summaryLadder = buildSummaryLadder({
         summaryLog: job.summaryLog,
         highlights: postable.highlights,
