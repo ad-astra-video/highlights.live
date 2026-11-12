@@ -953,8 +953,12 @@ export function confirmDiveAdoption(
         confirmAttestation: promotionAttestation,
         pendingConfirmDive: undefined,
         // R7: the row discloses the authority its promotion used, on the same
-        // disclosure object the accept lane wrote (merged, never invented).
-        ...(row.attestationUsed ? { attestationUsed: { ...row.attestationUsed, authority } } : {}),
+        // disclosure object the accept lane wrote (merged, never invented). A
+        // promotion CLEARS any refusal the accept lane named on the demoted row,
+        // or the stored row would claim `authority: frame` and a refusal at once.
+        ...(row.attestationUsed
+          ? { attestationUsed: { ...row.attestationUsed, authority, refusalReason: undefined } }
+          : {}),
       },
       reason: deadLaneFramePromotion
         ? `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"}) ` +
