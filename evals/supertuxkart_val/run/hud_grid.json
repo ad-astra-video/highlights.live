@@ -66,163 +66,435 @@
   {
    "a1": false,
    "a2": false,
-   "a3": true,
-   "a4": true,
-   "candidates": 7,
-   "candidatesInDecodedWindow": 7,
-   "candidatesInWindow": 5,
-   "candidatesPerMinute": 0.311,
-   "candidatesPerMinuteLabelCoverage": 0.222,
+   "a3": false,
+   "a4": false,
+   "a5": true,
+   "candidates": 85,
+   "candidatesInDecodedWindow": 85,
+   "candidatesInWindow": 82,
+   "candidatesPerMinute": 3.775,
+   "candidatesPerMinuteLabelCoverage": 3.642,
    "cell": "s0.08_d2",
    "changeSensitivity": 0.08,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.000808,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d2.json",
-   "flickersSuppressed": 0,
-   "fp": 5,
-   "fpRate": 1.0,
-   "frameCostP95Ms": 0.24,
+   "flickersSuppressed": 20,
+   "forcedRearms": 80,
+   "fp": 75,
+   "fpRate": 0.9146,
+   "frameCostP95Ms": 0.387,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 2,
+     "max": 0.00061,
+     "n": 1351,
+     "p50": 0.000356,
+     "p95": 0.000387
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 2,
+     "max": 0.001098,
+     "n": 85,
+     "p50": 0.000741,
+     "p95": 0.000808
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 2,
+     "max": 1.000535,
+     "n": 85,
+     "p50": 1.000381,
+     "p95": 1.000423
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 2,
    "nonEventWindows": 13,
-   "outsideWindow": 2,
-   "recall": 0.0,
-   "recalled": 0,
-   "silentWindows": 13
+   "outsideWindow": 3,
+   "recall": 0.3333,
+   "recalled": 5,
+   "runWallS": 0.486,
+   "silentWindows": 1
   },
   {
    "a1": false,
    "a2": false,
-   "a3": true,
-   "a4": true,
-   "candidates": 7,
-   "candidatesInDecodedWindow": 7,
-   "candidatesInWindow": 5,
-   "candidatesPerMinute": 0.311,
-   "candidatesPerMinuteLabelCoverage": 0.222,
+   "a3": false,
+   "a4": false,
+   "a5": true,
+   "candidates": 87,
+   "candidatesInDecodedWindow": 87,
+   "candidatesInWindow": 83,
+   "candidatesPerMinute": 3.864,
+   "candidatesPerMinuteLabelCoverage": 3.686,
    "cell": "s0.08_d3",
    "changeSensitivity": 0.08,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001119,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d3.json",
-   "flickersSuppressed": 0,
-   "fp": 5,
-   "fpRate": 1.0,
-   "frameCostP95Ms": 0.236,
+   "flickersSuppressed": 39,
+   "forcedRearms": 75,
+   "fp": 78,
+   "fpRate": 0.9398,
+   "frameCostP95Ms": 0.374,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 3,
+     "max": 0.000428,
+     "n": 1351,
+     "p50": 0.000322,
+     "p95": 0.000375
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 3,
+     "max": 0.001155,
+     "n": 87,
+     "p50": 0.000985,
+     "p95": 0.001119
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 3,
+     "max": 2.000412,
+     "n": 87,
+     "p50": 2.000334,
+     "p95": 2.000395
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 3,
    "nonEventWindows": 13,
-   "outsideWindow": 2,
-   "recall": 0.0,
-   "recalled": 0,
-   "silentWindows": 13
+   "outsideWindow": 4,
+   "recall": 0.4,
+   "recalled": 6,
+   "runWallS": 0.445,
+   "silentWindows": 0
   },
   {
    "a1": false,
    "a2": false,
-   "a3": true,
-   "a4": true,
-   "candidates": 7,
-   "candidatesInDecodedWindow": 7,
-   "candidatesInWindow": 5,
-   "candidatesPerMinute": 0.311,
-   "candidatesPerMinuteLabelCoverage": 0.222,
+   "a3": false,
+   "a4": false,
+   "a5": true,
+   "candidates": 74,
+   "candidatesInDecodedWindow": 74,
+   "candidatesInWindow": 71,
+   "candidatesPerMinute": 3.286,
+   "candidatesPerMinuteLabelCoverage": 3.153,
    "cell": "s0.08_d4",
    "changeSensitivity": 0.08,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001384,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.08_d4.json",
-   "flickersSuppressed": 0,
-   "fp": 5,
-   "fpRate": 1.0,
-   "frameCostP95Ms": 0.219,
+   "flickersSuppressed": 47,
+   "forcedRearms": 76,
+   "fp": 66,
+   "fpRate": 0.9296,
+   "frameCostP95Ms": 0.348,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 4,
+     "max": 0.000699,
+     "n": 1351,
+     "p50": 0.000313,
+     "p95": 0.000349
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 4,
+     "max": 0.001613,
+     "n": 74,
+     "p50": 0.001286,
+     "p95": 0.001384
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 4,
+     "max": 3.000374,
+     "n": 74,
+     "p50": 3.000332,
+     "p95": 3.000367
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 4,
    "nonEventWindows": 13,
-   "outsideWindow": 2,
-   "recall": 0.0,
-   "recalled": 0,
-   "silentWindows": 13
+   "outsideWindow": 3,
+   "recall": 0.3333,
+   "recalled": 5,
+   "runWallS": 0.432,
+   "silentWindows": 0
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": true,
-   "candidates": 25,
-   "candidatesInDecodedWindow": 25,
-   "candidatesInWindow": 23,
-   "candidatesPerMinute": 1.11,
-   "candidatesPerMinuteLabelCoverage": 1.021,
+   "a4": false,
+   "a5": true,
+   "candidates": 100,
+   "candidatesInDecodedWindow": 100,
+   "candidatesInWindow": 96,
+   "candidatesPerMinute": 4.441,
+   "candidatesPerMinuteLabelCoverage": 4.264,
    "cell": "s0.12_d2",
    "changeSensitivity": 0.12,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.000709,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d2.json",
-   "flickersSuppressed": 11,
-   "fp": 22,
-   "fpRate": 0.9565,
-   "frameCostP95Ms": 0.218,
+   "flickersSuppressed": 43,
+   "forcedRearms": 47,
+   "fp": 87,
+   "fpRate": 0.9062,
+   "frameCostP95Ms": 0.348,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 2,
+     "max": 0.000396,
+     "n": 1351,
+     "p50": 0.000319,
+     "p95": 0.000348
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 2,
+     "max": 0.000741,
+     "n": 100,
+     "p50": 0.000654,
+     "p95": 0.000709
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 2,
+     "max": 1.000384,
+     "n": 100,
+     "p50": 1.000334,
+     "p95": 1.000368
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 2,
    "nonEventWindows": 13,
-   "outsideWindow": 2,
-   "recall": 0.0667,
-   "recalled": 1,
-   "silentWindows": 9
+   "outsideWindow": 4,
+   "recall": 0.4667,
+   "recalled": 7,
+   "runWallS": 0.433,
+   "silentWindows": 1
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": true,
-   "candidates": 27,
-   "candidatesInDecodedWindow": 27,
-   "candidatesInWindow": 25,
-   "candidatesPerMinute": 1.199,
-   "candidatesPerMinuteLabelCoverage": 1.11,
+   "a4": false,
+   "a5": true,
+   "candidates": 73,
+   "candidatesInDecodedWindow": 73,
+   "candidatesInWindow": 68,
+   "candidatesPerMinute": 3.242,
+   "candidatesPerMinuteLabelCoverage": 3.02,
    "cell": "s0.12_d3",
    "changeSensitivity": 0.12,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001061,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d3.json",
-   "flickersSuppressed": 28,
-   "fp": 24,
-   "fpRate": 0.96,
-   "frameCostP95Ms": 0.22,
+   "flickersSuppressed": 88,
+   "forcedRearms": 47,
+   "fp": 61,
+   "fpRate": 0.8971,
+   "frameCostP95Ms": 0.346,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 3,
+     "max": 0.000427,
+     "n": 1351,
+     "p50": 0.000312,
+     "p95": 0.000346
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 3,
+     "max": 0.00111,
+     "n": 73,
+     "p50": 0.000976,
+     "p95": 0.001061
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 3,
+     "max": 2.000427,
+     "n": 73,
+     "p50": 2.000335,
+     "p95": 2.000371
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 3,
    "nonEventWindows": 13,
-   "outsideWindow": 2,
-   "recall": 0.0667,
-   "recalled": 1,
-   "silentWindows": 7
+   "outsideWindow": 5,
+   "recall": 0.4,
+   "recalled": 6,
+   "runWallS": 0.43,
+   "silentWindows": 3
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
-   "a4": true,
-   "candidates": 24,
-   "candidatesInDecodedWindow": 24,
-   "candidatesInWindow": 22,
-   "candidatesPerMinute": 1.066,
-   "candidatesPerMinuteLabelCoverage": 0.977,
+   "a4": false,
+   "a5": true,
+   "candidates": 68,
+   "candidatesInDecodedWindow": 68,
+   "candidatesInWindow": 63,
+   "candidatesPerMinute": 3.02,
+   "candidatesPerMinuteLabelCoverage": 2.798,
    "cell": "s0.12_d4",
    "changeSensitivity": 0.12,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001475,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.12_d4.json",
-   "flickersSuppressed": 33,
-   "fp": 20,
-   "fpRate": 0.9091,
-   "frameCostP95Ms": 0.228,
+   "flickersSuppressed": 115,
+   "forcedRearms": 44,
+   "fp": 60,
+   "fpRate": 0.9524,
+   "frameCostP95Ms": 0.362,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 4,
+     "max": 0.002919,
+     "n": 1351,
+     "p50": 0.000326,
+     "p95": 0.000362
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 4,
+     "max": 0.001535,
+     "n": 68,
+     "p50": 0.001342,
+     "p95": 0.001475
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 4,
+     "max": 3.000399,
+     "n": 68,
+     "p50": 3.000349,
+     "p95": 3.00039
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 4,
    "nonEventWindows": 13,
-   "outsideWindow": 2,
+   "outsideWindow": 5,
    "recall": 0.1333,
    "recalled": 2,
+   "runWallS": 0.445,
+   "silentWindows": 2
+  },
+  {
+   "a1": false,
+   "a2": false,
+   "a3": false,
+   "a4": false,
+   "a5": true,
+   "candidates": 56,
+   "candidatesInDecodedWindow": 56,
+   "candidatesInWindow": 52,
+   "candidatesPerMinute": 2.487,
+   "candidatesPerMinuteLabelCoverage": 2.309,
+   "cell": "s0.18_d2",
+   "changeSensitivity": 0.18,
+   "clears": false,
+   "eventToCandidateCpuP95S": 0.000742,
+   "events": 15,
+   "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d2.json",
+   "flickersSuppressed": 48,
+   "forcedRearms": 24,
+   "fp": 52,
+   "fpRate": 1.0,
+   "frameCostP95Ms": 0.367,
+   "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 2,
+     "max": 0.000547,
+     "n": 1351,
+     "p50": 0.000337,
+     "p95": 0.000367
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 2,
+     "max": 0.000745,
+     "n": 56,
+     "p50": 0.000689,
+     "p95": 0.000742
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 2,
+     "max": 1.00041,
+     "n": 56,
+     "p50": 1.000354,
+     "p95": 1.000387
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "minDwellFrames": 2,
+   "nonEventWindows": 13,
+   "outsideWindow": 4,
+   "recall": 0.0,
+   "recalled": 0,
+   "runWallS": 0.461,
    "silentWindows": 7
   },
   {
@@ -230,162 +502,310 @@
    "a2": false,
    "a3": false,
    "a4": false,
-   "candidates": 39,
-   "candidatesInDecodedWindow": 39,
-   "candidatesInWindow": 36,
-   "candidatesPerMinute": 1.732,
-   "candidatesPerMinuteLabelCoverage": 1.599,
-   "cell": "s0.18_d2",
-   "changeSensitivity": 0.18,
-   "clears": false,
-   "events": 15,
-   "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d2.json",
-   "flickersSuppressed": 34,
-   "fp": 33,
-   "fpRate": 0.9167,
-   "frameCostP95Ms": 0.239,
-   "frames": 1351,
-   "minDwellFrames": 2,
-   "nonEventWindows": 13,
-   "outsideWindow": 3,
-   "recall": 0.2,
-   "recalled": 3,
-   "silentWindows": 5
-  },
-  {
-   "a1": false,
-   "a2": false,
-   "a3": false,
-   "a4": true,
-   "candidates": 30,
-   "candidatesInDecodedWindow": 30,
-   "candidatesInWindow": 27,
-   "candidatesPerMinute": 1.332,
-   "candidatesPerMinuteLabelCoverage": 1.199,
+   "a5": true,
+   "candidates": 41,
+   "candidatesInDecodedWindow": 41,
+   "candidatesInWindow": 39,
+   "candidatesPerMinute": 1.821,
+   "candidatesPerMinuteLabelCoverage": 1.732,
    "cell": "s0.18_d3",
    "changeSensitivity": 0.18,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001048,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d3.json",
-   "flickersSuppressed": 47,
-   "fp": 27,
-   "fpRate": 1.0,
-   "frameCostP95Ms": 0.237,
+   "flickersSuppressed": 60,
+   "forcedRearms": 24,
+   "fp": 37,
+   "fpRate": 0.9487,
+   "frameCostP95Ms": 0.348,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 3,
+     "max": 0.000403,
+     "n": 1351,
+     "p50": 0.000323,
+     "p95": 0.000349
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 3,
+     "max": 0.001076,
+     "n": 41,
+     "p50": 0.000993,
+     "p95": 0.001048
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 3,
+     "max": 2.000403,
+     "n": 41,
+     "p50": 2.000345,
+     "p95": 2.000383
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 3,
    "nonEventWindows": 13,
-   "outsideWindow": 3,
-   "recall": 0.0667,
-   "recalled": 1,
-   "silentWindows": 6
+   "outsideWindow": 2,
+   "recall": 0.1333,
+   "recalled": 2,
+   "runWallS": 0.436,
+   "silentWindows": 8
   },
   {
    "a1": false,
    "a2": false,
    "a3": false,
    "a4": true,
-   "candidates": 26,
-   "candidatesInDecodedWindow": 26,
-   "candidatesInWindow": 23,
-   "candidatesPerMinute": 1.155,
-   "candidatesPerMinuteLabelCoverage": 1.021,
+   "a5": true,
+   "candidates": 31,
+   "candidatesInDecodedWindow": 31,
+   "candidatesInWindow": 29,
+   "candidatesPerMinute": 1.377,
+   "candidatesPerMinuteLabelCoverage": 1.288,
    "cell": "s0.18_d4",
    "changeSensitivity": 0.18,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001388,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.18_d4.json",
-   "flickersSuppressed": 55,
-   "fp": 23,
+   "flickersSuppressed": 76,
+   "forcedRearms": 24,
+   "fp": 29,
    "fpRate": 1.0,
-   "frameCostP95Ms": 0.247,
+   "frameCostP95Ms": 0.35,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 4,
+     "max": 0.000426,
+     "n": 1351,
+     "p50": 0.000323,
+     "p95": 0.00035
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 4,
+     "max": 0.001394,
+     "n": 31,
+     "p50": 0.001323,
+     "p95": 0.001388
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 4,
+     "max": 3.000394,
+     "n": 31,
+     "p50": 3.000347,
+     "p95": 3.00039
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 4,
    "nonEventWindows": 13,
-   "outsideWindow": 3,
+   "outsideWindow": 2,
    "recall": 0.0,
    "recalled": 0,
-   "silentWindows": 7
+   "runWallS": 0.436,
+   "silentWindows": 9
   },
   {
    "a1": false,
    "a2": false,
-   "a3": false,
+   "a3": true,
    "a4": true,
-   "candidates": 30,
-   "candidatesInDecodedWindow": 30,
-   "candidatesInWindow": 27,
-   "candidatesPerMinute": 1.332,
-   "candidatesPerMinuteLabelCoverage": 1.199,
+   "a5": true,
+   "candidates": 27,
+   "candidatesInDecodedWindow": 27,
+   "candidatesInWindow": 25,
+   "candidatesPerMinute": 1.199,
+   "candidatesPerMinuteLabelCoverage": 1.11,
    "cell": "s0.25_d2",
    "changeSensitivity": 0.25,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.000782,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d2.json",
-   "flickersSuppressed": 22,
-   "fp": 25,
-   "fpRate": 0.9259,
-   "frameCostP95Ms": 0.257,
+   "flickersSuppressed": 19,
+   "forcedRearms": 13,
+   "fp": 23,
+   "fpRate": 0.92,
+   "frameCostP95Ms": 0.365,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 2,
+     "max": 0.002427,
+     "n": 1351,
+     "p50": 0.000334,
+     "p95": 0.000365
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 2,
+     "max": 0.000786,
+     "n": 27,
+     "p50": 0.000726,
+     "p95": 0.000782
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 2,
+     "max": 1.000429,
+     "n": 27,
+     "p50": 1.000362,
+     "p95": 1.000403
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 2,
    "nonEventWindows": 13,
-   "outsideWindow": 3,
+   "outsideWindow": 2,
    "recall": 0.1333,
    "recalled": 2,
-   "silentWindows": 7
+   "runWallS": 0.459,
+   "silentWindows": 11
   },
   {
    "a1": false,
    "a2": false,
-   "a3": false,
+   "a3": true,
    "a4": true,
-   "candidates": 25,
-   "candidatesInDecodedWindow": 25,
-   "candidatesInWindow": 23,
-   "candidatesPerMinute": 1.11,
-   "candidatesPerMinuteLabelCoverage": 1.021,
+   "a5": true,
+   "candidates": 21,
+   "candidatesInDecodedWindow": 21,
+   "candidatesInWindow": 19,
+   "candidatesPerMinute": 0.933,
+   "candidatesPerMinuteLabelCoverage": 0.844,
    "cell": "s0.25_d3",
    "changeSensitivity": 0.25,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001055,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d3.json",
-   "flickersSuppressed": 31,
-   "fp": 21,
-   "fpRate": 0.913,
-   "frameCostP95Ms": 0.229,
+   "flickersSuppressed": 27,
+   "forcedRearms": 12,
+   "fp": 18,
+   "fpRate": 0.9474,
+   "frameCostP95Ms": 0.364,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 3,
+     "max": 0.000391,
+     "n": 1351,
+     "p50": 0.000334,
+     "p95": 0.000364
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 3,
+     "max": 0.001088,
+     "n": 21,
+     "p50": 0.000999,
+     "p95": 0.001055
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 3,
+     "max": 2.00038,
+     "n": 21,
+     "p50": 2.000346,
+     "p95": 2.000379
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 3,
    "nonEventWindows": 13,
    "outsideWindow": 2,
-   "recall": 0.1333,
-   "recalled": 2,
-   "silentWindows": 7
+   "recall": 0.0667,
+   "recalled": 1,
+   "runWallS": 0.452,
+   "silentWindows": 11
   },
   {
    "a1": false,
    "a2": false,
-   "a3": false,
+   "a3": true,
    "a4": true,
-   "candidates": 25,
-   "candidatesInDecodedWindow": 25,
-   "candidatesInWindow": 23,
-   "candidatesPerMinute": 1.11,
-   "candidatesPerMinuteLabelCoverage": 1.021,
+   "a5": true,
+   "candidates": 21,
+   "candidatesInDecodedWindow": 21,
+   "candidatesInWindow": 19,
+   "candidatesPerMinute": 0.933,
+   "candidatesPerMinuteLabelCoverage": 0.844,
    "cell": "s0.25_d4",
    "changeSensitivity": 0.25,
    "clears": false,
+   "eventToCandidateCpuP95S": 0.001367,
    "events": 15,
    "exportPath": "evals/supertuxkart_val/run/cell_s0.25_d4.json",
-   "flickersSuppressed": 31,
-   "fp": 21,
-   "fpRate": 0.913,
-   "frameCostP95Ms": 0.231,
+   "flickersSuppressed": 27,
+   "forcedRearms": 12,
+   "fp": 18,
+   "fpRate": 0.9474,
+   "frameCostP95Ms": 0.342,
    "frames": 1351,
+   "latency": {
+    "cpuFrameS": {
+     "dwellFrames": 4,
+     "max": 0.000372,
+     "n": 1351,
+     "p50": 0.000311,
+     "p95": 0.000342
+    },
+    "definitions": {
+     "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+     "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+     "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+    },
+    "eventToCandidateCpuS": {
+     "dwellFrames": 4,
+     "max": 0.001403,
+     "n": 21,
+     "p50": 0.0013,
+     "p95": 0.001367
+    },
+    "eventToCandidateWallS": {
+     "dwellFrames": 4,
+     "max": 3.000372,
+     "n": 21,
+     "p50": 3.000348,
+     "p95": 3.000371
+    }
+   },
+   "livePath": true,
+   "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
+   "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
    "minDwellFrames": 4,
    "nonEventWindows": 13,
    "outsideWindow": 2,
-   "recall": 0.1333,
-   "recalled": 2,
-   "silentWindows": 7
+   "recall": 0.0667,
+   "recalled": 1,
+   "runWallS": 0.431,
+   "silentWindows": 11
   }
  ],
  "harness": "evals/measure_hud_recall.py",
@@ -395,19 +815,19 @@
  ],
  "labelledWindowS": 1351,
  "latchTrace": {
-  "dwell": 4,
+  "dwell": 2,
   "events": [
    {
     "event": "A-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.0795,
-     "grand-prix-panel": 0.0535,
-     "race-clock": 0.0974
+     "centre-banner": 0.2289,
+     "grand-prix-panel": 0.0525,
+     "race-clock": 0.1013
     },
     "states": {
      "centre-banner": "latched",
-     "grand-prix-panel": "latched",
+     "grand-prix-panel": "armed",
      "race-clock": "armed"
     },
     "t": 4429.67
@@ -416,14 +836,14 @@
     "event": "A-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.0805,
-     "grand-prix-panel": 0.0795,
-     "race-clock": 0.07
+     "centre-banner": 0.0691,
+     "grand-prix-panel": 0.0551,
+     "race-clock": 0.0723
     },
     "states": {
-     "centre-banner": "latched",
-     "grand-prix-panel": "latched",
-     "race-clock": "latched"
+     "centre-banner": "armed",
+     "grand-prix-panel": "armed",
+     "race-clock": "armed"
     },
     "t": 4547.0
    },
@@ -431,14 +851,14 @@
     "event": "A-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.1408,
-     "grand-prix-panel": 0.1177,
-     "race-clock": 0.0837
+     "centre-banner": 0.1264,
+     "grand-prix-panel": 0.1051,
+     "race-clock": 0.1025
     },
     "states": {
-     "centre-banner": "latched",
-     "grand-prix-panel": "latched",
-     "race-clock": "latched"
+     "centre-banner": "armed",
+     "grand-prix-panel": "armed",
+     "race-clock": "armed"
     },
     "t": 4596.0
    },
@@ -446,9 +866,9 @@
     "event": "B-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.0512,
-     "grand-prix-panel": 0.0116,
-     "race-clock": 0.0062
+     "centre-banner": 0.5107,
+     "grand-prix-panel": 0.4064,
+     "race-clock": 0.1856
     },
     "states": {
      "centre-banner": "latched",
@@ -461,14 +881,14 @@
     "event": "B-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.1341,
-     "grand-prix-panel": 0.0668,
-     "race-clock": 0.1896
+     "centre-banner": 0.25,
+     "grand-prix-panel": 0.0683,
+     "race-clock": 0.1416
     },
     "states": {
      "centre-banner": "latched",
-     "grand-prix-panel": "latched",
-     "race-clock": "latched"
+     "grand-prix-panel": "armed",
+     "race-clock": "armed"
     },
     "t": 4873.0
    },
@@ -476,14 +896,14 @@
     "event": "B-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.1954,
-     "grand-prix-panel": 0.151,
-     "race-clock": 0.1225
+     "centre-banner": 0.1532,
+     "grand-prix-panel": 0.13,
+     "race-clock": 0.1149
     },
     "states": {
      "centre-banner": "latched",
-     "grand-prix-panel": "latched",
-     "race-clock": "latched"
+     "grand-prix-panel": "armed",
+     "race-clock": "armed"
     },
     "t": 4974.0
    },
@@ -491,9 +911,9 @@
     "event": "C-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.0628,
-     "grand-prix-panel": 0.018,
-     "race-clock": 0.0304
+     "centre-banner": 0.5202,
+     "grand-prix-panel": 0.3796,
+     "race-clock": 0.1848
     },
     "states": {
      "centre-banner": "latched",
@@ -506,14 +926,14 @@
     "event": "C-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.111,
-     "grand-prix-panel": 0.092,
-     "race-clock": 0.0809
+     "centre-banner": 0.0925,
+     "grand-prix-panel": 0.0765,
+     "race-clock": 0.05
     },
     "states": {
-     "centre-banner": "latched",
-     "grand-prix-panel": "latched",
-     "race-clock": "latched"
+     "centre-banner": "armed",
+     "grand-prix-panel": "armed",
+     "race-clock": "armed"
     },
     "t": 5222.0
    },
@@ -521,13 +941,13 @@
     "event": "C-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.1121,
-     "grand-prix-panel": 0.0703,
-     "race-clock": 0.0915
+     "centre-banner": 0.1247,
+     "grand-prix-panel": 0.0744,
+     "race-clock": 0.1295
     },
     "states": {
      "centre-banner": "latched",
-     "grand-prix-panel": "latched",
+     "grand-prix-panel": "armed",
      "race-clock": "latched"
     },
     "t": 5251.0
@@ -536,9 +956,9 @@
     "event": "D-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.09,
-     "grand-prix-panel": 0.0593,
-     "race-clock": 0.1102
+     "centre-banner": 0.3531,
+     "grand-prix-panel": 0.3003,
+     "race-clock": 0.2445
     },
     "states": {
      "centre-banner": "latched",
@@ -551,9 +971,9 @@
     "event": "D-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.1935,
-     "grand-prix-panel": 0.0852,
-     "race-clock": 0.0883
+     "centre-banner": 0.3064,
+     "grand-prix-panel": 0.154,
+     "race-clock": 0.1257
     },
     "states": {
      "centre-banner": "latched",
@@ -566,14 +986,14 @@
     "event": "D-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.2721,
-     "grand-prix-panel": 0.1722,
+     "centre-banner": 0.1741,
+     "grand-prix-panel": 0.1996,
      "race-clock": 0.2513
     },
     "states": {
      "centre-banner": "latched",
      "grand-prix-panel": "latched",
-     "race-clock": "armed"
+     "race-clock": "latched"
     },
     "t": 5490.0
    },
@@ -581,12 +1001,12 @@
     "event": "E-start",
     "event_type": "race_start",
     "scores": {
-     "centre-banner": 0.0457,
-     "grand-prix-panel": 0.0789,
-     "race-clock": 0.0631
+     "centre-banner": 0.0436,
+     "grand-prix-panel": 0.15,
+     "race-clock": 0.2423
     },
     "states": {
-     "centre-banner": "latched",
+     "centre-banner": "armed",
      "grand-prix-panel": "latched",
      "race-clock": "latched"
     },
@@ -596,14 +1016,14 @@
     "event": "E-final-lap",
     "event_type": "final_lap",
     "scores": {
-     "centre-banner": 0.0822,
-     "grand-prix-panel": 0.0828,
-     "race-clock": 0.1143
+     "centre-banner": 0.0602,
+     "grand-prix-panel": 0.1974,
+     "race-clock": 0.136
     },
     "states": {
-     "centre-banner": "latched",
+     "centre-banner": "armed",
      "grand-prix-panel": "latched",
-     "race-clock": "armed"
+     "race-clock": "latched"
     },
     "t": 5649.0
    },
@@ -611,9 +1031,9 @@
     "event": "E-finish",
     "event_type": "race_finish",
     "scores": {
-     "centre-banner": 0.1604,
-     "grand-prix-panel": 0.1087,
-     "race-clock": 0.1872
+     "centre-banner": 0.1039,
+     "grand-prix-panel": 0.1001,
+     "race-clock": 0.3551
     },
     "states": {
      "centre-banner": "latched",
@@ -626,148 +1046,600 @@
   "fires": [
    {
     "band": "centre-banner",
-    "score": 0.3444,
-    "t": 4393.0
+    "score": 0.3292,
+    "t": 4391.0
    },
    {
-    "band": "race-clock",
-    "score": 0.1588,
-    "t": 4461.0
-   },
-   {
-    "band": "race-clock",
-    "score": 0.2409,
-    "t": 4475.0
+    "band": "centre-banner",
+    "score": 0.211,
+    "t": 4424.0
    },
    {
     "band": "race-clock",
     "score": 0.1528,
-    "t": 4647.0
+    "t": 4432.0
    },
    {
-    "band": "centre-banner",
-    "score": 0.467,
-    "t": 4760.0
-   },
-   {
-    "band": "centre-banner",
-    "score": 0.5473,
-    "t": 5122.0
-   },
-   {
-    "band": "centre-banner",
-    "score": 0.3503,
-    "t": 5338.0
+    "band": "grand-prix-panel",
+    "score": 0.1672,
+    "t": 4438.0
    },
    {
     "band": "race-clock",
-    "score": 0.2591,
-    "t": 5371.0
+    "score": 0.1618,
+    "t": 4454.0
    },
    {
     "band": "centre-banner",
-    "score": 0.2882,
-    "t": 5386.0
+    "score": 0.1738,
+    "t": 4457.0
    },
    {
     "band": "race-clock",
-    "score": 0.2968,
-    "t": 5391.0
+    "score": 0.1777,
+    "t": 4463.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1604,
+    "t": 4464.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1643,
+    "t": 4494.0
    },
    {
     "band": "race-clock",
-    "score": 0.1642,
-    "t": 5423.0
+    "score": 0.3004,
+    "t": 4499.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.156,
+    "t": 4501.0
    },
    {
     "band": "centre-banner",
-    "score": 0.2537,
-    "t": 5429.0
+    "score": 0.1722,
+    "t": 4523.0
    },
    {
     "band": "centre-banner",
-    "score": 0.3143,
-    "t": 5477.0
+    "score": 0.1527,
+    "t": 4535.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1279,
+    "t": 4541.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1754,
+    "t": 4554.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1747,
+    "t": 4558.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1648,
+    "t": 4560.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.19,
+    "t": 4577.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1435,
+    "t": 4578.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1463,
+    "t": 4590.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1268,
+    "t": 4597.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1521,
+    "t": 4619.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.2083,
+    "t": 4624.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.162,
+    "t": 4633.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1822,
+    "t": 4634.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.3272,
+    "t": 4650.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.4667,
+    "t": 4758.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1901,
+    "t": 4791.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2157,
+    "t": 4794.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1284,
+    "t": 4814.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1575,
+    "t": 4826.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1851,
+    "t": 4827.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1344,
+    "t": 4837.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.211,
+    "t": 4860.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1497,
+    "t": 4868.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1806,
+    "t": 4869.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1572,
+    "t": 4874.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1399,
+    "t": 4885.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1519,
+    "t": 4899.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1221,
+    "t": 4901.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.2338,
+    "t": 4915.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1898,
+    "t": 4930.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1339,
+    "t": 4932.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1627,
+    "t": 4939.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.2395,
+    "t": 4954.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1707,
+    "t": 4962.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.143,
+    "t": 4965.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1611,
+    "t": 4975.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.17,
+    "t": 4987.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.167,
+    "t": 4989.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.4104,
+    "t": 5003.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.5462,
+    "t": 5120.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1894,
+    "t": 5158.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1819,
+    "t": 5164.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1367,
+    "t": 5172.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1917,
+    "t": 5202.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1524,
+    "t": 5231.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1332,
+    "t": 5235.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1679,
+    "t": 5248.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1482,
+    "t": 5251.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1449,
+    "t": 5259.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.2128,
+    "t": 5260.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.3499,
+    "t": 5336.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.34,
+    "t": 5369.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.2482,
+    "t": 5380.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.3405,
+    "t": 5389.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1553,
+    "t": 5395.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1539,
+    "t": 5400.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1971,
+    "t": 5402.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1768,
+    "t": 5421.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1461,
+    "t": 5428.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2406,
+    "t": 5435.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1763,
+    "t": 5438.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.4592,
+    "t": 5455.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.2049,
+    "t": 5457.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2396,
+    "t": 5470.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2632,
+    "t": 5475.0
    },
    {
     "band": "race-clock",
     "score": 0.3241,
-    "t": 5491.0
+    "t": 5489.0
    },
    {
     "band": "grand-prix-panel",
-    "score": 0.1751,
-    "t": 5541.0
-   },
-   {
-    "band": "grand-prix-panel",
-    "score": 0.5411,
-    "t": 5559.0
-   },
-   {
-    "band": "grand-prix-panel",
-    "score": 0.198,
-    "t": 5584.0
+    "score": 0.1996,
+    "t": 5490.0
    },
    {
     "band": "race-clock",
-    "score": 0.3657,
-    "t": 5605.0
+    "score": 0.1917,
+    "t": 5539.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.5978,
+    "t": 5556.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.534,
+    "t": 5557.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2079,
+    "t": 5571.0
    },
    {
     "band": "race-clock",
+    "score": 0.1409,
+    "t": 5572.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1733,
+    "t": 5582.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.2204,
+    "t": 5591.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.2463,
+    "t": 5609.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.16,
+    "t": 5621.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1541,
+    "t": 5625.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1227,
+    "t": 5630.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1548,
+    "t": 5635.0
+   },
+   {
+    "band": "grand-prix-panel",
+    "score": 0.1214,
+    "t": 5639.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1882,
+    "t": 5642.0
+   },
+   {
+    "band": "grand-prix-panel",
     "score": 0.1718,
-    "t": 5618.0
+    "t": 5644.0
    },
    {
-    "band": "grand-prix-panel",
-    "score": 0.1564,
-    "t": 5631.0
-   },
-   {
-    "band": "race-clock",
-    "score": 0.3393,
-    "t": 5655.0
+    "band": "centre-banner",
+    "score": 0.5791,
+    "t": 5652.0
    },
    {
     "band": "race-clock",
     "score": 0.1915,
-    "t": 5669.0
-   },
-   {
-    "band": "race-clock",
-    "score": 0.1993,
-    "t": 5697.0
-   },
-   {
-    "band": "grand-prix-panel",
-    "score": 0.318,
-    "t": 5713.0
-   }
-  ],
-  "perBand": [
-   {
-    "band": "race-clock",
-    "firstLatchT": 4461,
-    "frames": 1351,
-    "latchedFrames": 1125
+    "t": 5667.0
    },
    {
     "band": "centre-banner",
-    "firstLatchT": 4393,
-    "frames": 1351,
-    "latchedFrames": 1022
+    "score": 0.2186,
+    "t": 5687.0
+   },
+   {
+    "band": "race-clock",
+    "score": 0.1958,
+    "t": 5695.0
    },
    {
     "band": "grand-prix-panel",
-    "firstLatchT": 4393,
-    "frames": 1351,
-    "latchedFrames": 933
+    "score": 0.31,
+    "t": 5711.0
+   },
+   {
+    "band": "centre-banner",
+    "score": 0.1249,
+    "t": 5713.0
    }
   ],
+  "maxLatchFrames": 30,
+  "perBand": [
+   {
+    "band": "race-clock",
+    "firstLatchT": 4432,
+    "frames": 1351,
+    "latchedFrames": 586
+   },
+   {
+    "band": "centre-banner",
+    "firstLatchT": 4391,
+    "frames": 1351,
+    "latchedFrames": 792
+   },
+   {
+    "band": "grand-prix-panel",
+    "firstLatchT": 4391,
+    "frames": 1351,
+    "latchedFrames": 596
+   }
+  ],
+  "referenceFrames": 3,
   "sensitivity": 0.12
  },
- "manifest": "/tmp/hl8744repo/evals/supertuxkart_val/label-manifest.json",
+ "latencyExport": {
+  "admissible": true,
+  "backend": "live",
+  "bars": {
+   "stageAEventToCandidateCpuP95S": {
+    "bar": 0.5,
+    "measured": true,
+    "pass": true,
+    "value": 0.000709
+   }
+  },
+  "candidates": 100,
+  "cell": {
+   "cell": 8,
+   "changeSensitivity": 0.12,
+   "maxLatchFrames": 30,
+   "minDwellFrames": 2,
+   "quietFrames": 2,
+   "referenceFrames": 3
+  },
+  "clip": {
+   "height": 240,
+   "manifestPath": "sh_onfoss_20230923_tournament.mp4",
+   "path": "/tmp/hl8744-data/clip.mp4",
+   "sha256": "3da355cc6ffc5e0fa5bbffa25c3025b165cee7bbddd3e96b8f0746a11801b264",
+   "width": 426,
+   "window": [
+    4380.0,
+    5731.0
+   ]
+  },
+  "frames": 1351,
+  "gpu": {
+   "note": "the hud-event reader is GPU-free (WP1); the pass occupies the box but spends no GPU compute, so GPU-minutes are 0",
+   "used": false
+  },
+  "harness": "measure_hud_recall",
+  "latency": {
+   "cpuFrameS": {
+    "dwellFrames": 2,
+    "max": 0.000396,
+    "n": 1351,
+    "p50": 0.000319,
+    "p95": 0.000348
+   },
+   "definitions": {
+    "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
+    "eventToCandidateCpuS": "sum of the per-frame CPU of the frames in the confirmed dwell run",
+    "eventToCandidateWallS": "(dwell-1)*frameS + emitting frame CPU"
+   },
+   "eventToCandidateCpuS": {
+    "dwellFrames": 2,
+    "max": 0.000741,
+    "n": 100,
+    "p50": 0.000654,
+    "p95": 0.000709
+   },
+   "eventToCandidateWallS": {
+    "dwellFrames": 2,
+    "max": 1.000384,
+    "n": 100,
+    "p50": 1.000334,
+    "p95": 1.000368
+   }
+  },
+  "livePath": true,
+  "schemaVersion": 1,
+  "trigger": "hud-event",
+  "wallS": 0.433
+ },
+ "manifest": "/tmp/hl8767repo/evals/supertuxkart_val/label-manifest.json",
  "manifestPinned": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
  "manifestSha256After": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",
  "manifestSha256Before": "d19a2240578ba6760d9634cd9932cd48ae49bd245b7085140711c6f1bca73d23",

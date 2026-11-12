@@ -82,6 +82,18 @@ STK_BANDS = (
     ("grand-prix-panel", (60, 50, 170, 180), "counter"),
 )
 
+#: the reader's re-arm defaults (ADAAAA-8767): the trailing window the change score
+#: is measured from, and the outside bound on a latch. These are NOT grid axes —
+#: the grid stays the plan §5 sensitivity x dwell table, and the bar does not move.
+#:
+#: The bound is structural, not tuned: a latch hold has to be longer than a single
+#: HUD state displays (a results banner holds a few seconds at 1 fps) and shorter
+#: than the smallest gap between two labelled instants in the frozen manifest
+#: (49 s, A-final-lap -> A-finish), or it suppresses a real second event by
+#: construction. 30 frames satisfies both directions.
+REFERENCE_FRAMES = 3
+MAX_LATCH_FRAMES = 30
+
 #: plan §5 bars. A1/A2/A3/A4 are graded per cell; nothing is averaged.
 BAR_RECALL = 0.80
 BAR_FP_RATE = 0.10
@@ -273,6 +285,8 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         min_dwell_frames=dwell,
         quiet_frames=2,
         cell=8,
+        reference_frames=REFERENCE_FRAMES,
+        max_latch_frames=MAX_LATCH_FRAMES,
     )
     reader = reader_mod.HudEventReader(model, enabled=True)
     prof = armed_profile(sys.modules[f"{READER_PKG}.game_profile"], model) if stage_a else None
@@ -339,10 +353,13 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
             "minDwellFrames": dwell,
             "quietFrames": 2,
             "cell": 8,
+            "referenceFrames": REFERENCE_FRAMES,
+            "maxLatchFrames": MAX_LATCH_FRAMES,
             "bands": [{"name": n, "rect": list(r), "kind": k} for n, r, k in STK_BANDS],
         },
         "frames_observed": reader.frames_observed,
         "flickers_suppressed": reader.flickers_suppressed,
+        "forced_rearms": reader.forced_rearms,
         "band_state_at_end": state_after,
         "candidates": candidates,
     }
@@ -360,6 +377,17 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
     )
     if result["sha_before"] != result["sha_after"]:
         raise Voided("manifest changed during the cell — run voided")
+    # A6 per cell, in the cell's own artifact: QA can read the digests the cell was
+    # scored under without trusting this process' memory.
+    export["integrity"] = {
+        "manifestPath": manifest_path,
+        "manifestSha256Before": result["sha_before"],
+        "manifestSha256After": result["sha_after"],
+        "manifestPinned": oracle.MANIFEST_SHA256,
+    }
+    with open(export_path, "w", encoding="utf-8") as fh:
+        json.dump(export, fh, indent=1, sort_keys=True)
+        fh.write("\n")
 
     overall = result["overall"]
     p95 = float(np.percentile(wall_ms, 95)) if wall_ms else 0.0
@@ -408,6 +436,9 @@ def run_cell(reader_mod, oracle, frames, start_s: int, sensitivity: float, dwell
         "a5": bool(e2c_cpu) and p95_cpu <= LATENCY_CPU_P95_BAR_S,
         "eventToCandidateCpuP95S": p95_cpu,
         "flickersSuppressed": int(reader.flickers_suppressed),
+        "forcedRearms": int(reader.forced_rearms),
+        "manifestSha256Before": result["sha_before"],
+        "manifestSha256After": result["sha_after"],
         "exportPath": export_path,
         "a1": bool(overall["recall"] >= BAR_RECALL),
         "a2": bool(overall["fp_rate"] <= BAR_FP_RATE),
@@ -443,16 +474,17 @@ def render_grid(rows: list[dict]) -> str:
 
 
 def latch_trace(reader_mod, frames, start_s: int, sensitivity: float, dwell: int,
-                oracle, manifest: dict, lookback: int = 3) -> dict:
+                oracle, manifest: dict) -> dict:
     """Why a cell misses: per-band latched frames and the armed/latched state at each label.
 
-    The reader emits at most one candidate per band per latch cycle, and a latch is
-    released only after ``quiet_frames`` consecutive frames *below* sensitivity
-    against the latch-time baseline. This trace reports, for one cell, how many of
-    the window's frames each band spent latched and, at every labelled instant,
-    what the band's step score was and whether the band was armed. That is the
-    difference between "no step exists here" and "a step exists but the band could
-    not fire" — two very different findings.
+    The reader emits at most one candidate per band per latch cycle, and (ADAAAA-8767)
+    a latch is released after ``quiet_frames`` consecutive frames *below* sensitivity
+    against the reference it latched with, or on the ``max_latch_frames`` bound. This
+    trace reports, for one cell, how many of the window's frames each band spent
+    latched and, at every labelled instant, the step score the reader actually used
+    and whether the band was armed. That is the difference between "no step exists
+    here" and "a step exists but the band could not fire" — two very different
+    findings.
     """
     game_profile = sys.modules[f"{READER_PKG}.game_profile"]
     band_objs = tuple(
@@ -460,10 +492,12 @@ def latch_trace(reader_mod, frames, start_s: int, sensitivity: float, dwell: int
     )
     model = game_profile.HudModel(
         bands=band_objs, change_sensitivity=sensitivity, min_dwell_frames=dwell,
-        quiet_frames=2, cell=8,
+        quiet_frames=2, cell=8, reference_frames=REFERENCE_FRAMES,
+        max_latch_frames=MAX_LATCH_FRAMES,
     )
     reader = reader_mod.HudEventReader(model, enabled=True)
     latched = {b.name: np.zeros(frames.shape[0], dtype=bool) for b in band_objs}
+    step_scores = {b.name: np.zeros(frames.shape[0], dtype=float) for b in band_objs}
     fires: list[dict] = []
     for i in range(frames.shape[0]):
         ts = float(start_s + i)
@@ -471,7 +505,9 @@ def latch_trace(reader_mod, frames, start_s: int, sensitivity: float, dwell: int
             fires.append({"t": round(float(fire.timestamp), 3), "band": fire.band,
                           "score": round(float(fire.score), 4)})
         for b in band_objs:
-            latched[b.name][i] = reader.state_for(b.name).latched
+            st = reader.state_for(b.name)
+            latched[b.name][i] = st.latched
+            step_scores[b.name][i] = st.last_score
 
     per_band = [
         {"band": b.name,
@@ -486,17 +522,15 @@ def latch_trace(reader_mod, frames, start_s: int, sensitivity: float, dwell: int
     for e in events:
         i = int(round(e["instant"])) - int(start_s)
         i = max(0, min(frames.shape[0] - 1, i))
-        j = max(0, i - lookback)
         scores, states = {}, {}
         for b in band_objs:
-            prev = reader_mod.band_signature(frames[j], b, 8)
-            sc = reader_mod.band_change_score(frames[i], b, prev, 8)
-            scores[b.name] = None if sc is None else round(float(sc), 4)
+            scores[b.name] = round(float(step_scores[b.name][i]), 4)
             states[b.name] = "latched" if latched[b.name][i] else "armed"
         rows.append({"event": e["id"], "event_type": e["event_type"],
                      "t": round(float(e["instant"]), 2), "scores": scores, "states": states})
-    return {"sensitivity": sensitivity, "dwell": dwell, "fires": fires,
-            "perBand": per_band, "events": rows}
+    return {"sensitivity": sensitivity, "dwell": dwell,
+            "referenceFrames": REFERENCE_FRAMES, "maxLatchFrames": MAX_LATCH_FRAMES,
+            "fires": fires, "perBand": per_band, "events": rows}
 
 
 def render_latch_trace(trace: dict) -> str:
@@ -583,7 +617,9 @@ def latency_export(row: dict, manifest: dict, clip_path: str, clip_sha: str,
         "livePath": bool(row.get("livePath")),
         "cell": {"changeSensitivity": row.get("changeSensitivity"),
                  "minDwellFrames": row.get("minDwellFrames"),
-                 "quietFrames": 2, "cell": 8},
+                 "quietFrames": 2, "cell": 8,
+                 "referenceFrames": REFERENCE_FRAMES,
+                 "maxLatchFrames": MAX_LATCH_FRAMES},
         "clip": {"path": clip_path, "sha256": clip_sha,
                  "manifestPath": (manifest.get("video") or {}).get("path"),
                  "window": [round(float(window[0]), 2), round(float(window[1]), 2)],

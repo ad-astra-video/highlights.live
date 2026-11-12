@@ -6,47 +6,22 @@
    "bar": 0.5,
    "measured": true,
    "pass": true,
-   "value": 0.000149
+   "value": 0.000709
   }
  },
- "candidates": 39,
+ "candidates": 100,
  "cell": {
   "cell": 8,
-  "changeSensitivity": 0.18,
+  "changeSensitivity": 0.12,
+  "maxLatchFrames": 30,
   "minDwellFrames": 2,
-  "quietFrames": 2
+  "quietFrames": 2,
+  "referenceFrames": 3
  },
- "classes": [
-  {
-   "candidates": 39,
-   "clip": "sh_onfoss_20230923_tournament.mp4",
-   "events": 15,
-   "fp": 36,
-   "fp_rate": 0.9230769230769231,
-   "gate": "hud-event",
-   "id": "objective_event",
-   "max_lat": 1.0,
-   "measured": true,
-   "negatives": {
-    "candidates": 12,
-    "fp_window_rate": 0.6153846153846154,
-    "fp_windows": 8,
-    "windows": 13
-   },
-   "p50": 0.0,
-   "p95": 1.0,
-   "recall": 0.2,
-   "recalled": 3,
-   "sr": 1,
-   "threshold_ids": [
-    "hud-event"
-   ]
-  }
- ],
  "clip": {
   "height": 240,
   "manifestPath": "sh_onfoss_20230923_tournament.mp4",
-  "path": "/tmp/hl_stk/sh_onfoss_20230923_tournament.mp4",
+  "path": "/tmp/hl8744-data/clip.mp4",
   "sha256": "3da355cc6ffc5e0fa5bbffa25c3025b165cee7bbddd3e96b8f0746a11801b264",
   "width": 426,
   "window": [
@@ -63,10 +38,10 @@
  "latency": {
   "cpuFrameS": {
    "dwellFrames": 2,
-   "max": 0.000189,
+   "max": 0.000396,
    "n": 1351,
-   "p50": 5.7e-05,
-   "p95": 7e-05
+   "p50": 0.000319,
+   "p95": 0.000348
   },
   "definitions": {
    "cpuFrameS": "wall time of one live-path frame call (stage_a.evaluate_stage_a)",
@@ -75,21 +50,21 @@
   },
   "eventToCandidateCpuS": {
    "dwellFrames": 2,
-   "max": 0.000207,
-   "n": 39,
-   "p50": 0.000124,
-   "p95": 0.000149
+   "max": 0.000741,
+   "n": 100,
+   "p50": 0.000654,
+   "p95": 0.000709
   },
   "eventToCandidateWallS": {
    "dwellFrames": 2,
-   "max": 1.000097,
-   "n": 39,
-   "p50": 1.000066,
-   "p95": 1.000078
+   "max": 1.000384,
+   "n": 100,
+   "p50": 1.000334,
+   "p95": 1.000368
   }
  },
  "livePath": true,
  "schemaVersion": 1,
  "trigger": "hud-event",
- "wallS": 0.081
+ "wallS": 0.433
 }

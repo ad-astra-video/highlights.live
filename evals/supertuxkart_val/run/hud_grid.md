@@ -10,18 +10,18 @@
 
 | cell | sensitivity | dwell | candidates (in-window) | recall | A1 | FP rate | A2 | silent windows | A3 | candidates/min | A4 | clears |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `s0.08_d2` | 0.08 | 2 | 5 | 0.00 (0/15) | FAIL | 1.0000 | FAIL | 13/13 | pass | 0.31 | pass | no |
-| `s0.08_d3` | 0.08 | 3 | 5 | 0.00 (0/15) | FAIL | 1.0000 | FAIL | 13/13 | pass | 0.31 | pass | no |
-| `s0.08_d4` | 0.08 | 4 | 5 | 0.00 (0/15) | FAIL | 1.0000 | FAIL | 13/13 | pass | 0.31 | pass | no |
-| `s0.12_d2` | 0.12 | 2 | 23 | 0.07 (1/15) | FAIL | 0.9565 | FAIL | 9/13 | FAIL | 1.11 | pass | no |
-| `s0.12_d3` | 0.12 | 3 | 25 | 0.07 (1/15) | FAIL | 0.9600 | FAIL | 7/13 | FAIL | 1.20 | pass | no |
-| `s0.12_d4` | 0.12 | 4 | 22 | 0.13 (2/15) | FAIL | 0.9091 | FAIL | 7/13 | FAIL | 1.07 | pass | no |
-| `s0.18_d2` | 0.18 | 2 | 36 | 0.20 (3/15) | FAIL | 0.9167 | FAIL | 5/13 | FAIL | 1.73 | FAIL | no |
-| `s0.18_d3` | 0.18 | 3 | 27 | 0.07 (1/15) | FAIL | 1.0000 | FAIL | 6/13 | FAIL | 1.33 | pass | no |
-| `s0.18_d4` | 0.18 | 4 | 23 | 0.00 (0/15) | FAIL | 1.0000 | FAIL | 7/13 | FAIL | 1.16 | pass | no |
-| `s0.25_d2` | 0.25 | 2 | 27 | 0.13 (2/15) | FAIL | 0.9259 | FAIL | 7/13 | FAIL | 1.33 | pass | no |
-| `s0.25_d3` | 0.25 | 3 | 23 | 0.13 (2/15) | FAIL | 0.9130 | FAIL | 7/13 | FAIL | 1.11 | pass | no |
-| `s0.25_d4` | 0.25 | 4 | 23 | 0.13 (2/15) | FAIL | 0.9130 | FAIL | 7/13 | FAIL | 1.11 | pass | no |
+| `s0.08_d2` | 0.08 | 2 | 82 | 0.33 (5/15) | FAIL | 0.9146 | FAIL | 1/13 | FAIL | 3.77 | FAIL | no |
+| `s0.08_d3` | 0.08 | 3 | 83 | 0.40 (6/15) | FAIL | 0.9398 | FAIL | 0/13 | FAIL | 3.86 | FAIL | no |
+| `s0.08_d4` | 0.08 | 4 | 71 | 0.33 (5/15) | FAIL | 0.9296 | FAIL | 0/13 | FAIL | 3.29 | FAIL | no |
+| `s0.12_d2` | 0.12 | 2 | 96 | 0.47 (7/15) | FAIL | 0.9062 | FAIL | 1/13 | FAIL | 4.44 | FAIL | no |
+| `s0.12_d3` | 0.12 | 3 | 68 | 0.40 (6/15) | FAIL | 0.8971 | FAIL | 3/13 | FAIL | 3.24 | FAIL | no |
+| `s0.12_d4` | 0.12 | 4 | 63 | 0.13 (2/15) | FAIL | 0.9524 | FAIL | 2/13 | FAIL | 3.02 | FAIL | no |
+| `s0.18_d2` | 0.18 | 2 | 52 | 0.00 (0/15) | FAIL | 1.0000 | FAIL | 7/13 | FAIL | 2.49 | FAIL | no |
+| `s0.18_d3` | 0.18 | 3 | 39 | 0.13 (2/15) | FAIL | 0.9487 | FAIL | 8/13 | FAIL | 1.82 | FAIL | no |
+| `s0.18_d4` | 0.18 | 4 | 29 | 0.00 (0/15) | FAIL | 1.0000 | FAIL | 9/13 | FAIL | 1.38 | pass | no |
+| `s0.25_d2` | 0.25 | 2 | 25 | 0.13 (2/15) | FAIL | 0.9200 | FAIL | 11/13 | pass | 1.20 | pass | no |
+| `s0.25_d3` | 0.25 | 3 | 19 | 0.07 (1/15) | FAIL | 0.9474 | FAIL | 11/13 | pass | 0.93 | pass | no |
+| `s0.25_d4` | 0.25 | 4 | 19 | 0.07 (1/15) | FAIL | 0.9474 | FAIL | 11/13 | pass | 0.93 | pass | no |
 
 ## Band change-score calibration
 
@@ -36,31 +36,31 @@
 
 ## Latch trace
 
-cell s0.12/d4 — 24 candidates in the window
+cell s0.12/d2 — 100 candidates in the window
 
 | band | latched frames | window frames | first latch t |
 | --- | --- | --- | --- |
-| `race-clock` | 1125 | 1351 | 4461 |
-| `centre-banner` | 1022 | 1351 | 4393 |
-| `grand-prix-panel` | 933 | 1351 | 4393 |
+| `race-clock` | 586 | 1351 | 4432 |
+| `centre-banner` | 792 | 1351 | 4391 |
+| `grand-prix-panel` | 596 | 1351 | 4391 |
 
 | event | class | t | `race-clock` step | `centre-banner` step | `grand-prix-panel` step | `race-clock` state | `centre-banner` state | `grand-prix-panel` state |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `A-start` | race_start | 4429.67 | 0.097 | 0.080 | 0.053 | armed | latched | latched |
-| `A-final-lap` | final_lap | 4547.0 | 0.070 | 0.081 | 0.080 | latched | latched | latched |
-| `A-finish` | race_finish | 4596.0 | 0.084 | 0.141 | 0.118 | latched | latched | latched |
-| `B-start` | race_start | 4764.05 | 0.006 | 0.051 | 0.012 | latched | latched | latched |
-| `B-final-lap` | final_lap | 4873.0 | 0.190 | 0.134 | 0.067 | latched | latched | latched |
-| `B-finish` | race_finish | 4974.0 | 0.122 | 0.195 | 0.151 | latched | latched | latched |
-| `C-start` | race_start | 5126.0 | 0.030 | 0.063 | 0.018 | latched | latched | latched |
-| `C-final-lap` | final_lap | 5222.0 | 0.081 | 0.111 | 0.092 | latched | latched | latched |
-| `C-finish` | race_finish | 5251.0 | 0.091 | 0.112 | 0.070 | latched | latched | latched |
-| `D-start` | race_start | 5341.81 | 0.110 | 0.090 | 0.059 | latched | latched | latched |
-| `D-final-lap` | final_lap | 5440.0 | 0.088 | 0.194 | 0.085 | latched | latched | latched |
-| `D-finish` | race_finish | 5490.0 | 0.251 | 0.272 | 0.172 | armed | latched | latched |
-| `E-start` | race_start | 5544.85 | 0.063 | 0.046 | 0.079 | latched | latched | latched |
-| `E-final-lap` | final_lap | 5649.0 | 0.114 | 0.082 | 0.083 | armed | latched | latched |
-| `E-finish` | race_finish | 5698.0 | 0.187 | 0.160 | 0.109 | latched | latched | armed |
+| `A-start` | race_start | 4429.67 | 0.101 | 0.229 | 0.052 | armed | latched | armed |
+| `A-final-lap` | final_lap | 4547.0 | 0.072 | 0.069 | 0.055 | armed | armed | armed |
+| `A-finish` | race_finish | 4596.0 | 0.102 | 0.126 | 0.105 | armed | armed | armed |
+| `B-start` | race_start | 4764.05 | 0.186 | 0.511 | 0.406 | latched | latched | latched |
+| `B-final-lap` | final_lap | 4873.0 | 0.142 | 0.250 | 0.068 | armed | latched | armed |
+| `B-finish` | race_finish | 4974.0 | 0.115 | 0.153 | 0.130 | armed | latched | armed |
+| `C-start` | race_start | 5126.0 | 0.185 | 0.520 | 0.380 | latched | latched | latched |
+| `C-final-lap` | final_lap | 5222.0 | 0.050 | 0.092 | 0.076 | armed | armed | armed |
+| `C-finish` | race_finish | 5251.0 | 0.130 | 0.125 | 0.074 | latched | latched | armed |
+| `D-start` | race_start | 5341.81 | 0.244 | 0.353 | 0.300 | latched | latched | latched |
+| `D-final-lap` | final_lap | 5440.0 | 0.126 | 0.306 | 0.154 | latched | latched | latched |
+| `D-finish` | race_finish | 5490.0 | 0.251 | 0.174 | 0.200 | latched | latched | latched |
+| `E-start` | race_start | 5544.85 | 0.242 | 0.044 | 0.150 | latched | armed | latched |
+| `E-final-lap` | final_lap | 5649.0 | 0.136 | 0.060 | 0.197 | latched | armed | latched |
+| `E-finish` | race_finish | 5698.0 | 0.355 | 0.104 | 0.100 | latched | latched | armed |
 
 ## Verdict
 
