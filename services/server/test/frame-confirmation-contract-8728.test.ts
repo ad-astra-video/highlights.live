@@ -150,6 +150,14 @@ describe("AC-3 / R5 — the recall guard: a frame attestation WITH a ref still p
     expect((a.patch.attestationUsed as any).authority).toBe("frame");
   });
 
+  it("a promotion clears the accept lane's refusal on the same disclosure object", () => {
+    const a = confirmDiveAdoption(row({ ...DEAD_LANE, authority: "none", refusalReason: "recap_window_open_play" }), verdict(), meta);
+    expect(a.kind).toBe("promoted");
+    const used = a.patch.attestationUsed as any;
+    expect(used.authority).toBe("frame");
+    expect(used.refusalReason).toBeUndefined();
+  });
+
   it("does NOT widen the guard to a lane that WAS read (8239 hold survives)", () => {
     const a = confirmDiveAdoption(row({ ...READ_NO_TRANSITION }), verdict(), meta);
     expect(a.kind).not.toBe("promoted");
@@ -270,6 +278,32 @@ describe("AC-5 / R7 — a delivered GOAL must name a non-none authority", () => 
       }).authority
     ).toBe("scoreboard");
     expect(liveGoalAttestationUsed({ attribution: { ...base, goalCrossed: true } }).authority).toBe("frame");
+  });
+});
+
+describe("AC-1 stored-row replay — job 08516607 / row aec39938 (read-only, $0)", () => {
+  it("a DELIVERED GOAL whose only named corroboration is audio_text no longer attests", () => {
+    // Read from `highlights` on livepeer-ai-x99 (no deploy, no call): window
+    // 38-53 s, eventType GOAL, `attestationUsed` absent (pre-8134 row),
+    // `confirmAttestation` absent, top-level `corroborationSource: "audio_text"`.
+    const used = liveGoalAttestationUsed({
+      attribution: { scoreBoardChanged: false, goalCrossed: false },
+      corroborated: true,
+      corroborationSource: "audio_text",
+      frameRefCount: 0,
+    });
+    expect(used.authority).toBe("none");
+    expect(
+      liveGoalHasMeasuredEvidence({
+        scoreBoardChanged: used.scoreBoardChanged,
+        goalCrossed: used.goalCrossed,
+        ballOutcome: used.ballOutcome,
+        corroborated: used.corroborated,
+        goalConfirmed: used.goalConfirmed,
+        corroborationSource: "audio_text",
+        frameRefCount: 0,
+      })
+    ).toBe(false);
   });
 });
 
