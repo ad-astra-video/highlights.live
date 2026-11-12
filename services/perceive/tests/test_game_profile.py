@@ -27,12 +27,14 @@ from app.game_profile import (
     ALL_TRIGGERS,
     BASKETBALL_PROFILE,
     DEFAULT_PROFILE,
+    FRAME_TRIGGERS,
     ORACLE_SCOREBOARD_OCR,
     PROFILES,
     SOCCER_PROFILE,
     TRIGGER_AUDIO,
     TRIGGER_BALL_VELOCITY,
     TRIGGER_DETECTION_IN_ZONE,
+    TRIGGER_HUD_EVENT,
     TRIGGER_MOTION,
     AudioThresholds,
     GameProfile,
@@ -1002,3 +1004,91 @@ def test_certification_is_a_separate_fact_from_measurement():
     view = prof.to_dict()
     assert view["measured"] is True
     assert view["certified"] is True
+
+
+# --- ADAAAA-8742 WP1: the `hudModel` field and the `hud-event` token --------
+
+
+def test_hud_model_is_the_declared_hud_geometry_field():
+    """A profile carries its HUD bands as data, and NONE is the inert default."""
+    from app.game_profile import (
+        SUPERTUXKART_PROFILE,
+        TRIGGER_HUD_EVENT,
+        HudBand,
+        HudModel,
+    )
+
+    # the token is part of the contract, on both the frame path and the subset
+    assert TRIGGER_HUD_EVENT in ALL_TRIGGERS
+    assert TRIGGER_HUD_EVENT in FRAME_TRIGGERS
+    assert "hud-event" in TriggerSubset.of(TRIGGER_HUD_EVENT).names()
+
+    # shipped profiles declare no HUD geometry: the site is inert for all of them
+    for key in ("soccer", "basketball", "american football", "supertuxkart"):
+        prof = load_game_profile(key)
+        assert prof.hud_model is None, key
+        assert TRIGGER_HUD_EVENT not in prof.triggers.names(), key
+        assert prof.to_dict()["hudModel"] is None, key
+
+    model = HudModel(
+        bands=(
+            HudBand(name="race-clock", rect=(20, 10, 140, 40), kind="clock"),
+            HudBand(name="event-banner", rect=(150, 90, 276, 130), kind="banner"),
+        ),
+        change_sensitivity=0.10,
+        min_dwell_frames=3,
+        quiet_frames=2,
+    )
+    prof = GameProfile(
+        key="hud-declared",
+        vocabulary=("kart",),
+        zone_model=ZoneModel.no_zone(),
+        corroboration_oracle=None,
+        triggers=TriggerSubset.of(TRIGGER_AUDIO, TRIGGER_HUD_EVENT),
+        audio_thresholds=AudioThresholds(),
+        tracking_roster=TrackingRoster(labels=("kart",)),
+        eval_set=None,
+        hud_model=model,
+    )
+    # declared geometry keeps the trigger; the serialized view states both
+    assert prof.allows(TRIGGER_HUD_EVENT)
+    view = prof.to_dict()["hudModel"]
+    assert view["changeSensitivity"] == 0.10
+    assert view["minDwellFrames"] == 3
+    assert [b["name"] for b in view["bands"]] == ["race-clock", "event-banner"]
+    # rects stay NATIVE pixels, not normalized fractions
+    assert view["bands"][0]["rect"] == [20, 10, 140, 40]
+    # supertuxkart itself is untouched by the field's existence
+    assert SUPERTUXKART_PROFILE.hud_model is None
+
+
+def test_hud_event_trigger_is_dropped_without_declared_geometry():
+    """The `hudModel` fallback mirrors the `no-zone` one, at construction."""
+    prof = GameProfile(
+        key="no-hud-geometry",
+        vocabulary=("kart",),
+        zone_model=ZoneModel.no_zone(),
+        corroboration_oracle=None,
+        triggers=TriggerSubset.of(TRIGGER_AUDIO, TRIGGER_HUD_EVENT),
+        audio_thresholds=AudioThresholds(),
+        tracking_roster=TrackingRoster(labels=("kart",)),
+        eval_set=None,
+    )
+    assert prof.hud_model is None
+    assert not prof.allows(TRIGGER_HUD_EVENT)
+    assert prof.triggers.names() == (TRIGGER_AUDIO,)
+
+
+def test_hud_geometry_is_validated_as_data():
+    from app.game_profile import HudBand, HudModel
+
+    with pytest.raises(ValueError):
+        HudModel(bands=())
+    with pytest.raises(ValueError):
+        HudModel(bands=(HudBand("a", (0, 0, 8, 8)), HudBand("a", (0, 0, 8, 8))))
+    with pytest.raises(ValueError):
+        HudModel(bands=(HudBand("a", (0, 0, 8, 8)),), change_sensitivity=2.0)
+    with pytest.raises(ValueError):
+        HudModel(bands=(HudBand("a", (0, 0, 8, 8)),), min_dwell_frames=0)
+    with pytest.raises(ValueError):
+        HudBand(name="bad", rect=(4, 4, 4, 9))

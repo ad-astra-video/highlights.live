@@ -6,6 +6,9 @@ Stage-A is the cheap, GPU-free candidate layer that gates the expensive Stage-B
 - ``motion``              — tracker peak single-step displacement
 - ``detection-in-zone``   — a detection whose box centre falls inside a scoring zone
 - ``ball-velocity``       — a ball-speed surge relative to its own recent window
+- ``hud-event``           — a DISCRETE HUD band transition (ADAAAA-8742 WP1),
+                            one candidate per transition, GPU-free; the
+                            discrete state machine lives in ``hud_reader``
 - ``audio``               — lives on its own ~10 Hz DSP path (``process_audio``),
                             routed through the profile there, not per frame
 
@@ -39,6 +42,7 @@ from .game_profile import (
     PLAN_ZONES,
     TRIGGER_BALL_VELOCITY,
     TRIGGER_DETECTION_IN_ZONE,
+    TRIGGER_HUD_EVENT,
     TRIGGER_MOTION,
     GameProfile,
     ZoneModel,
@@ -174,6 +178,47 @@ def ball_velocity_fire(
     )
 
 
+def hud_event_fires(
+    profile: GameProfile,
+    reader: Any,
+    frame: Any,
+    timestamp: Optional[float],
+    *,
+    seq: Optional[int] = None,
+) -> list:
+    """The ``hud-event`` site (ADAAAA-8742 WP1): one fire per HUD transition.
+
+    The reader owns the discrete state machine (per-band change score, dwell
+    gate, per-band latch); this function only converts a confirmed transition
+    into the layer's ``StageAFire`` shape. It is inert — and evaluates nothing —
+    when the profile does not enable the trigger, when no reader is supplied, or
+    when there is no frame. The reader itself is inert while
+    ``PERCEIVE_HUD_EVENT_ENABLED`` is off, so an unarmed deployment yields zero
+    candidates even with a fully declared ``hudModel``.
+    """
+    if not profile.allows(TRIGGER_HUD_EVENT):
+        return []
+    if reader is None or frame is None or timestamp is None:
+        return []
+    observe = getattr(reader, "observe", None)
+    if observe is None:
+        return []
+    transitions = observe(frame, float(timestamp), seq=seq) or ()
+    fires: list = []
+    for transition in transitions:
+        detail = {
+            "band": str(getattr(transition, "band", "") or ""),
+            "kind": str(getattr(transition, "kind", "") or ""),
+            "direction": str(getattr(transition, "direction", "enter") or "enter"),
+            "score": round(float(getattr(transition, "score", 0.0) or 0.0), 4),
+        }
+        coincident = getattr(transition, "coincident_bands", ()) or ()
+        if coincident:
+            detail["coincidentBands"] = list(coincident)
+        fires.append(StageAFire(trigger=TRIGGER_HUD_EVENT, detail=detail))
+    return fires
+
+
 def evaluate_stage_a(
     profile: GameProfile,
     *,
@@ -182,12 +227,22 @@ def evaluate_stage_a(
     ball_velocity: Optional[Mapping[str, Any]] = None,
     ball_recent_speeds: Optional[Sequence[float]] = None,
     plan_zones: Optional[Sequence[Any]] = None,
+    frame: Any = None,
+    hud_reader: Any = None,
+    timestamp: Optional[float] = None,
+    seq: Optional[int] = None,
 ) -> list:
     """Evaluate the frame-path trigger sites this profile enables.
 
     A site that the profile does not enable is not evaluated at all: its inputs
     are never consulted (no zone geometry is built, no motion history is read,
-    no ball speed is scored). Returns the fires that survived, in trigger order.
+    no ball speed is scored, no HUD band is cropped). Returns the fires that
+    survived, in trigger order.
+
+    ``frame`` / ``hud_reader`` exist for the ``hud-event`` site (ADAAAA-8742).
+    The reader is duck-typed on purpose: this module stays stdlib+numpy-free at
+    import time, and a caller that does not pass a reader leaves the site inert
+    instead of building geometry the profile never measured.
     """
     fires: list = []
 
@@ -211,6 +266,11 @@ def evaluate_stage_a(
         if fire is not None:
             fires.append(fire)
 
+    if profile.allows(TRIGGER_HUD_EVENT):
+        fires.extend(
+            hud_event_fires(profile, hud_reader, frame, timestamp, seq=seq)
+        )
+
     return fires
 
 
@@ -224,5 +284,6 @@ __all__ = [
     "motion_peak_step",
     "motion_fire",
     "ball_velocity_fire",
+    "hud_event_fires",
     "evaluate_stage_a",
 ]

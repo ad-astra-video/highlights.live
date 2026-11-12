@@ -49,12 +49,19 @@ TRIGGER_MOTION = "motion"
 TRIGGER_AUDIO = "audio"
 TRIGGER_DETECTION_IN_ZONE = "detection-in-zone"
 TRIGGER_BALL_VELOCITY = "ball-velocity"
+# ADAAAA-8742 (esports R1): a discrete HUD state change (race-clock reset,
+# centre event banner, lap-counter crossing, clock stop). Automotive/timed
+# HUDs only; the reader that implements it is `app.hud_reader.py` and it is
+# GPU-free, so enabling it never adds a GPU job. A type enables it only by
+# declaring both this trigger and a `hudModel`.
+TRIGGER_HUD_EVENT = "hud-event"
 
 ALL_TRIGGERS: Tuple[str, ...] = (
     TRIGGER_MOTION,
     TRIGGER_AUDIO,
     TRIGGER_DETECTION_IN_ZONE,
     TRIGGER_BALL_VELOCITY,
+    TRIGGER_HUD_EVENT,
 )
 
 # Triggers evaluated on the frame path. `audio` is evaluated on its own ~10 Hz
@@ -63,6 +70,7 @@ FRAME_TRIGGERS: Tuple[str, ...] = (
     TRIGGER_MOTION,
     TRIGGER_DETECTION_IN_ZONE,
     TRIGGER_BALL_VELOCITY,
+    TRIGGER_HUD_EVENT,
 )
 
 # --- zone model -------------------------------------------------------------
@@ -319,6 +327,101 @@ class ScoreboardOcrOracle(CorroborationOracle):
 
 
 @dataclass(frozen=True)
+class HudBand:
+    """One HUD region a type reads for discrete transitions.
+
+    ``rect`` is in NATIVE frame pixels ``(x0, y0, x1, y1)`` — the resolution the
+    band was measured at (426x240 for the SuperTuxKart measurement), not a
+    normalized box: a HUD element's pixel extent is what makes a banner or a
+    race clock separable from the play area, and a normalized box would drift
+    with the aspect ratio. ``kind`` is informational only (``clock`` /
+    ``banner`` / ``counter`` / ``results``); it never selects behaviour.
+    """
+
+    name: str
+    rect: Tuple[int, int, int, int]
+    kind: str = "generic"
+
+    def __post_init__(self) -> None:
+        if not str(self.name or "").strip():
+            raise ValueError("a HUD band needs a name")
+        try:
+            x0, y0, x1, y1 = (int(v) for v in self.rect)
+        except (TypeError, ValueError):
+            raise ValueError(f"HUD band {self.name!r} needs a 4-int rect") from None
+        if x0 < 0 or y0 < 0:
+            raise ValueError(f"HUD band {self.name!r} rect origin must be >= 0")
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            raise ValueError(
+                f"HUD band {self.name!r} rect must be at least 2x2 native pixels"
+            )
+
+
+@dataclass(frozen=True)
+class HudModel:
+    """The type's declared HUD geometry and the discrete-detector operating point.
+
+    Carries exactly what plan §2 WP1 names: the band rects in native pixels, a
+    change sensitivity, and a minimum dwell.
+
+    - ``change_sensitivity`` — mean absolute signature delta (in [0, 1]) that
+      reads as a step. Structural, not a kart number: a band that changes by a
+      tenth of its full range between two frames is a state change, not a
+      shading drift.
+    - ``min_dwell_frames`` — a step must persist this many consecutive frames to
+      be a transition. At the default of 3 a two-frame flicker is suppressed by
+      construction, which is the difference between a discrete detector and the
+      audio gate's volume problem.
+    - ``quiet_frames`` — frames back at baseline before a latched band re-arms.
+
+    No ``hudModel`` on a profile means the type has no measured HUD geometry, so
+    the ``hud-event`` site is inert (``GameProfile.__post_init__`` drops the
+    trigger) — the same shape as the ``no-zone`` fallback.
+    """
+
+    bands: Tuple[HudBand, ...]
+    change_sensitivity: float = 0.10
+    min_dwell_frames: int = 3
+    quiet_frames: int = 2
+    cell: int = 8
+
+    def __post_init__(self) -> None:
+        if not self.bands:
+            raise ValueError(
+                "a hudModel declares at least one band; use no hudModel for a type "
+                "with no measured HUD geometry"
+            )
+        names = [b.name for b in self.bands]
+        if len(set(names)) != len(names):
+            raise ValueError(f"duplicate HUD band name(s) in {names}")
+        sensitivity = float(self.change_sensitivity)
+        if not 0.0 < sensitivity <= 1.0:
+            raise ValueError("change sensitivity must be in (0, 1]")
+        if int(self.min_dwell_frames) < 1:
+            raise ValueError("minimum dwell must be >= 1 frame")
+        if int(self.quiet_frames) < 1:
+            raise ValueError("quiet frames must be >= 1")
+        if int(self.cell) < 2:
+            raise ValueError("the signature cell grid must be >= 2")
+
+    @property
+    def band_names(self) -> Tuple[str, ...]:
+        return tuple(b.name for b in self.bands)
+
+    def to_dict(self) -> dict:
+        return {
+            "bands": [
+                {"name": b.name, "rect": list(b.rect), "kind": b.kind}
+                for b in self.bands
+            ],
+            "changeSensitivity": self.change_sensitivity,
+            "minDwellFrames": self.min_dwell_frames,
+            "quietFrames": self.quiet_frames,
+            "cell": self.cell,
+        }
+
+
+@dataclass(frozen=True)
 class GameProfile:
     """One video type's analysis-loop parameter set (the seven approved fields)."""
 
@@ -330,6 +433,9 @@ class GameProfile:
     audio_thresholds: AudioThresholds
     tracking_roster: TrackingRoster
     eval_set: Optional[EvalSet] = None
+    # ADAAAA-8742: declared HUD geometry for the `hud-event` site. `None` means
+    # the type has no measured HUD bands, so the site stays inert.
+    hud_model: Optional[HudModel] = None
 
     def __post_init__(self) -> None:
         # The `no-zone` fallback: the detection-in-zone trigger is disabled by
@@ -338,6 +444,13 @@ class GameProfile:
         if self.zone_model.is_no_zone and self.triggers.allows(TRIGGER_DETECTION_IN_ZONE):
             object.__setattr__(
                 self, "triggers", self.triggers.without(TRIGGER_DETECTION_IN_ZONE)
+            )
+        # The `hudModel` fallback (ADAAAA-8742), same shape: without declared
+        # geometry the site cannot score a band, so the trigger is dropped at
+        # construction instead of silently reading nothing at frame time.
+        if self.hud_model is None and self.triggers.allows(TRIGGER_HUD_EVENT):
+            object.__setattr__(
+                self, "triggers", self.triggers.without(TRIGGER_HUD_EVENT)
             )
         if self.corroboration_oracle is not None:
             kind = getattr(self.corroboration_oracle, "kind", "")
@@ -438,6 +551,9 @@ class GameProfile:
             "measured": self.measured,
             # measurement vs review: see `GameProfile.certified`
             "certified": self.certified,
+            # ADAAAA-8742 WP1: declared HUD bands + discrete-detector operating
+            # point (None = the type declares no HUD geometry, site inert).
+            "hudModel": None if self.hud_model is None else self.hud_model.to_dict(),
         }
 
 
@@ -975,6 +1091,7 @@ __all__ = [
     "TRIGGER_AUDIO",
     "TRIGGER_DETECTION_IN_ZONE",
     "TRIGGER_BALL_VELOCITY",
+    "TRIGGER_HUD_EVENT",
     "ORACLE_SCOREBOARD_OCR",
     "ORACLE_HUD_PARSE",
     "ORACLE_AUDIO_TEXT",
@@ -984,6 +1101,8 @@ __all__ = [
     "BALL_SPEED_WINDOW",
     "ZoneSpec",
     "ZoneModel",
+    "HudBand",
+    "HudModel",
     "AudioThresholds",
     "TriggerSubset",
     "TrackingRoster",
