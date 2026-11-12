@@ -2020,8 +2020,9 @@ export function servedShapeViolations(
  * ------------------------------------------------------------------------- */
 
 /** The window-relative audit marker, as a source fragment (no flags): every
- *  form the model writes — `at t=-2.7s`, `at t=0.0`, `t=-1.0`, and a range. */
-const AUDIT_MARKER_SRC = String.raw`\b(?:at\s+)?t\s*=\s*-?\d+(?:\.\d+)?\s*s?`;
+ *  form the model writes — `at t=-2.7s`, `at t=0.0` (unit-less), `t=-1.0`, the
+ *  match-clock form `t=22:13`, and a range. */
+const AUDIT_MARKER_SRC = String.raw`\b(?:at\s+)?t\s*=\s*-?\d+(?:[:.]\d+)?\s*s?`;
 
 /** Does this text cite the model's OWN window clock (`at t=…`, any unit form)? */
 const AUDIT_MARKER_TEST = new RegExp(String.raw`${AUDIT_MARKER_SRC}\b`, "i");
