@@ -273,11 +273,21 @@ export interface AcceptanceLaneRow {
     corroborated: boolean | null;
     corroborationSource: string | null;
   } | null;
-  /** ADAAAA-8728 (R7/AC-5): the measured authority this row used, derived from
-   *  the SAME stored trigger/confirm fields the accept gate read. `none` on a
-   *  delivered GOAL is the defect the contract forbids, so the lane can count
-   *  it without a highlight join. */
+  /** ADAAAA-8728 (R7/AC-5) / ADAAAA-8774: the measured authority this row used.
+   *  PREFERS the delivered card's own `attestationUsed.authority` (the
+   *  accept-time disclosure the card renders) and only falls back to the
+   *  candidate's stored trigger/confirm signals — so the lane falsifier and the
+   *  delivered card cannot disagree about the same row. `none` on a delivered
+   *  GOAL is the defect the contract forbids, so the lane can count it. */
   authority: "scoreboard" | "frame" | "none";
+  /** ADAAAA-8774: which basis `authority` came from — `row` when the delivered
+   *  highlight's disclosure named it, `candidate` when the lane fell back to the
+   *  candidate record (pre-R7 lanes). */
+  authoritySource: "row" | "candidate";
+  /** ADAAAA-8774: the trigger-derived authority, reported beside the delivered
+   *  one so a disagreement between the two bases is visible on one row instead
+   *  of being silently resolved by precedence. */
+  candidateAuthority: "scoreboard" | "frame" | "none";
 }
 
 /** Durable tombstone written by `DELETE /jobs/:id`: who deleted which job when,

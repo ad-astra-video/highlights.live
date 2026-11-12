@@ -19,10 +19,37 @@
 import type { Job, JobCandidate } from "@highlights/events";
 import type { AcceptanceLaneRow, DeletedJobCounts, DeletedJobTombstone } from "./db";
 
-/** ADAAAA-8728 (R7): the measured authority one candidate row names. Reads only
- *  the fields the accept gate itself stored (trigger signals + the dive verdict),
- *  so the projection cannot disagree with the row it describes. */
-export function laneRowAuthority(c: JobCandidate): "scoreboard" | "frame" | "none" {
+type LaneAuthority = "scoreboard" | "frame" | "none";
+
+/** ADAAAA-8774: what the DELIVERED card discloses about itself. `attestationUsed`
+ *  and the row-level corroboration fields are the accept-time / dive-time
+ *  disclosure the card renders, so they — not a re-derivation — are the primary
+ *  basis for the lane's authority. Narrow structural type: a stored highlight
+ *  row satisfies it, and a tombstone reader can still build one by hand. */
+export interface DeliveredHighlightLike {
+  /** `highlights.record.candidateId` — the link back to the lane row
+   *  (ADAAAA-6798). A row without it cannot be attributed to a candidate. */
+  candidateId?: string | null;
+  /** Only a delivered (`accepted`) row contributes a disclosure. */
+  status?: string | null;
+  attestationUsed?: {
+    /** ADAAAA-8728 (R7): the measured authority the accept/dive lane disclosed. */
+    authority?: LaneAuthority | string | null;
+    refusalReason?: string | null;
+    /** ADAAAA-8774 (R3 offline): cited-frame count on a frame attestation. */
+    frameRefCount?: number | null;
+    /** The rest of the disclosure (score reads, transition, …) is not read here. */
+    [extra: string]: unknown;
+  } | null;
+  corroborationSource?: string | null;
+}
+
+/** The authority the CANDIDATE record alone names (trigger signals + the dive
+ *  verdict). Kept exported because it is a second, independent basis: the lane
+ *  reports it beside the delivered one so a disagreement is visible.
+ *
+ *  ADAAAA-8728 (R7) derivation; ADAAAA-8774 keeps it as the FALLBACK only. */
+export function candidateRowAuthority(c: JobCandidate): LaneAuthority {
   if (c.trigger?.scoreBoardChanged === true) return "scoreboard";
   if (c.trigger?.goalCrossed === true) return "frame";
   if (/^goal$/i.test((c.trigger?.ballOutcome ?? "").trim())) return "frame";
@@ -32,6 +59,50 @@ export function laneRowAuthority(c: JobCandidate): "scoreboard" | "frame" | "non
     if (dive.corroborationSource === "frame_attestation") return "frame";
   }
   return "none";
+}
+
+/** ADAAAA-8774 (AC-5): the lane row's authority, preferring the disclosure the
+ *  DELIVERED card itself carries.
+ *
+ *  Why the delivered row wins: the QA seed replay on ADAAAA-8768 found a card
+ *  whose stored `attestationUsed.authority` says `frame` (`corroborated: true`,
+ *  `goalConfirmed: confirmed_goal`, ball-in-net evidence) while its candidate
+ *  record carried only `trigger: {kind: motion}` and a `confirm` block with a
+ *  decision + request and no corroboration — so a candidate-only derivation said
+ *  `none` and the AC-5 falsifier counted a delivered GOAL as unattested, i.e. it
+ *  reported a violation the row itself refutes. The row's disclosure is the
+ *  accept-time attestation (it is what the card renders), so the lane must never
+ *  contradict it; the candidate derivation stays as the fallback for lanes
+ *  written before R7 (no `attestationUsed.authority`) — never as the primary.
+ *
+ *  `none` is a real disclosure, not a missing one: a demoted row that says
+ *  `none` keeps saying `none` here (the fallback must not re-credit it). */
+export function laneRowAuthority(
+  c: JobCandidate,
+  delivered?: DeliveredHighlightLike | null
+): LaneAuthority {
+  const stored = delivered?.attestationUsed?.authority;
+  if (stored === "scoreboard" || stored === "frame" || stored === "none") return stored;
+  return candidateRowAuthority(c);
+}
+
+/** ADAAAA-8774: index the delivered rows' disclosures by candidate id, so a
+ *  lane projection is one map lookup per row. Only `accepted` rows contribute:
+ *  a rejected clip is not delivered and its disclosure never describes a lane
+ *  accept. Later rows win (a re-attested/re-promoted row replaces the earlier
+ *  one), which matches the store's single-row-per-candidate reality. */
+export function deliveredAuthorityByCandidate(
+  rows: ReadonlyArray<DeliveredHighlightLike>
+): Map<string, DeliveredHighlightLike> {
+  const byCandidate = new Map<string, DeliveredHighlightLike>();
+  for (const r of rows) {
+    const id = r?.candidateId;
+    if (!id) continue;
+    if (r.status != null && r.status !== "accepted") continue;
+    if (!r.attestationUsed && !r.corroborationSource) continue;
+    byCandidate.set(id, r);
+  }
+  return byCandidate;
 }
 
 /** ADAAAA-8728 (AC-5): delivered GOAL rows that name no measured authority. The
@@ -60,8 +131,19 @@ export function countDeliveredGoalsWithoutAuthority(
  * already survives in `decide_audit`. Everything the lane question DOES need is
  * copied: `status`, the trigger signals the accept gate read, the suppression
  * reason, and the confirm dive outcome.
+ *
+ * ADAAAA-8774: pass the candidate's delivered highlight row (when one exists)
+ * so the row's `authority` is the DELIVERED disclosure, with the trigger-derived
+ * value reported beside it as `candidateAuthority`.
  */
-export function acceptanceLaneRow(c: JobCandidate): AcceptanceLaneRow {
+export function acceptanceLaneRow(
+  c: JobCandidate,
+  delivered?: DeliveredHighlightLike | null
+): AcceptanceLaneRow {
+  const storedAuthority = delivered?.attestationUsed?.authority;
+  const fromRow =
+    storedAuthority === "scoreboard" || storedAuthority === "frame" || storedAuthority === "none";
+  const authority: LaneAuthority = fromRow ? storedAuthority : candidateRowAuthority(c);
   return {
     id: c.id,
     seq: c.seq ?? 0,
@@ -92,8 +174,12 @@ export function acceptanceLaneRow(c: JobCandidate): AcceptanceLaneRow {
           corroborationSource: c.confirm.decision?.corroborationSource ?? null,
         }
       : null,
-    // ADAAAA-8728 (R7/AC-5): the authority the row used, from the same fields.
-    authority: laneRowAuthority(c),
+    // ADAAAA-8728 (R7/AC-5) / ADAAAA-8774: the authority the DELIVERED row used,
+    // falling back to the candidate's own signals, plus both bases so a
+    // disagreement between the lane and the card is visible on one row.
+    authority,
+    authoritySource: fromRow ? "row" : "candidate",
+    candidateAuthority: candidateRowAuthority(c),
   };
 }
 
@@ -120,15 +206,26 @@ export function acceptanceLaneCounts(
 
 /** Build the tombstone written by `DELETE /jobs/:id`. Call it BEFORE the
  * cascade: the lane is read from the live working set and then committed in the
- * same transaction as the deletion. */
+ * same transaction as the deletion.
+ *
+ * ADAAAA-8774: `extra.delivered` carries the job's stored highlight rows. They
+ * are still in the store at this point, so the tombstone keeps the DELIVERED
+ * authority of each accepted row — otherwise the surviving lane would say `none`
+ * about a card that shipped as a GOAL naming a measured authority. */
 export function buildDeletedJobTombstone(
   job: Job,
   candidates: JobCandidate[],
-  extra: { highlights: number; alternatives: number; observations: number },
+  extra: {
+    highlights: number;
+    alternatives: number;
+    observations: number;
+    delivered?: ReadonlyArray<DeliveredHighlightLike>;
+  },
   deletedBy: string | null,
   deletedAt: string = new Date().toISOString()
 ): DeletedJobTombstone {
-  const rows = candidates.map(acceptanceLaneRow);
+  const delivered = deliveredAuthorityByCandidate(extra.delivered ?? []);
+  const rows = candidates.map((c) => acceptanceLaneRow(c, delivered.get(c.id)));
   return {
     jobId: job.id,
     ownerId: job.ownerId ?? null,

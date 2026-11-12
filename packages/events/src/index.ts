@@ -2089,6 +2089,15 @@ export const HighlightRecordSchema = z.object({
        *  `none`, so "a delivered GOAL with no authority" is countable from the
        *  stored row. Additive optional — legacy rows parse as before. */
       authority: z.enum(["scoreboard", "frame", "none"]).optional(),
+      /** ADAAAA-8774 (R3, offline re-derivability): how many in-window frames the
+       *  dive's frame attestation cited. Present ONLY when a frame attestation
+       *  claimed the row (`corroborationSource: "frame_attestation"`): absent =
+       *  no frame claim (not applicable), `0` = claimed but cited nothing (the
+       *  row is refused), `>= 1` = cited. The accept lane's own request payload
+       *  is never persisted, so this count is the only durable citation record
+       *  and it makes `frame_attestation_uncited` re-derivable from the stored
+       *  row instead of from a transient prompt. Additive optional. */
+      frameRefCount: z.number().int().min(0).optional(),
       /** ADAAAA-8728 (R7): why the GOAL was refused on a demoted row
        *  (`text_only_corroboration`, `frame_attestation_uncited`,
        *  `recap_window_open_play`, `score_lane_read_no_transition`, …). Absent
