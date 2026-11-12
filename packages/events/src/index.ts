@@ -1765,6 +1765,40 @@ export const ClipChoiceSchema = z.object({
 });
 export type ClipChoice = z.infer<typeof ClipChoiceSchema>;
 
+/**
+ * ADAAAA-8733 (GT-2): the scorebug MATCH CLOCK reading for one window.
+ *
+ * The clock sits in the SAME crop and the SAME OCR line as the score pair
+ * (`LALIGA00:56`, `RMA 1/2 FCB36:54`, `GER 4 1 SCO86:35FOXEURO2`), so reading it
+ * costs no extra OCR call and no GPU-second: the parse runs on text the score
+ * parse already returned, on the server's CPU (AC-GT6).
+ *
+ * The shape list is the GT-1 census's measured set: `mm:ss`, `hh:mm:ss`, the
+ * `bare_minute` apostrophe form, and `dot` — the colon lost to the crop
+ * (`ENG82.29`), which the census measured on 392 of the 444 OCR windows of one
+ * FOX Euro fixture and is the single biggest coverage lever.
+ */
+export const MatchClockReadingSchema = z.object({
+  /** Match clock in content-absolute seconds, or null when unreadable. */
+  seconds: z.number().int().min(0).nullable(),
+  /** Which measured shape produced `seconds`; null when nothing parsed. */
+  shape: z.enum(["mm:ss", "hh:mm:ss", "dot", "bare_minute"]).nullable(),
+  /** Period marker the bug shows (`1H`/`2H`/`Q3`/`1.Ç`/`HT`), normalized, or
+   * null when the graphic shows none. Two readings in different periods are
+   * never the same moment. */
+  period: z.string().nullable(),
+  /** True only when `seconds` parsed AND the reading is a match clock (the
+   * media-timecode trap `0:03:04:800` is NOT legible). */
+  legible: z.boolean(),
+  /** The token that produced the reading, bounded for audit. Absent when
+   * nothing parsed. */
+  token: z.string().optional(),
+  /** Content instant (seconds from stream start) of the OCR frame this reading
+   * came from, so the merge lane can test coherence against content time (R4). */
+  ts: z.number().min(0).optional(),
+});
+export type MatchClockReading = z.infer<typeof MatchClockReadingSchema>;
+
 export const HighlightRecordSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -1964,6 +1998,14 @@ export const HighlightRecordSchema = z.object({
   duplicateOf: z.string().optional(),
   duplicateCount: z.number().int().min(0).optional(),
   mergedIds: z.array(z.string()).optional(),
+  /** ADAAAA-8733 (GT-2): the scorebug MATCH CLOCK read on the same crop and
+   * the same OCR call that produced the score pair. The clock is the only
+   * on-screen signal that says "this is the same game moment" without needing a
+   * score transition to parse, so the postable merge lane combines GOAL moments
+   * on it (`highlight-postable.ts` R1-R6). Additive optional — legacy rows and
+   * every row whose bug shows no clock carry no key, and a missing clock is a
+   * no-op for every rule (it can never attest, demote or re-lane a goal). */
+  matchClock: MatchClockReadingSchema.optional(),
   // ADAAAA-7865: why a delivered highlight was DOWNGRADED out of the scoring
   // lane. Set on a repeat GOAL accept that re-read an already-delivered goal
   // event (post-goal celebration frames attested by ball-in-net) and carried no

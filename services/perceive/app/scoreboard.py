@@ -751,6 +751,103 @@ def score_changed(prev: Optional[Tuple[int, int]], curr: Optional[Tuple[int, int
     return prev != curr
 
 
+# --- ADAAAA-8733 (GT-2): the scorebug MATCH CLOCK ----------------------------
+# The clock sits in the SAME crop and the SAME OCR line as the score pair
+# (``LALIGA00:56``, ``RMA 1/2 FCB36:54``, ``GER 4 1 SCO86:35FOXEURO2``), so
+# reading it costs no extra OCR call and no GPU-second. Until now every clock
+# shape was deliberately REFUSED by the score parser (a clock must never become
+# a score — see ``_SCORE_LINE_RE``); this parser reads it WITHOUT feeding the
+# score/delta lane, so ``scoreBoardChanged`` can never be driven by a clock.
+#
+# This mirrors ``parseOcrMatchClockLine`` in services/server/src/analyzer.ts
+# token for token — same shape precedence, same guards, same period
+# normalisation — because the two layers read the same OCR text and must not
+# disagree about it. Change one, change the other; the parity fixture in
+# services/perceive/tests/test_match_clock_8733.py pins the table.
+_MATCH_CLOCK_MEDIA_TIMECODE_RE = re.compile(r"\d{1,3}:\d{2}:\d{2}:\d{1,3}")
+_MATCH_CLOCK_HHMMSS_RE = re.compile(r"(?<![\d:])(\d{1,2}):([0-5]\d):([0-5]\d)(?![\d:])")
+_MATCH_CLOCK_MMSS_RE = re.compile(r"(?<!\d)(\d{1,3}):([0-5]\d)(?![\d:])")
+# The colon lost to the crop (``ENG82.29``). The left side is 2-3 digits
+# (minutes >= 10), which is what keeps a dot-glued SCORE pair (both sides <= 9)
+# out of the clock's hands and the clock out of the score parser's.
+_MATCH_CLOCK_DOT_RE = re.compile(r"(?<![\d.])(\d{2,3})\.([0-5]\d)(?![\d.])")
+_MATCH_CLOCK_BARE_MINUTE_RE = re.compile(r"(?<![\d:])(\d{1,2})(?:\+(\d{1,2}))?'(?![A-Za-z])")
+
+_MATCH_CLOCK_PERIOD_PATTERNS = (
+    (re.compile(r"\b(?:HT|MT|HALF[-\s]?TIME)\b", re.IGNORECASE), lambda m: "HT"),
+    (re.compile(r"(?<!\d)([12])\s*\.\s*[ÇC](?![A-Za-z])"), lambda m: f"Q{m.group(1)}"),
+    (re.compile(r"\bQ([1-4])\b", re.IGNORECASE), lambda m: f"Q{m.group(1)}"),
+    (re.compile(r"\b([12])H\b", re.IGNORECASE), lambda m: f"{m.group(1)}H"),
+    (re.compile(r"\bH([12])\b"), lambda m: f"{m.group(1)}H"),
+    (
+        re.compile(r"\b([12])(?:st|nd)\s+(?:half|period|quarter)\b", re.IGNORECASE),
+        lambda m: f"{m.group(1)}H",
+    ),
+)
+
+
+def parse_match_clock_period(text: str) -> Optional[str]:
+    """The period a line shows, normalised (``1H`` / ``2H`` / ``Q3`` / ``HT``),
+    or ``None`` when the bug shows none."""
+    for pattern, period in _MATCH_CLOCK_PERIOD_PATTERNS:
+        m = pattern.search(text)
+        if m:
+            return period(m)
+    return None
+
+
+def parse_match_clock_line(text) -> Optional[dict]:
+    """The match clock carried by ONE OCR line, or ``None``.
+
+    Returns ``{"seconds", "shape", "period", "legible", "token"}``. Shape
+    precedence is ``hh:mm:ss`` -> ``mm:ss`` -> ``dot`` -> ``bare_minute`` and the
+    first token of the winning shape wins. An unreadable clock returns ``None``
+    (absent evidence, never a fabricated reading), and a media timecode
+    (``0:03:04:800`` — a player scrub overlay) is refused outright: it reads as
+    perfect ``mm:ss`` coverage but is not a match clock.
+    """
+    line = str(text or "").strip()
+    if not line:
+        return None
+    if _MATCH_CLOCK_MEDIA_TIMECODE_RE.search(line):
+        return None
+    period = parse_match_clock_period(line)
+    shapes = (
+        ("hh:mm:ss", _MATCH_CLOCK_HHMMSS_RE, lambda m: int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))),
+        ("mm:ss", _MATCH_CLOCK_MMSS_RE, lambda m: int(m.group(1)) * 60 + int(m.group(2))),
+        ("dot", _MATCH_CLOCK_DOT_RE, lambda m: int(m.group(1)) * 60 + int(m.group(2))),
+        (
+            "bare_minute",
+            _MATCH_CLOCK_BARE_MINUTE_RE,
+            lambda m: (int(m.group(1)) + int(m.group(2) or 0)) * 60,
+        ),
+    )
+    for shape, pattern, to_seconds in shapes:
+        m = pattern.search(line)
+        if not m:
+            continue
+        seconds = to_seconds(m)
+        if seconds < 0:
+            continue
+        return {
+            "seconds": int(seconds),
+            "shape": shape,
+            "period": period,
+            "legible": True,
+            "token": m.group(0),
+        }
+    return None
+
+
+def parse_match_clock(lines) -> Optional[dict]:
+    """The first legible match clock among a window's OCR lines, or ``None``."""
+    for raw in lines or ():
+        reading = parse_match_clock_line(raw)
+        if reading is not None:
+            return reading
+    return None
+
+
 # ADAAAA-7844: a measured scoreboard delta must be LEGIBLE on both sides and
 # CONSISTENT across OCR samples, not a single-frame flip. A one-frame OCR
 # misread (a stat line / sponsor graphic / clock read as "N - M") produced a

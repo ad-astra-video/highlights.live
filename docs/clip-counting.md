@@ -14,8 +14,8 @@ cannot drift back to counting database rows.
 | **Raw rows** (audit) | Every persisted `highlights` row, including rejected clips, gate-dropped verdicts, and merged-away overlapping duplicates | `SELECT COUNT(*) FROM highlights` | Admin / diagnostics only, labelled raw |
 
 The database keeps **every** clip row. Nothing is deleted, backfilled, or migrated:
-merged-ness is derived at read time from `start`, `end`, `score`, `corroborated`
-and `outcome`, so the raw trail stays complete for audit and for the future
+merged-ness is derived at read time from `start`, `end`, `score`, `corroborated`,
+`outcome` and (ADAAAA-8733) the row's `matchClock`, so the raw trail stays complete for audit and for the future
 "detect the merge before the expensive deep dive" work (parked as ADAAAA-7853).
 
 `raw rows - postable moments` is the number of rows that are not a separate clip
@@ -34,6 +34,40 @@ and verdicts the precision gate dropped.
 4. collapse overlapping clip windows into ONE moment — the best-scoring, then
    best-corroborated, then earliest clip wins; the rest are marked
    `duplicateOf` the winner and reported through `duplicateCount` / `mergedIds`.
+5. ADAAAA-8733 (GT-2): collapse moments whose **scorebug match clock** proves
+   they are the same GAME moment, even when their clip windows do not overlap —
+   and never collapse two whose clocks prove they are distinct. Absorbed rows
+   move to the duplicate lane exactly like step 4 (same `duplicateOf` /
+   `duplicateCount` / `mergedIds` fields), nothing is re-cut, and a row with no
+   legible clock is a no-op.
+
+### The match-clock lane (ADAAAA-8733)
+
+The clock is read on the SAME crop and the SAME OCR call as the score pair
+(`LALIGA00:56`, `RMA 1/2 FCB36:54`), parsed by
+`parseOcrMatchClockLine` (server) and `parse_match_clock_line` (perceive) — two
+mirrors of one table, pinned by a parity fixture. It costs no OCR call and no
+GPU-second, and it never feeds the score/delta lane: a clock can never attest,
+confirm, demote or re-lane a GOAL (R3).
+
+The tolerances are measured, not chosen (ADAAAA-8732 census): two re-reads of one
+event agreed within 7 s (`CLOCK_SAME_MOMENT_S = 10`); the smallest measured gap
+between genuinely distinct goals on one coherent segment was 309 s, so
+`CLOCK_DISTINCT_S = 30` is a floor. Three gates keep the lane safe:
+
+- **anchor** — a row carries the clock read AT its measured goal instant (within
+  `CLOCK_ANCHOR_TOLERANCE_S = 4` s); a window-centred read advances with content
+  and cannot identify a moment.
+- **coherence** — the clock must advance with content time within
+  `CLOCK_COHERENCE_TOLERANCE_S = 3` s. That is the segment gate: every incoherent
+  pair in the census was a graphic/match cut (`+124 s` in `3 s`), so a bumper or
+  studio cut-away can never merge two matches' goals. A rewound read is a replay
+  inset and never combines.
+- **frozen bug** — a job whose clock does not move while content advances
+  (> 20 s) has NO clock lane, so a static/placeholder graphic cannot merge
+  distinct goals. `matchClock` absent on every row also means no lane at all.
+
+Tolerances apply per job at read time; nothing is written back to the rows.
 
 ### `status` is a publish state, not a verdict (ADAAAA-8678)
 

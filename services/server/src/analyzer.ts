@@ -4,7 +4,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { WindowAnalysisSchema, ConfirmRecordSchema } from "@highlights/events";
 import type { DecideAdmissionMetrics, DecideCapacitySnapshot, DecideRunnerAttribution } from "@highlights/livepeer-session";
-import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord } from "@highlights/events";
+import type { HighlightRecord, HighlightTrigger, JobCandidate, TrackObservation, WindowAnalysis, ConfirmRecord, MatchClockReading } from "@highlights/events";
 // ADAAAA-8544: the resolved per-job decide knob's stamp type — carried on the
 // observe snapshot so a rewritten snapshot keeps the frozen knob.
 import type { DecideKnobStamp } from "@highlights/events";
@@ -329,6 +329,13 @@ export interface CandidateSignal {
    * lands below the score state this run already read (2-2)"`). Carried so the
    * demoted row's copy names the rewind; absent when nothing was refused. */
   scoreRewindRefusal?: string;
+  /** ADAAAA-8733 (GT-2): the scorebug MATCH CLOCK, parsed from the SAME OCR text
+   * the score pair comes from (no extra OCR call, no GPU-second). Kept only when
+   * the reading sits on the window's measured goal instant, so two windows of
+   * one goal compare the clock AT the goal, not at their own centres. Never a
+   * score and never attestation evidence — the postable merge lane is its only
+   * reader. */
+  matchClock?: MatchClockReading;
 }
 
 /**
@@ -1548,6 +1555,160 @@ export function scoreReadingsFromTimeline(
     if (score) out.push({ ts: r.ts, score });
   }
   return out.sort((a, b) => a.ts - b.ts);
+}
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8733 (GT-2): the scorebug MATCH CLOCK
+// ---------------------------------------------------------------------------
+//
+// The clock sits in the SAME crop and the SAME OCR line as the score pair
+// (`LALIGA00:56`, `RMA 1/2 FCB36:54`, `GER 4 1 SCO86:35FOXEURO2`), and until now
+// every clock shape was deliberately REFUSED by the score parser (a clock must
+// never become a score — ADAAAA-8189 / ADAAAA-8507). The terrain is measured:
+// GT-1's census (`decide_audit`, 4 jobs / 2000 rows) found the clock legible on
+// 98.5 % of a LaLiga bug's OCR windows and 13.1 % (92.1 % with the dot form) on
+// a FOX Euro bug. Reading it costs nothing — the text is already returned.
+//
+// This parser is MIRRORED by `parse_ocr_match_clock` in
+// `services/perceive/app/scoreboard.py`, the same way `parseOcrScoreLine` is
+// mirrored by `_score_pair_in_line`, so the two layers cannot disagree about the
+// same text on the same line. Any change here must land there too (a parity
+// fixture pins the table).
+
+/** The clock shapes the GT-1 census measured. */
+export type MatchClockShape = "mm:ss" | "hh:mm:ss" | "dot" | "bare_minute";
+
+/** ADAAAA-8733: how close (seconds) a clock reading must sit to the window's
+ * goal instant to be a MOMENT KEY. A read taken at the window centre of a
+ * re-read window shows the clock AT THAT INSTANT, which advances with content —
+ * using it would make one goal's re-read look 40 s newer than the goal. Only a
+ * read at the measured goal instant is comparable across windows. */
+export const CLOCK_ANCHOR_TOLERANCE_S = 4;
+
+/** A media timecode (`0:03:04:800`, the player scrub overlay on the
+ * `e5538461` census job) is NOT a match clock: it reads as perfect `mm:ss`
+ * coverage and would be a permanent "clock" that never advances with the game.
+ * Refused before any shape is tried. */
+const CLOCK_MEDIA_TIMECODE_RE = /\d{1,3}:\d{2}:\d{2}:\d{1,3}/;
+
+/** `hh:mm:ss` (a basketball bug shows hours when the clock crosses 60 min). */
+const CLOCK_HHMMSS_RE = /(?<![\d:])(\d{1,2}):([0-5]\d):([0-5]\d)(?![\d:])/;
+/** `mm:ss` — minutes may exceed 59 on a match bug (`96:26`) and may be a single
+ * digit (`0:12`). The right side must be exactly two digits <= 59, which is
+ * what keeps `2:1` (a score pair with a colon) out. */
+const CLOCK_MMSS_RE = /(?<!\d)(\d{1,3}):([0-5]\d)(?![\d:])/;
+/** The colon lost to the crop: `ENG82.29`, `99.34`. The left side is 2-3 digits
+ * (minutes >= 10), which is what separates it from a dot-glued SCORE pair —
+ * `parseOcrScoreLine` refuses those above 9 per side, so the two parsers can
+ * never claim the same token. */
+const CLOCK_DOT_RE = /(?<![\d.])(\d{2,3})\.([0-5]\d)(?![\d.])/;
+/** The bare-minute apostrophe form (`27'`, `45+2'`); seconds are whole minutes. */
+const CLOCK_BARE_MINUTE_RE = /(?<![\d:])(\d{1,2})(?:\+(\d{1,2}))?'(?![A-Za-z])/;
+
+/** Period markers the measured bugs show, in precedence order. `1.Ç` is the
+ * Turkish quarter mark (`1. Çeyrek`) the census listed. */
+const CLOCK_PERIOD_PATTERNS: ReadonlyArray<{ re: RegExp; period: (m: RegExpMatchArray) => string }> = [
+  { re: /\b(?:HT|MT|HALF[-\s]?TIME)\b/i, period: () => "HT" },
+  { re: /(?<!\d)([12])\s*\.\s*[ÇC](?![A-Za-z])/, period: (m) => `Q${m[1]}` },
+  { re: /\bQ([1-4])\b/i, period: (m) => `Q${m[1]}` },
+  { re: /\b([12])H\b/i, period: (m) => `${m[1]}H` },
+  { re: /\bH([12])\b/, period: (m) => `${m[1]}H` },
+  {
+    re: /\b([12])(?:st|nd)\s+(?:half|period|quarter)\b/i,
+    period: (m) => `${m[1]}H`,
+  },
+];
+
+/** The period a line shows, normalized, or null when the bug shows none. */
+export function parseOcrMatchClockPeriod(text: string): string | null {
+  for (const { re, period } of CLOCK_PERIOD_PATTERNS) {
+    const m = text.match(re);
+    if (m) return period(m);
+  }
+  return null;
+}
+
+/**
+ * ADAAAA-8733: the match clock carried by ONE OCR line, or null when the line
+ * carries none (an unreadable clock is absent evidence, never a fabricated
+ * reading — the same fail-closed posture the score parser takes).
+ *
+ * Shape precedence is `hh:mm:ss` -> `mm:ss` -> `dot` -> `bare_minute`, and the
+ * FIRST token of the winning shape in the line wins: the bug renders the clock
+ * once, and a second colon token (`201:14` stream timer) is a different
+ * instrument that the coherence gate rejects at the merge boundary.
+ */
+export function parseOcrMatchClockLine(text: string | undefined): MatchClockReading | null {
+  const line = typeof text === "string" ? text.trim() : "";
+  if (!line) return null;
+  if (CLOCK_MEDIA_TIMECODE_RE.test(line)) return null;
+  const period = parseOcrMatchClockPeriod(line);
+  const shapes: ReadonlyArray<{ shape: MatchClockShape; re: RegExp; toSeconds: (m: RegExpMatchArray) => number }> = [
+    {
+      shape: "hh:mm:ss",
+      re: CLOCK_HHMMSS_RE,
+      toSeconds: (m) => Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]),
+    },
+    { shape: "mm:ss", re: CLOCK_MMSS_RE, toSeconds: (m) => Number(m[1]) * 60 + Number(m[2]) },
+    { shape: "dot", re: CLOCK_DOT_RE, toSeconds: (m) => Number(m[1]) * 60 + Number(m[2]) },
+    {
+      shape: "bare_minute",
+      re: CLOCK_BARE_MINUTE_RE,
+      toSeconds: (m) => (Number(m[1]) + Number(m[2] ?? 0)) * 60,
+    },
+  ];
+  for (const { shape, re, toSeconds } of shapes) {
+    const m = line.match(re);
+    if (!m) continue;
+    const seconds = toSeconds(m);
+    if (!Number.isFinite(seconds) || seconds < 0) continue;
+    return { seconds, shape, period, legible: true, token: m[0] };
+  }
+  return null;
+}
+
+/** ADAAAA-8733: the first legible clock among a window's OCR lines, or null. */
+export function parseOcrMatchClock(lines: ReadonlyArray<string> | undefined): MatchClockReading | null {
+  for (const raw of lines ?? []) {
+    if (typeof raw !== "string") continue;
+    const reading = parseOcrMatchClockLine(raw);
+    if (reading) return reading;
+  }
+  return null;
+}
+
+/**
+ * ADAAAA-8733: the clock reading a WINDOW carries as its moment key.
+ *
+ * Reads the same `ocr` lines the score parse reads (nothing new is OCR'd) and
+ * keeps only a legible reading within {@link CLOCK_ANCHOR_TOLERANCE_S} of the
+ * given instant — the measured goal instant when the window has one, else the
+ * judged window centre. No reading inside that tolerance means the moment
+ * carries NO clock: the field stays absent and every merge rule is a no-op
+ * (R3/R4), so the read-side clock lane can only ever act on a measurement that
+ * sits on the goal itself.
+ */
+export function matchClockFromTimeline(
+  records: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined,
+  opts: { anchorTs?: number; centerTs?: number; toleranceS?: number } = {}
+): MatchClockReading | undefined {
+  const target = opts.anchorTs ?? opts.centerTs;
+  const tolerance = opts.toleranceS ?? CLOCK_ANCHOR_TOLERANCE_S;
+  let best: { reading: MatchClockReading; dist: number; ts: number } | undefined;
+  for (const r of records ?? []) {
+    if (!Number.isFinite(r?.ts)) continue;
+    const reading = parseOcrMatchClock(r.ocr);
+    if (!reading) continue;
+    if (target === undefined) {
+      return { ...reading, ts: r.ts };
+    }
+    const dist = Math.abs(r.ts - target);
+    if (dist > tolerance) continue;
+    if (best === undefined || dist < best.dist || (dist === best.dist && r.ts < best.ts)) {
+      best = { reading, dist, ts: r.ts };
+    }
+  }
+  return best ? { ...best.reading, ts: best.ts } : undefined;
 }
 
 /**
@@ -7955,6 +8116,12 @@ export async function acceptVideoDecision(
     // self-contradictory accept. The demoted-row payload still wins when the
     // gate demoted this window.
     attestationUsed: liveAttestationUsed ?? (isGoalAccept ? attestationUsed : undefined),
+    // ADAAAA-8733 (GT-2): the scorebug match clock this accept measured, carried
+    // next to the attestation payload so the postable merge lane can combine
+    // clips on GAME time (`highlight-postable.ts` R1-R6). Absent when the bug
+    // shows no legible clock at the goal instant — a null clock is a no-op and
+    // can never attest, demote or re-lane a goal (R3).
+    matchClock: candidate.matchClock,
     // ADAAAA-8139 (interim step): the row is a celebration (never postable) but
     // carries a goal cue, so the board can show it as a PROVISIONAL goal until
     // the deferred re-attestation measures the score change on this same row.
@@ -9834,6 +10001,15 @@ export async function observeAcceptOnly(
     // a no-op / backward span instead of trusting a bare `scoreBoardChanged`.
     pooledScoreReads = scoreReadDiagnostics(run.scoreReadBuffer(), liveWindow);
   }
+  const candidateAnchorTs = liveAnchorTs(windowAttestation.scoreTransitionTs, pooledScoreReads, liveWindow);
+  // ADAAAA-8733 (GT-2): the scorebug match clock for this window, parsed from
+  // the SAME OCR lines the score parse just consumed — zero added OCR calls and
+  // zero GPU-seconds (AC-GT6). Read AT the anchor, so every window of one goal
+  // carries the clock of the goal itself.
+  const candidateMatchClock = matchClockFromTimeline(payload.observations, {
+    anchorTs: candidateAnchorTs,
+    centerTs: payload.centerTs,
+  });
   const candidate: CandidateSignal = {
     eventType: payload.biasHints[0]?.eventType ?? observeDefaultEventType(payload),
     timestamp: payload.centerTs,
@@ -9848,10 +10024,14 @@ export async function observeAcceptOnly(
     // (scoreBoardDelta absent) — the instant is a measurement the rail already
     // paid for, and without it the live clip anchored on the window's sticky
     // first frame and put the goal at the very end of the card.
-    anchorTs: liveAnchorTs(windowAttestation.scoreTransitionTs, pooledScoreReads, liveWindow),
+    anchorTs: candidateAnchorTs,
     // ADAAAA-8134: the read counts behind a window the pooled re-read could not
     // attest, so the demoted row discloses them (AC-R4).
     scoreReads: pooledScoreReads,
+    // ADAAAA-8733 (GT-2): the match clock this window measured, on the row so
+    // the postable merge lane can combine GOAL moments on game time when the
+    // clip windows do not overlap.
+    matchClock: candidateMatchClock,
     // ADAAAA-8610: the measured transition this window was refused on (a
     // below-high-water rewind), so the demoted row NAMES the real refusal instead
     // of reporting the generic "already credited / no change measured" copy.

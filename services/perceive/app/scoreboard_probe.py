@@ -26,7 +26,7 @@ import base64
 import io
 from typing import Optional, Sequence
 
-from .scoreboard import ScoreboardRoi, explicit_scoreboard_roi, parse_ocr_score
+from .scoreboard import ScoreboardRoi, explicit_scoreboard_roi, parse_match_clock, parse_ocr_score
 
 # Same top-band prior the live ROI fallback uses when discovery has not run:
 # the documented fallback (ADAAAA-7094 / ADAAAA-7909) rather than a guess.
@@ -105,12 +105,16 @@ def probe_scoreboard_ocr(
 ) -> dict:
     """Run ONE score-bug crop OCR on a persisted frame.
 
-    Returns ``{"ocr": [...], "score": [h, a] | None, "roi": [x0,y0,x1,y1] | None,
-    "ok": bool, "reason": str}``.
+    Returns ``{"ocr": [...], "score": [h, a] | None, "matchClock": {...} | None,
+    "roi": [x0,y0,x1,y1] | None, "ok": bool, "reason": str}``.
+
+    ADAAAA-8733 (GT-2): ``matchClock`` is parsed from the SAME OCR lines this
+    call already returned — the same crop, the same OCR call, zero added
+    GPU-seconds. It is reported BESIDE ``score`` and never feeds it.
     """
     resolved = resolve_probe_roi(roi, state)
     roi_out = [resolved.x0, resolved.y0, resolved.x1, resolved.y1]
-    out = {"ocr": [], "score": None, "roi": roi_out, "ok": False, "reason": ""}
+    out = {"ocr": [], "score": None, "matchClock": None, "roi": roi_out, "ok": False, "reason": ""}
     rgb = _decode_rgb(image_b64)
     if rgb is None:
         out["reason"] = "bad_image"
@@ -131,6 +135,8 @@ def probe_scoreboard_ocr(
         return out
     ocr = [str(line) for line in lines if str(line).strip()]
     score = parse_ocr_score(ocr, roi=None)
+    # ADAAAA-8733: the match clock on the same crop / same OCR call.
+    match_clock = parse_match_clock(ocr)
     if score is not None:
         reason = ""
     elif not ocr:
@@ -141,6 +147,7 @@ def probe_scoreboard_ocr(
         {
             "ocr": ocr,
             "score": list(score) if score is not None else None,
+            "matchClock": match_clock,
             "ok": True,
             "reason": reason,
         }
