@@ -373,6 +373,64 @@ def _print_outdepth(vod, live):
     return ok
 
 
+# ------------------------------------------------------- HUD latency (A5) ----
+# ADAAAA-8745: `evals/measure_hud_recall.py` exports the Stage-A HUD trigger's
+# live-path latency as a JSON artifact; this runner grades it against the A5 bar
+# so the latency number is read by the same acceptance tool as every other bar
+# instead of living in a comment. No fixture export is admissible: the plan
+# (§2 WP4) admits no `--backend fixture` number anywhere in WP1-WP4.
+
+HUD_LATENCY_BAR_S = 0.5
+
+
+def _hud_latency_verdict(doc):
+    """Grade a `measure_hud_recall.py` export. Returns (ok, lines, incomplete)."""
+    if not isinstance(doc, dict) or not doc.get("harness"):
+        return False, ["  INCOMPLETE  hud latency export             got=not a hud export"], True
+    backend = doc.get("backend")
+    if backend != "live" or doc.get("admissible") is False:
+        return False, [
+            f"  INADMISSIBLE  hud latency export           backend={backend!r} "
+            f"admissible={doc.get('admissible')!r}",
+            "  (a fixture export is not a measurement — plan §2 WP4)",
+        ], True
+    lat = doc.get("latency") or {}
+    cpu = lat.get("eventToCandidateCpuS") or {}
+    frame = lat.get("cpuFrameS") or {}
+    wall = lat.get("eventToCandidateWallS") or {}
+    bar_cfg = ((doc.get("bars") or {}).get("stageAEventToCandidateCpuP95S") or {})
+    bar = float(bar_cfg.get("bar", HUD_LATENCY_BAR_S))
+    got = cpu.get("p95")
+    lines = [
+        f"== HUD stage-A latency (live path, {doc.get('frames')} frames, "
+        f"{doc.get('candidates')} candidates) ==",
+    ]
+    if got is None or not cpu.get("n"):
+        lines.append("  INCOMPLETE  event->candidate CPU p95       got=NA "
+                     "(no candidate emitted — recall, not latency, is the finding)")
+        return False, lines, True
+    ok = float(got) <= bar
+    lines.append(f"  {'PASS' if ok else 'FAIL':<7}  event->candidate CPU p95 <= "
+                 f"{bar:.2f}s            got={float(got):.4f} bar={bar:.4f}")
+    for label, block in (("cpu/frame p95", frame), ("event->candidate wall p95", wall)):
+        if block.get("n"):
+            lines.append(f"  MEASURED {label:<34} got={float(block['p95']):.4f}s "
+                         f"(p50={float(block['p50']):.4f} max={float(block['max']):.4f})")
+    if doc.get("wallS") is not None:
+        lines.append(f"  MEASURED wall/compute share                 "
+                     f"wall={float(doc['wallS']):.1f}s "
+                     f"gpu-minutes={0.0 if not (doc.get('gpu') or {}).get('used') else 'see export'}")
+    return ok, lines, False
+
+
+def _print_hud_latency(path):
+    doc = json.load(open(path))
+    ok, lines, incomplete = _hud_latency_verdict(doc)
+    for line in lines:
+        print(line)
+    return 0 if (ok and not incomplete) else 1
+
+
 def load_manifest(path):
     """Load either label-manifest shape into (clips, acceptance, sport).
 
@@ -419,7 +477,17 @@ def main():
     ap.add_argument("--loc-tolerance", type=float, default=None,
                     help="localisation tolerance in seconds (default: manifest "
                          "acceptance.localisationToleranceS, else 5.0)")
+    ap.add_argument("--hud-latency", default=None,
+                    help="grade a measure_hud_recall.py latency export against the A5 "
+                         "stage-A event->candidate p95 bar (ADAAAA-8745); may be combined "
+                         "with a trace run")
     args = ap.parse_args()
+
+    rc_lat = None
+    if args.hud_latency:
+        rc_lat = _print_hud_latency(args.hud_latency)
+        if not args.trace and not (args.vod and args.live):
+            return rc_lat
 
     clips, accept, sport = load_manifest(args.manifest)
 
@@ -438,7 +506,8 @@ def main():
         print(f"\n== live baseline pass ==")
         _print_single(lm, accept, sport, "live")
         print(f"\n== paired out-depth (A4) ==")
-        return 0 if _print_outdepth(vm, lm) else 1
+        ok = bool(_print_outdepth(vm, lm))
+        return 0 if ok and not rc_lat else 1
 
     # Single-trace legacy mode
     if not args.trace:
@@ -451,7 +520,7 @@ def main():
     dm = m.get("depthMean")
     if dm is not None:
         print(f"out-depth D_detail mean = {dm:.1f} (n={m.get('depthN')})")
-    return rc
+    return rc if rc_lat is None else max(rc, rc_lat)
 
 
 if __name__ == "__main__":
