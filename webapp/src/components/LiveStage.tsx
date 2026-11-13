@@ -9,7 +9,7 @@ import { AnalyzePositionChip } from "./AnalyzePositionChip";
 import { ScoreboardOverlay } from "./ScoreboardOverlay";
 import { LiveFrameStill } from "./LiveFrameStill";
 import type { ScoreboardSurface } from "../lib/scoreboardSurface";
-import { contentAnchorMs, type LiveFrameRef } from "../lib/liveFrameStill";
+import { contentAnchorMs, type LiveFrameRef, type LiveStillRefusal, type LiveStillStateKind } from "../lib/liveFrameStill";
 import { useLiveFrameStill } from "../lib/useLiveFrameStill";
 
 // ADAAAA-7976: the live stage on the job detail page.
@@ -65,6 +65,8 @@ export function LiveStageViewBlock({
   stillFrame = null,
   stillImgSrc = null,
   stillError = null,
+  stillState = undefined,
+  stillRefusal = null,
   stillAnchorMs = null,
   nowMs,
   onStop,
@@ -90,6 +92,10 @@ export function LiveStageViewBlock({
   stillFrame?: LiveFrameRef | null;
   stillImgSrc?: string | null;
   stillError?: string | null;
+  /** ADAAAA-8970: the degrade state the source reported for this poll. */
+  stillState?: LiveStillStateKind;
+  /** ADAAAA-8970: `auth` (401/403) vs `transport`, for the refusal copy. */
+  stillRefusal?: LiveStillRefusal;
   /** Wall-clock anchor of the job's content clock (`startedAt`) in ms. */
   stillAnchorMs?: number | null;
   /** Wall clock for the still's age readout (the stage ticks it once a second). */
@@ -216,6 +222,8 @@ export function LiveStageViewBlock({
             anchorMs={stillAnchorMs}
             nowMs={nowMs ?? Date.now()}
             error={stillError}
+            state={stillState}
+            refusal={stillRefusal}
           />
         </div>
       )}
@@ -314,6 +322,8 @@ export function LiveStage({ job, liveProgress, staleSec = 0, pollTick = 0 }: Liv
       stillFrame={still.frame}
       stillImgSrc={still.imgSrc}
       stillError={still.error}
+      stillState={still.state}
+      stillRefusal={still.refusal}
       stillAnchorMs={contentAnchorMs(job.startedAt)}
       nowMs={now}
       onStop={() => void onStop()}

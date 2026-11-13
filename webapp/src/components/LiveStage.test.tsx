@@ -336,9 +336,16 @@ describe("LiveStage no-preview still (ADAAAA-8949)", () => {
     nowMs: ANCHOR + 120_300,
   };
 
+  // ADAAAA-8970: the still props, taken from the block's own signature so a
+  // degrade-state override cannot silently widen past what the component takes.
+  type StillProps = Pick<
+    Parameters<typeof LiveStageViewBlock>[0],
+    "stillFrame" | "stillImgSrc" | "stillError" | "stillState" | "stillRefusal" | "stillAnchorMs" | "nowMs"
+  >;
+
   function render(
     v: LiveStageView,
-    opts: { surface?: ScoreboardSurface; source?: string; still?: typeof STILL | Record<string, never> } = {},
+    opts: { surface?: ScoreboardSurface; source?: string; still?: StillProps } = {},
   ) {
     return renderToString(
       React.createElement(LiveStageViewBlock, {
@@ -423,5 +430,69 @@ describe("LiveStage no-preview still (ADAAAA-8949)", () => {
     }
     const stoppedHtml = render(view({ jobStatus: "done" }));
     expect(stoppedHtml).toContain("data-live-stage-finalized");
+  });
+
+  // ADAAAA-8970 (Inc 2): the ticket's state matrix, at the STAGE level (the slot
+  // `LiveStageViewBlock` owns), so the counts hold for the element the page
+  // actually mounts. Frame-request counts live in `lib/liveFrameStill.test.ts`.
+  it("ADAAAA-8970 matrix: no surface — 0 img, 0 box, no label", () => {
+    const html = render(view({ jobSource: "rtmp" }), { source: "rtmp", still: STILL });
+    expect(html.match(/<img/g) ?? []).toHaveLength(0);
+    expect(html).not.toContain("data-live-stage-frame-still-box=");
+    expect(html).not.toContain("data-live-stage-frame-still-state=");
+    expect(html).not.toContain("No analyzed frame yet");
+    expect(html).not.toContain("token was refused");
+  });
+
+  it("ADAAAA-8970 matrix: frames empty — 0 img, 0 box, the named waiting label", () => {
+    const html = render(view({ jobSource: "rtmp" }), {
+      source: "rtmp",
+      surface: SURFACE,
+      still: { stillFrame: null, stillImgSrc: null, stillState: "waiting", stillAnchorMs: ANCHOR, nowMs: ANCHOR + 1_000 },
+    });
+    expect(html.match(/<img/g) ?? []).toHaveLength(0);
+    expect(html).not.toContain("data-live-stage-frame-still-box=");
+    expect(html).toContain('data-live-stage-frame-still-state="waiting"');
+    expect(html).toContain('data-live-stage-frame-still-waiting="true"');
+    expect(html).toContain("No analyzed frame yet");
+  });
+
+  it("ADAAAA-8970 matrix: frame 401/403 — 0 img, 0 box, the named refusal label", () => {
+    const html = render(view({ jobSource: "rtmp" }), {
+      source: "rtmp",
+      surface: SURFACE,
+      still: {
+        stillFrame: null,
+        stillImgSrc: null,
+        stillError: "frame fetch failed: HTTP 403",
+        stillState: "refused",
+        stillRefusal: "auth",
+        stillAnchorMs: ANCHOR,
+        nowMs: ANCHOR + 1_000,
+      },
+    });
+    expect(html.match(/<img/g) ?? []).toHaveLength(0);
+    expect(html).not.toContain("data-live-stage-frame-still-box=");
+    expect(html).toContain('data-live-stage-frame-still-state="refused"');
+    expect(html).toContain('data-live-stage-frame-still-refusal="auth"');
+    expect(html).toContain("token was refused");
+    expect(html).not.toContain("No analyzed frame yet");
+  });
+
+  it("ADAAAA-8970 matrix: frame seq 4 min old — 1 img, box once measured, stale with age", () => {
+    const html = render(view({ jobSource: "rtmp" }), {
+      source: "rtmp",
+      surface: SURFACE,
+      still: { ...STILL, stillState: "ready", nowMs: ANCHOR + 112_300 + 240_000 },
+    });
+    expect(html.match(/<img/g) ?? []).toHaveLength(1);
+    // SSR has no intrinsic image size, so the box ships only once measured: the
+    // 1-box half of this row is pinned with explicit geometry in
+    // `LiveFrameStill.test.tsx`, and Inc 3's no-guess rule is asserted here.
+    expect(html).not.toContain("data-live-stage-frame-still-box=");
+    expect(html).toContain('data-live-stage-frame-still-state="ready"');
+    expect(html).toContain('data-live-stage-frame-still-age="240s ago"');
+    expect(html).toContain('data-live-stage-frame-still-stale="true"');
+    expect(html).toContain("240s ago");
   });
 });
