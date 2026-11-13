@@ -2497,6 +2497,10 @@ export function JobDetail() {
   // composite refresh and the SSE-driven deltas keep feeding it too: the effect
   // below always keeps the NEWER of the two readings.
   const [liveProgress, setLiveProgress] = useState<LiveProgress | undefined>();
+  // ADAAAA-8949: the count of successful light polls, handed to the live stage so
+  // its no-preview still re-reads the newest analyzed frame on the EXISTING 5 s
+  // cadence (no second timer, no extra route).
+  const [detailPollTick, setDetailPollTick] = useState(0);
   // ADAAAA-7759: health of that light read. A failed read keeps the last honest
   // number (by design), but the chip must say when the reading has gone stale —
   // QA saw one source of failed reads hold a 36 s number for ~21 s while the
@@ -2546,6 +2550,10 @@ export function JobDetail() {
             if (!aliveRef.current) return;
             setLightHealth((h: LiveReadHealth) => nextLiveReadHealth(h, { ok: true, at: Date.now() }));
             if (r?.liveProgress) setLiveProgress(r.liveProgress);
+            // ADAAAA-8949: one poll tick = one frame-list read for the no-preview
+            // still. The COUNT comes from this loop's single tick, not from a
+            // second timer inside the stage.
+            setDetailPollTick((n) => n + 1);
           })
           // Best-effort: a failed light read keeps the last honest reading, and
           // ADAAAA-7759 makes that failure stated (stale chip + banner) rather
@@ -3149,7 +3157,12 @@ export function JobDetail() {
               (SummaryLadderView) in document order. VOD (`file`) jobs never
               render it. */}
           {isLiveStageSource(detail.job.source) && (
-            <LiveStage job={detail.job} liveProgress={liveProgress} staleSec={lightHealth.staleSec} />
+            <LiveStage
+              job={detail.job}
+              liveProgress={liveProgress}
+              staleSec={lightHealth.staleSec}
+              pollTick={detailPollTick}
+            />
           )}
           {/* Header: job metadata */}
           <div className="card card-accent p-5">

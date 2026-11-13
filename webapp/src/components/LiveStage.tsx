@@ -7,7 +7,10 @@ import type { JobDetail, LiveProgress } from "../lib/jobDetail";
 import { LiveProgressChip } from "./LiveProgressChip";
 import { AnalyzePositionChip } from "./AnalyzePositionChip";
 import { ScoreboardOverlay } from "./ScoreboardOverlay";
+import { LiveFrameStill } from "./LiveFrameStill";
 import type { ScoreboardSurface } from "../lib/scoreboardSurface";
+import { contentAnchorMs, type LiveFrameRef } from "../lib/liveFrameStill";
+import { useLiveFrameStill } from "../lib/useLiveFrameStill";
 
 // ADAAAA-7976: the live stage on the job detail page.
 //
@@ -20,8 +23,13 @@ import type { ScoreboardSurface } from "../lib/scoreboardSurface";
 //   data-scoreboard-overlay*  - ADAAAA-8886: the score-bug box drawn over the
 //                                  video through the CONTENT rect, display only
 //                                  (pointer-events-none, aria-hidden)
-//     data-live-stage-nopreview - RTMP/WebRTC ingest (no playback route exists)
+//   data-live-stage-nopreview - RTMP/WebRTC ingest (no playback route exists)
 //                                  or a browser capture this page no longer holds
+//   data-live-stage-frame-still* - ADAAAA-8949: on `nopreview` for a job with a
+//                                  `scoreboardSurface`, the newest already-
+//                                  extracted analyze frame as a still with the
+//                                  same score-bug box drawn over it (no new
+//                                  route, no extraction, no GPU)
 //     data-live-stage-status    - real job status + elapsed + the existing lag chip
 //     data-live-stage-stop      - Stop & finalize: flush recording chunks, then
 //                                  POST /jobs/:id/stop, stay on this page
@@ -36,6 +44,9 @@ export interface LiveStageProps {
   liveProgress?: LiveProgress;
   /** Seconds the light lag read has been failing (ADAAAA-7759 chip honesty). */
   staleSec?: number;
+  /** ADAAAA-8949: bump on every detail poll so the no-preview still re-reads the
+   *  newest extracted frame on the EXISTING 5 s cadence (no timer of its own). */
+  pollTick?: number;
 }
 
 /** Presentational stage, split out so every state is pinned by an SSR test. */
@@ -51,6 +62,11 @@ export function LiveStageViewBlock({
   captureNotice = null,
   gapNotice = null,
   scoreboardSurface,
+  stillFrame = null,
+  stillImgSrc = null,
+  stillError = null,
+  stillAnchorMs = null,
+  nowMs,
   onStop,
 }: {
   view: LiveStageView;
@@ -70,6 +86,14 @@ export function LiveStageViewBlock({
   /** ADAAAA-8886: the served score-surface block; drawn as a box over the video
    *  only in `video` mode, and absent (no node) when the server has none. */
   scoreboardSurface?: ScoreboardSurface;
+  /** ADAAAA-8949: the newest extracted analyze frame for the no-preview still. */
+  stillFrame?: LiveFrameRef | null;
+  stillImgSrc?: string | null;
+  stillError?: string | null;
+  /** Wall-clock anchor of the job's content clock (`startedAt`) in ms. */
+  stillAnchorMs?: number | null;
+  /** Wall clock for the still's age readout (the stage ticks it once a second). */
+  nowMs?: number;
   onStop?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -175,6 +199,27 @@ export function LiveStageViewBlock({
         </div>
       )}
 
+      {view.showNoPreview && scoreboardSurface && (
+        // ADAAAA-8949 (Inc 4): the no-preview stage gets the newest extracted
+        // analyze frame as a still, with the Inc 3 box mapped through the
+        // IMAGE's content rect (`object-contain` letterboxes it inside this
+        // `aspect-video` box). The wrapper is the stage slot; the image fills
+        // it and the overlay is positioned against the same box.
+        <div
+          className="relative mt-3 aspect-video w-full max-w-3xl overflow-hidden rounded-lg border border-neon/30 bg-black"
+          data-live-stage-frame-wrap
+        >
+          <LiveFrameStill
+            surface={scoreboardSurface}
+            frame={stillFrame}
+            imgSrc={stillImgSrc}
+            anchorMs={stillAnchorMs}
+            nowMs={nowMs ?? Date.now()}
+            error={stillError}
+          />
+        </div>
+      )}
+
       {view.showNoPreview && (
         <div
           className="mt-3 rounded-lg border border-mut/30 bg-black/30 px-3 py-2 text-sm text-mut"
@@ -200,7 +245,7 @@ export function LiveStageViewBlock({
   );
 }
 
-export function LiveStage({ job, liveProgress, staleSec = 0 }: LiveStageProps) {
+export function LiveStage({ job, liveProgress, staleSec = 0, pollTick = 0 }: LiveStageProps) {
   const cap = useLiveCapture();
   const [now, setNow] = useState(() => Date.now());
   const [localStopped, setLocalStopped] = useState(false);
@@ -227,6 +272,11 @@ export function LiveStage({ job, liveProgress, staleSec = 0 }: LiveStageProps) {
     stopped: localStopped || (cap.lastJobId === job.id && cap.stopped),
     now,
   });
+
+  // ADAAAA-8949: the no-preview still. The hook is inert unless the stage is
+  // `nopreview` AND the job carries a `scoreboardSurface` (0 frame requests, 0
+  // overlay nodes otherwise), and it polls on the page's existing detail poll.
+  const still = useLiveFrameStill(job.id, view.mode, job.scoreboardSurface, pollTick);
 
   async function onStop() {
     if (!view.canStop || stopping) return;
@@ -261,6 +311,11 @@ export function LiveStage({ job, liveProgress, staleSec = 0 }: LiveStageProps) {
       captureNotice={cap.jobId === job.id ? cap.recordingNotice : null}
       gapNotice={cap.jobId === job.id ? cap.recordingGapNotice : null}
       scoreboardSurface={job.scoreboardSurface}
+      stillFrame={still.frame}
+      stillImgSrc={still.imgSrc}
+      stillError={still.error}
+      stillAnchorMs={contentAnchorMs(job.startedAt)}
+      nowMs={now}
       onStop={() => void onStop()}
     />
   );
