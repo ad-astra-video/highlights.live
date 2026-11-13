@@ -2,6 +2,10 @@
 
 Source: plan §0–0.4, §8, §9.
 
+Pathway map: every route from capture to a served highlight/notable row is mapped
+in [`docs/highlight-pathways.md`](../highlight-pathways.md). Read it before changing
+detection, gating or clip placement; update it in the same commit.
+
 ## System split (processes, one contract)
 - Perceive runner (GPU 0): Florence-2, SAM3 (2 slots), 1fps+8fps confirm, trickle/WS/SSE. Does NOT hold Gemma, ETH keys, DB, UI.
 - Decide runner (GPU 1): Gemma 4 12B Q4 `/highlight`, single-shot. No SAM3 state, no keys.
