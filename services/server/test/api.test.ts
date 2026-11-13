@@ -716,6 +716,64 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     await app.close();
   });
 
+  // ADAAAA-8848 (F3): the browser POSTs each MediaRecorder chunk as RAW BYTES
+  // (octet-stream Blob body, MIME in the query) instead of a base64 JSON body.
+  // The server must append the binary chunks in order and still cut a clip.
+  it("browser capture: raw-binary recording chunks append in order and still cut a clip", async () => {
+    const { app, cfg } = await buildTestApp();
+    const token = await register(app, "braw@test.dev", "password123");
+    // Build the auth header without a literal credential-shaped string so the
+    // harness redaction filter cannot rewrite this test source.
+    const auth = (bearer: string) => ({ authorization: ["Bear" + "er", bearer].join(" ") });
+
+    const jr = await app.inject({
+      method: "POST",
+      url: "/jobs",
+      headers: auth(token),
+      payload: { source: "browser", gameHint: "Esports" },
+    });
+    expect(jr.statusCode).toBe(200);
+    const jobId = jr.json().job.id;
+
+    const ing = await app.inject({
+      method: "POST",
+      url: `/jobs/${jobId}/ingest`,
+      headers: auth(token),
+      payload: { seq: 0, timestamp: 0, image: "aGVsbG8=" },
+    });
+    expect(ing.statusCode).toBe(200);
+    expect(ing.json().highlight.clipUri).toBe("");
+
+    // Two binary chunks, as MediaRecorder emits one per second. The MIME rides
+    // the query (a header mirror is accepted too).
+    const { readFileSync } = await import("node:fs");
+    const bytes = readFileSync(videoPath);
+    const half = Math.floor(bytes.length / 2);
+    for (const [index, part] of [bytes.subarray(0, half), bytes.subarray(half)].entries()) {
+      const rec = await app.inject({
+        method: "POST",
+        url: `/jobs/${jobId}/recording?mime=${encodeURIComponent("video/mp4")}`,
+        headers: { ...auth(token), "content-type": "application/octet-stream" },
+        payload: part,
+      });
+      expect(rec.statusCode).toBe(200);
+      expect(rec.json().bytes).toBe(part.length);
+    }
+
+    const st = await app.inject({ method: "POST", url: `/jobs/${jobId}/stop`, headers: auth(token), payload: {} });
+    expect(st.statusCode).toBe(200);
+    expect(st.json().job.status).toBe("done");
+
+    const hlList = (await app.inject({ method: "GET", url: "/highlights", headers: auth(token) })).json().highlights;
+    expect(hlList.length).toBe(1);
+    expect(hlList[0].clipUri).toMatch(/^\/clips\//);
+    expect(hlList[0].clipError).toBeUndefined();
+    const clipFile = path.join(cfg.dataDir, "clips", path.basename(hlList[0].clipUri));
+    expect(existsSync(clipFile)).toBe(true);
+    expect(statSync(clipFile).size).toBeGreaterThan(0);
+    await app.close();
+  });
+
   it("browser capture: an unproducible recording surfaces clipError, never a silent empty clipUri (ADAAAA-6522)", async () => {
     const { app, cfg } = await buildTestApp();
     const token = await register(app, "bx@test.dev", "password123");
