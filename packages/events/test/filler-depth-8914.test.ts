@@ -187,10 +187,17 @@ describe("AC14.1/AC14.2 — the served bodies' filler sentences are unattested",
   it("keeps a repaired, fact-per-sentence body on the same evidence", () => {
     // The tightening is not a trade: a body that says the same facts in every
     // sentence serves (AC6 — the standing bars keep passing on the same rows).
+    //
+    // ADAAAA-8941: these fixtures used to pair the score line with a possession
+    // tail ("keeps possession and works the ball forward …", "carries the ball
+    // forward …") and print the clip offset as match time. Those are the two
+    // shapes the rev-8 LIVE leg served as filler on job `e4c2fe29`, so the fixture
+    // now spells what the row actually attests: its own `matchClock.token` and a
+    // named attested actor's play.
     const repaired = [
-      "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid keeps possession and works the ball forward through midfield near the box.",
-      "The scoreboard moves to 2-2 at the 2:35 mark of this clip. Barcelona keeps the ball and presses high to force a turnover near the wing.",
-      "The scoreboard moves to 2-1 at the 6:35 mark of this clip. Barcelona carries the ball forward and switches play to the left flank.",
+      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid passes through midfield near the box as the move develops.",
+      "The scoreboard moves to 2-2 at the 22:19 mark of the match. Barcelona crosses into the box as the move develops near the wing.",
+      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Barcelona passes to the left flank as the move develops.",
     ];
     const rows = [ROW_AED6, ROW_DC96, ROW_7574];
     rows.forEach((evidence, i) => {
