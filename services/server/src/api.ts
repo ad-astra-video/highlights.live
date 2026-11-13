@@ -862,10 +862,22 @@ export async function attestConfirmDiveHighlight(
   meta: {
     diveAt: string;
     onDelivered?: (triggerTs: number, deliveredAtMs: number, highlightId: string) => void;
-    /** ADAAAA-8820 (D2): the dive named a moment that may move this row's
-     *  deferred clip cut. Called only on a PROMOTED row, off the accept path —
-     *  the caller owns the drift gate, the once-per-row bound and the re-cut. */
-    onDiveMoment?: (highlightId: string, momentTs: number, confidence?: number) => void;
+    /**
+     * ADAAAA-8820 (D2): the dive named a moment that may move this row's
+     * deferred clip cut. Called on EVERY verdict that names a moment for a
+     * `confirmed_goal` (`goalConfirmed` is handed over with it) — ADAAAA-8877:
+     * NOT gated on promotion. A score-lane refutation keeps the row a
+     * celebration card, but the dive still named when the play happened, and
+     * `diveReanchorDecision` is the ONE gate that decides whether that moment
+     * may move the cut (non-confirmed verdicts, celebration-tail cards and
+     * sub-1 s drift are refused there). The caller owns the drift gate, the
+     * once-per-row bound and the re-cut. */
+    onDiveMoment?: (
+      highlightId: string,
+      momentTs: number,
+      confidence: number | undefined,
+      goalConfirmed: string | undefined
+    ) => void;
   }
 ): Promise<{ kind: "promoted" | "refuted" | "unchanged"; rec: HighlightRecord } | null> {
   const row = deps.store.getHighlight(highlightId);
@@ -895,16 +907,28 @@ export async function attestConfirmDiveHighlight(
     } catch (e: any) {
       console.error(`[live-confirm] delivered-ack hook failed:`, String(e?.message || e));
     }
-    // ADAAAA-8820 (D2): hand the dive's moment to the deferred clip cut. Only a
-    // promo carries a usable anchor (a refuted/near-miss row keeps its card and
-    // its clip), and a null moment hands nothing.
-    const momentTs = momentOf(result.verdict);
-    if (momentTs != null) {
-      try {
-        meta.onDiveMoment?.(highlightId, momentTs, result.verdict?.momentConfidence);
-      } catch (e: any) {
-        console.error(`[live-confirm] dive-moment hook failed:`, String(e?.message || e));
-      }
+  }
+  // ADAAAA-8820 (D2): hand the dive's moment to the deferred clip cut.
+  // ADAAAA-8877: OUTSIDE the promotion branch on purpose. Promotion is a LANE
+  // decision (does this card become a GOAL?), the moment is an ANCHOR decision
+  // (where inside the window does the play sit?), and the two lanes disagree:
+  // measured on job 1bf38e92 both dives answered `confirmed_goal` with a named
+  // moment while the score lane refuted them (`score_lane_read_no_transition`),
+  // so a promotion-gated hook dropped the moment entirely and the cut kept its
+  // accept anchor. The anchor gate is `diveReanchorDecision` alone — it already
+  // refuses a non-`confirmed_goal` verdict, a celebration-tail card and a
+  // sub-1 s drift, so promotion is not a needed second gate.
+  const momentTs = momentOf(result.verdict);
+  if (momentTs != null && result.verdict?.goalConfirmed === "confirmed_goal") {
+    try {
+      meta.onDiveMoment?.(
+        highlightId,
+        momentTs,
+        result.verdict?.momentConfidence,
+        result.verdict?.goalConfirmed
+      );
+    } catch (e: any) {
+      console.error(`[live-confirm] dive-moment hook failed:`, String(e?.message || e));
     }
   }
   console.error(
@@ -1436,6 +1460,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   /** `${jobId}:${highlightId}` — rows this run has already re-cut on a dive
    * moment. The bounded-re-cut guard: at most ONE re-cut per row, ever. */
   const diveReanchored = new Set<string>();
+  /** ADAAAA-8877: the file suffix an INGEST re-cut on a dive moment writes, so a
+   * refused/failed re-cut can never overwrite (or delete, `LiveIngest.cut` does
+   * `rm` its own output on a truncated window) the delivered card's clip. */
+  const DIVE_RECUT_SUFFIX = "-dive";
   /** ADAAAA-8152: how the delivered file was placed (see
    * `resolveClipPlacement`). `frame_match` means the anchor picture was located
    * in the recording itself; `content_clock` means the cut fell back to the
@@ -2055,11 +2083,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
    * A drift below `DIVE_REANCHOR_MIN_DRIFT_S` records nothing: the accept anchor
    * already sits within the AC2 tolerance and the re-cut would be pure cost.
    */
-  function noteDiveMomentForClip(jobId: string, highlightId: string, momentTs: number, confidence?: number): void {
+  function noteDiveMomentForClip(
+    jobId: string,
+    highlightId: string,
+    momentTs: number,
+    confidence?: number,
+    goalConfirmed?: string
+  ): void {
     const row = store.getHighlight(highlightId);
     if (!row) return;
     const gate = diveReanchorDecision({
-      goalConfirmed: "confirmed_goal",
+      goalConfirmed,
       momentTs,
       acceptTs: acceptAnchorTs(row),
       cueTail: row.clipPlacementReason === "celebration_tail",
@@ -2078,7 +2112,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       );
       return;
     }
-    reanchorLiveClipOnDiveMoment(jobId, highlightId, dive);
+    // ADAAAA-8877: the clip already exists — the ingest rails cut it ~6-30 s
+    // BEFORE the dive's verdict lands, so the deferred-cut read can never see
+    // the moment. Re-cut on the rail that produced the file.
+    if (store.getJob(jobId)?.source === "browser") reanchorLiveClipOnDiveMoment(jobId, highlightId, dive);
+    else reanchorIngestClipOnDiveMoment(jobId, highlightId, dive);
   }
 
   /** Re-cut ONE already-published browser clip on the dive's moment. Bounded to a
@@ -2126,6 +2164,94 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           `goal at ${rec.placement.deliveredOffsetSec == null ? "?" : rec.placement.deliveredOffsetSec.toFixed(3)}s)`
       );
       emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId, clipUri: rec.uri });
+    })().catch((e: any) =>
+      console.error(
+        `[live-dive-anchor:${jobId}] re-cut failed for ${highlightId} (published clip kept):`,
+        String(e?.message || e)
+      )
+    );
+    // Same per-share serial chain as every other live cut: never two ffmpeg on
+    // one recording.
+    const prev = liveClipChains.get(jobId) ?? Promise.resolve();
+    const chained = prev
+      .then(() => task)
+      .catch(() => {})
+      .finally(() => {
+        if (liveClipChains.get(jobId) === chained) liveClipChains.delete(jobId);
+      });
+    liveClipChains.set(jobId, chained);
+  }
+
+  /**
+   * ADAAAA-8877: re-cut ONE already-published INGEST clip on the dive's moment.
+   *
+   * The ingest (`file-sim` / `rtmp` / `screen`) rails cut at accept + window
+   * flush, i.e. ~6-30 s BEFORE the dive's verdict lands (measured on job
+   * `1bf38e92`: clip files written at 04:07:49 / 04:08:51, dives stamped at
+   * 04:08:00 / 04:08:57). Every such row therefore has a `clipUri` by the time
+   * the moment arrives, so `rowDiveMoment` at deferred-cut time can never see
+   * it — the moment must re-cut the published file, exactly like the browser
+   * rail's single re-cut.
+   *
+   * Bounded to ONE attempt per row (`diveReanchored`), serialized on the job's
+   * cut chain, and it writes a DIVE-SUFFIXED file: `LiveIngest.cut` removes its
+   * own output when the window is not flushed, so re-cutting in place could
+   * delete the delivered card's file. On success the row points at the new file
+   * and the old one is left for the job-delete sweep; every guard fails closed
+   * and keeps the published clip.
+   */
+  function reanchorIngestClipOnDiveMoment(
+    jobId: string,
+    highlightId: string,
+    dive: { ts: number; confidence?: number }
+  ): void {
+    const key = `${jobId}:${highlightId}`;
+    if (diveReanchored.has(key)) return;
+    const job = store.getJob(jobId);
+    const ingest = liveSessions.get(jobId);
+    // A finished share's recording may already be gone: nothing to re-cut.
+    if (!job || job.status !== "active" || !ingest) {
+      console.log(
+        `[live-dive-anchor:${jobId}] ${highlightId} re-cut skipped (share ${job ? job.status : "gone"}) — published clip kept`
+      );
+      return;
+    }
+    diveReanchored.add(key);
+    const task = (async () => {
+      const row = store.getHighlight(highlightId);
+      if (!row || !row.clipUri) return;
+      const ts = Number.isFinite(row.localizedTs as number)
+        ? (row.localizedTs as number)
+        : Number(row.trigger?.timestamp);
+      if (!Number.isFinite(ts)) return;
+      const rec = await ingest.cut(ts, {
+        requireFullWindow: true,
+        // The row's OWN delivered window (celebration-tail rows end on the cue);
+        // the moment only moves which instant inside it is centred, exactly like
+        // the deferred ingest cut's `anchorTs`.
+        window: {
+          start: Number.isFinite(row.start) ? row.start : ts,
+          end: Number.isFinite(row.end) ? row.end : ts,
+          cueTail: row.clipPlacementReason === "celebration_tail",
+        },
+        anchorTs: dive.ts,
+        outSuffix: DIVE_RECUT_SUFFIX,
+      });
+      // Re-read: the stop path may have patched the row meanwhile.
+      const cur = store.getHighlight(highlightId);
+      if (!cur) return;
+      await store.patchHighlight(highlightId, {
+        clipUri: rec.clipUri,
+        ...(rec.clipAudit ? rec.clipAudit : {}),
+        ...diveAnchorFields(dive, cur),
+        clipError: undefined as any,
+      } as any);
+      console.log(
+        `[live-dive-anchor:${jobId}] ${highlightId} re-cut on the dive moment ${dive.ts.toFixed(3)}s ` +
+          `(drift ${(dive.ts - (acceptAnchorTs(cur) ?? dive.ts)).toFixed(3)}s, ` +
+          `goal at ${rec.clipAudit?.clipAnchorEvidenceTs == null ? "?" : Number(rec.clipAudit.clipAnchorEvidenceTs).toFixed(3)}s)`
+      );
+      emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId, clipUri: rec.clipUri });
     })().catch((e: any) =>
       console.error(
         `[live-dive-anchor:${jobId}] re-cut failed for ${highlightId} (published clip kept):`,
@@ -2997,8 +3123,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // ADAAAA-8820 (D2): the dive's named moment points this row's deferred
           // clip cut at the right instant (drift-gated, once per row, off the
           // accept path — the clip may already exist and be re-cut once).
-          onDiveMoment: (highlightId, momentTs, confidence) =>
-            noteDiveMomentForClip(jobId, highlightId, momentTs, confidence),
+          // ADAAAA-8877: the verdict travels with it, so the ONE anchor gate
+          // (`diveReanchorDecision`) refuses a non-confirmed verdict itself
+          // instead of the caller assuming `confirmed_goal`.
+          onDiveMoment: (highlightId, momentTs, confidence, goalConfirmed) =>
+            noteDiveMomentForClip(jobId, highlightId, momentTs, confidence, goalConfirmed),
         }
       );
       if (written && written.kind !== "unchanged") {
