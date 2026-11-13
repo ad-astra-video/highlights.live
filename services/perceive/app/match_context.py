@@ -2748,7 +2748,7 @@ _SOCCER_KIT_PRIORS: dict[str, tuple[str, Optional[str]]] = {
     # the served replay of 493b55ff's own frames reads 0.2823 (inside). That
     # margin is a measurement for QA on natural traffic, not a value changed here.
     #
-    # PRIMARY only. `Real Madrid` (home side of 8 stored jobs) is deliberately
+    # PRIMARY only. `Real Madrid` (home side of 6 stored jobs) is deliberately
     # NOT curated: its plate could not be measured. The home half was stable on
     # ONE burst only and read "red" (A1: rgb [159.0, 53.2, 49.7], 20/30) — not
     # white — and never stabilised on the other clips, so a "white" row would be
