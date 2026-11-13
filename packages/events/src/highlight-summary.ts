@@ -440,6 +440,31 @@ const VENUE_RE = /\b(?:stadium|arena|ground|park|cup|league|championship|tournam
 /** An action verb the row can attest (never an inference verb). */
 const ACTION_RE = /\b(?:scores?|scored|strikes?|struck|shoots?|shot|heads?|headed|finishes?|finished|converts?|converted|buries|buried|taps?|tapped|rolls?|rolled|slots?|slotted|drives?|drove|saves?|saved|blocks?|blocked|tackles?|tackled|passes?|passed|crosses?|crossed|clears?|cleared|wins|won|levels?|levelled|equalises?|equalised|restores?|restored|answers?|answered|completes?|completed|nets?|netted|rips?|ripped|fires?|fired|volleys?|volleyed|lobs?|lobbed|curls?|curled|assists?|assisted)\b/i;
 
+/**
+ * ADAAAA-8903: the SUSTAINED-PLAY action class — the second `action` FACT source,
+ * disjoint from the ball-outcome verbs above.
+ *
+ * The measured defect (live job `9bed3bd7`, promoted rows `c3257097` / `eaf1da9f`,
+ * served build `6426d6bf`): both rows attest `clock + action` and served nothing,
+ * refused `too-few-facts` on both calls. Their replies were
+ * "Barcelona maintains possession … the team works the ball across the pitch …"
+ * and "Barcelona maintains control … continues to pressure the opposition …",
+ * i.e. exactly the copy the prompt DEMANDS on such a row: `ballActionAttested ===
+ * false` (this window measured no ball outcome) makes every shot/save/head verb a
+ * `unattested-action` refusal, so the only legal action prose is sustained play —
+ * which `ACTION_RE` had no verb for. The lane therefore asked for prose its own
+ * gate could never credit, and every BIG_PLAY row on that build shipped a card
+ * with no body (AC1-live 3/5 = 60%).
+ *
+ * Widening this cannot manufacture a fact: `attestedSummaryFactKinds` credits an
+ * `action` only when the body NAMES an actor the row's structured evidence
+ * attests (`bodyNamesAttestedActor`), and the ball-outcome bar
+ * (`bodyAssertsUnattestedAction`) is a separate, untouched gate. A bare
+ * "the ball is worked forward" still earns nothing.
+ */
+const SUSTAINED_ACTION_RE =
+  /\b(?:possess(?:es|ed|ing)?|maintains?|maintained?|maintaining|retains?|retained?|controls?|controlled?|controlling|presses|pressed|pressing|pressures?|pressured|counters?|countered?|counter-?attacks?|counter-?attacked|intercepts?|intercepted?|dispossess(?:es|ed)?|recovers?|recovered?|wins?\s+back|won\s+back|works?\s+the\s+ball|worked\s+the\s+ball|circulates?|circulated?|switches?\s+(?:play|the\s+ball)|switched\s+(?:play|the\s+ball)|carries?\s+(?:the\s+ball|possession)|carried\s+(?:the\s+ball|possession)|keeps?\s+(?:the\s+ball|possession|their\s+shape)|kept\s+(?:the\s+ball|possession)|holds?\s+possession|held\s+possession|builds?\s+up|building\s+up|built\s+up|advanced?|advancing|breaks?\s+forward|broke\s+forward|threads?\s+(?:a\s+pass|the\s+ball)|threaded|spreads?\s+play|spread\s+play|recycles?\s+(?:the\s+ball|possession)|recycled)\b/i;
+
 /** Every fact the summary asserts, with the substring that carries it. */
 export function summaryFacts(text: string): { kind: SummaryFactKind; text: string }[] {
   const body = text ?? "";
@@ -454,6 +479,14 @@ export function summaryFacts(text: string): { kind: SummaryFactKind; text: strin
   if (venue) out.push({ kind: "venue", text: venue[0] });
   const action = body.match(ACTION_RE);
   if (action) out.push({ kind: "action", text: action[0] });
+  // ADAAAA-8903: sustained play is an `action` fact too — only when no
+  // ball-outcome verb already carried it (one action fact per body, so the
+  // fact COUNT is unchanged and this can never lift a body over the two-kind
+  // bar on its own).
+  else {
+    const sustained = body.match(SUSTAINED_ACTION_RE);
+    if (sustained) out.push({ kind: "action", text: sustained[0] });
+  }
   return out;
 }
 
@@ -1448,6 +1481,43 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     droppedSentences,
     raw: stripped,
     captionOverlap: captionTokenOverlap(stripped, evidence.caption),
+  };
+}
+
+/**
+ * ADAAAA-8903 (§15.4): the refusal DETAIL a `dropped:*` row must persist.
+ *
+ * The census on live job `9bed3bd7` could read only `summaryDroppedByReason:
+ * {gate: 1}` per row, which is an aggregate counter: a `too-few-words` refusal (a
+ * depth-threshold bug at or above the 18-word floor / 25-word target) is
+ * indistinguishable from a compliance refusal (`too-few-facts`,
+ * `ungrounded-name`) without replaying the row. QA's rev-7 grade recorded §15.4
+ * as `not_captured` for that reason.
+ *
+ * This projects the EXACT numbers the gate judged, so the next census tells the
+ * two apart by reading the row: `violations` names the bar, `words` against
+ * `floorWords`/`targetMinWords` says whether the copy was thin, and
+ * `droppedSentences` says whether the AC10 neutraliser (not the writer) took the
+ * body under the band — the ADAAAA-8831 confusion, in one read.
+ */
+export interface SummaryRefusalDetail {
+  violations: string[];
+  words: number;
+  sentences: number;
+  floorWords: number;
+  targetMinWords: number;
+  droppedSentences: number;
+}
+
+export function summaryRefusalDetail(decision: SummaryGateDecision, rail: SummaryRail): SummaryRefusalDetail {
+  const band = summaryBand(rail);
+  return {
+    violations: [...decision.violations],
+    words: decision.words,
+    sentences: decision.sentences,
+    floorWords: band.floorWords,
+    targetMinWords: band.targetMinWords,
+    droppedSentences: decision.droppedSentences,
   };
 }
 
