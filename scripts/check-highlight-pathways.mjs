@@ -139,9 +139,16 @@ for (const m of doc.matchAll(anchorRe)) {
   const at = Number(lineText);
   const window = lines.slice(Math.max(0, at - 7), at + 6).join("\n");
   if (window.includes(ident)) continue;
-  const real = lines.findIndex((l) => l.includes(ident));
+  // Report the DECLARATION (or route registration), not the first comment
+  // mention, so the fix is a direct line substitution.
+  const isDecl = (l) =>
+    (/^\s*(?:export\s+)?(?:async\s+)?(?:function|class|const|def)\b/.test(l) ||
+      /^\s*@router\.(?:get|post)\b/.test(l)) &&
+    l.includes(ident);
+  let where = lines.findIndex(isDecl);
+  if (where === -1) where = lines.findIndex((l) => l.includes(ident));
   problems.push(
-    `${p}: map anchors \`${ident}\` at line ${at}, but it is ${real === -1 ? "not in the file" : `at line ${real + 1}`}`
+    `${p}: map anchors \`${ident}\` at line ${at}, but it is ${where === -1 ? "not in the file" : `at line ${where + 1}`}`
   );
 }
 

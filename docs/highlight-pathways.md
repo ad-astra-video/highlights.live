@@ -25,8 +25,8 @@ Three different questions get conflated in conversation; keep them separate.
 | Term | Meaning | Set at |
 | --- | --- | --- |
 | `outcome` | `scoring_play` \| `near_miss` \| `big_play` \| `not_highlight` — the decide verdict's own classification of the window | `services/decide/app/gemma.py:434` (prompt contract), mirrored by the deterministic rule path |
-| `isHighlight` | the accept flag on a decide verdict; a `scoring_play` read still has to survive the server accept path before it is a row | `services/decide/app/__init__.py:789` (`/highlight`) |
-| row status / lane | `accepted` \| `suppressed` \| `rejected`, plus per-row markers: provisional goal, confirmation lane, `replayOf`, `clipChoice` | `packages/events/src/index.ts:1886` (`HighlightRecordSchema`) |
+| `isHighlight` | the accept flag on a decide verdict; a `scoring_play` read still has to survive the server accept path before it is a row | `services/decide/app/__init__.py:806` (`/highlight`) |
+| row status / lane | `accepted` \| `suppressed` \| `rejected`, plus per-row markers: provisional goal, confirmation lane, `replayOf`, `clipChoice` | `packages/events/src/index.ts:1909` (`HighlightRecordSchema`) |
 | "postable" | the read-side gate that decides what the board may show. A stored row is **not** a highlight until it passes this | `services/server/src/highlight-postable.ts:265` |
 
 Only `scoring_play` may be a board GOAL. `near_miss` (a shot that did not convert)
@@ -82,7 +82,7 @@ and whether it is shipped on or opt-in.
 | --- | --- | --- | --- | --- | --- |
 | L1 | live browser share | browser publishes WebRTC video+opus to the media node | `services/media/src/rtc.ts`, `services/server/src/media-rail.ts:484` | each observation + anchor JPEG feeds a `LiveObserver` | on when a browser share is provisioned |
 | L2 | live RTMP / file-sim | server pulls a stream / loops a file | `services/server/src/live.ts` | frames + audio tap into `analyzeJob` | on |
-| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11377` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
+| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11452` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
 | A1 | both | audio energy change: burst (fast onset) or sustained swell | `services/perceive/app/audio_gate.py` → `POST /audio` | Stage-A candidate anchored at the onset | on |
 | A2 | both | band-limited tonal whistle (2.4–3.4 kHz) | `services/perceive/app/audio_gate.py` (Stage-B) | whistle candidate / evidence; own verdict ledger | on |
 | A3 | both | tracker peak displacement, detection-in-zone, ball-velocity surge | `services/perceive/app/stage_a.py` | profile-routed Stage-A sites | **inert for soccer** — no shipped profile enables motion/zone/ball-velocity |
@@ -97,7 +97,7 @@ and whether it is shipped on or opt-in.
 | B4 | VOD (baseline) | a perceive candidate fires | `services/server/src/analyzer.ts` (candidate path, 3 s frame-group merge) | one merged `/highlight` review per group | default VOD baseline when `OBSERVE_LOOP` is off |
 | C1 | both | un-attested goal-type accept | `services/decide/app/confirm.py` (`/confirm`), server lane `services/server/src/live-confirm-async.ts` | higher-fidelity dive: confirmed_goal / near_miss / not_goal | `DECIDE_CONFIRM_ENABLED=1`; live async lane `LIVE_CONFIRM_ASYNC` (default on) |
 | C2 | live | celebration window follows an attack/shot window | `services/server/src/live-goal-recall.ts` | recall floor: a real goal whose crossing instant fell between 1 fps samples | on (live rail) |
-| C3 | live | a GOAL accept without a measured attestation | server scoring lane (`services/server/src/analyzer.ts:7899`, LANE-1) | demote / hold the GOAL unless scoreboard- or frame-attested, no recap refusal | on (live rail) |
+| C3 | live | a GOAL accept without a measured attestation | server scoring lane (`services/server/src/analyzer.ts:7955`, LANE-1) | demote / hold the GOAL unless scoreboard- or frame-attested, no recap refusal | on (live rail) |
 | C4 | live | demoted goal with a corroborating cue | `services/server/src/live-provisional-goal.ts:132` | stamps a **provisional** marker; the row stays `big_play` | on |
 | C5 | live | a demoted window whose OCR has no post-goal read | `services/server/src/live-frame-reread.ts` | bounded re-read of frames already on disk (no decide, no GPU) | on |
 | D1 | both | verdict + evidence are final for a window | decide-side gate ladder, S4.1 | accept / reject / score | on |
@@ -116,7 +116,7 @@ provisional marker) that are marked below.
 
 ### 4.1 Decide-side ladder (inside `/highlight`)
 
-Order as executed in `services/decide/app/__init__.py:789` (single) and
+Order as executed in `services/decide/app/__init__.py:806` (single) and
 `_handle_group` (grouped):
 
 1. **Read** — gemma 12B (`services/decide/app/gemma.py`) or the deterministic rule
@@ -139,7 +139,7 @@ Order as executed in `services/decide/app/__init__.py:789` (single) and
 7. **Contract guard** (`services/decide/app/gemma.py:1142`, last) — the served sentence may not claim
    more than the evidence attested.
 
-### 4.2 Server accept ladder (`acceptVideoDecision`, `services/server/src/analyzer.ts:7603`)
+### 4.2 Server accept ladder (`acceptVideoDecision`, `services/server/src/analyzer.ts:7659`)
 
 1. **Confirm dive** — for an un-attested goal-shaped accept: inline
    (`confirmReconcile`), or off the accept path on the live async lane
@@ -148,7 +148,7 @@ Order as executed in `services/decide/app/__init__.py:789` (single) and
 2. **Live goal recall** (`services/server/src/live-goal-recall.ts`) — a celebration/reaction window
    that follows an attack-or-shot window becomes a recounted goal (the sub-second
    crossing fell between 1 fps samples).
-3. **LANE-1 scoring gate** (`services/server/src/analyzer.ts:7899`) — a GOAL row must be
+3. **LANE-1 scoring gate** (`services/server/src/analyzer.ts:7955`) — a GOAL row must be
    `measuredGoalAttested` **and** carry a named authority (`scoreboard` or
    `frame`) **and** not be a recap refusal (`recapWindowRefusal`). Otherwise the
    row is held/demoted, not silently accepted.
