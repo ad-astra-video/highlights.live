@@ -124,7 +124,7 @@ import {
 } from "./recentered-alternative";
 // ADAAAA-8854: the ONE served highlight / notable row shape, shared by the
 // composite detail read and the incremental sections-delta stream.
-import { servedHighlightRow, servedNotableRow, type ServedRowContext } from "./served-highlight-rows";
+import { servedHighlightRow, servedNotableRow, countSuppressedSiblingAlternatives, type ServedRowContext } from "./served-highlight-rows";
 // ADAAAA-8530: the read-side confirmation lane a served highlight card states.
 import { confirmationForHighlightRow, laneConfirmsGoal } from "./confirmation-lane";
 import { buildSummaryLadder } from "./summary-ladder";
@@ -7197,6 +7197,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // delivered row can never be silently absent, and a grader does not have
         // to reconstruct the notable grouping to know that.
         rowAccounting: postable.rowAccounting,
+        // ADAAAA-8912 (D5b/AC5.6b): the sibling-window options this read did NOT
+        // project (owner-only rule) are counted, never silently dropped.
+        suppressedSiblingAlternatives: countSuppressedSiblingAlternatives(
+          postable.notableMoments.moments,
+          alternativesByOwner
+        ),
         // ADAAAA-8321: how many replay windows this job attached as alternatives
         // (never their own highlights). Additive top-level field.
         replaysAttached: servedAlternatives.attached,
@@ -7355,6 +7361,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-8542 (AC3): the delta carries the same one-pass accounting as
         // the composite read, so an appended refresh cannot hide a row either.
         rowAccounting: postable.rowAccounting,
+        // ADAAAA-8912 (D5b/AC5.6b): same suppressed-option count as the
+        // composite read, so a refresh cannot hide an unprojected option.
+        suppressedSiblingAlternatives: countSuppressedSiblingAlternatives(
+          postable.notableMoments.moments,
+          alternativesByOwner
+        ),
         duplicateHighlights: postable.duplicates,
         maxTraces: maxTracesForSource(job.source),
         summaryLadder,

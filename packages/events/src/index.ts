@@ -3266,6 +3266,17 @@ export const JobDetailSchema = z.object({
   /** ADAAAA-8321: how many replay windows this job attached as alternatives.
    * Additive optional; absent on payloads that predate the detector. */
   replaysAttached: z.number().int().min(0).optional(),
+  /** ADAAAA-8912 (D5b/AC5.6b): options delivered on a notable moment's SIBLING
+   * window. Only the moment owner can carry an option (spec rev 4 §4 D5 item
+   * 7b), so these are not projected onto any slide or pick row — they are
+   * COUNTED here, with the rows that hold them, so a delivered option can never
+   * be silently dropped. Additive optional; absent on payloads that predate it. */
+  suppressedSiblingAlternatives: z
+    .object({
+      count: z.number().int().min(0),
+      rows: z.array(z.object({ rowId: z.string(), ownerId: z.string(), alternativeIds: z.array(z.string()) })),
+    })
+    .optional(),
   /** ADAAAA-7621: overlapping clips merged out of `highlights`, each carrying
    * `duplicateOf` = the id of the moment that owns the footage. */
   duplicateHighlights: z.array(HighlightRecordSchema).default([]),

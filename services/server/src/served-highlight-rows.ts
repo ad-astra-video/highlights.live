@@ -128,6 +128,33 @@ export function servedSiblingClips(m: NotableMomentCluster, ctx: ServedRowContex
 }
 
 /**
+ * ADAAAA-8912 (D5b/AC5.6b): the options this read SUPPRESSES.
+ *
+ * {@link servedSiblingClips} deliberately drops a sibling row's own
+ * `highlight_alternatives[]` (only the moment OWNER can carry an option), so a
+ * delivered option on a sibling-eligible row reaches no slide and no pick row.
+ * The D5 contract (spec rev 4, §4 D5 item 7b) says such an option must be
+ * COUNTED rather than silently dropped — measured on job `a0e60cc2`: row
+ * `daa53f58` carries `11d4d688` (`recentered`, window 416) while the card serves
+ * `-4150.mp4`. Pure: ids only, no stored data is touched.
+ */
+export function countSuppressedSiblingAlternatives(
+  moments: NotableMomentCluster[],
+  alternativesByOwner: Map<string, HighlightAlternative[]>
+): { count: number; rows: { rowId: string; ownerId: string; alternativeIds: string[] }[] } {
+  const rows: { rowId: string; ownerId: string; alternativeIds: string[] }[] = [];
+  for (const m of moments) {
+    for (const option of m.options) {
+      const alts = alternativesByOwner.get(option.id);
+      if (!alts?.length) continue;
+      rows.push({ rowId: option.id, ownerId: m.owner.id, alternativeIds: alts.map((a) => a.id) });
+    }
+  }
+  rows.sort((a, b) => (a.rowId < b.rowId ? -1 : a.rowId > b.rowId ? 1 : 0));
+  return { count: rows.reduce((n, r) => n + r.alternativeIds.length, 0), rows };
+}
+
+/**
  * One SERVED notable card (ADAAAA-8178 / ADAAAA-8530): the same card the
  * postable feed mounts, so it needs the same export URL, copy target, caption
  * and confirmation lane, plus its one-card-per-moment grouping.
