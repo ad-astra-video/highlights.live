@@ -6,13 +6,20 @@ import { liveStageView, noPreviewText, type LiveStageView } from "../lib/liveSta
 import type { JobDetail, LiveProgress } from "../lib/jobDetail";
 import { LiveProgressChip } from "./LiveProgressChip";
 import { AnalyzePositionChip } from "./AnalyzePositionChip";
+import { ScoreboardOverlay } from "./ScoreboardOverlay";
+import type { ScoreboardSurface } from "../lib/scoreboardSurface";
 
 // ADAAAA-7976: the live stage on the job detail page.
 //
 // First block of the detail content, ABOVE the match summary (`data-detail-ladder`):
 //   data-live-stage
-//     data-live-stage-video     - the playing browser-capture stream (muted,
-//                                  autoPlay, playsInline, srcObject = capture)
+//   data-live-stage-video     - the playing browser-capture stream (muted,
+//                                  autoPlay, playsInline, srcObject = capture),
+//                                  wrapped in a positioned box
+//   data-live-stage-video-wrap - that box (the stage's own geometry)
+//   data-scoreboard-overlay*  - ADAAAA-8886: the score-bug box drawn over the
+//                                  video through the CONTENT rect, display only
+//                                  (pointer-events-none, aria-hidden)
 //     data-live-stage-nopreview - RTMP/WebRTC ingest (no playback route exists)
 //                                  or a browser capture this page no longer holds
 //     data-live-stage-status    - real job status + elapsed + the existing lag chip
@@ -43,6 +50,7 @@ export function LiveStageViewBlock({
   stopError = null,
   captureNotice = null,
   gapNotice = null,
+  scoreboardSurface,
   onStop,
 }: {
   view: LiveStageView;
@@ -59,6 +67,9 @@ export function LiveStageViewBlock({
   /** ADAAAA-8848: the recording-gap notice once the bounded upload queue had to
    *  drop bytes (upload slower than capture). */
   gapNotice?: string | null;
+  /** ADAAAA-8886: the served score-surface block; drawn as a box over the video
+   *  only in `video` mode, and absent (no node) when the server has none. */
+  scoreboardSurface?: ScoreboardSurface;
   onStop?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -137,14 +148,24 @@ export function LiveStageViewBlock({
       )}
 
       {view.showVideo && (
-        <video
-          ref={videoRef}
-          data-live-stage-video
-          muted
-          autoPlay
-          playsInline
-          className="mt-3 aspect-video w-full max-w-3xl rounded-lg border border-neon/30 bg-black"
-        />
+        // ADAAAA-8886 (Inc 3): same <video> element and `data-live-stage-video`
+        // marker, now inside a positioned wrapper that is exactly the video box,
+        // so the score-bug box can be mapped through the video CONTENT rect.
+        <div className="relative mt-3 aspect-video w-full max-w-3xl" data-live-stage-video-wrap>
+          <video
+            ref={videoRef}
+            data-live-stage-video
+            muted
+            autoPlay
+            playsInline
+            className="h-full w-full rounded-lg border border-neon/30 bg-black"
+          />
+          <ScoreboardOverlay
+            surface={scoreboardSurface}
+            enabled={view.mode === "video"}
+            videoRef={videoRef}
+          />
+        </div>
       )}
 
       {view.showNoPreview && (
@@ -232,6 +253,7 @@ export function LiveStage({ job, liveProgress, staleSec = 0 }: LiveStageProps) {
       stopError={stopError}
       captureNotice={cap.jobId === job.id ? cap.recordingNotice : null}
       gapNotice={cap.jobId === job.id ? cap.recordingGapNotice : null}
+      scoreboardSurface={job.scoreboardSurface}
       onStop={() => void onStop()}
     />
   );
