@@ -103,6 +103,11 @@ export interface ConfirmationInput {
    *  (`confirmAttestation.dropReason`), the only persisted record that a dive was
    *  requested and dropped fail-closed. */
   droppedReason?: string;
+  /** ADAAAA-8894 (D4): the row carries a MEASURED attestation AND a D4 dive ran on
+   *  it (`confirmAttestation.laneKeptByMeasurement`). The dive may not move the
+   *  lane, so the measurement wins over the dive verdict. Absent on every row
+   *  written before D4 — those keep the D3 precedence byte-identically. */
+  measuredLaneKept?: boolean;
 }
 
 const LANE_LABELS = {
@@ -285,7 +290,15 @@ function skipReasonFor(
   measurement: ConfirmationMeasurement | undefined
 ): ConfirmationSkipReason | undefined {
   const dropped = typeof input.droppedReason === "string" ? input.droppedReason.trim() : "";
-  if (dropped) return `dropped:${dropped.split(":")[0]}`;
+  if (dropped) {
+    const cause = dropped.split(":")[0];
+    // ADAAAA-8894 (D4, Ruling B): `density_cap` is a BARE enum entry, not a
+    // `dropped:` cause. It is an admission bound the contract owns (the live
+    // 48-dives/stream-hour guard), not a fail-closed dive drop, so it is served
+    // under its own name — a card answering "the cap withheld this dive" must not
+    // read as a transport/busy failure.
+    return cause === "density_cap" ? "density_cap" : `dropped:${cause}`;
+  }
   if (input.confirmEnabled === false) return "dive_disabled";
   if (measurement && measurement !== "none") return "measured_attestation";
   if (input.confirmEnabled === undefined) return undefined;
@@ -315,6 +328,45 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
   const stage1 = criteriaFlags(input.analysis);
   const diveFlags = diveEvidenceFlags(input.confirm);
   const dive = diveVerdict(input.confirm);
+  const measured = measuredMeasurement(input, stage1);
+
+  /** The lane-1 arm. `withSkipReason=false` is the ADAAAA-8894 (D4) shape: a dive
+   *  DID run on this measured row, so the card must not claim a skip — the row's
+   *  own `confirmAttestation` is the answer, and the measurement is the lane. */
+  const measuredArm = (withSkipReason: boolean): WindowConfirmation => {
+    const value = measured as ConfirmationMeasurement;
+    const detail = value === "score" ? scoreTransitionDetail(input.analysis) : undefined;
+    const label =
+      value === "goal_line"
+        ? "Confirmed by goal line: ball crossed the line between posts"
+        : value === "ball_in_net"
+          ? "Confirmed by ball in net"
+          : value === "ball_outcome"
+            ? "Confirmed by measured ball outcome: goal"
+            : detail
+              ? `Confirmed by measured score: ${detail}`
+              : "Confirmed by measured score change";
+    const skipReason = withSkipReason ? skipReasonFor(input, value) : undefined;
+    return {
+      lane: "measured",
+      label,
+      measurement: value,
+      ...(detail ? { detail } : {}),
+      ...(skipReason ? { skipReason } : {}),
+      flags: stage1,
+      flagsSource: stage1 ? "stage1_verdict" : input.trigger ? "trigger" : undefined,
+    };
+  };
+
+  // ADAAAA-8894 (D4): THE PRECISION GUARD, read side. D4 dives a row that already
+  // measured its own goal; the dive may add the moment but may NOT move the lane,
+  // so the measurement wins over the dive verdict on a flagged row (`AC4.2`: 0
+  // measured rows change lane). The flag is written only by the two adoption
+  // writers, so every pre-D4 row keeps the D3 precedence below byte-identically —
+  // including the AC2 rule that a dive which DEMOTED a row still reads
+  // `dive_disagreed` (a demoted row carries no flag, because the guard is what
+  // stops D4 demoting one).
+  if (measured && input.measuredLaneKept === true) return measuredArm(Boolean(input.droppedReason));
 
   if (dive && !dive.corroborated) {
     return {
@@ -338,30 +390,7 @@ export function deriveConfirmation(input: ConfirmationInput): WindowConfirmation
     };
   }
 
-  const measured = measuredMeasurement(input, stage1);
-  if (measured) {
-    const detail = measured === "score" ? scoreTransitionDetail(input.analysis) : undefined;
-    const label =
-      measured === "goal_line"
-        ? "Confirmed by goal line: ball crossed the line between posts"
-        : measured === "ball_in_net"
-          ? "Confirmed by ball in net"
-          : measured === "ball_outcome"
-            ? "Confirmed by measured ball outcome: goal"
-            : detail
-              ? `Confirmed by measured score: ${detail}`
-              : "Confirmed by measured score change";
-    const skipReason = skipReasonFor(input, measured);
-    return {
-      lane: "measured",
-      label,
-      measurement: measured,
-      ...(detail ? { detail } : {}),
-      ...(skipReason ? { skipReason } : {}),
-      flags: stage1,
-      flagsSource: stage1 ? "stage1_verdict" : input.trigger ? "trigger" : undefined,
-    };
-  }
+  if (measured) return measuredArm(true);
 
   // ADAAAA-8678: a `pending` row is NOT a non-accepted row in the reject sense —
   // it is a served card waiting for the operator's Approve, so it states its lane
@@ -448,8 +477,11 @@ export function confirmationForHighlightRow(
       goalConfirmed?: string | null;
       corroborated?: boolean | null;
       /** ADAAAA-8721 (D3): the stored fail-closed drop cause — proof a dive was
-       *  requested and did not run. */
+       *  requested and did not run. Includes the D4 `density_cap` admission bound. */
       dropReason?: string | null;
+      /** ADAAAA-8894 (D4): a dive ran on a row that already MEASURED its goal, so
+       *  the measurement keeps the lane. */
+      laneKeptByMeasurement?: boolean | null;
     } | null;
   },
   candidate?: ConfirmationInput,
@@ -474,6 +506,22 @@ export function confirmationForHighlightRow(
   // Same precedence `deriveConfirmation` documents for a candidate's `confirm`:
   // a verdict that did not corroborate wins over any measurement (so a refuted
   // row never reads CONFIRMED), and a corroborated verdict names lane 2.
+  //
+  // ADAAAA-8894 (D4): EXCEPT on a row D4 dived while it already carried a MEASURED
+  // attestation (`laneKeptByMeasurement`). There the measurement IS the lane and
+  // the dive's verdict is a second opinion the row records — the precision guard
+  // forbids `measured -> dive` and `measured -> dive_disagreed`, which is exactly
+  // what AC4.2 measures. A row that did NOT measure (or a pre-D4 row, where the
+  // flag is absent) keeps the precedence below unchanged.
+  const measuredLaneKept = row.confirmAttestation?.laneKeptByMeasurement === true;
+  if (measuredLaneKept) {
+    const status: ConfirmationInput["status"] =
+      row.status === "accepted" ? "accepted" : row.status === "rejected" ? "rejected" : row.status === "pending" ? "pending" : "suppressed";
+    const input = withSkipInput(candidate ?? { status, trigger: row.trigger }, row, options);
+    const derived = deriveConfirmation({ ...input, measuredLaneKept: true });
+    const served = servedConfirmation(derived);
+    if (served?.lane === "measured") return served;
+  }
   const rowDive = diveVerdictFromAttestation(row.confirmAttestation);
   if (rowDive && !rowDive.corroborated) {
     return servedConfirmation({
