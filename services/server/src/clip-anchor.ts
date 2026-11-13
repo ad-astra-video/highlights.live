@@ -25,6 +25,7 @@ import {
   firstPacketTs,
   locateImageInSource,
   locateScoreboardFlip,
+  measureOffsetInFile,
   probeDuration,
   CLIP_EXACT_TRIM_PREROLL_S,
   type ClipCutResult,
@@ -150,6 +151,13 @@ export interface AnchorCutInput {
    * that would put the goal at the cue's slot and push the reaction off the end.
    * The evidence picture stays the anchor; the flip audit fields stay null. */
   cueTail?: boolean;
+  /** ADAAAA-8906: this cut places a DIVE MOMENT (the re-centered option), not
+   * the accept anchor. The score-flip substitution below must NOT run: a flip is
+   * by definition at-or-before the accepted picture, so re-centering an option
+   * on it slides the whole window earlier than the window the row stores and the
+   * named moment lands 1.0-1.2 s late in the file (QA on `0685049`). A moment is
+   * placed on its OWN picture, at `moment - window.start`. */
+  momentAnchor?: boolean;
 }
 
 /** Basis the delivered flip offset was measured on (logged, never graded):
@@ -270,6 +278,149 @@ export async function measureDeliveredFlipOffset(input: {
   return { offset: null, basis: null, origin };
 }
 
+/** ADAAAA-8906: how far a DIVE moment must sit from the row's accept anchor
+ * before the option cut stops treating it as the accept anchor. The delivery
+ * gate is |drift| >= 1 s; half a second keeps a "same instant" dive on the
+ * accept-anchor path byte-for-byte. */
+export const MOMENT_ANCHOR_MIN_DRIFT_S = 0.5;
+/** ADAAAA-8906: how far the moment's own picture may sit from `before` in the
+ * delivered file before the copy cut is corrected with one frame-accurate trim.
+ * 0.15 s ≈ 9 frames at 60 fps / 4 at 25-30 fps — the tolerance the fix ticket
+ * grades ("± a frame"), not the 0.6 / 1.2 s the accept-anchor paths allow. */
+export const MOMENT_ANCHOR_DELIVERED_TOL_S = 0.15;
+
+/** Is `anchorTs` a dive MOMENT rather than the row's accept anchor? One rule,
+ * used by both rails, so live and VOD cannot diverge again. */
+export function isMomentAnchor(
+  anchorTs: number | null | undefined,
+  acceptTs: number | null | undefined
+): boolean {
+  if (!Number.isFinite(anchorTs as number) || !Number.isFinite(acceptTs as number)) return false;
+  return Math.abs(Number(anchorTs) - Number(acceptTs)) >= MOMENT_ANCHOR_MIN_DRIFT_S;
+}
+
+/**
+ * ADAAAA-8906 (D5 fix): cut a file that places a DIVE MOMENT at
+ * `moment - window.start`, and NOTHING else.
+ *
+ * This is the ONE option-placement path for both rails (`LiveIngest.cut` via
+ * `anchorCutOnEvidence`, and `cutBrowserHighlightClip` in api.ts). It exists
+ * because the accept-anchor chain is wrong for a moment anchor: it locates the
+ * score flip at-or-before the anchor and centers THERE, which slides the whole
+ * window earlier by the flip→picture gap. QA measured that on build `0685049`:
+ * row `-87` stored the window `[1.6667, 16.6667]` and the dive moment at
+ * 12.6667 s (`before` = 11.0), the delivered option opened at 0.4667 s and the
+ * moment measured 12.2 s of the file — AC5.1's "opens on the dive moment"
+ * failing while the row fields were right.
+ *
+ * So: locate the moment's own evidence picture (frame match handles the
+ * content-clock ↔ recording skew), center the window on THAT, and — when the
+ * copy cut lands off the requested offset — correct once with a frame-accurate
+ * trim. Falls back to the content-clock window when the picture cannot be
+ * located (honest, and still `window.start`).
+ */
+export async function cutMomentAnchoredClip(input: {
+  ffmpegPath: string;
+  source: string;
+  outPath: string;
+  /** Content-clock start of the window the option row stores. */
+  contentStart: number;
+  dur: number;
+  /** The dive's named instant (content clock). */
+  momentTs: number;
+  evidenceFramePath: string | null;
+  tag?: string;
+  log?: (message: string) => void;
+}): Promise<{ placement: ClipPlacement; cut: ClipCutResult }> {
+  const { ffmpegPath, source, outPath, contentStart, dur, momentTs, evidenceFramePath } = input;
+  const log = input.log ?? ((m: string) => console.log(m));
+  const tag = input.tag ?? "clip-anchor";
+  const before = Math.max(0, Math.min(dur, momentTs - contentStart));
+  const contentClock = async (why: string): Promise<{ placement: ClipPlacement; cut: ClipCutResult }> => {
+    log(
+      `[${tag}] moment anchor: ${why} — cutting the content-clock window ` +
+        `[${contentStart.toFixed(3)}, ${(contentStart + dur).toFixed(3)}] for the moment at ${momentTs.toFixed(3)}s ` +
+        `(no score-flip substitution: the moment IS the anchor)`
+    );
+    return {
+      placement: {
+        cutStart: contentStart,
+        dur,
+        method: "content_clock",
+        evidenceTs: momentTs,
+        fileTs: null,
+        lagSec: null,
+        score: null,
+        runnerUp: null,
+        clamped: false,
+        deliveredOffsetSec: null,
+        flipPx: null,
+        flipDigits: null,
+        flipRunnerUpTs: null,
+      },
+      cut: await cutClip(ffmpegPath, source, outPath, contentStart, dur),
+    };
+  };
+  if (!evidenceFramePath) return contentClock("no evidence frame");
+  const centered = await centerClipOnEvidence(ffmpegPath, source, outPath, evidenceFramePath, before, dur, {
+    searchStartS: Math.max(0, contentStart - 2),
+    searchDurS: dur + 6,
+    // The correction below is the frame-accurate one; the locator's own copy
+    // re-cut (tolerance 1.2 s) would only burn a second ffmpeg pass.
+    recutTolSec: Number.POSITIVE_INFINITY,
+  });
+  if (centered.mode !== "frame_match" || !centered.cut || centered.fileTs == null) {
+    return contentClock(
+      `the moment's picture at ${momentTs.toFixed(3)}s not located in the recording ` +
+        `(score ${Number(centered.score ?? NaN).toFixed(3)}, runner-up ${Number(centered.runnerUp ?? NaN).toFixed(3)})`
+    );
+  }
+  let cutStart = centered.cutStart;
+  let cut = centered.cut;
+  let deliveredOffset = centered.deliveredOffset;
+  let corrected = false;
+  if (deliveredOffset == null || Math.abs(deliveredOffset - before) > MOMENT_ANCHOR_DELIVERED_TOL_S) {
+    // ONE frame-accurate trim. The copy cut's start snaps to the recording's
+    // keyframe grid, so a corrective copy would snap again (ADAAAA-8170); the
+    // exact trim is a CPU re-encode of the same window — no decide call, no GPU.
+    const exact = await cutCenteredOnInstant(ffmpegPath, source, outPath, centered.fileTs, before, dur, {
+      recutTolSec: MOMENT_ANCHOR_DELIVERED_TOL_S,
+      measureOffset: async (file) => measureOffsetInFile(ffmpegPath, file, evidenceFramePath, dur),
+      exactTrim: true,
+      preRollS: CLIP_EXACT_TRIM_PREROLL_S,
+    });
+    cutStart = exact.cutStart;
+    cut = exact.cut;
+    deliveredOffset = exact.deliveredOffset;
+    corrected = true;
+  }
+  log(
+    `[${tag}] moment anchor: content ${momentTs.toFixed(3)}s -> recording ${centered.fileTs.toFixed(3)}s ` +
+      `(lag ${(momentTs - centered.fileTs).toFixed(3)}s), cut [${cutStart.toFixed(3)}, ${(cutStart + dur).toFixed(3)}] ` +
+      `(window starts at content ${contentStart.toFixed(3)}s), moment at ` +
+      `${deliveredOffset == null ? "?" : deliveredOffset.toFixed(3)}s of ${dur}s wanted ${before.toFixed(3)}s` +
+      `${corrected ? ` + exact trim (${cut.mode})` : ""}`
+  );
+  return {
+    placement: {
+      cutStart,
+      dur,
+      method: "frame_match",
+      evidenceTs: momentTs,
+      fileTs: centered.fileTs,
+      lagSec: momentTs - centered.fileTs,
+      score: centered.score,
+      runnerUp: centered.runnerUp,
+      clamped: centered.clamped,
+      deliveredOffsetSec: deliveredOffset,
+      flipPx: null,
+      flipDigits: null,
+      flipRunnerUpTs: null,
+    },
+    cut,
+  };
+}
+
 /**
  * Cut `outPath` so the goal instant sits `before` seconds into a `dur`-second
  * window, and say how it was placed.
@@ -290,6 +441,22 @@ export async function anchorCutOnEvidence(
   // How far into the window the anchor instant belongs. The row's window is
   // centered on `evidenceTs`, so this is `clipBeforeS` minus any clamp at 0.
   const before = Math.max(0, Math.min(dur, evidenceTs - contentStart));
+  // ADAAAA-8906: a DIVE MOMENT is placed on its own picture, never on the score
+  // flip before it (see `cutMomentAnchoredClip`). The browser rail takes the
+  // same branch, so live and VOD cannot ship different placements again.
+  if (input.momentAnchor && !input.cueTail) {
+    return cutMomentAnchoredClip({
+      ffmpegPath,
+      source,
+      outPath,
+      contentStart,
+      dur,
+      momentTs: evidenceTs,
+      evidenceFramePath,
+      tag,
+      log,
+    });
+  }
 
   if (!evidenceFramePath) {
     log(
