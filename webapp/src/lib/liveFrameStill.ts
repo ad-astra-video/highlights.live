@@ -228,10 +228,17 @@ export function isAuthRefusal(status: number | null): boolean {
  *   the client already dropped; any other transport failure keeps the last
  *   readable still, labelled with the frame it actually depicts (`frame`).
  *
- * The source deliberately does not own revocation: the component revokes the
- * previous object URL from the effect cleanup that React runs after the new
- * `<img src>` has committed, so a swap never blanks the visible still. Dropping
- * the URL to `null` runs the same cleanup, so a refused frame is revoked too.
+ * The source deliberately does not own revocation of the RENDERED url: the
+ * component revokes the previous object URL from the effect cleanup that React
+ * runs after the new `<img src>` has committed, so a swap never blanks the
+ * visible still. Dropping the URL to `null` runs the same cleanup, so a refused
+ * frame is revoked too.
+ *
+ * ADAAAA-8962 (the unmount race this contract left open): a poll that resolves
+ * AFTER `reset()`/`dispose()` — the stage left no-preview, the job changed, or
+ * the page unmounted — creates a blob object URL nobody will ever render. The
+ * generation guard below revokes that URL at the source and answers `waiting`,
+ * so no object URL outlives its stage.
  */
 export class LiveStillSource {
   private loadedSeq: number | null = null;
@@ -242,6 +249,8 @@ export class LiveStillSource {
   private authRefused = false;
   private listRequests = 0;
   private imageRequests = 0;
+  /** Bumped by reset()/dispose(): a poll that resolves afterwards is dropped. */
+  private generation = 0;
 
   constructor(private readonly transport: LiveStillTransport) {}
 
@@ -254,10 +263,24 @@ export class LiveStillSource {
    *  changed): the next poll re-fetches the frame it finds, and a previously
    *  refused token is allowed one fresh attempt. */
   reset(): void {
+    this.generation += 1;
     this.loadedSeq = null;
     this.url = null;
     this.shownFrame = null;
     this.authRefused = false;
+  }
+
+  /** Unmount: drop the cached still AND revoke the URL nobody will render, so a
+   *  closed page leaves no blob behind. */
+  dispose(): void {
+    const orphan = this.url;
+    this.reset();
+    revokeUrl(orphan);
+  }
+
+  /** The answer to a poll whose stage went away mid-flight: nothing to render. */
+  private dropped(): LiveStillSnapshot {
+    return { state: "waiting", frame: null, newestSeq: null, url: null, error: null, refusal: null };
   }
 
   private snapshot(
@@ -278,11 +301,13 @@ export class LiveStillSource {
   }
 
   async poll(jobId: string): Promise<LiveStillSnapshot> {
+    const generation = this.generation;
     this.listRequests += 1;
     let payload: unknown;
     try {
       payload = await this.transport.listFrames(jobId);
     } catch (e: unknown) {
+      if (generation !== this.generation) return this.dropped();
       const text = errorText(e);
       if (isAuthRefusal(frameErrorStatus(e))) {
         this.authRefused = true;
@@ -292,6 +317,10 @@ export class LiveStillSource {
       // last honest picture), otherwise say the read failed.
       return this.snapshot(this.url ? "ready" : "refused", null, text, this.url ? null : "transport");
     }
+
+    // The stage left no-preview, the job changed, or the page unmounted while the
+    // list was in flight: this answer is nobody's.
+    if (generation !== this.generation) return this.dropped();
 
     const frame = latestLiveFrame(payload);
     // No extracted frame yet (the job's frame dir does not exist or the writer
@@ -313,11 +342,18 @@ export class LiveStillSource {
       this.imageRequests += 1;
       try {
         const url = await this.transport.fetchImage(uri);
+        if (generation !== this.generation) {
+          // The bytes arrived but no `<img>` will ever carry them: revoke here,
+          // because the committed-src cleanup cannot see a URL never rendered.
+          revokeUrl(url);
+          return this.dropped();
+        }
         this.url = url;
         this.loadedSeq = frame.seq;
         this.shownFrame = frame;
         return this.snapshot("ready", frame.seq, null, null);
       } catch (e: unknown) {
+        if (generation !== this.generation) return this.dropped();
         const text = errorText(e);
         if (isAuthRefusal(frameErrorStatus(e))) {
           this.authRefused = true;
@@ -340,4 +376,12 @@ function errorText(e: unknown): string {
   const anyE = e as { message?: unknown; status?: unknown } | null;
   const msg = typeof anyE?.message === "string" ? anyE.message : String(e);
   return msg.length > 0 ? msg : "frame request failed";
+}
+
+/** ADAAAA-8962: Node has no `URL.revokeObjectURL`; guard so a discarded fetch is
+ *  a no-op there instead of a TypeError (the browser path is the one that
+ *  matters, and the test stubs it to count revocations). */
+function revokeUrl(url: string | null): void {
+  if (!url) return;
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(url);
 }
