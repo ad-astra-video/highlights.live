@@ -1070,28 +1070,6 @@ export function confirmDiveAdoption(
       reason: "row already in the scoring lane — the dive does not rewrite it",
     };
   }
-  // ADAAAA-8894 (D4): THE PRECISION GUARD — placed BEFORE every promotion arm,
-  // not after it: the guard is "nothing about a measured row changes except the
-  // moment", so a dive that confirms a goal the accept demoted must not promote
-  // it either. A row that already MEASURED its own goal is not refutable by a
-  // dive. D4 fires the dive anyway (coverage: every promoted card gets a dive
-  // moment and a re-centered option), and the dive's verdict lands on
-  // `confirmAttestation` — but the measurement is the accept's own corroboration,
-  // so a disagreeing dive is a second opinion, not a retraction. Demoting here
-  // would delete a confirmed GOAL from the board in the name of confirming it,
-  // and would move the card's lane `measured -> dive_disagreed`, which is the
-  // regression the guard exists to prevent. The moment (applied in
-  // `attestConfirmDiveHighlight`) is the one thing the dive may add.
-  if (measured) {
-    return {
-      kind: "unchanged",
-      patch: { confirmAttestation: attestation, pendingConfirmDive: undefined },
-      reason:
-        `row carries a MEASURED attestation (${describeRowMeasurement(row)}) — the dive adds its moment ` +
-        `but does not refute the measurement or move the lane (goalConfirmed=${goalConfirmed ?? "none"}, ` +
-        `corroborated=${corroborated})`,
-    };
-  }
   if (goalConfirmed === null) {
     return {
       kind: "unchanged",
@@ -1161,6 +1139,27 @@ export function confirmDiveAdoption(
           `(${describeRowMeasurement(row)}), ` +
           "so the window is promoted on the dive's frame attestation instead of being held forever"
         : `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"})`,
+    };
+  }
+  // ADAAAA-8894 (D4): THE PRECISION GUARD. It sits AFTER the promote arm and
+  // BEFORE every refute/hold arm on purpose: a row that MEASURED its own goal is
+  // still promotable — the measurement, not the dive, is what licenses the GOAL,
+  // and D1 AC1.4 requires that promotion to stay in place. What the guard forbids
+  // is the opposite direction. D4 fires the dive on such a row for coverage (a
+  // dive moment and a re-centered option), and the dive's verdict lands on
+  // `confirmAttestation` as a SECOND OPINION; it may not refute the measurement,
+  // delete the GOAL, or move the lane off `measured` (`measured -> dive_disagreed`
+  // is the regression this guard exists to prevent). The moment (applied in
+  // `attestConfirmDiveHighlight`) plus the `laneKeptByMeasurement` flag above are
+  // the only things the dive may add here.
+  if (measured) {
+    return {
+      kind: "unchanged",
+      patch: { confirmAttestation: attestation, pendingConfirmDive: undefined },
+      reason:
+        `row carries a MEASURED attestation (${describeRowMeasurement(row)}) — the dive adds its moment ` +
+        `but does not refute the measurement or move the lane (goalConfirmed=${goalConfirmed ?? "none"}, ` +
+        `corroborated=${corroborated})`,
     };
   }
   // B3: refute only a row that actually carries a provisional marker. A
