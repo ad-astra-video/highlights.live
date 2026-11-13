@@ -18,6 +18,7 @@ frame path (`POST /app/analyze`) and the identity module directly:
 import base64
 import io
 import uuid
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -25,7 +26,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app as _app
-from app import app, _incumbent_surface_kept
+from app import app, _incumbent_surface_kept, _publish_surface_identity
 from app.scoreboard import ScoreboardRoi
 from app.surface_identity import (
     SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD,
@@ -218,10 +219,43 @@ def test_identity_pass_is_bounded_and_costs_no_extra_reads(client, monkeypatch):
     published = [o for o in obs if "scoreboardSurfaceIdentity" in o]
     assert 1 <= len(published) <= SURFACE_IDENTITY_MAX_PASSES
     assert published[0]["scoreboardSurfaceIdentity"]["verdict"] == "consistent"
+    # ADAAAA-8939: and it rides the box it was measured on — the server can only
+    # fold an identity onto a box the SAME observation reports.
+    assert all("scoreboardRoi" in o for o in published)
     assert state.surface_identity["verdict"] == "consistent"
     # The clean match still attests its real score change.
     assert any(o.get("scoreBoardChanged") for o in obs)
     assert not any(o.get("scoreboardSurfaceDemoted") for o in obs)
+
+
+def test_verdict_rides_the_box_it_was_measured_on():
+    """ADAAAA-8939: a verdict may only ride the observation naming its own box.
+
+    The served build measured a verdict on every VOD job and stored none: the
+    publish fired on the pass frame, and when that frame reported no box (the
+    visibility gate was closed) the server's fold dropped the identity and the
+    once-per-surface publish never retried it (job 591f4088: verdicts at seq 6
+    and 271, box first reported at seq 276, 0 identity rows).
+    """
+    verdict = {"verdict": "consistent", "kitDistance": None, "names": ["RMA", "BAR"]}
+    state = SimpleNamespace(surface_identity_by_sig={"sigA": verdict})
+    # A frame that reports no box publishes nothing and does not burn the surface.
+    out = {}
+    _publish_surface_identity(state, None, out)
+    assert "scoreboardSurfaceIdentity" not in out
+    assert getattr(state, "surface_identity_emitted_sig", None) is None
+    # The frame that reports the measured box publishes its verdict.
+    _publish_surface_identity(state, "sigA", out)
+    assert out["scoreboardSurfaceIdentity"] is verdict
+    assert state.surface_identity_emitted_sig == "sigA"
+    # A later frame on the same box does not re-publish (stream stays free).
+    again = {}
+    _publish_surface_identity(state, "sigA", again)
+    assert "scoreboardSurfaceIdentity" not in again
+    # An UNMEASURED box never borrows another box's verdict.
+    other = {}
+    _publish_surface_identity(state, "sigB", other)
+    assert other == {}
 
 
 def test_contradicted_surface_withholds_scoreboardchanged(client, monkeypatch):
