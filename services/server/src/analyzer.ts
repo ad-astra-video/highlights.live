@@ -153,6 +153,13 @@ export interface ObservationResult {
     roiPasses?: number;
     roiTiles?: number;
     roiEnabled?: boolean;
+    // ADAAAA-8835 (Inc 1): the score surface THIS frame's OCR crop used —
+    // the normalized box, perceive's raw `scoreboard_roi_source` and whether that
+    // box produced a parseable score. Additive: absent on a runner that does not
+    // report the crop, so an old observation is byte-identical.
+    scoreboardRoi?: number[];
+    scoreboardRoiSource?: string;
+    scoreboardRoiVerified?: boolean;
   };
   candidate?: {
     eventType: string;
@@ -3114,6 +3121,12 @@ export interface PlanRequest {
 export interface GoalLineCalibration {
   homography?: number[];
   goalLine?: { axis?: string; position?: number; mouthMin?: number; mouthMax?: number };
+  /** ADAAAA-8835 (Inc 1): the job's score-bug PIN, normalized 0..1
+   * `[x0, y0, x1, y1]`, delivered on every /analyze beside the pitch
+   * calibration so perceive adopts it as the session scoreboard ROI with source
+   * `explicit`, ahead of discovery. Absent on an unpinned job — no field is sent,
+   * so today's request stays byte-identical. */
+  scoreboardRoi?: number[];
 }
 
 /** ADAAAA-6935: one Stage-A candidate trigger accumulated within a 3 s frame
@@ -3411,6 +3424,13 @@ export interface AnalyzerConfig {
    * perceive emits no ballOutcome/goalCrossed and the metric reports
    * not_captured (never a fabricated signal). */
   calibration?: GoalLineCalibration;
+  /** ADAAAA-8835 (Inc 1): invoked once per PERCEIVED frame with the observation
+   * perceive returned, so the caller can fold the score surface it reports
+   * (`scoreboardRoi` / `scoreboardRoiSource` / `scoreboardRoiVerified`) into the
+   * job's `scoreboardSurface` provenance block. Pure bookkeeping: the callback is
+   * expected to persist only when the block CHANGES, and a throwing callback is
+   * swallowed (it must never fail the pass). Absent => nothing changes. */
+  onScoreboardSurface?: (observation: ObservationResult["observation"]) => void;
   /** Detail-first VOD knobs (ADAAAA-4954, spec §1). When absent the pass runs at
     * the live/default depth (1 fps frames, 16-frame window, single decide image).
     * When `decideWindowN` is set the pass is "detail-first": the shared frame
@@ -11971,6 +11991,12 @@ export async function analyzeJob(
         // -> perceive emits no signal (not_captured, never fabricated).
         ...(cfg.calibration?.homography ? { homography: cfg.calibration.homography } : {}),
         ...(cfg.calibration?.goalLine ? { goalLine: cfg.calibration.goalLine } : {}),
+        // ADAAAA-8835 (Inc 1): deliver this job's score-bug PIN on every
+        // /analyze (same delivery pattern as the pitch calibration) so perceive
+        // crops the score surface the operator chose instead of whatever it
+        // discovered — and a fresh/re-reserved session inherits it on its first
+        // frame. Absent on an unpinned job: the body stays byte-identical.
+        ...(cfg.calibration?.scoreboardRoi ? { scoreboardRoi: cfg.calibration.scoreboardRoi } : {}),
       };
       // ADAAAA-7152 Gap 1: decide whether this frame gets the expensive perceive
       // pass. In a cool (no-signal) region only every `quietStride`-th frame is
@@ -12014,6 +12040,19 @@ export async function analyzeJob(
               roiPasses += Math.max(0, Math.floor(obsRoi));
               roiTiles += Math.max(0, Math.floor(Number(res.observation?.roiTiles) || 0));
               if (res.observation?.roiEnabled === true) roiEnabled = true;
+            }
+            // ADAAAA-8835 (Inc 1): fold the score surface this frame's crop
+            // actually used into the job's provenance block. Bookkeeping only (no
+            // perception, no decide input): a throwing/slow writer must never
+            // fail the pass, and the callback persists only on a CHANGE.
+            if (cfg.onScoreboardSurface) {
+              try {
+                cfg.onScoreboardSurface(res.observation);
+              } catch (e: any) {
+                console.warn(
+                  `[scoreboard-surface] fold failed (best-effort): ${String(e?.message || e)}`
+                );
+              }
             }
             // ADAAAA-7774: the stride that keeps the loop at the live edge is
             // driven by this measurement (shared-GPU perceive is the real rate

@@ -472,6 +472,11 @@ export class OrchestratorAdapter implements PipelineClient {
         // -> perceive emits no signal (not_captured, never fabricated).
         ...(opts?.homography ? { homography: opts.homography } : {}),
         ...(opts?.goalLine ? { goalLine: opts.goalLine } : {}),
+        // ADAAAA-8835 (Inc 1): the per-job score-bug PIN rides the SAME carriage
+        // as the pitch calibration on the paid/orchestrator rail, so a live or
+        // VOD job crops the operator's box ahead of discovery. Absent on an
+        // unpinned job => the body is byte-identical.
+        ...(opts?.scoreboardRoi ? { scoreboardRoi: opts.scoreboardRoi } : {}),
       }),
     });
     if (status >= 400) {
@@ -1166,6 +1171,8 @@ export class DirectAdapter implements PipelineClient {
         // per-clip goal-line calibration (homography + goal-line spec).
         ...(opts?.homography ? { homography: opts.homography } : {}),
         ...(opts?.goalLine ? { goalLine: opts.goalLine } : {}),
+        // ADAAAA-8835 (Inc 1): the per-job score-bug PIN, same carriage.
+        ...(opts?.scoreboardRoi ? { scoreboardRoi: opts.scoreboardRoi } : {}),
       }),
     });
     if (!r.ok) {

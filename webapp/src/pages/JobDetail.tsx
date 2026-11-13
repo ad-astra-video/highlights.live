@@ -80,6 +80,7 @@ import { ResumeAction, ResumeTrail, type ResumeActionState } from "../components
 import { CaptureNotice } from "../components/CaptureNotice";
 import { LiveStage } from "../components/LiveStage";
 import { isLiveStageSource } from "../lib/liveStage";
+import { ScoreboardSurfaceReadout } from "../components/ScoreboardSurfaceReadout";
 import {
   LIVE_READ_HEALTH_FRESH,
   liveProgressFailureNotice,
@@ -915,6 +916,12 @@ export function FailureReasonChip({ reason }: { reason?: string | null }) {
  * ADAAAA-7741: how far behind live the customer's feed is — see
  * components/LiveProgressChip.tsx (kept in its own module so both chip states
  * are pinned by a render test).
+ */
+
+/**
+ * ADAAAA-8835 (Inc 1): the read-only `scoreboardSurface` chip moved to
+ * `components/ScoreboardSurfaceReadout` so it is render-tested in isolation; the
+ * job page renders it for every live and VOD job (see below).
  */
 
 function statusChip(status: string): string {
@@ -3166,6 +3173,10 @@ export function JobDetail() {
                   decide/candidates/Stage-A/cost/partition readouts inside the
                   component are internal diagnostics — admin only. */}
               <JobDetailMetrics job={detail.job} frameCount={frameCount} partition={partition} admin={admin} />
+              {/* ADAAAA-8835 (Inc 1): which score surface the OCR cropped (the
+                  per-job pin, a discovered box, or the shipped prior) — the
+                  board-visible half of the pin. Customer-facing, not internal. */}
+              <ScoreboardSurfaceReadout surface={detail.job.scoreboardSurface} />
             </div>
             {/* ADAAAA-8425: the admin window audit. Five causes side by side +
                 decideCalls/supply + the effective/funded decide ceiling, read

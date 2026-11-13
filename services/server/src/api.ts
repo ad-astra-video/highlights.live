@@ -41,6 +41,15 @@ import { MediaRailObserver } from "./media-rail";
 import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
 import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
 import {
+  declaredScoreboardSurface,
+  nextScoreboardSurface,
+  parseScoreboardRoi,
+  sameScoreboardSurface,
+  type ReportedScoreboardSurface,
+  type ScoreboardRoiBox,
+  type ScoreboardSurfaceBlock,
+} from "./scoreboard-surface";
+import {
   ConfirmDiveDispatcher,
   LIVE_CONFIRM_LEAD_S,
   LIVE_CONFIRM_LOOKAHEAD_S,
@@ -1162,6 +1171,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     gameHint: string;
     preferLabels: string[];
     sampleFps?: number;
+    /** ADAAAA-8835 (Inc 1): the per-job score-bug pin, normalized 0..1. */
+    scoreboardRoi?: ScoreboardRoiBox;
     lastChunkAt: number;
   }
   const uploadSessions = new Map<string, UploadSession>();
@@ -2569,6 +2580,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       cfg,
       job,
       clipWindow: cw,
+      // ADAAAA-8835 (Inc 1): persist the score surface perceive reports (which
+      // box, which provenance, whether it parsed a score) on the job record.
+      onScoreboardSurface: scoreboardSurfaceRecorder(store, job.id),
       // ADAAAA-8437: size the per-stream in-flight depth from the DISCOVERED
       // decide admission (the routed 5090 set advertises 6), not the static
       // funded number.
@@ -3314,6 +3328,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         cfg,
         job,
         clipWindow: cw,
+        // ADAAAA-8835 (Inc 1): persist the score surface perceive reports (which
+        // box, which provenance, whether it parsed a score) on the job record.
+        onScoreboardSurface: scoreboardSurfaceRecorder(store, job.id),
         // ADAAAA-8544: the knob frozen on the record at job start, read from the
         // STORE (not from `cfg`) so this run honours the posture the user bought.
         decideKnob: store.getJob(job.id)?.decideKnob,
@@ -4336,8 +4353,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // signal (goalCrossed/ballOutcome) is real. Absent -> perceive emits no
       // ballOutcome and the metric reports not_captured (never a fabricated
       // signal). Keyed by job id, then the clip filename/source, then `default`
-      // (ADAAAA-7163 Blocker 1).
-      calibration: resolveGoalLineCalibration(cfg, [jobId, stableClipCalibrationKey(videoPath)]),
+      // ADAAAA-7163 Blocker 1).
+      calibration: withScoreboardRoi(
+        resolveGoalLineCalibration(cfg, [jobId, stableClipCalibrationKey(videoPath)]),
+        store.getJob(jobId)?.scoreboardRoi
+      ),
+      // ADAAAA-8835 (Inc 1): fold the score surface perceive reports (which box,
+      // which provenance, whether it parsed a score) onto the job record.
+      onScoreboardSurface: scoreboardSurfaceRecorder(store, jobId),
       // ADAAAA-6797: Stage-2 goal/near-miss confirmation pass. ADAAAA-7663: the
       // live pass builds the same gate through `buildLiveAnalyzerConfig`, so
       // `DECIDE_CONFIRM_ENABLED` now covers both passes; off is a strict no-op
@@ -6036,6 +6059,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       /** ADAAAA-8544: charged decides per 300 s of CONTENT clock, `63..N`, or
        *  `null` = uncapped (the shipped default). Below 63 is a 422. */
       rateCapPer300s?: number | null;
+      /** ADAAAA-8835 (Inc 1): the per-job score-bug PIN, normalized 0..1
+       *  `[x0, y0, x1, y1]`. Absent => today's behaviour, request byte-identical. */
+      scoreboardRoi?: number[];
     };
   }>(
     "/jobs",
@@ -6053,6 +6079,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!knobInput.ok) {
         return reply.code(422).send({ error: knobInput.message, code: knobInput.code });
       }
+      // ADAAAA-8835 (Inc 1): validate the per-job score-bug pin BEFORE any gate
+      // that spends quota or schedules compute. A malformed box is a 422 and no
+      // job row, no decide slot and no quota consumption — silently dropping it
+      // would scope the OCR back onto whatever discovery picks. Absent input is
+      // `{ ok: true, roi: undefined }`, so an unpinned submit is unchanged.
+      const roiInput = parseScoreboardRoi(req.body?.scoreboardRoi);
+      if (!roiInput.ok) {
+        return reply.code(422).send({ error: roiInput.message, code: roiInput.code });
+      }
+      const scoreboardRoi = roiInput.roi;
       const sub = await db.getSubscription(user.id);
       // Budget hard-stop: reject at submission time as soon as the month's clip
       // quota is exhausted. This runs BEFORE any job is created or any compute
@@ -6096,6 +6132,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         gameHint: req.body.gameHint || cfg.gameHintDefault,
         preferLabels: req.body.preferLabels ?? [],
         sampleFps: req.body.sampleFps,
+        // ADAAAA-8835 (Inc 1): the score-bug pin travels with the job row, so
+        // both rails (live + VOD worker) deliver it on every /analyze and the
+        // board can read the declared surface before any frame runs.
+        ...(scoreboardRoi
+          ? {
+              scoreboardRoi,
+              scoreboardSurface: declaredScoreboardSurface(scoreboardRoi),
+            }
+          : {}),
       });
       // ADAAAA-8544: resolve the knob ONCE, here, and freeze it on the row before
       // any decide can run. `resolvedSource` distinguishes the user's choice
@@ -6259,6 +6304,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
     const fv = (v: any) => (Array.isArray(v) ? v[0] : v)?.value ?? "";
     const gameHint = fv(fields.gameHint) || cfg.gameHintDefault;
+    // ADAAAA-8835 (Inc 1): the per-job score-bug pin, submitted as the JSON
+    // encoding of `[x0, y0, x1, y1]`. Validated BEFORE the file is streamed, so
+    // a malformed box is a 422 and leaves no footprint.
+    const roiField = fv(fields.scoreboardRoi);
+    const roiInput = parseScoreboardRoi(roiField ? parseJsonField(roiField) : undefined);
+    if (!roiInput.ok) {
+      file.resume();
+      return reply.code(422).send({ error: roiInput.message, code: roiInput.code });
+    }
     let preferLabels: string[] = [];
     try {
       const raw = fv(fields.preferLabels);
@@ -6327,6 +6381,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       gameHint,
       preferLabels,
       sampleFps,
+      // ADAAAA-8835 (Inc 1): carry the pin onto the job row (both rails then
+      // deliver it on every /analyze).
+      ...(roiInput.roi
+        ? {
+            scoreboardRoi: roiInput.roi,
+            scoreboardSurface: declaredScoreboardSurface(roiInput.roi),
+          }
+        : {}),
     });
     await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
     // Durable non-blocking submit (ADAAAA-6873): enqueue the landed file for
@@ -6362,7 +6424,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const user = req.user;
     // Sweep idle sessions left by abandoned clients before opening a new one.
     sweepUploadSessions();
-    const { filename, size, mime, gameHint, preferLabels, sampleFps } = req.body ?? {};
+    const { filename, size, mime, gameHint, preferLabels, sampleFps, scoreboardRoi } = req.body ?? {};
+    // ADAAAA-8835 (Inc 1): validate a submitted score-bug pin at INIT (before any
+    // byte is staged), so a malformed box is a 422 and no upload session exists.
+    const roiInput = parseScoreboardRoi(
+      typeof scoreboardRoi === "string" && scoreboardRoi.trim() ? parseJsonField(scoreboardRoi) : scoreboardRoi
+    );
+    if (!roiInput.ok) {
+      return reply.code(422).send({ error: roiInput.message, code: roiInput.code });
+    }
     const sub = await db.getSubscription(user.id);
     try {
       await entitlements.canSubmit(user, sub);
@@ -6416,6 +6486,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       gameHint: gameHint || cfg.gameHintDefault,
       preferLabels: labels,
       sampleFps: sampleFps !== undefined ? Number(sampleFps) : undefined,
+      ...(roiInput.roi ? { scoreboardRoi: roiInput.roi } : {}),
       lastChunkAt: Date.now(),
     });
     return { uploadId: jobId, chunkBytes: cfg.vodChunkBytes, vodMax: cfg.vodMaxUploadBytes };
@@ -6476,6 +6547,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       gameHint: session.gameHint,
       preferLabels: session.preferLabels,
       sampleFps: session.sampleFps,
+      // ADAAAA-8835 (Inc 1): carry the pin submitted at init onto the job row.
+      ...(session.scoreboardRoi
+        ? {
+            scoreboardRoi: session.scoreboardRoi,
+            scoreboardSurface: declaredScoreboardSurface(session.scoreboardRoi),
+          }
+        : {}),
     });
     await recordJobFunnel(db, user.id, priorJobs, firstJobAt, cfg.funnelRetainDays);
     // Durable non-blocking submit (ADAAAA-6873): the full file is already
@@ -8734,7 +8812,7 @@ function buildObserveSignalGateOpts(cfg: ServerConfig): SignalGateOptions | unde
  */
 export interface LiveAnalyzerConfigDeps {
   cfg: ServerConfig;
-  job: { id: string; gameHint?: string; preferLabels?: string[]; cameraId?: string; perceiveSessionId?: string };
+  job: { id: string; gameHint?: string; preferLabels?: string[]; cameraId?: string; perceiveSessionId?: string; scoreboardRoi?: number[] };
   clipWindow: { clipBeforeS: number; clipAfterS: number; clipWindowMinSec?: number };
   onDecision?: AnalyzerConfig["onDecision"];
   onDecideAudit?: AnalyzerConfig["onDecideAudit"];
@@ -8764,9 +8842,12 @@ export interface LiveAnalyzerConfigDeps {
    * (tests / older wiring) falls back to `cfg.liveDecideAdmission`. */
   decideEffectiveAdmission?: AnalyzerConfig["liveDecideEffectiveAdmission"];
   /** ADAAAA-8495: the ingest rail publishes the row at accept and cuts the clip
-   * afterwards on its own serial cut chain. Unset (the media/browser rail, which
-   * passes a no-op `cut`, and every test) keeps the inline cut. */
+   *  afterwards on its own serial cut chain. Unset (the media/browser rail, which
+   *  passes a no-op `cut`, and every test) keeps the inline cut. */
   deferLiveClipCut?: boolean;
+  /** ADAAAA-8835 (Inc 1): fold the score surface perceive reports for each
+   *  perceived frame into the job record's `scoreboardSurface` block. */
+  onScoreboardSurface?: AnalyzerConfig["onScoreboardSurface"];
 }
 
 /**
@@ -8826,6 +8907,7 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     decideKnob,
     decideEffectiveAdmission,
     deferLiveClipCut,
+    onScoreboardSurface,
   } = deps;
   return {
     jobId: job.id,
@@ -8983,7 +9065,13 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // reported not_captured, never fabricated). Keyed by job id (a live
     // stream has no stable clip id configured on the job), then `default`
     // (ADAAAA-7163 Blocker 1).
-    calibration: resolveGoalLineCalibration(cfg, [job.id]),
+    // ADAAAA-8835 (Inc 1): the per-job score-bug PIN rides the same per-analyze
+    // calibration delivery, so perceive crops the operator's box ahead of
+    // discovery. Absent on an unpinned job => today's body, byte-identical.
+    calibration: withScoreboardRoi(resolveGoalLineCalibration(cfg, [job.id]), job.scoreboardRoi),
+    // ADAAAA-8835 (Inc 1): fold the score surface perceive reports (which box,
+    // which provenance, whether it parsed a score) onto the job record.
+    ...(onScoreboardSurface ? { onScoreboardSurface } : {}),
     // ADAAAA-7663: Stage-2 goal/near-miss confirmation pass on the LIVE pass.
     // The live pass previously left this unset, so shouldRunConfirm() returned
     // false on every live read and no gNNN:confirm row could ever be written.
@@ -9039,6 +9127,57 @@ export function resolveGoalLineCalibration(
     if (v) return v;
   }
   return cfg.goalLineCalibrations?.default;
+}
+
+/** ADAAAA-8835 (Inc 1): parse a JSON-encoded body field (the upload rails accept
+ * the pin as a JSON string so a multipart/typed form can carry it). A malformed
+ * value returns `undefined`, which `parseScoreboardRoi` treats as "no pin"; the
+ * caller that needs a 422 passes the ORIGINAL value when this is undefined. */
+function parseJsonField(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** ADAAAA-8835 (Inc 1): attach the job's score-bug PIN to its per-analyze
+ * calibration. The pin is a PER-JOB field (submitted at create), not part of a
+ * deploy-time calibration map, so it is merged in here rather than resolved from
+ * env. Absent pin => the calibration object is returned untouched (an unpinned
+ * job's /analyze body stays byte-identical). */
+export function withScoreboardRoi(
+  calibration: GoalLineCalibration | undefined,
+  roi: readonly number[] | undefined,
+): GoalLineCalibration | undefined {
+  if (!roi) return calibration;
+  return { ...(calibration ?? {}), scoreboardRoi: [...roi] };
+}
+
+/**
+ * ADAAAA-8835 (Inc 1): the per-observation writer for a job's
+ * `scoreboardSurface` block.
+ *
+ * The frame pass calls this for every perceived frame; it folds what perceive
+ * reported about the crop and persists ONLY when the block changes (the first
+ * observation of a pin, a discovery/learned box adoption, a verified latch), so
+ * a 20-minute stream costs a handful of writes rather than one per frame. The
+ * previous block is seeded from the store so a resumed pass does not restart
+ * `seqFirstSeen`.
+ */
+export function scoreboardSurfaceRecorder(
+  store: Pick<Store, "getJob" | "patchJob">,
+  jobId: string
+): (observation: ReportedScoreboardSurface) => void {
+  let current: ScoreboardSurfaceBlock | undefined = store.getJob(jobId)?.scoreboardSurface;
+  return (observation) => {
+    const next = nextScoreboardSurface(current, observation ?? {});
+    if (!next || sameScoreboardSurface(current, next)) return;
+    current = next;
+    void store.patchJob(jobId, { scoreboardSurface: next }).catch((e: any) =>
+      console.warn(`[scoreboard-surface:${jobId}] persist failed:`, String(e?.message || e))
+    );
+  };
 }
 
 function spaHandler(cfg: ServerConfig) {

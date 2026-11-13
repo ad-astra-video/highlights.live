@@ -339,6 +339,57 @@ def _set_scoreboard_roi(state, roi, source: str, seq=None) -> None:
     _note_scoreboard_roi_source(state, source, roi, seq)
 
 
+def _scoreboard_roi_pinned(state) -> bool:
+    """True when a PER-JOB pin (ADAAAA-8835) owns this session's score crop.
+
+    Distinct from the process-global ``PERCEIVE_SCOREBOARD_ROI`` (also recorded
+    with source ``explicit``): the job pin is stricter — the operator asked for
+    exactly this box, so the session must never read OCR outside it (no selector
+    probe, no bottom-prior repair, no whole-frame team/score fallback). Keeping
+    the flag separate means a deployment that already sets the env box keeps its
+    shipped behaviour (AC4: unpinned is byte-identical).
+    """
+    return getattr(state, "scoreboard_roi_pin", None) is not None
+
+
+def _apply_scoreboard_pin(state, raw, seq=None) -> None:
+    """Adopt the per-job score-bug PIN as the session ROI (ADAAAA-8835 Inc 1).
+
+    Delivered on every ``/analyze`` for a pinned job. First valid delivery wins
+    the session region with source ``explicit`` (ahead of discovery) and marks
+    the session as pinned; later deliveries of the SAME box are a no-op, so the
+    per-frame carriage costs nothing and never re-logs. A malformed box is
+    ignored (never fatal): the session keeps today's resolution order, exactly as
+    an unpinned job does. Invalid values cannot reach here from the server (job
+    create validates them), but the runner must not trust a caller.
+    """
+    if raw is None:
+        return
+    try:
+        vals = [float(v) for v in raw]
+    except (TypeError, ValueError):
+        vals = []
+    if len(vals) != 4:
+        log.warning("bad scoreboardRoi pin ignored session=%s value=%r", getattr(state, "session_id", "?"), raw)
+        return
+    candidate = ScoreboardRoi(*vals)
+    if candidate.pixel_box(1920, 1080) is None:
+        log.warning("bad scoreboardRoi pin ignored session=%s value=%r", getattr(state, "session_id", "?"), raw)
+        return
+    pinned = getattr(state, "scoreboard_roi_pin", None)
+    if pinned is not None and _same_roi(pinned, candidate):
+        return
+    state.scoreboard_roi_pin = candidate
+    _set_scoreboard_roi(state, candidate, "explicit", seq)
+    log.info(
+        "scoreboard ROI pinned session=%s seq=%s box=%s source=job_pin "
+        "(per-job scoreboardRoi, crop-only OCR; ADAAAA-8835)",
+        getattr(state, "session_id", "?"),
+        seq,
+        _roi_box_label(candidate),
+    )
+
+
 def _lines_have_digit(lines) -> bool:
     """True when any OCR line of this read carries a digit (ADAAAA-8548).
 
@@ -785,6 +836,12 @@ class AnalyzeRequest(BaseModel):
     # `configure` goalLine key. Absent -> the candidate carries no ballOutcome
     # (reported as not_captured, never invented).
     goalLine: Optional[dict] = None
+    # ADAAAA-8835 (Inc 1): the per-job score-bug PIN, normalized 0..1
+    # `[x0, y0, x1, y1]`. Delivered on every /analyze for a pinned job (same
+    # carriage as homography/goalLine) so the session crops the operator's box
+    # with source `explicit`, AHEAD of discovery, and never falls back to a
+    # read outside it. Absent -> today's resolution order, byte-identical.
+    scoreboardRoi: Optional[list] = None
 
 
 class AudioChunkRequest(BaseModel):
@@ -1320,6 +1377,14 @@ def _scoreboard_ocr_fields(
     out: dict = {"ocr": []}
     if detector is None or rgb is None:
         return out
+    # ADAAAA-8835 (Inc 1): a per-job PIN is a hard scope. The operator named the
+    # score surface, so this session must not spend a read outside it — no
+    # vision-LLM box, no multi-region selector probe, no bottom-prior repair and
+    # no whole-frame team/score fallback (each of those can read a foreign PIP
+    # score bug, which is exactly what the pin exists to exclude). Everything
+    # below still pays the SAME single crop read the unpinned path would: only
+    # the coordinates change (AC5: zero added inference).
+    _pinned = _scoreboard_roi_pinned(state)
 
     # ADAAAA-7081/7084/7086/7094: scoreboard OCR scoped to a scoreboard region
     # of interest, on the observe cadence. The scoreboard graphic is cropped to
@@ -1347,7 +1412,7 @@ def _scoreboard_ocr_fields(
     # overlaps the configured scoreboard ROI — a hallucinated box/score off the
     # graphic can never forge a scoreBoardChanged delta.
     # ADAAAA-7084 (opt-in): vision-LLM scoreboard visibility verdict.
-    verdict = vision_scoreboard(image_b64) if scoreboard_vision_enabled() else None
+    verdict = vision_scoreboard(image_b64) if scoreboard_vision_enabled() and not _pinned else None
     state.scoreboard_vision = verdict
     # Crop region: prefer the vision-LLM box (when it ran and localized a
     # usable scoreboard), else the ADAAAA-7086-aware `_scoreboard_roi`.
@@ -1370,6 +1435,9 @@ def _scoreboard_ocr_fields(
         if _vision_roi is not None
         else (getattr(state, "scoreboard_roi_source", "") or "unknown")
     )
+    # ADAAAA-8835 (Inc 1): a per-job PIN is a hard scope (computed at the top of
+    # this pass; repeated here for the read-gating flags below).
+    _pinned = _scoreboard_roi_pinned(state)
     # Visibility gate: the LLM says no scoreboard (7084) or the region
     # discovery found none (7086) -> skip the `<OCR>` pass entirely so
     # out-of-ROI / non-scoreboard text is never even read.
@@ -1382,7 +1450,7 @@ def _scoreboard_ocr_fields(
     # `SCOREBOARD_SELECT_MAX_FRAMES` frames and stops as soon as a region
     # clears the stability gates; the chosen region is then cached as the
     # session's ROI so later frames pay a single crop read as before.
-    selector = _scoreboard_selector(state, _ocr_sport) if verdict is None else None
+    selector = _scoreboard_selector(state, _ocr_sport) if verdict is None and not _pinned else None
     _probe_frame = False
     if visible and selector is not None and not selector.resolved:
         regions = selector.candidates_for_frame()
@@ -1483,11 +1551,13 @@ def _scoreboard_ocr_fields(
         else {"home", "away"}  # nothing to repair: the name pass is off
     )
     # No team text at all -> the whole-frame read may see the graphic the ROI
-    # missed (ADAAAA-7190 fallback extended in ADAAAA-7909).
-    _no_team_text = len(_sides) == 0 and _ocr_budget
+    # missed (ADAAAA-7190 fallback extended in ADAAAA-7909). ADAAAA-8835: never
+    # on a pinned session — a whole-frame read is a read outside the pin.
+    _no_team_text = len(_sides) == 0 and _ocr_budget and not _pinned
     # One side only -> the active region is clipping part of the graphic;
-    # repair the ROI before spending the whole-frame read.
-    _need_roi_repair = 0 < len(_sides) < 2 and _ocr_budget
+    # repair the ROI before spending the whole-frame read (never on a pin: the
+    # operator's box is the scope, not a clipping guess).
+    _need_roi_repair = 0 < len(_sides) < 2 and _ocr_budget and not _pinned
     _need_team_text = _no_team_text
     # ADAAAA-7909 ROI repair: the documented fallback prior is a TOP band
     # (`ScoreboardRoi.from_env()` -> 0,0,1,0.25), but a bottom-centre scorebug
@@ -1550,10 +1620,12 @@ def _scoreboard_ocr_fields(
     # a healthy session pays none — its crop parses the score first try) and it is
     # disclosed: an INFO line when it recovers a score, one when the budget runs out.
     _score_budget = int(getattr(state, "score_fallback_reads", 0) or 0) < _score_fallback_allowance(state)
-    _need_score_fallback = score is None and _score_budget
-    if score is None and not _score_budget:
+    # ADAAAA-8835: a pinned session never reads the whole frame, even when its
+    # crop parses no score — the crop-only scope is the contract.
+    _need_score_fallback = score is None and _score_budget and not _pinned
+    if score is None and not _score_budget and not _pinned:
         _note_score_fallback_exhausted(state, seq)
-    if visible and (_need_score_fallback or _need_team_text):
+    if visible and not _pinned and (_need_score_fallback or _need_team_text):
         try:
             full_ocr = detector.ocr(rgb) or []
             alt = parse_ocr_score(full_ocr)  # whole-frame, no ROI filter
@@ -1601,6 +1673,31 @@ def _scoreboard_ocr_fields(
                 # bounds it never moved. Same rule as the bottom-centre repair: the
                 # retry is charged as soon as it runs.
                 state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
+    # ADAAAA-8835 (Inc 1): report the score surface THIS frame's crop used, so
+    # the server can publish a truthful `scoreboardSurface` on the job (box,
+    # provenance, first seq, whether the box ever parsed a score). Pure
+    # bookkeeping: it re-reads state the pass already computed, adds no OCR and
+    # no GPU work, and is omitted on a probe frame (whose lines are a UNION of
+    # several regions, so naming one box would be a lie).
+    if roi is not None and not _probe_frame and visible:
+        _sig = _roi_signature(roi)
+        if score is not None:
+            state.scoreboard_roi_verified_sig = _sig
+        out["scoreboardRoi"] = [
+            round(float(roi.x0), 6),
+            round(float(roi.y0), 6),
+            round(float(roi.x1), 6),
+            round(float(roi.y1), 6),
+        ]
+        out["scoreboardRoiSource"] = (
+            "vision"
+            if _vision_roi is not None
+            else (getattr(state, "scoreboard_roi_source", "") or "unknown")
+        )
+        out["scoreboardRoiVerified"] = bool(
+            _sig is not None
+            and getattr(state, "scoreboard_roi_verified_sig", None) == _sig
+        )
     state.scoreboard_tracker.record(timestamp, score)
     # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
     # the OCR pass just read (CPU only, no GPU). These are the Stage-3
@@ -2606,6 +2703,10 @@ def create_app() -> FastAPI:
         # image-space / no-goal-line-signal fallback (not_captured, never
         # fabricated).
         _apply_calibration(state, req.homography, req.goalLine)
+        # ADAAAA-8835 (Inc 1): adopt this job's score-bug PIN as the session ROI
+        # BEFORE the frame runs, ahead of discovery, so a fresh or re-reserved
+        # session crops the operator's box on its first frame.
+        _apply_scoreboard_pin(state, req.scoreboardRoi, req.seq)
         # Live path: the worker reserved a session with a control URL, so this
         # first proxied call opens this session's trickle channels and the rail
         # starts consuming video-in frames (plan §3.2/§3.5). The orchestrator

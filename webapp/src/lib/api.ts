@@ -73,6 +73,8 @@ export interface UploadVideoOptions {
   file: File;
   gameHint: string;
   preferLabels?: string[];
+  /** ADAAAA-8835 (Inc 1): the per-job score-bug pin, normalized 0..1. */
+  scoreboardRoi?: [number, number, number, number];
   onProgress?: (fraction: number) => void;
 }
 
@@ -110,14 +112,14 @@ async function httpError(res: Response, token: string | null): Promise<ApiError>
 // VOD_SINGLE_SHOT_MAX is sliced into chunks and reassembled server-side via the
 // /jobs/upload/{init,chunk,complete} rail. Smaller files keep the one-request
 // multipart path unchanged.
-export function uploadVideo<T = any>({ file, gameHint, preferLabels, onProgress }: UploadVideoOptions): Promise<T> {
+export function uploadVideo<T = any>({ file, gameHint, preferLabels, scoreboardRoi, onProgress }: UploadVideoOptions): Promise<T> {
   if (file.size > VOD_SINGLE_SHOT_MAX) {
-    return uploadVideoChunked<T>({ file, gameHint, preferLabels, onProgress });
+    return uploadVideoChunked<T>({ file, gameHint, preferLabels, scoreboardRoi, onProgress });
   }
-  return uploadVideoSingle<T>({ file, gameHint, preferLabels, onProgress });
+  return uploadVideoSingle<T>({ file, gameHint, preferLabels, scoreboardRoi, onProgress });
 }
 
-function uploadVideoSingle<T = any>({ file, gameHint, preferLabels, onProgress }: UploadVideoOptions): Promise<T> {
+function uploadVideoSingle<T = any>({ file, gameHint, preferLabels, scoreboardRoi, onProgress }: UploadVideoOptions): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/jobs/upload");
@@ -163,6 +165,9 @@ function uploadVideoSingle<T = any>({ file, gameHint, preferLabels, onProgress }
     fd.append("file", file, file.name);
     fd.append("gameHint", gameHint);
     if (preferLabels && preferLabels.length > 0) fd.append("preferLabels", JSON.stringify(preferLabels));
+    // ADAAAA-8835 (Inc 1): the per-job score-bug pin rides the multipart form as
+    // a JSON-encoded normalized box; absent = today's auto-detect behaviour.
+    if (scoreboardRoi) fd.append("scoreboardRoi", JSON.stringify(scoreboardRoi));
     xhr.send(fd);
   });
 }
@@ -170,7 +175,7 @@ function uploadVideoSingle<T = any>({ file, gameHint, preferLabels, onProgress }
 /** Upload a file in <chunkBytes parts (each well under the Cloudflare ~100 MB
  * edge cap) via the resumable /jobs/upload rail. Returns the same { job, … }
  * shape as the single-shot upload once the server has reassembled + run it. */
-async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onProgress }: UploadVideoOptions): Promise<T> {
+async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, scoreboardRoi, onProgress }: UploadVideoOptions): Promise<T> {
   const token = getToken();
   const jsonHeaders: Record<string, string> = { "content-type": "application/json" };
   if (token) jsonHeaders["authorization"] = `Bearer ${token}`;
@@ -178,7 +183,15 @@ async function uploadVideoChunked<T = any>({ file, gameHint, preferLabels, onPro
   const initRes = await fetch("/jobs/upload/init", {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ filename: file.name, size: file.size, mime: file.type, gameHint, preferLabels }),
+    body: JSON.stringify({
+      filename: file.name,
+      size: file.size,
+      mime: file.type,
+      gameHint,
+      preferLabels,
+      // ADAAAA-8835 (Inc 1): the score-bug pin travels with the upload session.
+      ...(scoreboardRoi ? { scoreboardRoi } : {}),
+    }),
   });
   if (!initRes.ok) throw await httpError(initRes, token);
   const init: { uploadId: string; chunkBytes: number } = await initRes.json();
@@ -462,6 +475,15 @@ export interface Job {
   error?: string;
   perceiveSessionId?: string;
   sampleFps?: number;
+  /** ADAAAA-8835 (Inc 1): the per-job score-bug pin, normalized 0..1, and the
+   * read-only provenance of the surface perceive actually cropped. */
+  scoreboardRoi?: [number, number, number, number];
+  scoreboardSurface?: {
+    roi: [number, number, number, number];
+    source: "explicit" | "discovery" | "default_top_band";
+    seqFirstSeen: number;
+    verified: boolean;
+  };
   stageAMetrics?: Record<string, unknown>;
   // ADAAAA-7727: whether the audio Stage-A counters are a real measurement
   // (`measured`) or `n/a`. Admin-only diagnostic — the raw admin job table reads
