@@ -3250,6 +3250,69 @@ export interface GoalLineCalibration {
   matchContextTeams?: { side?: string; name?: string; kitColors?: { primary?: string; secondary?: string }[] }[];
 }
 
+/** ADAAAA-8902: the identity reference perceive's `_surface_identity_pass` reads
+ * (`[{side, name, kitColors[{primary, secondary}]}]`). */
+export type MatchContextTeamRef = NonNullable<GoalLineCalibration["matchContextTeams"]>;
+
+/**
+ * ADAAAA-8844 / ADAAAA-8902: shape a job's resolved `matchContext.teams` into the
+ * surface-identity reference. Only the fields the identity pass compares against
+ * survive, and a side that is not `home`/`away` is dropped — a malformed or empty
+ * input returns `[]`, and the caller then sends NO field at all.
+ */
+export function shapeMatchContextTeams(teams: unknown): MatchContextTeamRef {
+  const list = Array.isArray(teams) ? teams : (teams as { teams?: unknown } | undefined)?.teams;
+  if (!Array.isArray(list) || !list.length) return [];
+  const shaped: MatchContextTeamRef = [];
+  for (const t of list as any[]) {
+    const side = typeof t?.side === "string" ? t.side : undefined;
+    const name = typeof t?.name === "string" ? t.name : undefined;
+    const kitColors: NonNullable<MatchContextTeamRef[number]["kitColors"]> = Array.isArray(t?.kitColors)
+      ? t.kitColors
+          .filter((k: any) => k && typeof k.primary === "string")
+          .slice(0, 2)
+          .map((k: any) => ({ primary: k.primary, ...(k.secondary ? { secondary: String(k.secondary) } : {}) }))
+      : [];
+    if ((side === "home" || side === "away") && (name || kitColors.length)) shaped.push({ side, name, kitColors });
+  }
+  return shaped;
+}
+
+/**
+ * ADAAAA-8902: the team reference to deliver on THIS `/analyze` call.
+ *
+ * The calibration is built ONCE at job start, but a job's `matchContext` is
+ * resolved by a pass that lands SECONDS later — measured +4.6 s on job
+ * `796e202d` (job startedAt 06:42:01.623Z, `matchContext.trail[0].at`
+ * 06:42:06.214Z). Merging the teams into that eager object therefore froze
+ * `undefined` on every served job, and perceive's `_surface_identity_pass`
+ * returned immediately (`if not teams: return None`) on every session, so
+ * `scoreboardSurface.identity` was never observable (AC2.4-a).
+ *
+ * Read the job's LIVE reader on every frame instead — the same lazy delivery the
+ * pin and the caption context already use — and fall back to the build-time
+ * calibration when the reader yields nothing. A job with no resolved
+ * `matchContext` returns `[]`, the field is not sent, and the request body stays
+ * byte-identical (AC6 posture); identity stays `absent`.
+ */
+export function deliveredMatchContextTeams(cfg: {
+  getMatchContext?: () => unknown;
+  calibration?: GoalLineCalibration;
+}): MatchContextTeamRef {
+  let raw: unknown;
+  if (cfg.getMatchContext) {
+    try {
+      raw = (cfg.getMatchContext() as { teams?: unknown } | undefined)?.teams;
+    } catch {
+      // A reader that throws is "no reference this frame", never a pass failure.
+      raw = undefined;
+    }
+  }
+  const live = shapeMatchContextTeams(raw);
+  if (live.length) return live;
+  return cfg.calibration?.matchContextTeams ?? [];
+}
+
 /** ADAAAA-6935: one Stage-A candidate trigger accumulated within a 3 s frame
  * group, carrying its own decide-evidence snapshot so a single merged group
  * review can return a per-trigger verdict (per-trigger accept / exactly-once
@@ -12147,6 +12210,12 @@ export async function analyzeJob(
       // frame runs, before resolve_vocabulary() gates the <OD> prompt.
       // The active TrackingPlan rides the same per-frame delivery so the
       // detect/seeding stays scoped to the plan's roster.
+      // ADAAAA-8844 (Inc 2) / ADAAAA-8902: the job's team reference for the
+      // score-surface identity pass, read from the job's LIVE reader on THIS
+      // frame. Merging it into the eager calibration at config-build time froze
+      // it at `undefined` (the resolver lands seconds after job start, +4.6 s on
+      // job 796e202d), so the identity pass never ran on any served session.
+      const deliveredTeams = deliveredMatchContextTeams(cfg);
       const vocab = {
         gameHint: cfg.gameHint,
         preferLabels: cfg.preferLabels,
@@ -12167,11 +12236,10 @@ export async function analyzeJob(
         ...(cfg.calibration?.scoreboardRoi ? { scoreboardRoi: cfg.calibration.scoreboardRoi } : {}),
         // ADAAAA-8844 (Inc 2): the job's team reference rides the same carriage
         // as the pin, so perceive can show a foreign PID bug's plate/names are
-        // NOT this match's. Absent (no resolved matchContext) => the body is
+        // NOT this match's. ADAAAA-8902: it is re-read per frame (above), not
+        // frozen at config build. Nothing resolved => no field, so the body is
         // byte-identical and identity stays `absent`.
-        ...(cfg.calibration?.matchContextTeams?.length
-          ? { matchContextTeams: cfg.calibration.matchContextTeams }
-          : {}),
+        ...(deliveredTeams.length ? { matchContextTeams: deliveredTeams } : {}),
       };
       // ADAAAA-7152 Gap 1: decide whether this frame gets the expensive perceive
       // pass. In a cool (no-signal) region only every `quietStride`-th frame is
