@@ -83,6 +83,17 @@ describe("deriveLiveProgress watermark (ADAAAA-8265)", () => {
     expect(p.state).toBe("caught_up");
   });
 
+  it("applies the 10 s caught-up boundary to the decide watermark too (ADAAAA-8944)", () => {
+    // The boundary moved but the source of truth did not: the same applied-decide
+    // watermark at 9 s reads caught_up and at 10 s reads behind.
+    const nine = deriveLiveProgress({ job: liveJob(), decidedThroughTs: 291, nowMs: T0 + 300_000 });
+    expect(nine.lagSec).toBe(9);
+    expect(nine.state).toBe("caught_up");
+    const ten = deriveLiveProgress({ job: liveJob(), decidedThroughTs: 290, nowMs: T0 + 300_000 });
+    expect(ten.lagSec).toBe(10);
+    expect(ten.state).toBe("behind");
+  });
+
   it("keeps the summary-log reading for a record with no candidate watermark (legacy)", () => {
     // Same job, same instant: the old meter read the caption cadence and called a
     // caught-up run 45 s behind. The fallback must stay available, but only then.

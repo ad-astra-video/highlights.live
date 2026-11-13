@@ -38,8 +38,17 @@
 import type { Job } from "@highlights/events";
 
 /** Content seconds a decided window may trail the live edge and still read as
- * "caught up". 5 s = the live tap's own sampling slack (AC3). */
-export const LIVE_PROGRESS_CAUGHT_UP_S = 5;
+ * "caught up". The comparison is strict (`lagSec <` this), because the board's
+ * ask is green when the feed is *less than* 10 s behind — exactly 10 s reads
+ * `behind`.
+ *
+ * ADAAAA-8944: 10 s is the operating posture, not slack. One gemma decide costs
+ * ~8-13 s of wall time per ~3 s of content, so a healthy live feed sits 5-10 s
+ * behind the edge between decides: normal processing, not a warning. The old 5 s
+ * boundary (the live tap's own sampling slack) painted that whole band yellow
+ * and made a healthy run look broken. Anything at or past 10 s is a real lag
+ * worth flagging. */
+export const LIVE_PROGRESS_CAUGHT_UP_S = 10;
 
 /** Decide cadence in content seconds. Mirrors `LIVE_OBSERVE_CADENCE_S` in
  * observe-loop.ts — the read path has no live AnalyzerConfig at hand, so keep
@@ -503,7 +512,7 @@ export function deriveLiveProgress(input: LiveProgressInput): LiveProgress {
   const state: LiveProgress["state"] =
     !LIVE_SOURCES.has(String(job.source ?? "")) || anchorMs === null || processedThroughTs <= 0
       ? "unknown"
-      : lagSec <= LIVE_PROGRESS_CAUGHT_UP_S
+      : lagSec < LIVE_PROGRESS_CAUGHT_UP_S
         ? "caught_up"
         : "behind";
 
