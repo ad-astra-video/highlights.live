@@ -641,6 +641,15 @@ export interface JobDetail {
     progress?: number;
     progressLabel?: string;
     createdAt: string;
+    /**
+     * ADAAAA-8949: the wall-clock ANCHOR of the job's content clock (content ts 0
+     * was captured here). The server stamps it on every live ingest/share
+     * (ADAAAA-7741, `stampContentClockStart`) and derives lag from it; the
+     * no-preview still uses the same anchor to place a frame's served content
+     * timestamp on the wall clock, so its age is derived from served values
+     * instead of guessed. Absent on rows that predate the stamp.
+     */
+    startedAt?: string;
   };
   highlights: JobDetailHighlight[];
   /** ADAAAA-7621: "notable, not a goal" lane — non-rejected near_miss /

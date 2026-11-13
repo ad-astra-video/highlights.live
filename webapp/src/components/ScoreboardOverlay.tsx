@@ -21,7 +21,6 @@
  * No fetch, no interval: the block arrives on the existing 5 s job-detail poll
  * (`VOD_DETAIL_POLL_MS`) that already drives this page.
  */
-import { useEffect, useRef, useState } from "react";
 import type { ScoreboardSurface } from "../lib/scoreboardSurface";
 import {
   contentRect,
@@ -34,6 +33,7 @@ import {
   overlayRoiText,
   type Rect,
 } from "../lib/scoreboardOverlay";
+import { useContentGeometry } from "../lib/useContentGeometry";
 
 export interface ScoreboardOverlayProps {
   surface?: ScoreboardSurface;
@@ -42,78 +42,26 @@ export interface ScoreboardOverlayProps {
   videoRef: React.RefObject<HTMLVideoElement>;
 }
 
-interface Geometry {
-  stageW: number;
-  stageH: number;
-  videoW: number;
-  videoH: number;
-}
-
-/**
- * Rendered stage size + the stream's intrinsic size, re-read on resize and on
- * `loadedmetadata`/`resize` (the stream's dimensions are only known once the
- * first frame decodes, and can change when a share changes resolution).
- */
-function useVideoGeometry(videoRef: React.RefObject<HTMLVideoElement>, active: boolean): Geometry | null {
-  const [geom, setGeom] = useState<Geometry | null>(null);
-  const last = useRef<Geometry | null>(null);
-
-  useEffect(() => {
-    if (!active) {
-      last.current = null;
-      setGeom(null);
-      return;
-    }
-    const v = videoRef.current;
-    if (!v) return;
-
-    const measure = () => {
-      const rect = v.getBoundingClientRect();
-      const next: Geometry = {
-        stageW: rect.width,
-        stageH: rect.height,
-        videoW: v.videoWidth,
-        videoH: v.videoHeight,
-      };
-      const prev = last.current;
-      if (
-        prev &&
-        prev.stageW === next.stageW &&
-        prev.stageH === next.stageH &&
-        prev.videoW === next.videoW &&
-        prev.videoH === next.videoH
-      ) {
-        return;
-      }
-      last.current = next;
-      setGeom(next);
-    };
-
-    measure();
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
-    observer?.observe(v);
-    v.addEventListener("loadedmetadata", measure);
-    v.addEventListener("resize", measure);
-    return () => {
-      observer?.disconnect();
-      v.removeEventListener("loadedmetadata", measure);
-      v.removeEventListener("resize", measure);
-    };
-  }, [active, videoRef]);
-
-  return geom;
-}
-
 export function ScoreboardOverlay({ surface, enabled, videoRef }: ScoreboardOverlayProps) {
   const active = enabled && !!surface;
-  const geom = useVideoGeometry(videoRef, active);
+  // Rendered stage size + the stream's intrinsic size, re-read on resize and on
+  // `loadedmetadata`/`resize` (the stream's dimensions are only known once the
+  // first frame decodes, and can change when a share changes resolution).
+  // ADAAAA-8949: the measuring hook moved to `lib/useContentGeometry.ts` so the
+  // no-preview still maps its `<img>` through the SAME content-rect rule.
+  const geom = useContentGeometry(
+    videoRef,
+    active,
+    (v) => ({ w: v.videoWidth, h: v.videoHeight }),
+    ["loadedmetadata", "resize"],
+  );
 
   // AC3.1 / AC3.7: no block (or no video stage) renders NO overlay node at all —
   // never a default or guessed box. AC3.1 also means no box before the stream's
   // intrinsic size is known: `contentRect` returns null and only the wrapper ships.
   if (!surface || !enabled) return null;
 
-  const rect: Rect | null = geom ? contentRect(geom.stageW, geom.stageH, geom.videoW, geom.videoH) : null;
+  const rect: Rect | null = geom ? contentRect(geom.stageW, geom.stageH, geom.elW, geom.elH) : null;
   const box = overlayBox(rect, surface.roi);
 
   return (

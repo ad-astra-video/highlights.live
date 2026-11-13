@@ -301,3 +301,127 @@ describe("LiveStage score-bug overlay (ADAAAA-8886)", () => {
     expect(videoStart).toBeLessThan(start);
   });
 });
+
+// ADAAAA-8949 (Inc 4): the analyze-frame still on the no-preview stage.
+//
+// Inc 3 draws the box only on the tab that holds the capture; RTMP/WebRTC ingest
+// has no playback route, so the box had no picture there. The still is the newest
+// JPEG perceive already cropped — one `<img>` + the same box mapped through the
+// IMAGE content rect. SSR has no intrinsic image size, so the markup here pins the
+// markers, the 1-image contract and the inert states; the box px arithmetic is
+// pinned in `LiveFrameStill.test.tsx` (with explicit geometry) and in
+// `lib/liveFrameStill.test.ts`.
+describe("LiveStage no-preview still (ADAAAA-8949)", () => {
+  function view(over: Partial<Parameters<typeof liveStageView>[0]> = {}): LiveStageView {
+    return liveStageView({
+      jobStatus: "active",
+      jobSource: "browser",
+      createdAt: "2026-11-04T12:00:00Z",
+      now: Date.parse("2026-11-04T12:00:30Z"),
+      ...over,
+    });
+  }
+
+  const SURFACE: ScoreboardSurface = {
+    roi: [0.1, 0.05, 0.6, 0.2],
+    source: "explicit",
+    seqFirstSeen: 41,
+    verified: true,
+  };
+  const ANCHOR = Date.parse("2026-11-04T12:00:00Z");
+  const STILL = {
+    stillFrame: { seq: 412, uri: "/jobs/job-1/frames/412", timestamp: 112.3 },
+    stillImgSrc: "blob:frame-412",
+    stillAnchorMs: ANCHOR,
+    nowMs: ANCHOR + 120_300,
+  };
+
+  function render(
+    v: LiveStageView,
+    opts: { surface?: ScoreboardSurface; source?: string; still?: typeof STILL | Record<string, never> } = {},
+  ) {
+    return renderToString(
+      React.createElement(LiveStageViewBlock, {
+        view: v,
+        jobId: "job-1",
+        source: opts.source ?? "browser",
+        stream: null,
+        scoreboardSurface: opts.surface,
+        onStop: () => {},
+        ...(opts.still ?? {}),
+      }),
+    );
+  }
+
+  it("AC4.1: renders NOTHING for the still on nopreview without a scoreboardSurface", () => {
+    const html = render(view({ jobSource: "rtmp" }), { source: "rtmp", still: STILL });
+    expect(html).toContain('data-live-stage-mode="nopreview"');
+    expect(html).not.toContain("data-live-stage-frame-still");
+    expect(html).not.toContain("data-live-stage-frame-wrap");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("data-scoreboard-overlay");
+  });
+
+  it("AC4.1: renders exactly one still image on nopreview with a surface", () => {
+    const html = render(view({ jobSource: "rtmp" }), { source: "rtmp", surface: SURFACE, still: STILL });
+    expect(html.match(/data-live-stage-frame-still-img/g)).toHaveLength(1);
+    expect(html).toContain('src="blob:frame-412"');
+    expect(html).toContain("data-live-stage-frame-wrap");
+    expect(html).toContain('data-live-stage-frame-still-seq="412"');
+    expect(html).toContain("newest analyzed frame #412");
+    expect(html).toContain("8s ago");
+    // SSR has no intrinsic size: the box does not ship (Inc 3's no-guess rule).
+    expect(html).not.toContain("data-live-stage-frame-still-box=");
+    // the honest no-preview note is still there, AFTER the picture
+    expect(html.indexOf("data-live-stage-frame-wrap")).toBeLessThan(html.indexOf("data-live-stage-nopreview"));
+    expect(html).toContain("No local preview for RTMP ingest");
+  });
+
+  it("AC4.6: video mode is unchanged — no still, Inc 3's box on the video", () => {
+    const html = render(view({ ownsCapture: true, hasCaptureStream: true }), { surface: SURFACE, still: STILL });
+    expect(html).toContain('data-live-stage-mode="video"');
+    expect(html).toContain("<video");
+    expect(html).toContain('data-scoreboard-overlay="stage"');
+    expect(html).not.toContain("data-live-stage-frame-still");
+    expect(html).not.toContain("<img");
+  });
+
+  it("AC4.6: stopped mode renders neither the still nor the box", () => {
+    const html = render(view({ jobStatus: "done" }), { surface: SURFACE, still: STILL });
+    expect(html).toContain('data-live-stage-mode="stopped"');
+    expect(html).not.toContain("data-live-stage-frame-still");
+    expect(html).not.toContain("data-scoreboard-overlay");
+    expect(html).not.toContain("<img");
+  });
+
+  it("AC4.6: every pre-existing data-live-stage marker is still present", () => {
+    const html = render(view({ jobSource: "rtmp" }), { source: "rtmp", surface: SURFACE, still: STILL });
+    for (const marker of [
+      "data-live-stage=",
+      "data-live-stage-mode=",
+      "data-live-stage-job=",
+      "data-live-stage-source=",
+      "data-live-stage-status",
+      "data-live-stage-state=",
+      "data-live-stage-job-status",
+      "data-live-stage-elapsed",
+      "data-live-stage-stop",
+      "data-live-stage-nopreview",
+      "data-live-stage-nopreview-reason=",
+      // Inc 4 additions
+      "data-live-stage-frame-wrap",
+      "data-live-stage-frame-still-layer",
+      "data-live-stage-frame-still-img",
+      "data-live-stage-frame-still-caption",
+    ]) {
+      expect(html, marker).toContain(marker);
+    }
+    // the video-mode markers keep shipping on the video stage
+    const videoHtml = render(view({ ownsCapture: true, hasCaptureStream: true }), { surface: SURFACE, still: STILL });
+    for (const marker of ["data-live-stage-video-wrap", "data-live-stage-video", "<video"]) {
+      expect(videoHtml, marker).toContain(marker);
+    }
+    const stoppedHtml = render(view({ jobStatus: "done" }));
+    expect(stoppedHtml).toContain("data-live-stage-finalized");
+  });
+});
