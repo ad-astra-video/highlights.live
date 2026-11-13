@@ -2893,6 +2893,48 @@ def _swatch_contradicts_curated_primary(swatch_color: str, primary: str) -> bool
     return sw_family != prior_family
 
 
+def _publish_from_stable_swatches(
+    teams: Sequence[Mapping[str, Any]],
+    swatch_by_side: Mapping[str, Mapping[str, Any]],
+    kit_prior: Optional[Mapping[str, tuple[str, Optional[str]]]],
+) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]]]:
+    """Name a side's kit colour from its STABLE score-bug swatch (ADAAAA-8935).
+
+    The FILE rail delivers no player-crop samples at all: every served VOD job
+    stores ``kitSamples: 0`` while carrying ~60 score-bug swatch readings. Before
+    this, a pass with no clusters returned before the swatch channel was even
+    folded, so every served ``file`` job published ``kitColors: []`` and the
+    surface-identity kit channel had nothing of the job's own to compare against.
+
+    A swatch may only publish when it is the side's MODAL reading across frames
+    (``stable_swatch_by_side``), so one frame over an advertising board cannot
+    name a kit. The ADAAAA-8076 veto is kept unchanged: a reading that contradicts
+    the curated primary for that same team does not publish, and the side stays
+    honestly unattributed.
+
+    Returns ``(per_side_kit, vetoed)``.
+    """
+    by_side: dict[str, list[dict[str, str]]] = {}
+    vetoed: list[dict[str, str]] = []
+    for team in teams:
+        side = str(team.get("side") or "")
+        name = str(team.get("name") or "")
+        if side not in ("home", "away") or not name or name.lower() == "unknown":
+            continue
+        sw = swatch_by_side.get(side)
+        if not sw or not sw.get("rgb"):
+            continue
+        colour = _norm(sw.get("color") or name_color(sw["rgb"]))
+        if not colour:
+            continue
+        prior_entry = kit_prior.get(name) if kit_prior is not None else None
+        if prior_entry and prior_entry[0] and _swatch_contradicts_curated_primary(colour, prior_entry[0]):
+            vetoed.append({"side": side, "swatch": colour, "curated": _norm(prior_entry[0])})
+            continue
+        by_side[side] = [{"primary": colour}]
+    return by_side, vetoed
+
+
 def associate_kits(
     teams: Sequence[Mapping[str, Any]],
     clusters: Sequence[KitCluster],
@@ -2958,18 +3000,10 @@ def associate_kits(
     # record shows WHAT was observed and why no side got a colour; the caller
     # keeps its own unfiltered list for `kitClustersUnattributed`.
     below_floor = [c for c in clusters if not _cluster_meets_publish_floor(c)]
+    had_clusters = bool(clusters)
     if below_floor and status is not None:
         status["kitClustersBelowFloor"] = sorted({c.primary for c in below_floor})
     clusters = [c for c in clusters if _cluster_meets_publish_floor(c)]
-    if not clusters:
-        if kit_prior is not None and status is not None:
-            status["kitPriorUsed"] = prior_used
-            status["kitPriorMiss"] = prior_miss
-            status["kitPriorConflict"] = prior_conflict
-        return by_side, False
-    used: set[int] = set()
-    colors = [c.primary for c in clusters]
-    same_color = len(set(colors)) == 1 and len(clusters) > 1
     # A swatch must REPEAT before it can link a colour to a side (see
     # `stable_swatch_by_side`): one frame over an advertising board reads the
     # board, not the kit, and would attribute a wrong colour.
@@ -2979,6 +3013,28 @@ def associate_kits(
     # graphic (flags/banner), not team kit colours.
     if len(swatch_by_side) >= 2 and len({s["color"] for s in swatch_by_side.values()}) == 1:
         swatch_by_side = {}
+    if not clusters:
+        if kit_prior is not None and status is not None:
+            status["kitPriorUsed"] = prior_used
+            status["kitPriorMiss"] = prior_miss
+            status["kitPriorConflict"] = prior_conflict
+        # ADAAAA-8935: the FILE rail samples the score bug but no player crops
+        # (every served VOD job stores `kitSamples: 0`), so there is no cluster to
+        # link. When NO cluster was observed at all, the side's own STABLE swatch
+        # is the measurement that names its kit. A pass that observed clusters
+        # below the publish floor keeps the shipped honest miss (no colour).
+        if had_clusters:
+            return by_side, False
+        published, swatch_vetoed = _publish_from_stable_swatches(teams, swatch_by_side, kit_prior)
+        if status is not None:
+            if published:
+                status["kitSwatchUsed"] = sorted(published)
+            if swatch_vetoed:
+                status["kitSwatchVetoed"] = swatch_vetoed
+        return published, False
+    used: set[int] = set()
+    colors = [c.primary for c in clusters]
+    same_color = len(set(colors)) == 1 and len(clusters) > 1
 
     unresolved: list[dict[str, str]] = []
     swatch_vetoed: list[dict[str, str]] = []

@@ -132,9 +132,75 @@ function sameRoi(a: readonly number[] | undefined, b: readonly number[] | undefi
   return true;
 }
 
+function sameStringList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  const aa = a ?? [];
+  const bb = b ?? [];
+  if (aa.length !== bb.length) return false;
+  return aa.every((v, i) => v === bb[i]);
+}
+
+function sameKitRecord(
+  a: Record<string, number[]> | undefined,
+  b: Record<string, number[]> | undefined
+): boolean {
+  const aa = Object.entries(a ?? {});
+  const bb = Object.entries(b ?? {});
+  if (aa.length !== bb.length) return false;
+  for (const [side, colour] of aa) {
+    const other = (b ?? {})[side];
+    if (!other || other.length !== colour.length) return false;
+    if (!colour.every((v, i) => Number(v) === Number(other[i]))) return false;
+  }
+  return true;
+}
+
+/**
+ * ADAAAA-8935: whether two identity blocks describe the SAME measurement.
+ *
+ * `seqFirstSeen` is deliberately EXCLUDED: it is the marker of when the verdict
+ * was first measured, not part of the measurement, so re-reporting the same
+ * verdict on a later frame must not read as a change (that would turn one
+ * measured surface into a per-frame write).
+ */
+export function sameSurfaceIdentity(
+  a: ScoreboardSurfaceIdentity | undefined,
+  b: ScoreboardSurfaceIdentity | undefined
+): boolean {
+  if (!a || !b) return a === b;
+  return (
+    a.verdict === b.verdict &&
+    (a.kitDistance ?? null) === (b.kitDistance ?? null) &&
+    (a.threshold ?? null) === (b.threshold ?? null) &&
+    Boolean(a.kitsPresent) === Boolean(b.kitsPresent) &&
+    Boolean(a.kitsDiffer) === Boolean(b.kitsDiffer) &&
+    (a.kitReference ?? null) === (b.kitReference ?? null) &&
+    Boolean(a.namesMatch) === Boolean(b.namesMatch) &&
+    sameStringList(a.namesMatched, b.namesMatched) &&
+    sameStringList(a.names, b.names) &&
+    sameKitRecord(a.kits, b.kits)
+  );
+}
+
+/**
+ * ADAAAA-8935: the change guard for the whole block.
+ *
+ * It used to compare only `source`/`seqFirstSeen`/`verified`/`roi`, so an
+ * observation that reported a VERDICT on an already-persisted box folded to a
+ * block that compared equal: the writer returned early, `patchJob` never ran,
+ * and the identity was dropped forever (`jobs.record->'scoreboardSurface' ? 'identity'`
+ * was 0 across the whole table). Identity and the named demotion are part of the
+ * block's own state, so they belong in this comparison.
+ */
 export function sameScoreboardSurface(a: ScoreboardSurfaceBlock | undefined, b: ScoreboardSurfaceBlock | undefined): boolean {
   if (!a || !b) return a === b;
-  return a.source === b.source && a.seqFirstSeen === b.seqFirstSeen && a.verified === b.verified && sameRoi(a.roi, b.roi);
+  return (
+    a.source === b.source &&
+    a.seqFirstSeen === b.seqFirstSeen &&
+    a.verified === b.verified &&
+    sameRoi(a.roi, b.roi) &&
+    sameSurfaceIdentity(a.identity, b.identity) &&
+    (a.demotion ?? "") === (b.demotion ?? "")
+  );
 }
 
 /** The block a pinned job carries from CREATION, before any frame runs.
@@ -227,6 +293,25 @@ export function scoreboardSurfaceDemotionNote(identity: ScoreboardSurfaceIdentit
 }
 
 /**
+ * ADAAAA-8935: fold a reported identity onto the block's existing one.
+ *
+ * The marker `seqFirstSeen` on the identity is "the frame this verdict was first
+ * measured at". Re-reporting the SAME measurement on a later frame keeps that
+ * marker (so the block compares unchanged and costs no write); a genuinely new
+ * measurement gets this frame's seq.
+ */
+function foldSurfaceIdentity(
+  prev: ScoreboardSurfaceIdentity | undefined,
+  reported: ScoreboardSurfaceIdentity,
+  seq: number
+): ScoreboardSurfaceIdentity {
+  if (prev && sameSurfaceIdentity(prev, reported)) {
+    return { ...reported, seqFirstSeen: prev.seqFirstSeen ?? seq };
+  }
+  return { ...reported, seqFirstSeen: seq };
+}
+
+/**
  * Fold one observation's reported crop into the job's provenance block.
  *
  * Returns `undefined` when the observation carries no reported box (old runner /
@@ -265,7 +350,7 @@ export function nextScoreboardSurface(
       seqFirstSeen: prev.seqFirstSeen < 0 ? seq : prev.seqFirstSeen,
       verified: prev.verified || observedVerified,
       ...(reportedIdentity
-        ? { identity: { ...reportedIdentity, seqFirstSeen: seq } }
+        ? { identity: foldSurfaceIdentity(prev.identity, reportedIdentity, seq) }
         : prev.identity
           ? { identity: prev.identity }
           : {}),
