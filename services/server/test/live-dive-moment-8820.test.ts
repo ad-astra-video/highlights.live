@@ -25,6 +25,7 @@ import {
   confirmDiveAdoption,
   diveReanchorDecision,
   momentOf,
+  type DegradedSignal,
 } from "../src/live-confirm-async";
 
 /** A permissive row for the adoption writer: promoted celebration + measured
@@ -52,7 +53,7 @@ function verdict(over: Record<string, unknown> = {}) {
   };
 }
 
-const META = { diveAt: "2026-11-12T00:00:00.000Z", diveLatencyMs: 2100, contextDegraded: [] as string[] };
+const META = { diveAt: "2026-11-12T00:00:00.000Z", diveLatencyMs: 2100, contextDegraded: [] as DegradedSignal[] };
 
 // --- (1) the contract -------------------------------------------------------
 
