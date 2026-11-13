@@ -76,6 +76,31 @@ Exit codes:
   4  stop unconfirmed — live job may remain; do not report the leg as valid
   5  leg setup/start failed (job create, session create, or driver launch)
   6  build identity unverified — refused, nothing metered
+  7  stopped OUTSIDE the guard — the leg's stop came from an operator/external
+     call (or the job ended by itself past its shape), so the harness refuses to
+     grade it and flags any cap breach in `capBreach`. See ADAAAA-8943.
+
+ADAAAA-8943 — the guard must survive the caller. On the rev-8 live leg
+(ADAAAA-8924) the harness process was killed together with the launching exec
+session ~1 min after `job created`: no `WALL-CLOCK STOP` line, no evidence
+file, and the job ran to its content end and past it. The operator stopped it
+1783 s after create, settled `costUsd $1.4537` against a `$1.3000` cap, and
+nothing in the bundle named the stop as unguarded. Three changes:
+
+  * `--heartbeat-path` — the harness writes an atomic heartbeat JSON (pid, job,
+    phase, deadline, stop state) while it runs, and prints an `[leg] arm ...`
+    line and periodic `[leg] heartbeat ...` lines on stdout. A launcher can
+    prove the guard is live from outside this process before it hands the leg
+    over (`evals/funded_leg/launch_funded_leg.py`), and a fallback supervisor
+    can stop the job if the heartbeats stop (`leg_supervisor.py`).
+  * the stop is classified. A leg whose terminal state arrived without this
+    process issuing a stop is `operator_api` (a stop the harness did not make)
+    or `job_content_end`, never reported as a harness stop. Evidence carries
+    `leg.stopSource`/`stopSourceClass`.
+  * such a leg is NOT gradable: exit 7, `result.outcome
+    "stopped_outside_guard"`, and `capBreach` with the overspend when the
+    settled cost crossed the cap. A grade over a leg that ran without a guard
+    is a grade of an unknown shape.
 """
 
 from __future__ import annotations
@@ -97,7 +122,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 #: ADAAAA-8529 item 2: the four files a live leg is served from. A leg graded on
 #: an unrecorded build is a grade of an unknown artifact, so the harness records
@@ -170,6 +195,106 @@ def _iso(dt: datetime) -> str:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def write_json_atomic(path: str, payload: Dict[str, Any]) -> None:
+    """Write a JSON file so a reader never sees a half-written document.
+
+    ADAAAA-8943: the heartbeat is read by another process (the launcher's arm
+    check, the fallback supervisor). A truncate-then-write there can be read as
+    an empty file and misdiagnosed as "the harness died".
+    """
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+def read_json(path: str) -> Optional[Dict[str, Any]]:
+    """Read a JSON object, or None when it is absent/unreadable."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            body = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def record_stop_fields(record: Any) -> Dict[str, Any]:
+    """The stop-signalling fields a job record discloses (ADAAAA-8943).
+
+    A harness stop and an operator stop both set `stopRequestedAt`, so these
+    fields cannot say WHO stopped the job. They say a stop was requested at all,
+    which is what separates an externally-requested stop from a job that simply
+    ran out of content.
+    """
+    if not isinstance(record, dict):
+        return {}
+    out: Dict[str, Any] = {}
+    for key in ("status", "stopRequestedAt", "stopReason", "error", "finishedAt"):
+        if key in record:
+            out[key] = record.get(key)
+    return out
+
+
+def classify_stop_source(
+    *,
+    harness_stop_issued: bool,
+    harness_stop_reason: str,
+    terminal_without_harness_stop: bool,
+    record: Any,
+) -> Dict[str, str]:
+    """Name where the leg's stop actually came from.
+
+    ADAAAA-8943. The incident leg settled `stop source: operator API stop` while
+    the bundle reported the harness's own reason, so a reader could not see that
+    the guard never fired. Three shapes:
+
+      * `harness` — this process issued the stop that ended the leg.
+      * `external` — the job reached a terminal state with a stop request this
+        process did not make (an operator `POST /jobs/{id}/stop`, a cancel).
+      * `job_self_ended` — the job ended on its own with no stop request at all
+        (its content ran out). Not an unguarded stop, but it is graded against
+        the authorized duration like any other end.
+    """
+    stop = record_stop_fields(record)
+    error = str(stop.get("error") or "").lower()
+    external_signalled = bool(stop.get("stopRequestedAt")) or "stop" in error
+    if harness_stop_issued and not terminal_without_harness_stop:
+        return {
+            "stopSource": harness_stop_reason or "harness",
+            "stopSourceClass": "harness",
+            "stopSourceLine": (
+                f"STOP-SOURCE: harness (`{harness_stop_reason}`) — the guard "
+                "issued the stop"
+            ),
+        }
+    if external_signalled:
+        detail = stop.get("stopReason") or stop.get("error") or "stopRequestedAt set"
+        return {
+            "stopSource": "operator_api",
+            "stopSourceClass": "external",
+            "stopSourceLine": (
+                "STOP-SOURCE: operator_api — the leg reached a terminal state "
+                f"without a harness stop (`{detail}`); the authorized stop never "
+                "fired, so this leg is NOT gradable"
+            ),
+        }
+    if terminal_without_harness_stop:
+        return {
+            "stopSource": "job_content_end",
+            "stopSourceClass": "job_self_ended",
+            "stopSourceLine": (
+                "STOP-SOURCE: job_content_end — the job ended on its own with no "
+                "stop request; the harness did not issue the stop"
+            ),
+        }
+    return {
+        "stopSource": harness_stop_reason or "unknown",
+        "stopSourceClass": "harness",
+        "stopSourceLine": f"STOP-SOURCE: `{harness_stop_reason or 'unknown'}`",
+    }
 
 
 class GateClosed(RuntimeError):
@@ -535,6 +660,12 @@ class StubApi:
                    dark: the billed figure must win over any clock projection.
       no-cost-source  both cost and metered time unreadable: the leg must be
                    refused.
+      operator-stop-overspend  ADAAAA-8943: the job flips to `cancelled` with a
+                   stop request this process did not make, settled ABOVE the
+                   cap. The leg must be refused as ungradable with the breach in
+                   the evidence.
+      operator-stop-within     the same outside stop, settled UNDER the cap: still
+                   not gradable, but no breach to flag.
     """
 
     def __init__(self, scenario: str, cost_per_s: float = 0.0016) -> None:
@@ -566,6 +697,15 @@ class StubApi:
         }
         self.job: Optional[Dict[str, Any]] = None
         self.stop_calls = 0
+        # ADAAAA-8943: the outside stop this stub performs itself, and the cost
+        # it settles at (the 8924 incident's $1.4537 against a $1.30 cap).
+        self.external_stop_after_s = (
+            2.0 if scenario.startswith("operator-stop") else None
+        )
+        self.external_stop_cost_usd = {
+            "operator-stop-overspend": 1.4537,
+            "operator-stop-within": 0.98,
+        }.get(scenario, 0.0)
         self.stop_attempts_at: List[float] = []
         self.metered_job_creates = 0
         self.metered_session_creates = 0
@@ -681,11 +821,25 @@ class StubApi:
         if self.job is None:
             return None
         elapsed = time.monotonic() - float(self.job["_t0"])
+        if (
+            self.external_stop_after_s is not None
+            and self.job["status"] == "running"
+            and elapsed >= self.external_stop_after_s
+        ):
+            # ADAAAA-8943: an outside stop — no harness process asked for this.
+            self.job["status"] = "cancelled"
+            self.job["stopRequestedAt"] = _iso(_now())
+            self.job["error"] = "stopped (cancelled via API)"
+            self.job["_stoppedAt"] = time.monotonic()
         if self.job["status"] == "running":
             self.job["costUsd"] = round(elapsed * self.cost_per_s, 6) if self.live_cost else 0.0
             self.job["perceiveSessionS"] = round(elapsed, 1) if self.metered else 0.0
             if self.decide_live:
                 self.job["decideCalls"] = int(elapsed / self.decide_cadence_s)
+        elif self.external_stop_after_s is not None:
+            # The settled figure an outside stop leaves behind (ADAAAA-8943).
+            self.job["costUsd"] = self.external_stop_cost_usd
+            self.job["perceiveSessionS"] = round(elapsed, 1) if self.metered else 0.0
         out = {k: v for k, v in self.job.items() if not k.startswith("_")}
         return out
 
@@ -744,6 +898,10 @@ class Config:
     decide_cadence_s: float = DECIDE_CADENCE_DEFAULT_S
     summary_fee_ratio: float = SUMMARY_FEE_RATIO
     perceive_usd_per_hour: float = PERCEIVE_PER_HOUR_USD
+    # ADAAAA-8943: the on-disk heartbeat another process reads to prove the
+    # guard is alive, and how often it is refreshed.
+    heartbeat_path: Optional[str] = None
+    heartbeat_s: float = 5.0
 
 
 @dataclass
@@ -1068,6 +1226,16 @@ class LegResult:
     # ADAAAA-8529 item 5: the leg's delivered rows, for the stage-field fallback
     # when nothing recorded a screen share.
     delivered_rows: List[Dict[str, Any]] = field(default_factory=list)
+    # ADAAAA-8943: where the stop came from, so a leg the guard never stopped is
+    # never reported as a supervised leg.
+    stop_source: str = "harness"
+    stop_source_class: str = "harness"
+    stop_source_line: str = ""
+    harness_stop_issued: bool = True
+    terminal_without_harness_stop: bool = False
+    record_stop: Dict[str, Any] = field(default_factory=dict)
+    armed_at: Optional[str] = None
+    heartbeat_path: Optional[str] = None
 
 
 def _job_field(body: Any, key: str, default: Any = None) -> Any:
@@ -1206,6 +1374,61 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         "record": {},
     }
 
+    # ---- ADAAAA-8943: the arm/heartbeat contract --------------------------
+    # The harness's own process is the only stop it can issue. On ADAAAA-8924
+    # the process died with the launching exec session and nothing else was
+    # watching, so the job ran past its cap. These two surfaces make the guard
+    # observable and replaceable from outside this process:
+    #
+    #   * the stdout lines `[leg] arm pid=… job=…` and `[leg] heartbeat …`,
+    #     which `launch_funded_leg.py` requires inside ~30 s before it reports
+    #     a supervised leg (and which it stops the job without, if the harness
+    #     died before arming);
+    #   * a heartbeat JSON on disk with the same facts plus the absolute stop
+    #     deadline, which `leg_supervisor.py` reads to stop the job if the beats
+    #     stop.
+    armed_at = _now()
+    deadline_at = window_started + timedelta(seconds=cfg.authorized_duration_s)
+    deadline_epoch = deadline_at.timestamp()
+    last_beat = 0.0
+
+    def heartbeat_payload(phase: str, status: Optional[str]) -> Dict[str, Any]:
+        return {
+            "harness": {"name": "funded_leg", "version": VERSION},
+            "pid": os.getpid(),
+            "phase": phase,
+            "jobId": job_id,
+            "sessionId": session_id,
+            "armedAt": _iso(armed_at),
+            "beatAt": _iso(_now()),
+            "legSeconds": round(max(0.0, time.monotonic() - t0), 3),
+            "authorizedDurationS": cfg.authorized_duration_s,
+            "hardStopSlackS": cfg.hard_stop_slack_s,
+            "capUsd": cfg.cap_usd,
+            "abortAtUsd": cfg.abort_at_usd,
+            "deadlineAt": _iso(deadline_at),
+            "deadlineEpoch": round(deadline_epoch, 3),
+            "status": status,
+            "stopIssued": stop_issued is not None,
+            "stopReason": stop_reason if stop_issued is not None else None,
+        }
+
+    def beat(phase: str, status: Optional[str] = None) -> None:
+        if not cfg.heartbeat_path:
+            return
+        try:
+            write_json_atomic(cfg.heartbeat_path, heartbeat_payload(phase, status))
+        except OSError as exc:  # a heartbeat that cannot be written is not a guard
+            log(f"heartbeat write failed: {exc}")
+
+    armed_pid = os.getpid()
+    log(
+        f"arm pid={armed_pid} job={job_id} heartbeat="
+        f"{cfg.heartbeat_path or '-'} deadline={_iso(deadline_at)}"
+    )
+    beat("armed")
+    last_beat = time.monotonic()
+
     def poll_state() -> str:
         res = runner.http("GET", f"{cfg.job_base}/jobs/{job_id}", headers=headers)
         status = _job_field(res.body, "status", "unknown")
@@ -1306,12 +1529,25 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
     thread = threading.Thread(target=watchdog, daemon=True)
     thread.start()
 
+    terminal_end = False
     try:
         while True:
             status = poll_state()
             if status in ("done", "failed", "cancelled"):
+                # ADAAAA-8943: the job reached a terminal state without this
+                # process issuing the stop. That is an unguarded end (an operator
+                # stop, or the content running out), and it must not be reported
+                # as a harness stop.
+                terminal_end = stop_issued is None
                 break
             now = time.monotonic()
+            if now - last_beat >= cfg.heartbeat_s:
+                last_beat = now
+                log(
+                    f"heartbeat t={max(0.0, now - t0):.1f}s status={status} "
+                    f"cost=${state['cost']:.4f} projected=${state['projected']:.4f}"
+                )
+                beat("running", status)
             if now >= deadline:
                 # Belt as well as braces: the loop never relies on the watchdog
                 # thread having run, and never on a stop moment.
@@ -1349,8 +1585,10 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
                 break
             time.sleep(cfg.poll_s)
     finally:
-        # Any exit path stops the leg: exception, keyboard, or normal end.
-        if not stop_confirmed and stop_issued is None:
+        # Any exit path stops the leg: exception, keyboard, or normal end. A job
+        # that is ALREADY terminal is not stopped again — a no-op stop here would
+        # relabel an unguarded end as `harness_exit` (ADAAAA-8943).
+        if not terminal_end and not stop_confirmed and stop_issued is None:
             issue_stop("harness_exit")
         done_event.set()
 
@@ -1382,6 +1620,22 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         )
         or []
     )
+    # ADAAAA-8943: name the stop source before the evidence is built. A leg that
+    # reached a terminal state without this process's stop is not a supervised
+    # leg, whatever reason this harness would have reported for it.
+    harness_stop_issued = stop_issued is not None and not terminal_end
+    stop_block = classify_stop_source(
+        harness_stop_issued=harness_stop_issued,
+        harness_stop_reason=stop_reason,
+        terminal_without_harness_stop=terminal_end,
+        record=state["record"],
+    )
+    log(stop_block["stopSourceLine"])
+    log(
+        f"finished status={state['status']} duration={duration_s:.1f}s "
+        f"cost=${float(state['cost']):.4f} stop={stop_block['stopSource']}"
+    )
+    beat("finished", state["status"])
     return LegResult(
         job_id=job_id,
         session_id=session_id,
@@ -1419,6 +1673,14 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         guard_source=state["guard_source"],
         record_cost_source=state["record_cost_source"],
         delivered_rows=list(rows),
+        stop_source=stop_block["stopSource"],
+        stop_source_class=stop_block["stopSourceClass"],
+        stop_source_line=stop_block["stopSourceLine"],
+        harness_stop_issued=harness_stop_issued,
+        terminal_without_harness_stop=terminal_end,
+        record_stop=record_stop_fields(state["record"]),
+        armed_at=_iso(armed_at),
+        heartbeat_path=cfg.heartbeat_path,
     )
 
 
@@ -1442,6 +1704,8 @@ def compare_shape(
     billing_basis: Optional[str] = None,
     projected_basis: Optional[str] = None,
     cost_readable: bool = False,
+    stop_source: Optional[str] = None,
+    stop_source_class: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Grade the leg against its authorization.
 
@@ -1566,8 +1830,14 @@ def compare_shape(
         )
     if gpu_hours is not None:
         table += f"\n| GPU-hours | - | {gpu_hours:.3f} | n/a |"
-    if abort_source:
-        table += f"\n| stop source | - | `{abort_source}` | - |"
+    if abort_source or stop_source:
+        # ADAAAA-8943: the graded stop source is the CLASSIFIED one, so a leg an
+        # operator stopped reads `operator_api (external)` here instead of the
+        # reason the harness would have reported for its own absent stop.
+        label = stop_source or abort_source
+        if stop_source_class and stop_source_class != "harness":
+            label = f"{label} ({stop_source_class})"
+        table += f"\n| stop source | - | `{label}` | - |"
     return {
         "authorizedDurationS": authorized_duration_s,
         "authorizedCapUsd": cap_usd,
@@ -1592,6 +1862,8 @@ def compare_shape(
         "projectedOverCap": bool(projected is not None and projected > cap_usd + 1e-9),
         "gpuHours": gpu_hours,
         "abortSource": abort_source,
+        "stopSource": stop_source or abort_source,
+        "stopSourceClass": stop_source_class or "harness",
         "verdict": verdict,
         "line": line,
         "table": table,
@@ -2045,12 +2317,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--decide-config-container", default="highlights-server")
     p.add_argument("--evidence-out", default=None,
                    help="write the evidence JSON here (also printed to stdout)")
+    p.add_argument("--heartbeat-path", default=None,
+                   help="ADAAAA-8943: write the harness heartbeat JSON here. "
+                        "`launch_funded_leg.py` arms on this file plus the `[leg] "
+                        "arm` line, and `leg_supervisor.py` stops the job when the "
+                        "beats stop")
+    p.add_argument("--heartbeat-s", type=float, default=5.0,
+                   help="seconds between heartbeats (default 5)")
     p.add_argument("--dry-run", action="store_true",
                    help="run against the in-process stub; no box, no metered call")
     p.add_argument("--stub-scenario", default="clean",
                    choices=["clean", "clean-no-cost", "decide-dark", "decide-record",
                             "live-cost-dark-session", "no-cost-source", "busy",
-                            "stop-stuck"])
+                            "stop-stuck", "operator-stop-overspend",
+                            "operator-stop-within"])
     p.add_argument("--preflight-only", action="store_true",
                    help="run the quiet-window preflight and exit; creates nothing "
                         "(the $0 way to verify the real probes)")
@@ -2146,6 +2426,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         decide_config_keys=tuple(args.decide_config_key or DEFAULT_DECIDE_CONFIG_KEYS),
         clips_container=args.clips_container,
         clips_dir=args.clips_dir,
+        heartbeat_path=args.heartbeat_path,
+        heartbeat_s=args.heartbeat_s,
     )
     if args.cost_source_grace_s is not None:
         log(
@@ -2177,7 +2459,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "name": "funded_leg",
             "version": VERSION,
             "issue": "ADAAAA-8489",
-            "followUps": ["ADAAAA-8832"],
+            "followUps": ["ADAAAA-8832", "ADAAAA-8943"],
             "dryRun": bool(args.dry_run),
             "stubScenario": args.stub_scenario if args.dry_run else None,
         },
@@ -2408,6 +2690,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # ADAAAA-8832: a readable billed figure is the money accounted, so the
         # shape is graded on it rather than on a clock extrapolation of it.
         cost_readable=result.record_cost_source == "live",
+        stop_source=result.stop_source,
+        stop_source_class=result.stop_source_class,
     )
     within_slack = shape["durationOvershootS"] <= cfg.hard_stop_slack_s
     clips_probe = (
@@ -2456,6 +2740,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "gpuHours": cfg.gpu_hours,
         "driverRc": result.driver_rc,
         "driverOutputTail": result.driver_output_tail,
+        # ADAAAA-8943: where the stop came from. A leg the harness did not stop
+        # is never reported as a supervised leg.
+        "stopSource": result.stop_source,
+        "stopSourceClass": result.stop_source_class,
+        "stopSourceLine": result.stop_source_line,
+        "harnessStopIssued": result.harness_stop_issued,
+        "terminalWithoutHarnessStop": result.terminal_without_harness_stop,
+        "recordStop": result.record_stop,
+        "arm": {
+            "pid": os.getpid(),
+            "armedAt": result.armed_at,
+            "heartbeatPath": result.heartbeat_path,
+            "heartbeatS": cfg.heartbeat_s,
+            "contract": (
+                "`[leg] arm pid=… job=…` on stdout plus this heartbeat file; "
+                "`launch_funded_leg.py` refuses without both inside its arm "
+                "window and stops the job, `leg_supervisor.py` stops the job when "
+                "the beats stop advancing"
+            ),
+        },
     }
     evidence["shape"] = shape
     evidence["meteredCalls"] = {
@@ -2463,6 +2767,49 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "sessionCreates": 1,
         "driverStarts": 1 if cfg.driver_cmd else 0,
     }
+
+    # ADAAAA-8943: an outside stop means the authorized stop never fired. The leg
+    # is not gradable, and any cap breach is a field rather than something a
+    # reader has to notice (the 8924 leg settled $1.4537 against a $1.30 cap and
+    # its bundle reported a normal grade).
+    if result.stop_source_class == "external":
+        overspend = max(0.0, result.cost_usd - cfg.cap_usd)
+        breach = None
+        if overspend > 1e-9:
+            breach = {
+                "capUsd": cfg.cap_usd,
+                "settledCostUsd": round(result.cost_usd, 6),
+                "overspendUsd": round(overspend, 6),
+                "stopSource": result.stop_source,
+                "cause": (
+                    "the leg was stopped from outside the harness: no wall-clock "
+                    "or metered-ceiling stop fired, so it metered past its "
+                    "authorized window"
+                ),
+            }
+            evidence["capBreach"] = breach
+        evidence["result"] = {
+            "outcome": "stopped_outside_guard",
+            "exitCode": 7,
+            "gradable": False,
+            "message": (
+                f"{result.stop_source_line}. "
+                + (
+                    f"CAP BREACH: settled ${result.cost_usd:.4f} vs cap "
+                    f"${cfg.cap_usd:.4f} (overspend ${overspend:.4f})."
+                    if breach
+                    else "No cap breach on the settled figure."
+                )
+            ),
+        }
+        log(f"STOPPED OUTSIDE THE GUARD — NOT GRADABLE, exiting 7")
+        if breach:
+            log(
+                f"CAP BREACH: settled ${breach['settledCostUsd']:.4f} vs cap "
+                f"${breach['capUsd']:.4f} -> overspend "
+                f"${breach['overspendUsd']:.4f}"
+            )
+        return finish(7)
 
     if not result.stop_confirmed:
         evidence["result"] = {
@@ -2488,6 +2835,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     evidence["result"] = {
         "outcome": "within_shape" if code == 0 else "over_shape",
         "exitCode": code,
+        "gradable": True,
         "message": shape["line"],
     }
     log(shape["line"])

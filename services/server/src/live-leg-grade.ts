@@ -38,6 +38,24 @@ export type DurationSource = "input" | "timestamps" | "harness_evidence" | "unkn
  * FAIL, and it is never a PASS. */
 export type LegVerdict = "PASS" | "FAIL" | "UNMEASURED";
 
+/** ADAAAA-8943: who stopped the leg, from the funded harness's evidence
+ * (`leg.stopSourceClass`). `harness` = the harness's own wall-clock/metered
+ * stop; `external` = a stop the harness did not make (an operator
+ * `POST /jobs/{id}/stop`, a cancel); `job_self_ended` = the job's content ran
+ * out with no stop request at all. */
+export type StopSourceClass = "harness" | "external" | "job_self_ended";
+
+/** ADAAAA-8943: the overspend an outside stop left behind, when the settled
+ * cost crossed the authorized cap. A field, so a reader does not have to
+ * subtract two numbers to see the breach. */
+export interface CapBreachLike {
+  capUsd: number;
+  settledCostUsd: number;
+  overspendUsd: number;
+  stopSource?: string;
+  cause?: string;
+}
+
 /** The delivered rows as stored (`observeMetrics.deliveredLatency.rows`). */
 export interface LiveLegRowLike {
   triggerTs: number;
@@ -147,6 +165,18 @@ export interface LiveLegInput {
    * `duration_below_floor` on a leg that ran its authorized shape exactly. The
    * value comes from the cap record, never from the leg. */
   authorizedDurationS?: number;
+  /** ADAAAA-8943: who stopped the leg (`leg.stopSource` / `stopSourceClass` in
+   * the funded harness's evidence). `external` means the authorized stop never
+   * fired, so the leg is refused rather than graded — see
+   * `stopped_outside_guard` below. Omitted keeps the pre-8943 behaviour for a
+   * leg graded from a record that carries no stop provenance. */
+  stopSource?: string;
+  stopSourceClass?: StopSourceClass;
+  /** ADAAAA-8943: the settled billed figure and the authorized cap, so an
+   * outside stop that crossed the cap is named on the verdict. Either missing
+   * leaves the breach uncomputed rather than guessed. */
+  settledCostUsd?: number;
+  capUsd?: number;
 }
 
 /** One fixture anchor: the census window the leg's content re-presents. `atS` is
@@ -261,6 +291,13 @@ export interface LiveLegGrade {
    * total, which is the ADAAAA-8495 schema-strip failure mode; 0 means the
    * decomposition is self-consistent. */
   stageSumMismatchRows: number;
+  /** ADAAAA-8943: who stopped the leg, published so a graded bundle always
+   * answers "was this a supervised leg?" — `operator_api` on a leg nobody else
+   * guarded is the 8924 shape. */
+  stopSource?: string;
+  stopSourceClass?: StopSourceClass;
+  /** ADAAAA-8943: present when an outside stop settled above the cap. */
+  capBreach?: CapBreachLike;
 }
 
 function roundMs(n: number): number {
@@ -457,6 +494,39 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     );
     shapeBlocked = true;
   }
+  // ADAAAA-8943: a leg whose stop came from outside the harness has an unknown
+  // shape — no authorized stop ever bound it, so its row counts and latency are
+  // whatever the operator's timing produced. Refuse it and name the breach
+  // instead of publishing a grade over a leg nobody guarded.
+  const stoppedOutsideGuard =
+    input.stopSourceClass === "external" || input.stopSource === "operator_api";
+  let capBreach: CapBreachLike | undefined;
+  if (
+    stoppedOutsideGuard &&
+    Number.isFinite(input.settledCostUsd) &&
+    Number.isFinite(input.capUsd) &&
+    (input.settledCostUsd as number) > (input.capUsd as number) + 1e-9
+  ) {
+    const settled = input.settledCostUsd as number;
+    const cap = input.capUsd as number;
+    capBreach = {
+      capUsd: cap,
+      settledCostUsd: settled,
+      overspendUsd: Number((settled - cap).toFixed(6)),
+      ...(input.stopSource ? { stopSource: input.stopSource } : {}),
+      cause:
+        "the leg was stopped from outside the harness: no wall-clock or metered-ceiling stop fired, so it metered past its authorized window",
+    };
+  }
+  if (stoppedOutsideGuard) {
+    shapeReasons.push(
+      `stopped_outside_guard: stop source \`${input.stopSource ?? "external"}\` — the authorized stop never fired, so this leg's shape is unknown and it is NOT gradable` +
+        (capBreach
+          ? ` ; CAP BREACH: settled $${capBreach.settledCostUsd.toFixed(4)} vs cap $${capBreach.capUsd.toFixed(4)} = overspend $${capBreach.overspendUsd.toFixed(4)}`
+          : " ; no cap breach on the settled figure"),
+    );
+    shapeBlocked = true;
+  }
   if (nRows > 0 && n < LIVE_LEG_BARS.minDeliveredRows) {
     shapeReasons.push(
       anchorAccounting
@@ -635,5 +705,8 @@ export function gradeLiveLeg(input: LiveLegInput): LiveLegGrade {
     acB,
     ...(acC ? { acC } : {}),
     stageSumMismatchRows,
+    ...(input.stopSource !== undefined ? { stopSource: input.stopSource } : {}),
+    ...(input.stopSourceClass !== undefined ? { stopSourceClass: input.stopSourceClass } : {}),
+    ...(capBreach ? { capBreach } : {}),
   };
 }
