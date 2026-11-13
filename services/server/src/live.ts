@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { probeDuration, probeFlushedDuration } from "./ffmpeg";
-import { anchorCutOnEvidence, clipAuditFields, isMomentAnchor, type ClipCut } from "./clip-anchor";
+import { anchorCutOnEvidence, clipAuditFields, type ClipCut } from "./clip-anchor";
 import type { ClipCutWindow } from "./clip-placement";
 import { clipWindow } from "./config";
 import type { ServerConfig } from "./config";
@@ -413,10 +413,12 @@ export class LiveIngest {
       );
     }
     const evidenceFramePath = this.evidenceFramePath(opts.anchorTs ?? ts);
-    // ADAAAA-8820 (D2): the deferred ingest cut anchors on the instant the Stage-2
-    // dive named when the row carries one (`anchorTs`), falling back to the accept
-    // anchor. The window itself is unchanged — the moment only moves which frame
-    // inside it is centered, exactly like the browser rail.
+    // ADAAAA-8820 (D2) / ADAAAA-8893 (D5): the deferred ingest cut anchors on the
+    // instant its caller names (`anchorTs`), falling back to the accept anchor.
+    // The window itself is unchanged. ADAAAA-8906 (cleanup): every option call
+    // site now names the CARD's accept anchor — the moment-anchor placement was
+    // measured 0.3-2.5 s off per row on the D5 population and was removed (see
+    // the note in `clip-anchor.ts`).
     const anchorTs = Number.isFinite(opts.anchorTs as number) ? Number(opts.anchorTs) : ts;
     const cutNow = () =>
       anchorCutOnEvidence({
@@ -431,9 +433,8 @@ export class LiveIngest {
         evidenceTs: anchorTs,
         evidenceFramePath,
         tag: `live-ingest:${this.jobId}`,
-        // ADAAAA-8906: a dive moment is placed on its own picture at
-        // `moment - window.start`, never on the score flip before it.
-        momentAnchor: isMomentAnchor(opts.anchorTs, ts),
+        // ADAAAA-8906 (cleanup): no moment anchor — the cut is placed on the
+        // clock-window anchor above, never re-centred on the dive moment.
         // ADAAAA-8714: on a celebration-tail row the cue IS the anchor — a score
         // flip found earlier would re-centre the card on the goal and push the
         // reaction off the end.
