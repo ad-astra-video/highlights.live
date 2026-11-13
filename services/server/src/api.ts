@@ -93,6 +93,7 @@ import {
   type Dataset,
   type DecideKnobStamp,
   type DetectionTrainingSample,
+  type HighlightAlternative,
   type HighlightRecord,
   type Job,
   type JobCandidate,
@@ -111,6 +112,11 @@ import { buildPostableHighlights, countsFromPostable, postableCountFields, quota
 import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./celebration-alternatives";
 import { attachReplayWindows, partitionAttachedReplays, replayAlternativeFrom } from "./replay-alternatives";
 import { clipChoiceFor, servedClipUri } from "./clip-choice";
+// ADAAAA-8893 (D5): the dive's re-centered cut is delivered as an OPTION
+// (`highlight_alternatives` row, `eventType: "recentered"`), never as a
+// replacement of the card's accept-anchor clip. Both rails go through this one
+// builder so live and VOD cannot diverge.
+import { deliverRecenteredOption as deliverRecenteredOptionInStore } from "./recentered-alternative";
 // ADAAAA-8854: the ONE served highlight / notable row shape, shared by the
 // composite detail read and the incremental sections-delta stream.
 import { servedHighlightRow, servedNotableRow, type ServedRowContext } from "./served-highlight-rows";
@@ -1463,10 +1469,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   /** `${jobId}:${highlightId}` — rows this run has already re-cut on a dive
    * moment. The bounded-re-cut guard: at most ONE re-cut per row, ever. */
   const diveReanchored = new Set<string>();
-  /** ADAAAA-8877: the file suffix an INGEST re-cut on a dive moment writes, so a
-   * refused/failed re-cut can never overwrite (or delete, `LiveIngest.cut` does
-   * `rm` its own output on a truncated window) the delivered card's clip. */
-  const DIVE_RECUT_SUFFIX = "-dive";
+  /** ADAAAA-8893 (D5): the file suffix the dive's RE-CENTERED OPTION writes on
+   * BOTH rails. The suffix (plus the `-recentered` name) is what keeps the
+   * card's accept-anchor clip byte-identical: the option is a second file, never
+   * a rewrite of the delivered one (`LiveIngest.cut` even `rm`s its own output
+   * on a truncated window, so cutting in place could delete the card's clip). */
+  const RECENTERED_CLIP_SUFFIX = "-recentered";
   /** ADAAAA-8152: how the delivered file was placed (see
    * `resolveClipPlacement`). `frame_match` means the anchor picture was located
    * in the recording itself; `content_clock` means the cut fell back to the
@@ -1556,17 +1564,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     opts: {
       requireFullWindow?: boolean;
       /** ADAAAA-8820 (D2): the content instant to anchor on instead of the
-       *  row's accept anchor (`localizedTs`) — the Stage-2 dive's named moment. */
+       *  row's accept anchor (`localizedTs`) — the Stage-2 dive's named moment.
+       *  ADAAAA-8893 (D5): only the OPTION cut passes this. The card's own clip
+       *  is always cut on its accept anchor, so a dive can never move it. */
       anchorTs?: number;
       /** ADAAAA-8820 (D2): the dive moment this cut is resting on, for the audit
        *  fields (`clipAnchorSource` / `clipAnchorDiveLagSec`). */
       diveMoment?: { ts: number; confidence?: number };
+      /** ADAAAA-8893 (D5): the file-name suffix an OPTION cut writes, so the
+       *  option lands in its own file (`${jobId}-${round(start*10)}-recentered`)
+       *  and the row's own clip is never overwritten. Absent = the historical
+       *  name, byte-identical for every accept-anchor cut. */
+      nameSuffix?: string;
     } = {}
   ): Promise<{ name: string; uri: string; hasAudio: boolean | null; bytes: number; mode: string; ms: number; seekMs: number | null; encodeMs: number; deliveredSec: number | null; placement: ClipPlacement }> {
     const outDir = path.join(cfg.dataDir, "clips");
     const { mkdir } = await import("node:fs/promises");
     await mkdir(outDir, { recursive: true });
-    const name = `${jobId}-${Math.round(h.start * 10)}`;
+    const name = `${jobId}-${Math.round(h.start * 10)}${opts.nameSuffix ?? ""}`;
     const out = path.join(outDir, `${name}.mp4`);
     const span = browserClipSpan(h, cw);
     const dur = span.dur;
@@ -1790,13 +1805,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   }
 
   /** The row fields that record HOW the delivered clip was placed (AC3). */
-  function clipPlacementPatch(
-    rec: { deliveredSec: number | null; placement: ClipPlacement },
-    /** ADAAAA-8820 (D2): present only when this cut rested on the Stage-2 dive's
-     *  named moment. `acceptTs` is the instant it moved off (the row's
-     *  `localizedTs`), so the row carries the signed drift the re-cut applied. */
-    dive?: { ts: number; confidence?: number; acceptTs: number | null } | null
-  ) {
+  function clipPlacementPatch(rec: { deliveredSec: number | null; placement: ClipPlacement }) {
     const p = rec.placement;
     return {
       clipAnchorMethod: p.method,
@@ -1816,13 +1825,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       clipScoreFlipPx: p.flipPx ?? undefined,
       clipScoreFlipDigits: p.flipDigits ?? undefined,
       clipScoreFlipRunnerUpTs: p.flipRunnerUpTs ?? undefined,
-      // ADAAAA-8820 (D2): the dive re-anchored this cut. `clipAnchorSource` is
-      // ABSENT on every accept-anchored row, so a pre-D2 row stays
-      // byte-identical; `clipAnchorDiveLagSec` is the drift the dive applied
-      // (`momentTs - localizedTs`), which is the AC2.2 dive-vs-evidence lag.
-      ...(dive
-        ? diveAnchorFields(dive, dive.acceptTs != null ? { localizedTs: dive.acceptTs } : {})
-        : {}),
+      // ADAAAA-8893 (D5): nothing dive-derived is stamped on the row. The card's
+      // clip is always the accept-anchor cut, so `clipAnchorSource` stays absent
+      // (accept) on every new row; the dive's provenance lives on its OPTION.
       // The MEASURED offset of the accepted picture inside the delivered file —
       // the number ACC-2 actually grades (clipGoalOffsetSec is the content-clock
       // intent, which is what the two-clock skew moved).
@@ -1936,9 +1941,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Re-read: the stop path may have cut it while we waited.
       const cur = store.getHighlight(highlightId);
       if (!cur || cur.clipUri) return;
-      // ADAAAA-8820 (D2): if the Stage-2 dive already named this row's moment
-      // (verdict landed before the cut), anchor on it directly — one ffmpeg, no
-      // re-cut. `undefined` keeps the accept-anchor path byte-identical.
+      // ADAAAA-8893 (D5): a dive moment never moves THIS cut. The card's clip is
+      // cut on its accept anchor (byte-identical to a pre-D2 card); the moment is
+      // delivered as a separate OPTION right after the row's clip lands.
       const dive = liveDiveMoment(jobId, highlightId);
       // A header-only capture is not a recording (ADAAAA-8055): leave it to the
       // stop path, which reports the honest "no recording" reason per highlight.
@@ -1952,19 +1957,42 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       let lastErr: any = null;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const rec = await cutBrowserHighlightClip(
-            jobId,
-            cur as any,
-            recPath,
-            cw,
-            { requireFullWindow: true, ...(dive ? { anchorTs: dive.ts, diveMoment: dive } : {}) }
-          );
+          const rec = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw, {
+            requireFullWindow: true,
+          });
           await store.patchHighlight(highlightId, {
             clipUri: rec.uri,
             ...(rec.hasAudio != null ? { hasAudio: rec.hasAudio } : {}),
-            ...clipPlacementPatch(rec, dive ? diveAudit(dive, cur) : null),
+            ...clipPlacementPatch(rec),
             clipError: undefined as any,
           } as any);
+          // ADAAAA-8893 (D5): the dive's instant becomes the card's OPTION (own
+          // file, own `highlight_alternatives` row). The card's clip above stays.
+          if (dive) {
+            await deliverRecenteredOption({
+              jobId,
+              highlightId,
+              dive,
+              cut: async () => {
+                const opt = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw, {
+                  requireFullWindow: true,
+                  anchorTs: dive.ts,
+                  nameSuffix: RECENTERED_CLIP_SUFFIX,
+                });
+                return {
+                  clipUri: opt.uri,
+                  start: opt.placement.cutStart,
+                  end: opt.placement.cutStart + opt.placement.dur,
+                  bytes: opt.bytes,
+                };
+              },
+            }).catch((e: any) =>
+              console.error(
+                `[live-dive-option:${jobId}] option cut failed for ${highlightId} (card clip kept):`,
+                String(e?.message || e)
+              )
+            );
+          }
           // AC6 cost evidence: the measured CPU seconds + bytes per live cut.
           // ADAAAA-8106 AC2: the line splits seek (demux into the growing
           // recording) from encode, so the next reader can grade the cut cost
@@ -2030,29 +2058,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return diveClipMoments.get(`${jobId}:${highlightId}`) ?? null;
   }
 
-  /** The audit triple a dive-anchored cut stamps (`acceptTs` = what it moved off). */
-  function diveAudit(
-    dive: { ts: number; confidence?: number },
-    h: { localizedTs?: number; trigger?: { timestamp?: number } }
-  ): { ts: number; confidence?: number; acceptTs: number | null } {
-    return { ts: dive.ts, ...(Number.isFinite(dive.confidence as number) ? { confidence: dive.confidence } : {}), acceptTs: acceptAnchorTs(h) };
-  }
-
-  /** ADAAAA-8820 (D2): the row fields a dive-anchored cut stamps. Shared by the
-   *  browser rail's placement patch and the ingest rail's deferred cut, so both
-   *  rails record the SAME contract (`clipAnchorSource`/lag/confidence). */
-  function diveAnchorFields(
-    dive: { ts: number; confidence?: number },
-    h: { localizedTs?: number; trigger?: { timestamp?: number } }
-  ) {
-    const acceptTs = acceptAnchorTs(h);
-    return {
-      clipAnchorSource: "dive" as const,
-      clipAnchorDiveMomentTs: dive.ts,
-      ...(acceptTs != null && Number.isFinite(acceptTs) ? { clipAnchorDiveLagSec: dive.ts - acceptTs } : {}),
-      ...(Number.isFinite(dive.confidence as number) ? { clipAnchorDiveConfidence: dive.confidence } : {}),
-    };
-  }
+  // ADAAAA-8893 (D5): there is no dive-anchored ROW any more. A dive moment is
+  // stamped on the OPTION it delivers (`momentConfidence` / `acceptAnchorTs` /
+  // `driftSec` on the `recentered` alternative), never on the card — so a card's
+  // `clipAnchorSource` stays `accept` (absent) and its clip can never be moved by
+  // a dive. The D2 row fields are still readable on legacy rows.
 
   /** ADAAAA-8820 (D2): the dive moment a STORED row carries, when it may move a
    * deferred cut — the same gate (`diveReanchorDecision`) every rail uses. */
@@ -2070,6 +2080,50 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const ts = Number(att?.momentTs);
     const conf = Number(att?.momentConfidence);
     return { ts, ...(Number.isFinite(conf) ? { confidence: conf } : {}) };
+  }
+
+
+  /** ADAAAA-8893 (D5): the bytes an option clip occupies on disk, so the extra
+   * storage per re-anchored row is reportable (p50/p95) without a second probe.
+   * Best-effort: a probe failure leaves the field absent rather than inventing 0. */
+  async function clipBytesForUri(uri: string): Promise<number | undefined> {
+    if (!uri) return undefined;
+    const rel = uri.replace(/^\/clips\//, "clips/");
+    try {
+      const { stat } = await import("node:fs/promises");
+      const s = await stat(path.join(cfg.dataDir, rel));
+      return Number.isFinite(s.size) ? s.size : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * ADAAAA-8893 (D5): deliver the dive's re-centered cut as an OPTION of
+   * `highlightId` — THE shared option path.
+   *
+   * Both rails call this (the browser re-cut, the ingest re-cut, and the deferred
+   * cuts right after the row's OWN clip lands), so live and VOD cannot diverge
+   * again. The delivery body lives in `recentered-alternative.ts` with a store
+   * seam that has NO `patchHighlight`: the card's clip is structurally
+   * unwritable from this path (claim-neutral, ADAAAA-8879).
+   */
+  async function deliverRecenteredOption(input: {
+    jobId: string;
+    highlightId: string;
+    dive: { ts: number; confidence?: number };
+    /** Cut the option's OWN file from the rail that owns the footage. */
+    cut: () => Promise<{ clipUri: string; start: number; end: number; bytes?: number; clipError?: string }>;
+  }): Promise<HighlightAlternative | null> {
+    return deliverRecenteredOptionInStore({
+      deps: {
+        getHighlight: (id) => store.getHighlight(id),
+        alternativesForHighlight: (id) => store.alternativesForHighlight(id),
+        addAlternative: (a) => store.addAlternative(a),
+        log: (m) => console.log(m),
+      },
+      ...input,
+    });
   }
 
   /**
@@ -2108,22 +2162,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const dive = { ts: momentTs, ...(Number.isFinite(confidence as number) ? { confidence } : {}) };
     diveClipMoments.set(`${jobId}:${highlightId}`, dive);
     if (!row.clipUri) {
-      // Not cut yet: the pending/stop-path cut reads the map and anchors on it.
+      // ADAAAA-8893 (D5): not cut yet. The deferred cut publishes the row's
+      // ACCEPT-anchor clip unchanged, then `deliverRecenteredOption` cuts the
+      // dive's instant to its own file and stores it as an option.
       console.log(
         `[live-dive-anchor:${jobId}] ${highlightId} dive moment ${momentTs.toFixed(3)}s recorded for its deferred cut ` +
-          `(drift ${gate.driftSec == null ? "?" : gate.driftSec.toFixed(3)}s)`
+          `(drift ${gate.driftSec == null ? "?" : gate.driftSec.toFixed(3)}s) — defect: the card keeps its accept anchor, the moment is an OPTION`
       );
       return;
     }
     // ADAAAA-8877: the clip already exists — the ingest rails cut it ~6-30 s
     // BEFORE the dive's verdict lands, so the deferred-cut read can never see
-    // the moment. Re-cut on the rail that produced the file.
+    // the moment. Deliver the option on the rail that produced the file.
+    // ADAAAA-8893 (D5): the option is a SECOND file; the published clip is kept.
     if (store.getJob(jobId)?.source === "browser") reanchorLiveClipOnDiveMoment(jobId, highlightId, dive);
     else reanchorIngestClipOnDiveMoment(jobId, highlightId, dive);
   }
 
-  /** Re-cut ONE already-published browser clip on the dive's moment. Bounded to a
-   * single attempt per row; every guard fails closed (progress logging, no throw). */
+  /** ADAAAA-8893 (D5): cut the dive's re-centered OPTION for an
+   * already-published browser card. Bounded to a single attempt per row; every
+   * guard fails closed (progress logging, no throw). The card's clip is NEVER
+   * touched — the option lands in its own `-recentered` file. */
   function reanchorLiveClipOnDiveMoment(jobId: string, highlightId: string, dive: { ts: number; confidence?: number }): void {
     const key = `${jobId}:${highlightId}`;
     if (diveReanchored.has(key)) return;
@@ -2150,23 +2209,35 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // Re-read: the stop path (or a peer cut) may have moved the row meanwhile.
       const cur = store.getHighlight(highlightId);
       if (!cur || !cur.clipUri) return;
-      const rec = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw, {
-        requireFullWindow: true,
-        anchorTs: dive.ts,
-        diveMoment: dive,
+      // D5: the OWNER row is read-only here. `deliverRecenteredOption` cuts the
+      // moment into its own file and stores the option; `clipUri`/`start`/`end`
+      // stay exactly what the accept path published.
+      const alt = await deliverRecenteredOption({
+        jobId,
+        highlightId,
+        dive,
+        cut: async () => {
+          const rec = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw, {
+            requireFullWindow: true,
+            anchorTs: dive.ts,
+            nameSuffix: RECENTERED_CLIP_SUFFIX,
+          });
+          console.log(
+            `[live-dive-option:${jobId}] ${highlightId} option cut on the dive moment ${dive.ts.toFixed(3)}s ` +
+              `(method ${rec.placement.method}, delivered ${rec.deliveredSec == null ? "?" : rec.deliveredSec.toFixed(3)}s, ` +
+              `goal at ${rec.placement.deliveredOffsetSec == null ? "?" : rec.placement.deliveredOffsetSec.toFixed(3)}s)`
+          );
+          return {
+            clipUri: rec.uri,
+            start: rec.placement.cutStart,
+            end: rec.placement.cutStart + rec.placement.dur,
+            bytes: rec.bytes,
+          };
+        },
       });
-      await store.patchHighlight(highlightId, {
-        clipUri: rec.uri,
-        ...(rec.hasAudio != null ? { hasAudio: rec.hasAudio } : {}),
-        ...clipPlacementPatch(rec, diveAudit(dive, cur)),
-        clipError: undefined as any,
-      } as any);
-      console.log(
-        `[live-dive-anchor:${jobId}] ${highlightId} re-cut on the dive moment ${dive.ts.toFixed(3)}s ` +
-          `(method ${rec.placement.method}, delivered ${rec.deliveredSec == null ? "?" : rec.deliveredSec.toFixed(3)}s, ` +
-          `goal at ${rec.placement.deliveredOffsetSec == null ? "?" : rec.placement.deliveredOffsetSec.toFixed(3)}s)`
-      );
-      emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId, clipUri: rec.uri });
+      // Announce a refresh (the card's own clip is unchanged; the rail grew a
+      // slide). The delta/composite read carries the option on the next poll.
+      if (alt) emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId, clipUri: cur.clipUri });
     })().catch((e: any) =>
       console.error(
         `[live-dive-anchor:${jobId}] re-cut failed for ${highlightId} (published clip kept):`,
@@ -2186,22 +2257,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   }
 
   /**
-   * ADAAAA-8877: re-cut ONE already-published INGEST clip on the dive's moment.
+   * ADAAAA-8877 / ADAAAA-8893 (D5): cut the dive's re-centered OPTION for an
+   * already-published INGEST card.
    *
    * The ingest (`file-sim` / `rtmp` / `screen`) rails cut at accept + window
    * flush, i.e. ~6-30 s BEFORE the dive's verdict lands (measured on job
    * `1bf38e92`: clip files written at 04:07:49 / 04:08:51, dives stamped at
    * 04:08:00 / 04:08:57). Every such row therefore has a `clipUri` by the time
-   * the moment arrives, so `rowDiveMoment` at deferred-cut time can never see
-   * it — the moment must re-cut the published file, exactly like the browser
-   * rail's single re-cut.
+   * the moment arrives, so the deferred-cut read can never see it.
    *
+   * D5 changes what "re-cut" means: the option is written to its OWN
+   * `-recentered` file and stored as a `highlight_alternatives` row
+   * (`eventType: "recentered"`). The row's published clip and all of its audit
+   * fields are left untouched — `LiveIngest.cut` even `rm`s its own output on a
+   * truncated window, which is why the option can never share the card's file.
    * Bounded to ONE attempt per row (`diveReanchored`), serialized on the job's
-   * cut chain, and it writes a DIVE-SUFFIXED file: `LiveIngest.cut` removes its
-   * own output when the window is not flushed, so re-cutting in place could
-   * delete the delivered card's file. On success the row points at the new file
-   * and the old one is left for the job-delete sweep; every guard fails closed
-   * and keeps the published clip.
+   * cut chain; every guard fails closed and keeps the published clip.
    */
   function reanchorIngestClipOnDiveMoment(
     jobId: string,
@@ -2227,34 +2298,37 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         ? (row.localizedTs as number)
         : Number(row.trigger?.timestamp);
       if (!Number.isFinite(ts)) return;
-      const rec = await ingest.cut(ts, {
-        requireFullWindow: true,
-        // The row's OWN delivered window (celebration-tail rows end on the cue);
-        // the moment only moves which instant inside it is centred, exactly like
-        // the deferred ingest cut's `anchorTs`.
-        window: {
-          start: Number.isFinite(row.start) ? row.start : ts,
-          end: Number.isFinite(row.end) ? row.end : ts,
-          cueTail: row.clipPlacementReason === "celebration_tail",
-        },
-        anchorTs: dive.ts,
-        outSuffix: DIVE_RECUT_SUFFIX,
-      });
-      // Re-read: the stop path may have patched the row meanwhile.
+      // D5: the OWNER row is read-only here. The option is cut to its own
+      // `-recentered` file from the row's OWN delivered window (a celebration-tail
+      // row still ends on the cue); only the instant inside it that is centered
+      // moves, and it moves in the OPTION, not in the card.
       const cur = store.getHighlight(highlightId);
-      if (!cur) return;
-      await store.patchHighlight(highlightId, {
-        clipUri: rec.clipUri,
-        ...(rec.clipAudit ? rec.clipAudit : {}),
-        ...diveAnchorFields(dive, cur),
-        clipError: undefined as any,
-      } as any);
-      console.log(
-        `[live-dive-anchor:${jobId}] ${highlightId} re-cut on the dive moment ${dive.ts.toFixed(3)}s ` +
-          `(drift ${(dive.ts - (acceptAnchorTs(cur) ?? dive.ts)).toFixed(3)}s, ` +
-          `goal at ${rec.clipAudit?.clipAnchorEvidenceTs == null ? "?" : Number(rec.clipAudit.clipAnchorEvidenceTs).toFixed(3)}s)`
-      );
-      emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId, clipUri: rec.clipUri });
+      if (!cur || !cur.clipUri) return;
+      const win = {
+        start: Number.isFinite(row.start) ? row.start : ts,
+        end: Number.isFinite(row.end) ? row.end : ts,
+        cueTail: row.clipPlacementReason === "celebration_tail",
+      };
+      const alt = await deliverRecenteredOption({
+        jobId,
+        highlightId,
+        dive,
+        cut: async () => {
+          const rec = await ingest.cut(ts, {
+            requireFullWindow: true,
+            window: win,
+            anchorTs: dive.ts,
+            outSuffix: RECENTERED_CLIP_SUFFIX,
+          });
+          return {
+            clipUri: rec.clipUri,
+            start: win.start,
+            end: win.end,
+            bytes: await clipBytesForUri(rec.clipUri),
+          };
+        },
+      });
+      if (alt) emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId, clipUri: cur.clipUri });
     })().catch((e: any) =>
       console.error(
         `[live-dive-anchor:${jobId}] re-cut failed for ${highlightId} (published clip kept):`,
@@ -2304,7 +2378,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         ? (cur.localizedTs as number)
         : Number(cur.trigger?.timestamp);
       if (!Number.isFinite(ts)) return;
-      // ADAAAA-8820 (D2): anchor on the dive's moment when this row carries one.
+      // ADAAAA-8893 (D5): a dive moment never moves THIS cut (the card keeps its
+      // accept anchor); it is delivered as a separate option after the row's clip
+      // lands.
       const dive = rowDiveMoment(cur);
       // `ingest.cut` owns the flush watermark wait + the whole-window guard; on
       // the live rail a window that never flushes is a refusal (throws), which
@@ -2318,19 +2394,45 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           end: Number.isFinite(cur.end) ? cur.end : ts,
           cueTail: cur.clipPlacementReason === "celebration_tail",
         },
-        ...(dive ? { anchorTs: dive.ts } : {}),
       });
       const still = store.getHighlight(highlightId);
       if (!still || still.clipUri) return;
       await store.patchHighlight(highlightId, {
         clipUri: rec.clipUri,
         ...(rec.clipAudit ? rec.clipAudit : {}),
-        ...(dive ? diveAnchorFields(dive, cur) : {}),
         clipError: undefined as any,
       } as any);
+      // ADAAAA-8893 (D5): the dive's instant becomes the card's OPTION — own
+      // `-recentered` file, own `highlight_alternatives` row. The card's clip
+      // patched above is untouched by it.
       if (dive) {
-        console.log(
-          `[live-dive-anchor:${jobId}] ${highlightId} deferred ingest cut anchored on the dive moment ${dive.ts.toFixed(3)}s`
+        await deliverRecenteredOption({
+          jobId,
+          highlightId,
+          dive,
+          cut: async () => {
+            const opt = await ingest.cut(ts, {
+              requireFullWindow: true,
+              window: {
+                start: Number.isFinite(cur.start) ? cur.start : ts,
+                end: Number.isFinite(cur.end) ? cur.end : ts,
+                cueTail: cur.clipPlacementReason === "celebration_tail",
+              },
+              anchorTs: dive.ts,
+              outSuffix: RECENTERED_CLIP_SUFFIX,
+            });
+            return {
+              clipUri: opt.clipUri,
+              start: Number.isFinite(cur.start) ? cur.start : ts,
+              end: Number.isFinite(cur.end) ? cur.end : ts,
+              bytes: await clipBytesForUri(opt.clipUri),
+            };
+          },
+        }).catch((e: any) =>
+          console.error(
+            `[live-dive-option:${jobId}] option cut failed for ${highlightId} (card clip kept):`,
+            String(e?.message || e)
+          )
         );
       }
       console.log(`[live-clip:${jobId}] deferred clip ${rec.clipId || ""} ready for ${highlightId}`);
@@ -2373,8 +2475,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         ? (h.localizedTs as number)
         : Number(h.trigger?.timestamp);
       if (!Number.isFinite(ts)) continue;
-      // ADAAAA-8820 (D2): the row's own dive moment (when it named one) moves the
-      // deferred stop-path cut's anchor; the window is unchanged.
+      // ADAAAA-8893 (D5): the row's own dive moment never moves the stop-path
+      // cut (the card keeps its accept anchor); it is delivered as an OPTION
+      // after the row's clip lands.
       const dive = rowDiveMoment(h);
       try {
         // ADAAAA-8714: the row's own delivered window (celebration-tail rows end
@@ -2390,14 +2493,39 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
                 },
               }
             : {}),
-          ...(dive ? { anchorTs: dive.ts } : {}),
         });
         await store.patchHighlight(h.id, {
           clipUri: rec.clipUri,
           ...(rec.clipAudit ? rec.clipAudit : {}),
-          ...(dive ? diveAnchorFields(dive, h) : {}),
           clipError: undefined as any,
         } as any);
+        // ADAAAA-8893 (D5): the dive's instant becomes the card's OPTION (own
+        // `-recentered` file + `highlight_alternatives` row); the card's clip is kept.
+        if (dive) {
+          await deliverRecenteredOption({
+            jobId,
+            highlightId: h.id,
+            dive,
+            cut: async () => {
+              const opt = await ingest.cut(ts, {
+                requireFullWindow: false,
+                ...(Number.isFinite(h.start) && Number.isFinite(h.end)
+                  ? { window: { start: h.start, end: h.end, cueTail: h.clipPlacementReason === "celebration_tail" } }
+                  : {}),
+                anchorTs: dive.ts,
+                outSuffix: RECENTERED_CLIP_SUFFIX,
+              });
+              const start = Number.isFinite(h.start) ? h.start : ts;
+              const end = Number.isFinite(h.end) ? h.end : ts;
+              return { clipUri: opt.clipUri, start, end, bytes: await clipBytesForUri(opt.clipUri) };
+            },
+          }).catch((e: any) =>
+            console.error(
+              `[live-dive-option:${jobId}] option cut failed for ${h.id} (card clip kept):`,
+              String(e?.message || e)
+            )
+          );
+        }
         cutCount++;
       } catch (e: any) {
         const msg = `Clip cut failed: ${String(e?.message || e)}`;
@@ -2582,18 +2710,40 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           continue;
         }
         try {
-          // ADAAAA-8820 (D2): a row the dive named a moment for (verdict landed
-          // before this stop-path cut) anchors on it, exactly like the mid-share
-          // path. `null` keeps the accept anchor byte-identical.
+          // ADAAAA-8893 (D5): a dive moment never moves this stop-path cut — the
+          // card keeps its accept anchor and the moment is delivered as an OPTION
+          // below (own `-recentered` file, own alternative row).
           const dive = rowDiveMoment(h);
-          const rec = await cutBrowserHighlightClip(jobId, h, recPath, cw, {
-            ...(dive ? { anchorTs: dive.ts, diveMoment: dive } : {}),
-          });
+          const rec = await cutBrowserHighlightClip(jobId, h, recPath, cw, {});
           await store.patchHighlight(h.id, {
             clipUri: rec.uri,
             ...(rec.hasAudio != null ? { hasAudio: rec.hasAudio } : {}),
-            ...clipPlacementPatch(rec, dive ? diveAudit(dive, h) : null),
+            ...clipPlacementPatch(rec),
           });
+          if (dive) {
+            await deliverRecenteredOption({
+              jobId,
+              highlightId: h.id,
+              dive,
+              cut: async () => {
+                const opt = await cutBrowserHighlightClip(jobId, h, recPath, cw, {
+                  anchorTs: dive.ts,
+                  nameSuffix: RECENTERED_CLIP_SUFFIX,
+                });
+                return {
+                  clipUri: opt.uri,
+                  start: opt.placement.cutStart,
+                  end: opt.placement.cutStart + opt.placement.dur,
+                  bytes: opt.bytes,
+                };
+              },
+            }).catch((e: any) =>
+              console.error(
+                `[live-dive-option:${jobId}] option cut failed for ${h.id} (card clip kept):`,
+                String(e?.message || e)
+              )
+            );
+          }
           // ADAAAA-8032: same `clip` event the live cut emits, so a surface that
           // subscribed late refreshes the card instead of polling for it.
           emitJobEvent(jobId, { seq: -1, timestamp: -1, type: "clip", highlightId: h.id, clipUri: rec.uri });

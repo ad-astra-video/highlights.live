@@ -1230,10 +1230,11 @@ function ClipRail({
             className="w-full shrink-0 snap-start"
             data-detail-clip-slide
             data-clip-index={index}
-            {...(slide.kind === "celebration" || slide.kind === "replay"
+            {...(slide.kind === "celebration" || slide.kind === "replay" || slide.kind === "recentered"
               ? { "data-detail-alternative": true }
               : {})}
             {...(slide.kind === "replay" ? { "data-detail-replay": true } : {})}
+            {...(slide.kind === "recentered" ? { "data-detail-recentered": true } : {})}
             {...(slide.kind === "sibling" ? { "data-detail-sibling-clip": true } : {})}
           >
             <VideoClip
