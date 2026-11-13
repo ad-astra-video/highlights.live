@@ -63,7 +63,11 @@ NAME_ONLY_TEAMS = [
     {"side": "away", "name": "Spain", "kitColors": []},
 ]
 # A team with NO curated prior — the coverage gap this fix does not invent around.
-NO_PRIOR_TEAMS = [{"side": "away", "name": "Barcelona", "kitColors": []}]
+# ADAAAA-8919 changed this fixture's team from `Barcelona` to `Liverpool`: the
+# served league now HAS a measured `Barcelona` row (`blue`), so the original team
+# no longer exercises the coverage gap. `Liverpool` is in the soccer lexicon and
+# uncurated, which is the shape this test actually pins — no assertion changed.
+NO_PRIOR_TEAMS = [{"side": "away", "name": "Liverpool", "kitColors": []}]
 
 FOREIGN_LINE = "LALIGA 1-0 AL1"
 GENUINE_LINE = "PORTUGAL 1-0 SPAIN"
