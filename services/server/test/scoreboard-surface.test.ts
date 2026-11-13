@@ -128,6 +128,96 @@ describe("withScoreboardRoi (per-analyze calibration delivery)", () => {
   });
 });
 
+describe("ADAAAA-8935: the guard must see identity and demotion", () => {
+  const IDENTITY = {
+    verdict: "consistent" as const,
+    kitDistance: 0.11,
+    threshold: 0.44,
+    kitsPresent: true,
+    kitsDiffer: false,
+    kitReference: "prior" as const,
+    namesMatch: false,
+    namesMatched: [],
+    names: ["RMA", "BAR"],
+    kits: { away: [99, 102, 182] },
+    seqFirstSeen: 4,
+  };
+  const base = {
+    roi: [0, 0, 1, 0.25] as [number, number, number, number],
+    source: "discovery" as const,
+    seqFirstSeen: 276,
+    verified: true,
+  };
+
+  function storeWith(initial: any) {
+    let job: any = { id: "j1", scoreboardSurface: initial };
+    const patchJob = vi.fn(async (_id: string, patch: any) => {
+      job = { ...job, ...patch };
+      return job;
+    });
+    return { store: { getJob: () => job, patchJob } as any, patchJob };
+  }
+
+  it("compares a newly folded identity that the box-only guard could not see", () => {
+    expect(sameScoreboardSurface(base, { ...base, identity: IDENTITY })).toBe(false);
+    expect(sameScoreboardSurface({ ...base, identity: IDENTITY }, { ...base, identity: IDENTITY })).toBe(true);
+    expect(
+      sameScoreboardSurface({ ...base, identity: IDENTITY }, { ...base, identity: { ...IDENTITY, verdict: "contradicted" } })
+    ).toBe(false);
+    // the measurement marker is not part of the measurement: a later fold keeps
+    // the block equal, so one measured surface costs one write
+    expect(
+      sameScoreboardSurface({ ...base, identity: IDENTITY }, { ...base, identity: { ...IDENTITY, seqFirstSeen: 900 } })
+    ).toBe(true);
+  });
+
+  it("compares the named demotion", () => {
+    expect(sameScoreboardSurface(base, { ...base, demotion: "ignored (kits differ)" })).toBe(false);
+  });
+
+  it("persists a verdict reported on an ALREADY-persisted box (the served defect)", () => {
+    // The served rows: the box landed at seq 276 with no identity, the verdict
+    // was measured earlier (seq 4-10) and re-reported on that same box. Before
+    // the fix `sameScoreboardSurface` returned true here, so `patchJob` never
+    // ran and `scoreboardSurface.identity` was absent on every served job.
+    const { store, patchJob } = storeWith({ ...base } as any);
+    const rec = scoreboardSurfaceRecorder(store, "j1");
+    rec({
+      seq: 276,
+      scoreboardRoi: [0, 0, 1, 0.25],
+      scoreboardRoiSource: "discovery",
+      scoreboardRoiVerified: true,
+      scoreboardSurfaceIdentity: IDENTITY,
+    });
+    expect(patchJob).toHaveBeenCalledTimes(1);
+    expect(patchJob.mock.calls[0][1].scoreboardSurface.identity.verdict).toBe("consistent");
+    expect(patchJob.mock.calls[0][1].scoreboardSurface.identity.seqFirstSeen).toBe(276);
+
+    // AC-B2: an identical block MUST NOT write — a per-frame re-report of the
+    // same measurement stays silent, even at a later seq.
+    rec({
+      seq: 300,
+      scoreboardRoi: [0, 0, 1, 0.25],
+      scoreboardRoiSource: "discovery",
+      scoreboardRoiVerified: true,
+      scoreboardSurfaceIdentity: { ...IDENTITY, seqFirstSeen: undefined },
+    });
+    expect(patchJob).toHaveBeenCalledTimes(1);
+
+    // A NEW verdict on the same box MUST persist.
+    rec({
+      seq: 302,
+      scoreboardRoi: [0, 0, 1, 0.25],
+      scoreboardRoiSource: "discovery",
+      scoreboardRoiVerified: true,
+      scoreboardSurfaceIdentity: { ...IDENTITY, verdict: "contradicted", kitsDiffer: true },
+    });
+    expect(patchJob).toHaveBeenCalledTimes(2);
+    expect(patchJob.mock.calls[1][1].scoreboardSurface.identity.verdict).toBe("contradicted");
+    expect(patchJob.mock.calls[1][1].scoreboardSurface.identity.seqFirstSeen).toBe(302);
+  });
+});
+
 describe("DirectAdapter.analyze body (AC1/AC4: the pin rides every analyze)", () => {
   const cfg = loadConfig({ PERCEIVE_URL: "http://p", DECIDE_URL: "http://d" });
   afterEach(() => vi.restoreAllMocks());
