@@ -1539,6 +1539,15 @@ export const ScoreboardSurfaceIdentitySchema = z.object({
   // prior is never published as a kit observation; this field is the provenance
   // that lets the board tell the two apart.
   kitReference: z.enum(["observed", "prior"]).optional(),
+  // ADAAAA-8960: where the KIT ARM of the published verdict came from. The rule
+  // requires a measured swatch for THIS surface, and the pass frame and the
+  // publishing frame are not the same frame (served jobs: pass seq 6 carried no
+  // plate swatch, the box published at seq 276). `measured` = the publishing
+  // frame's own crop; `carried` = an EARLIER frame of the same surface measured
+  // it (`kitSampleSeq` names which); `none` = no observation of this surface ever
+  // measured a swatch, so `kits: {}` is explicit rather than a silent gap.
+  kitSource: z.enum(["measured", "carried", "none"]).optional(),
+  kitSampleSeq: z.number().int().optional(),
   namesMatch: z.boolean().optional(),
   namesMatched: z.array(z.string()).max(8).optional(),
   names: z.array(z.string()).max(8).optional(),
