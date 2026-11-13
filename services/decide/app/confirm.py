@@ -1040,6 +1040,16 @@ MOMENT_MAX_GRID_GAP_S = 2.0
 #: "frame 3", "frame3"). Kept narrow so a bare "3" stays an INSTANT, not an index.
 _MOMENT_FRAME_LABEL = re.compile(r"^\s*(?:f|frame|image)\s*#?\s*(\d+)\s*$", re.IGNORECASE)
 
+#: The instant a PROSE reason names ("entering the net at t=1105.25", "at
+#: t=182.0s", "at 921.00, followed by …"). Narrow on purpose: only a ``t=``
+#: prefix or a trailing ``s`` unit is read as a content instant, so a scoreline
+#: ("2-1") or a frame count is never mistaken for a moment.
+_MOMENT_PROSE_INSTANT = re.compile(
+    r"\bt\s*=\s*(\d+(?:\.\d+)?)\s*s?\b"
+    r"|\bat\s+(\d+(?:\.\d+)?)\s*s\b",
+    re.IGNORECASE,
+)
+
 
 def frame_instants(frames: list | None) -> list[float]:
     """The content-clock instant of each dense frame, in the order the model sees
@@ -1095,6 +1105,30 @@ def snap_moment(value, instants: list[float]) -> Optional[float]:
     return nearest
 
 
+def _prose_moment(text, instants: list[float]) -> Optional[float]:
+    """The moment a reply names in PROSE, snapped onto the frame grid.
+
+    Real replies state the instant in the reason far more often than they copy it
+    into ``momentTs`` — measured on the live corpus: "entering the net at
+    t=1105.25", "at t=182.0s (dense frame 180.25s)", "at t=819.0s", "at 921.00,
+    followed by …". A moment the reply plainly names is a measurement the cut can
+    use; one it does not name is never invented. The regex is deliberately narrow
+    (``t=<num>`` or ``at <num>s``) so an unrelated number — a scoreline, a frame
+    count — is never read as an instant, and ``snap_moment`` still refuses an
+    instant that lies off the grid the dive was actually shown.
+    """
+    if not instants or not isinstance(text, str) or not text:
+        return None
+    m = _MOMENT_PROSE_INSTANT.search(text)
+    if not m:
+        return None
+    value = m.group(1) or m.group(2)
+    try:
+        return snap_moment(float(value), instants)
+    except (TypeError, ValueError):  # noqa: BLE001
+        return None
+
+
 def parse_moment(parsed: dict | None, instants: list[float]) -> Tuple[Optional[float], float]:
     """``(momentTs, momentConfidence)`` from a parsed confirm reply.
 
@@ -1103,10 +1137,16 @@ def parse_moment(parsed: dict | None, instants: list[float]) -> Tuple[Optional[f
     accept anchor). The confidence is clamped into 0..1 and is only reported when
     a moment was actually named — a confidence about nothing is not a number a
     re-cut may act on.
+
+    A ``confirmed_goal`` whose structured field named nothing falls back to the
+    instant its reason names in prose (:func:`_prose_moment`); a reply that
+    refutes the goal does not, because a refutation has no moment to cut on.
     """
     if not isinstance(parsed, dict):
         return None, 0.0
     moment_ts = snap_moment(parsed.get("momentTs"), instants)
+    if moment_ts is None and parsed.get("goalConfirmed") == "confirmed_goal":
+        moment_ts = _prose_moment(parsed.get("reason"), instants)
     if moment_ts is None:
         return None, 0.0
     try:
