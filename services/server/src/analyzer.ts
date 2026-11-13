@@ -160,6 +160,13 @@ export interface ObservationResult {
     scoreboardRoi?: number[];
     scoreboardRoiSource?: string;
     scoreboardRoiVerified?: boolean;
+    // ADAAAA-8844 (Inc 2): the surface-identity verdict perceive measured on the
+    // crop it took (kit swatches + printed names vs the job's matchContext), and
+    // the named demotion when a score change on that surface was ignored. Both
+    // additive: absent on a runner that does not measure identity, so an old
+    // observation stays byte-identical.
+    scoreboardSurfaceIdentity?: unknown;
+    scoreboardSurfaceDemoted?: string;
   };
   candidate?: {
     eventType: string;
@@ -948,6 +955,11 @@ export function liveUnattestedGoalRefusal(used: LiveGoalAttestationUsed): string
   const post = used.postSamples ?? 0;
   const pre = used.preSamples ?? 0;
   const need = used.need ?? SCOREBOARD_MIN_CONSISTENT_READS;
+  // ADAAAA-8844 (Inc 2): the score change measured in this window landed on a
+  // surface that is demonstrably NOT this match's. That is the reason the window
+  // has no score attestation, so it leads — the board must not read this as "no
+  // scoreboard was watched".
+  if (used.surfaceDemotion) return used.surfaceDemotion;
   // ADAAAA-8728 (R1/R4/R6): the AUTHORITY refusals come first. The branches
   // below describe a score span that was read and did not attest; these describe
   // a window whose evidence could not be an authority at all.
@@ -2220,6 +2232,13 @@ export interface WindowAttestation {
   scoreBoardChanged?: boolean;
   scoreBoardDelta?: ScoreboardDeltaEvidence;
   /**
+   * ADAAAA-8844 (Inc 2): the named demotion when this window's score change was
+   * ignored because the score surface measured there is NOT this match's
+   * (contradicted kits + unmatched printed names). Carried so the demoted row's
+   * copy says WHY, and so nothing downstream can read the window as attested.
+   */
+  surfaceDemotion?: string;
+  /**
    * ADAAAA-8152 (ACC-2): the MEASURED goal instant this window read — the first
    * frame that reads the new score. Set whenever the window's own timeline (or
    * the pooled read span) derived a legible transition, INCLUDING when the run's
@@ -2392,6 +2411,10 @@ export interface LiveGoalAttestationUsed {
    * Disclosed on the demoted row so the copy names the real refusal; absent when
    * nothing was refused. */
   scoreRewindRefusal?: string;
+  /** ADAAAA-8844 (Inc 2): the window's score change landed on a CONTRADICTED
+   * score surface (it is not this match's), so it could not attest a goal. The
+   * note is persisted on the demoted row so the copy names the real reason. */
+  surfaceDemotion?: string;
   /** ADAAAA-8728 (R7): the MEASURED authority this row used (`scoreboard` /
    *  `frame`) or `none`. A `GOAL` requires `scoreboard`/`frame`; every demoted
    *  row names `none`, so a delivered GOAL with no authority is countable from
@@ -2437,7 +2460,11 @@ export function liveGoalAttestationUsed(input: {
   transitionDelta?: ScoreboardDeltaEvidence | null;
   /** ADAAAA-8610: the accept lane refused this window's measured transition as a
    * rewind (POST below the run's read high-water). */
-  scoreRewindRefusal?: string | null;
+  scoreRewindRefusal?: string;
+  /** ADAAAA-8844 (Inc 2): the window's score change landed on a CONTRADICTED
+   * score surface (different kits printed, no name matching this match), so the
+   * change could not attest a goal. Named on the demoted row. */
+  surfaceDemotion?: string;
   /** ADAAAA-8728 (R1/R2): which corroboration signal fired, so the row can name
    * the authority it used (or `none` for commentary text). */
   corroborationSource?: "audio_text" | "scoreboard" | "frame_attestation" | null;
@@ -2452,7 +2479,7 @@ export function liveGoalAttestationUsed(input: {
   // fails closed and discloses nothing rather than pairing a key with a delta
   // that does not describe it.
   const creditedDelta =
-    input.transitionKey && input.transitionDelta && scoreboardDeltaLegible(input.transitionDelta)
+    !input.attribution.surfaceDemotion && input.transitionKey && input.transitionDelta && scoreboardDeltaLegible(input.transitionDelta)
       ? input.transitionDelta
       : undefined;
   const transitionScore =
@@ -2463,7 +2490,13 @@ export function liveGoalAttestationUsed(input: {
         }
       : undefined;
   const authority: GoalAuthority =
-    input.transitionKey ||
+    // ADAAAA-8844 (Inc 2): a demoted score change is a CLAIM about another
+    // match's bug, so it can never be this row's authority — not even when a
+    // credited transition or a legible delta was passed in beside it. Defence in
+    // depth: the fold already withholds both, this makes the invariant local.
+    input.attribution.surfaceDemotion
+      ? "none"
+      : input.transitionKey ||
     (input.attribution.scoreBoardChanged === true &&
       scoreChangeAttests(input.attribution.scoreBoardDelta, input.scoreReads))
       ? "scoreboard"
@@ -2475,7 +2508,8 @@ export function liveGoalAttestationUsed(input: {
           ballOutcome: input.attribution.ballOutcome,
         });
   return {
-    scoreBoardChanged: input.attribution.scoreBoardChanged === true,
+    scoreBoardChanged:
+      input.attribution.surfaceDemotion ? false : input.attribution.scoreBoardChanged === true,
     goalCrossed: input.attribution.goalCrossed === true,
     ballOutcome: input.attribution.ballOutcome ?? null,
     corroborated: input.corroborated === true,
@@ -2491,10 +2525,12 @@ export function liveGoalAttestationUsed(input: {
       ? { frameRefCount: input.frameRefCount ?? 0 }
       : {}),
     // Only spread when a transition was actually credited: a row that carries no
-    // measured delta keeps the legacy payload shape byte-identical.
-    ...(input.transitionKey ? { transitionKey: input.transitionKey } : {}),
+    // measured delta keeps the legacy payload shape byte-identical. ADAAAA-8844:
+    // a demoted window credits nothing, so it discloses no transition key.
+    ...(!input.attribution.surfaceDemotion && input.transitionKey ? { transitionKey: input.transitionKey } : {}),
     ...(transitionScore ? { transitionScore } : {}),
     ...(input.scoreRewindRefusal ? { scoreRewindRefusal: input.scoreRewindRefusal } : {}),
+    ...(input.attribution.surfaceDemotion ? { surfaceDemotion: input.attribution.surfaceDemotion } : {}),
     ...(input.scoreReads
       ? {
           scoreReads: input.scoreReads.scoreReads,
@@ -3208,6 +3244,10 @@ export interface GoalLineCalibration {
    * `explicit`, ahead of discovery. Absent on an unpinned job — no field is sent,
    * so today's request stays byte-identical. */
   scoreboardRoi?: number[];
+  /** ADAAAA-8844 (Inc 2): `[{side, name, kitColors[{primary, secondary}]}]` from
+   * the job's persisted `matchContext` — the reference the score-surface identity
+   * check compares against. Absent => identity is `absent` (today's behaviour). */
+  matchContextTeams?: { side?: string; name?: string; kitColors?: { primary?: string; secondary?: string }[] }[];
 }
 
 /** ADAAAA-6935: one Stage-A candidate trigger accumulated within a 3 s frame
@@ -3327,6 +3367,13 @@ export interface PipelineClient {
        * decide runner must force isHighlight=true for a goal when set, and
        * treat absence as weak/absent evidence (never on its own a goal). */
       scoreBoardChanged?: boolean;
+      /** ADAAAA-8844 (Inc 2): the job's score-surface identity verdict. When
+       * `contradicted`, decide must NOT force a goal off a score change on
+       * either path — the change is a claim from a bug that is not this
+       * match's. Absent => today's behaviour. */
+      scoreboardSurfaceIdentity?: string;
+      /** ADAAAA-8844: the named demotion carried with the window (provenance). */
+      surfaceDemotion?: string;
       // I4 / ADAAAA-6361: per-detection geometry + ball position + audio level
       // curve so the prompt can cite concrete evidence (all optional).
       detections?: DetectionEvidence[];
@@ -4001,6 +4048,15 @@ export interface AnalyzerConfig {
    * Absent (or a context with nothing usable) => the decide request carries no
    * matchContext and the prompt is byte-identical to today (AC6). */
   getMatchContext?: () => unknown;
+  /** ADAAAA-8844 (Inc 2): whether the job's CURRENT score surface may attest a
+   * score change. `false` only when the surface was measured and CONTRADICTED
+   * (different kits + no printed name of ours); an unmeasured/absent surface
+   * returns `true`, so today's behaviour is kept. Absent => never demote. */
+  getScoreboardSurfaceAttests?: () => boolean;
+  /** ADAAAA-8844 (Inc 2): the job's current surface verdict as forwarded to
+   * decide (`consistent` / `contradicted` / `absent`). Absent => decide applies
+   * today's behaviour. */
+  getScoreboardSurfaceVerdict?: () => string | undefined;
   /**
    * ADAAAA-8408 (W2): hand EVERY observe window's own commentary + content clock
    * to the live match-context writer. Pure bookkeeping on this path — the writer
@@ -8928,6 +8984,10 @@ export interface PerceiveTimelineRecord {
   ballInNet?: boolean;
   /** Scoreboard score delta observed across this frame's candidate window. */
   scoreBoardChanged?: boolean;
+  /** ADAAAA-8844 (Inc 2): a score change measured on a CONTRADICTED score
+   * surface (not this match's). Named so the window can say why it was ignored
+   * rather than looking like a window with no evidence at all. */
+  surfaceDemotion?: string;
   /** A confident motion burst was detected on this frame. */
   motionBurst?: boolean;
 }
@@ -8939,13 +8999,18 @@ export interface PerceiveTimelineRecord {
  * near-miss / absent). Returns `{}` when nothing attests — the correct
  * "no attestation, provenance-only" case. Pure + deterministic (ADAAAA-7021). */
 export function foldWindowAttestation(
-  hints: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence }[] | ReadonlyArray<ObserveBiasHint>
-): { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence } {
-  const out: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence } = {};
+  hints: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence; surfaceDemotion?: string }[] | ReadonlyArray<ObserveBiasHint>
+): { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence; surfaceDemotion?: string } {
+  const out: { goalCrossed?: boolean; ballOutcome?: string; scoreBoardChanged?: boolean; scoreBoardDelta?: ScoreboardDeltaEvidence; surfaceDemotion?: string } = {};
   for (const h of hints) {
     if (h.goalCrossed === true) out.goalCrossed = true;
     if (typeof h.ballOutcome === "string" && /^goal$/i.test(h.ballOutcome.trim())) out.ballOutcome = h.ballOutcome;
     if (h.scoreBoardChanged === true) out.scoreBoardChanged = true;
+    // ADAAAA-8844 (Inc 2): a demoted score change is carried as its REASON, never
+    // as attestation. First note wins; the window's copy names it.
+    if (!out.surfaceDemotion && h.surfaceDemotion) {
+      out.surfaceDemotion = String(h.surfaceDemotion);
+    }
     // ADAAAA-7844: keep the FIRST legible measured delta in the window (the
     // hints are already time-filtered to the window, so it is time-tied by
     // construction). A bare boolean with no legible delta still attests (the
@@ -9232,6 +9297,9 @@ export function buildObserveDecideRequest(
   const windowAudioB64 = slice.audioB64;
   const windowAudioLevels = slice.levels;
   const audioPeak = windowAudioLevels.length ? Math.max(...windowAudioLevels) : 0;
+  // ADAAAA-8844 (Inc 2): read ONCE per window (a stored-record read, never a
+  // recompute) — the verdict is a property of the job's surface, not of a frame.
+  const _surfaceVerdict = cfg.getScoreboardSurfaceVerdict?.();
   const evidence: Parameters<PipelineClient["decide"]>[0] = {
     eventType,
     trackCount,
@@ -9279,6 +9347,13 @@ export function buildObserveDecideRequest(
     goalCrossed: windowAttestation.goalCrossed || undefined,
     ballOutcome: windowAttestation.ballOutcome || undefined,
     scoreBoardChanged: windowAttestation.scoreBoardChanged || undefined,
+    // ADAAAA-8844 (Inc 2): the surface verdict rides the evidence so decide can
+    // refuse a forced goal on a contradicted surface ON BOTH of its paths
+    // (single-candidate `scoreboard_forces_goal` and group
+    // `_postprocess_gemma_verdict`), even if a score change ever reaches it.
+    // Absent on an unmeasured surface, so the decide payload is byte-identical.
+    ...(_surfaceVerdict ? { scoreboardSurfaceIdentity: _surfaceVerdict } : {}),
+    ...(windowAttestation.surfaceDemotion ? { surfaceDemotion: windowAttestation.surfaceDemotion } : {}),
   };
   // (ADAAAA-7399): the window-aligned audio clip + level curve were computed
   // above (before the evidence) via `run.audioWindowB64` / `audioWindowLevels`
@@ -12090,6 +12165,13 @@ export async function analyzeJob(
         // discovered — and a fresh/re-reserved session inherits it on its first
         // frame. Absent on an unpinned job: the body stays byte-identical.
         ...(cfg.calibration?.scoreboardRoi ? { scoreboardRoi: cfg.calibration.scoreboardRoi } : {}),
+        // ADAAAA-8844 (Inc 2): the job's team reference rides the same carriage
+        // as the pin, so perceive can show a foreign PID bug's plate/names are
+        // NOT this match's. Absent (no resolved matchContext) => the body is
+        // byte-identical and identity stays `absent`.
+        ...(cfg.calibration?.matchContextTeams?.length
+          ? { matchContextTeams: cfg.calibration.matchContextTeams }
+          : {}),
       };
       // ADAAAA-7152 Gap 1: decide whether this frame gets the expensive perceive
       // pass. In a cool (no-signal) region only every `quietStride`-th frame is
@@ -12209,21 +12291,37 @@ export async function analyzeJob(
         {
           const _o = res.observation as any;
           const _ev: PerFrameSignal | undefined = _o.evidence;
+          // ADAAAA-8844 (Inc 2): a score change measured on a CONTRADICTED score
+          // surface is a CLAIM, not an attestation — the change came from a bug
+          // that is demonstrably not this match's (different kits, no name of
+          // ours printed). Withhold it here, at the ONE fold both rails share
+          // (live observe + VOD observe), and carry the REASON instead so the
+          // demoted row says why. `absent` identity never demotes (AC2.3).
+          const _surfaceDemotion: string =
+            (typeof _o.scoreboardSurfaceDemoted === "string" && _o.scoreboardSurfaceDemoted.trim()) ||
+            (cfg.getScoreboardSurfaceAttests && !cfg.getScoreboardSurfaceAttests()
+              ? "score change on a contradicted score surface: ignored"
+              : "");
           const _att = {
             goalCrossed: _o.goalCrossed ?? _ev?.goalCrossed,
             ballOutcome: _o.ballOutcome ?? _ev?.ballOutcome,
-            scoreBoardChanged: _o.scoreBoardChanged ?? _ev?.scoreBoardChanged,
+            scoreBoardChanged: _surfaceDemotion ? false : _o.scoreBoardChanged ?? _ev?.scoreBoardChanged,
             // ADAAAA-7844: the measured delta the flag is backed by (absent when
             // perceive did not measure a legible one). Wire name on the
             // observation is `scoreboardDelta`; the hint/attestation field is
             // `scoreBoardDelta`.
-            scoreBoardDelta: _o.scoreboardDelta ?? (_ev as any)?.scoreboardDelta,
+            scoreBoardDelta: _surfaceDemotion
+              ? undefined
+              : _o.scoreboardDelta ?? (_ev as any)?.scoreboardDelta,
+            ...(_surfaceDemotion ? { surfaceDemotion: _surfaceDemotion } : {}),
           };
           const _attested =
             _att.scoreBoardChanged === true ||
             _att.goalCrossed === true ||
             (typeof _att.ballOutcome === "string" && GOAL_OUTCOMES.has(_att.ballOutcome));
-          if (_attested) {
+          // A demoted score change still reaches the hint so the window's copy
+          // names the reason; it just cannot attest anything.
+          if (_attested || _surfaceDemotion) {
             const _evType: string = _o.eventType || res.candidate?.eventType || "SPORTING_EVENT";
             observeDecider?.addHint(_evType, frame.timestamp, _att);
             liveObserver?.addHint(_evType, frame.timestamp, _att);
@@ -12244,16 +12342,20 @@ export async function analyzeJob(
           // ADAAAA-7021 fix: the candidate's goal-attestation signals (goalCrossed /
           // ballOutcome / scoreBoardChanged) are folded into the hint so the decide
           // goal-attestation gate can attest a `scoring_play` rather than reject it.
-          observeDecider?.addHint(res.candidate.eventType, res.candidate.timestamp, {
+          const _candSurfaceDemotion: string =
+            (typeof (res.observation as any)?.scoreboardSurfaceDemoted === "string" &&
+              (res.observation as any).scoreboardSurfaceDemoted.trim()) ||
+            (cfg.getScoreboardSurfaceAttests && !cfg.getScoreboardSurfaceAttests()
+              ? "score change on a contradicted score surface: ignored"
+              : "");
+          const _candHint = {
             goalCrossed: res.candidate.goalCrossed,
             ballOutcome: res.candidate.ballOutcome,
-            scoreBoardChanged: res.candidate.scoreBoardChanged,
-          });
-          liveObserver?.addHint(res.candidate.eventType, res.candidate.timestamp, {
-            goalCrossed: res.candidate.goalCrossed,
-            ballOutcome: res.candidate.ballOutcome,
-            scoreBoardChanged: res.candidate.scoreBoardChanged,
-          });
+            scoreBoardChanged: _candSurfaceDemotion ? false : res.candidate.scoreBoardChanged,
+            ...(_candSurfaceDemotion ? { surfaceDemotion: _candSurfaceDemotion } : {}),
+          };
+          observeDecider?.addHint(res.candidate.eventType, res.candidate.timestamp, _candHint);
+          liveObserver?.addHint(res.candidate.eventType, res.candidate.timestamp, _candHint);
         }
       }
       // ADAAAA-7007/7008: drive the decide-observer on cadence, feeding EVERY

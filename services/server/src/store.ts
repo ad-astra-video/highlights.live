@@ -13,6 +13,7 @@ import {
   type TrackObservation,
 } from "@highlights/events";
 import type { Db, DatasetRecord, JobDeletionOptions } from "./db";
+import type { ScoreboardSurfaceBlock } from "./scoreboard-surface";
 import { mergeResumeCheckpoint, type ResumeCheckpointPatch } from "./vod-resume";
 
 export interface StoredObservation {
@@ -140,7 +141,7 @@ export class Store {
   async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number;
     /** ADAAAA-8835 (Inc 1): the per-job score-bug pin + its declared provenance block. */
     scoreboardRoi?: [number, number, number, number];
-    scoreboardSurface?: { roi: [number, number, number, number]; source: "explicit" | "discovery" | "default_top_band"; seqFirstSeen: number; verified: boolean } }): Promise<Job> {
+    scoreboardSurface?: ScoreboardSurfaceBlock }): Promise<Job> {
     const id = input.id ?? randomUUID();
     const job: Job = JobSchema.parse({
       id,

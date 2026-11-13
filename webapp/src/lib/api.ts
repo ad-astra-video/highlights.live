@@ -483,6 +483,16 @@ export interface Job {
     source: "explicit" | "discovery" | "default_top_band";
     seqFirstSeen: number;
     verified: boolean;
+    /** ADAAAA-8844 (Inc 2): whether the surface can be shown to be this match's. */
+    identity?: {
+      verdict: "consistent" | "contradicted" | "absent";
+      kitDistance?: number | null;
+      threshold?: number;
+      namesMatched?: string[];
+      names?: string[];
+    };
+    /** ADAAAA-8844: why a score change on this surface was ignored. */
+    demotion?: string;
   };
   stageAMetrics?: Record<string, unknown>;
   // ADAAAA-7727: whether the audio Stage-A counters are a real measurement

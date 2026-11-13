@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { ScoreboardSurfaceReadout } from "./ScoreboardSurfaceReadout";
 import {
   describeScoreboardSurface,
+  describeSurfaceIdentity,
   formatScoreboardRoi,
   parseScoreboardRoiInput,
   scoreboardSourceLabel,
@@ -102,5 +103,41 @@ describe("parseScoreboardRoiInput (the typed box on the job form)", () => {
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.message.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ADAAAA-8844 (Inc 2): the board must see the identity verdict AND the named
+// demotion, so a window that was not accepted says why without a replay.
+describe("ScoreboardSurfaceReadout (ADAAAA-8844 identity)", () => {
+  it("renders the measured identity verdict, and the demotion reason when one exists", () => {
+    const contradicted: ScoreboardSurface = {
+      ...PIN,
+      identity: { verdict: "contradicted", kitDistance: 0.42, threshold: 0.35 },
+      demotion: "score change on a contradicted score surface: ignored",
+    };
+    const html = render(contradicted);
+    expect(html).toContain("surface: different match (kits Δ=0.42 &gt; 0.35)");
+    expect(html).toContain("data-scoreboard-surface-demotion");
+    expect(html).toContain("contradicted score surface");
+    // It never reads as this match's surface.
+    expect(html).not.toContain("surface: this match");
+  });
+
+  it("says `this match` for a consistent surface and adds no demotion chip", () => {
+    const html = render({ ...PIN, identity: { verdict: "consistent", kitDistance: 0.04, threshold: 0.35 } });
+    expect(html).toContain("surface: this match");
+    expect(html).not.toContain("data-scoreboard-surface-demotion");
+  });
+
+  it("calls an unreadable surface unreadable, not contradicted (absence is not contradiction)", () => {
+    const html = render({ ...PIN, identity: { verdict: "absent" } });
+    expect(html).toContain("surface: unreadable surface");
+    expect(html).not.toContain("different match");
+    expect(html).not.toContain("data-scoreboard-surface-demotion");
+  });
+
+  it("leaves a surface with no identity reading unchanged", () => {
+    expect(render(PIN)).not.toContain("surface:");
+    expect(describeSurfaceIdentity(undefined)).toBe("");
   });
 });

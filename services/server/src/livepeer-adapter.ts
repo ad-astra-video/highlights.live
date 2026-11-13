@@ -477,6 +477,9 @@ export class OrchestratorAdapter implements PipelineClient {
         // VOD job crops the operator's box ahead of discovery. Absent on an
         // unpinned job => the body is byte-identical.
         ...(opts?.scoreboardRoi ? { scoreboardRoi: opts.scoreboardRoi } : {}),
+        // ADAAAA-8844 (Inc 2): the job's team reference for the surface-identity
+        // check rides beside the pin, on both rails. Absent => byte-identical.
+        ...(opts?.matchContextTeams?.length ? { matchContextTeams: opts.matchContextTeams } : {}),
       }),
     });
     if (status >= 400) {
@@ -1173,6 +1176,9 @@ export class DirectAdapter implements PipelineClient {
         ...(opts?.goalLine ? { goalLine: opts.goalLine } : {}),
         // ADAAAA-8835 (Inc 1): the per-job score-bug PIN, same carriage.
         ...(opts?.scoreboardRoi ? { scoreboardRoi: opts.scoreboardRoi } : {}),
+        // ADAAAA-8844 (Inc 2): the job's team reference for the surface-identity
+        // check rides beside the pin, on both rails. Absent => byte-identical.
+        ...(opts?.matchContextTeams?.length ? { matchContextTeams: opts.matchContextTeams } : {}),
       }),
     });
     if (!r.ok) {

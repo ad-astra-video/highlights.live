@@ -29,6 +29,8 @@ from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_contract_guard,
     apply_goal_attestation_gate,
+    clear_decision_accept,
+    decision_accepts_highlight,
     decide_group_with_gemma,
     decide_with_gemma,
     finalize_goal_acceptance,
@@ -132,6 +134,14 @@ class Evidence(BaseModel):
     # candidate window — a hard, independent goal-confirmation signal. Absent
     # (default False) == weak/absent evidence, never on its own a goal.
     scoreBoardChanged: bool = Field(default=False)
+    # ADAAAA-8844 (Inc 2): the score-surface identity verdict the server measured
+    # for this job (`consistent` / `contradicted` / `absent`). Present ONLY when a
+    # surface was measured, so an unmeasured window's payload is byte-identical.
+    # `contradicted` means a score change measured here belongs to a DIFFERENT
+    # game's bug, so it may never force a goal on either path.
+    scoreboardSurfaceIdentity: Optional[str] = None
+    # ADAAAA-8844: the named demotion carried with the window (provenance only).
+    surfaceDemotion: Optional[str] = None
     # People-reaction context (INC-4). Optional; absent == no reaction signal,
     # so the prompt renders without it (no regression vs today).
     reaction: ReactionEvidence = Field(default_factory=ReactionEvidence)
@@ -640,14 +650,19 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
         gate_ok, gate_reason = True, None
     else:
         gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
-    if not gate_ok and decision.get("isHighlight"):
-        decision["isHighlight"] = False
+    if not gate_ok and decision_accepts_highlight(decision):
+        clear_decision_accept(decision)
         decision["reason"] = (
             (decision.get("reason") or "") + "; " + (gate_reason or "")
         ).strip("; ")
     elif (
         scoreboard_forces_goal(
-            bool(evidence.get("scoreBoardChanged", False)), decision.get("eventType") or event_type
+            bool(evidence.get("scoreBoardChanged", False)),
+            decision.get("eventType") or event_type,
+            # ADAAAA-8844 (AC2.3, group path): a contradicted surface can never
+            # satisfy scoreboard_forces_goal — the group review must refuse a
+            # forced goal off a foreign score bug exactly like the single path.
+            evidence.get("scoreboardSurfaceIdentity"),
         )
         and decision.get("outcome") != "not_highlight"
     ):
@@ -664,12 +679,12 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
             (decision.get("reason") or "") + "; scoreboard score change confirmed"
         ).strip("; ")
     att_ok, att_reason = apply_goal_attestation_gate(decision, evidence, event_type)
-    if not att_ok and decision.get("isHighlight"):
-        decision["isHighlight"] = False
+    if not att_ok and decision_accepts_highlight(decision):
+        clear_decision_accept(decision)
         decision["reason"] = (
             (decision.get("reason") or "") + "; " + (att_reason or "")
         ).strip("; ")
-    if decision.get("isHighlight"):
+    if decision_accepts_highlight(decision):
         ok, rejects = apply_gate(
             score=float(decision.get("score") or 0.0),
             event_type=decision.get("eventType") or event_type,
@@ -678,9 +693,10 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
             ocr_hits=evidence.get("ocrHits", 0),
             reaction=evidence.get("reaction") or {},
             score_board_changed=evidence.get("scoreBoardChanged", False),
+            surface_identity=evidence.get("scoreboardSurfaceIdentity"),
         )
         if not ok:
-            decision["isHighlight"] = False
+            clear_decision_accept(decision)
             decision["reason"] = (
                 (decision.get("reason") or "")
                 + "; rejected by notable-only bar: "
@@ -707,6 +723,7 @@ def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
         ocr_hits=cand.evidence.ocrHits,
         reaction=cand.evidence.reaction.model_dump() if cand.evidence.reaction else None,
         score_board_changed=cand.evidence.scoreBoardChanged,
+        surface_identity=cand.evidence.scoreboardSurfaceIdentity,
     )
     ball_outcome = evidence.get("ballOutcome")
     gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
@@ -887,7 +904,11 @@ def create_app() -> FastAPI:
             # skipped when the model already explicitly said "not a highlight".
             elif (
                 scoreboard_forces_goal(
-                    req.evidence.scoreBoardChanged, decision.get("eventType") or req.eventType
+                    req.evidence.scoreBoardChanged,
+                    decision.get("eventType") or req.eventType,
+                    # ADAAAA-8844 (AC2.3, single-candidate path): a contradicted
+                    # score surface can never force a goal.
+                    req.evidence.scoreboardSurfaceIdentity,
                 )
                 and decision.get("outcome") != "not_highlight"
             ):
@@ -930,6 +951,7 @@ def create_app() -> FastAPI:
                     ocr_hits=req.evidence.ocrHits,
                     reaction=req.evidence.reaction.model_dump(),
                     score_board_changed=req.evidence.scoreBoardChanged,
+                    surface_identity=req.evidence.scoreboardSurfaceIdentity,
                 )
                 if not ok:
                     decision["isHighlight"] = False
@@ -955,6 +977,7 @@ def create_app() -> FastAPI:
             ocr_hits=req.evidence.ocrHits,
             reaction=ev,
             score_board_changed=req.evidence.scoreBoardChanged,
+            surface_identity=req.evidence.scoreboardSurfaceIdentity,
         )
         # Decide-leg I2 (ADAAAA-6359): HARD GATE — a non-"goal" perceived
         # ballOutcome forces rejection even on the deterministic rule path.
