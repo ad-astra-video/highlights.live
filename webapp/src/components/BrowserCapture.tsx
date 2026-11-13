@@ -97,6 +97,15 @@ export function BrowserCapture({
           {cap.recordingNotice}
         </div>
       )}
+      {cap.recordingGapNotice && (
+        <div
+          className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2 text-sm font-bold text-yellow"
+          data-capture-recording-gap
+          role="alert"
+        >
+          {cap.recordingGapNotice}
+        </div>
+      )}
       {cap.error && (
         <div className="mt-3 rounded-lg border border-red/40 bg-red/10 px-3 py-2 text-sm text-red" data-capture-error>
           {cap.error}
