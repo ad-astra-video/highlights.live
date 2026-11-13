@@ -533,6 +533,34 @@ def _surface_identity_pass(state, rgb, roi, lines, seq=None):
     return identity
 
 
+def _publish_surface_identity(state, sig, out):
+    """Publish the verdict for the box ``sig`` on the observation that reports it.
+
+    ADAAAA-8939: a verdict is evidence ABOUT A SURFACE, so it may only ride an
+    observation that names that same surface. The server folds a reported verdict
+    onto the box the SAME observation reports (``nextScoreboardSurface``) and
+    drops the whole observation when no box is reported, so a verdict emitted on a
+    frame whose box was not reported (the visibility gate was closed) is lost —
+    and because the publish is once-per-surface it was never retried. Measured on
+    the served build: job ``591f4088`` measured ``consistent`` at seq 6 and
+    ``absent`` at seq 271 while the box was first reported at seq 276, and
+    ``jobs.record->'scoreboardSurface' ? 'identity'`` stayed 0.
+
+    Keying the publish on the frame's own box signature fixes both halves:
+    nothing is emitted for an unreported box, and a box measured earlier (its
+    verdict is cached per signature) still publishes on the frame that first
+    reports it. Emitted once per measured surface, so the observation stream
+    stays per-frame free.
+    """
+    if sig is None:
+        return
+    verdict = (getattr(state, "surface_identity_by_sig", None) or {}).get(sig)
+    if verdict is None or sig == getattr(state, "surface_identity_emitted_sig", None):
+        return
+    out["scoreboardSurfaceIdentity"] = verdict
+    state.surface_identity_emitted_sig = sig
+
+
 def _incumbent_surface_kept(state, rgb, roi, seq=None) -> bool:
     """A different box whose surface contradicts the proven incumbent cannot take over.
 
@@ -1728,12 +1756,6 @@ def _scoreboard_ocr_fields(
         # about the surface this read came from, so it must see the names the bug
         # printed (the incumbent check below may discard them).
         _identity = _surface_identity_pass(state, rgb, roi, ocr_lines, seq)
-        _sig_now = getattr(state, "surface_identity_sig", None)
-        if _identity is not None and _sig_now != getattr(state, "surface_identity_emitted_sig", None):
-            # Published once per measured surface (<= SURFACE_IDENTITY_MAX_PASSES
-            # frames per session), so the observation stream stays per-frame free.
-            out["scoreboardSurfaceIdentity"] = _identity
-            state.surface_identity_emitted_sig = _sig_now
         if _incumbent_surface_kept(state, rgb, roi, seq):
             score = None
             ocr_lines = []
@@ -1921,6 +1943,10 @@ def _scoreboard_ocr_fields(
             _sig is not None
             and getattr(state, "scoreboard_roi_verified_sig", None) == _sig
         )
+        # ADAAAA-8939: the verdict rides THIS box. `_sig` is the signature of the
+        # box this frame's read came from, so a cached verdict measured on it is
+        # published here — the frame the server can actually fold it on.
+        _publish_surface_identity(state, _sig, out)
     state.scoreboard_tracker.record(timestamp, score)
     # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
     # the OCR pass just read (CPU only, no GPU). These are the Stage-3
