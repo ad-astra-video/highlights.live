@@ -60,7 +60,13 @@ export function createFrameSampler(options: FrameSamplerOptions = {}): FrameSamp
  *  while one request is still pending, so ticks are SKIPPED rather than queued.
  *  The WS rail does not need it (a WS send is not an HTTP request), but the HTTP
  *  ingest rail does. */
-export function createTickGate(): { tryEnter: () => boolean; leave: () => void; get inFlight(): boolean } {
+export interface TickGate {
+  tryEnter: () => boolean;
+  leave: () => void;
+  readonly inFlight: boolean;
+}
+
+export function createTickGate(): TickGate {
   let inFlight = false;
   return {
     tryEnter() {
@@ -75,4 +81,51 @@ export function createTickGate(): { tryEnter: () => boolean; leave: () => void; 
       return inFlight;
     },
   };
+}
+
+export interface IngestTickOptions {
+  gate: TickGate;
+  sampler: FrameSampler;
+  /** The share's sample video; a tick before its first frame does nothing. */
+  source: HTMLVideoElement | null | undefined;
+  /** Starts the ingest POST for one frame. The tick owns the gate for the
+   *  request's lifetime and releases it when the request settles. */
+  post: (image: string) => Promise<unknown>;
+  /** Called with the frame only when a POST was actually started. */
+  onFrame?: (image: string) => void;
+}
+
+/** Run ONE ingest tick against the single-flight gate.
+ *
+ *  Splitting this out of the interval callback is deliberate: an early return
+ *  between `tryEnter()` and the POST used to leave the gate entered forever, so
+ *  one frame-less tick silently stopped the whole HTTP ingest rail for the rest
+ *  of the share. The gate is now released on every path that does not hand it to
+ *  a request (ADAAAA-8848 F4).
+ *
+ *  Returns true when a POST was started. */
+export function runIngestTick({ gate, sampler, source, post, onFrame }: IngestTickOptions): boolean {
+  if (!source || !source.videoWidth || !gate.tryEnter()) return false;
+  let image: string | null = null;
+  try {
+    image = sampler.capture(source);
+  } catch {
+    image = null;
+  }
+  if (!image) {
+    // No pixels (or a dead 2d context): release the gate so the NEXT tick can
+    // still run. This was the stall path.
+    gate.leave();
+    return false;
+  }
+  onFrame?.(image);
+  try {
+    void post(image)
+      .catch(() => {})
+      .finally(() => gate.leave());
+  } catch {
+    gate.leave();
+    return false;
+  }
+  return true;
 }
