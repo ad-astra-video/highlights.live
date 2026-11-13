@@ -193,6 +193,40 @@ def test_group_endpoint_refuses_a_contradicted_surface(monkeypatch):
     assert "scoreboard score change confirmed" not in (vs[1].get("reason") or "")
 
 
+# --- the demotion keys on the accept under BOTH spellings (ADAAAA-8880) -------
+
+def test_group_postprocess_demotes_a_snake_case_accept_on_a_contradicted_surface():
+    """ADAAAA-8880: the group-path demotion is keyed on the ACCEPT, both spellings.
+
+    The current producer emits camelCase (`gemma.py` parses `isHighlight`), so this
+    was a latent gap rather than a live-reachable path — but a verdict dict carrying
+    snake_case `is_highlight` walked past every `decision.get("isHighlight")` guard
+    and shipped an accept on a contradicted surface (QA reproduced 3/3). This pins
+    both the demotion (is_highlight cleared) and the recall side (our own surface
+    keeps the accept).
+    """
+    decision = {
+        "is_highlight": True,
+        "score": 90,
+        "eventType": "GOAL",
+        "reason": "score moved",
+        "outcome": "scoring_play",
+    }
+    evidence = {"trackCount": 0, "maxVelocity": 0.0, "ocrHits": 0,
+                "scoreBoardChanged": True, "scoreboardSurfaceIdentity": "contradicted"}
+    out = _postprocess_gemma_verdict(dict(decision), evidence, "GOAL", [])
+    assert out["is_highlight"] is False, out
+    # Both spellings agree, so no consumer can read a stale accept.
+    assert out.get("isHighlight") is False, out
+    assert "scoreboard score change confirmed" not in (out.get("reason") or "")
+
+    # Recall side: the same snake_case accept on THIS match's surface is kept.
+    evidence["scoreboardSurfaceIdentity"] = "consistent"
+    kept = _postprocess_gemma_verdict(dict(decision), evidence, "GOAL", [])
+    assert kept["is_highlight"] is True, kept
+    assert kept.get("isHighlight") is not False, kept
+
+
 # --- the attestation criterion (gemma accept) -------------------------------
 
 def test_attested_goal_criterion_refuses_a_contradicted_surface():
