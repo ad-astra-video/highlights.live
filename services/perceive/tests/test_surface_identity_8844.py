@@ -40,11 +40,14 @@ from app.surface_identity import (
 
 RED = [205.0, 30.0, 30.0]
 BLUE = [40.0, 45.0, 205.0]
-# A foreign bug's plates: a yellow/cyan bug, i.e. NOT a red or a blue kit. Chosen
-# OUTSIDE the measured bar on purpose — the bar is set above the worst same-surface
-# drift (0.3005), so a near-red plate (orange, delta 0.25) is deliberately read as
-# the red family and only the printed names can demote it.
-FOREIGN_HOME = [230.0, 220.0, 20.0]
+# A foreign bug's plates: a green/cyan bug, i.e. NOT a red or a blue kit. Chosen
+# OUTSIDE the measured bar on purpose (green is 0.814 from `red`, cyan 0.456 from
+# `blue`). ADAAAA-8927 moved the bar to 0.44 on the natural-traffic measurement,
+# which pulls a YELLOW fill (0.426 from `red`) inside it — so this fixture uses
+# fills outside 0.44 of BOTH delivered references: that is what "the foreign bug
+# must not attest" requires, and the yellow/red pair is pinned as an in-set
+# consequence in `test_surface_identity_natural_bar_8927.py`.
+FOREIGN_HOME = [0.0, 180.0, 60.0]
 FOREIGN_AWAY = [0.0, 200.0, 200.0]
 
 TEAMS = [
@@ -118,19 +121,25 @@ def _run(client, det, monkeypatch, frames, frame_b64, teams=None, roi=None, hint
 # --- the measured bar (AC2.5) -------------------------------------------------
 
 def test_threshold_is_the_value_measured_on_the_truth_set():
-    """AC2.5: 0.35 is the measured bar, not a guess.
+    """AC2.5 (ADAAAA-8844) + AC1 (ADAAAA-8927): 0.44 is measured, not a guess.
 
-    Measured by `evals/scoreboard_identity_threshold_8844.py` on the labelled crop
-    truth set (ADAAAA-8577 crops / ADAAAA-8578 truth): 62 crops carry a surface
-    reading, same-surface chromaticity drift p50 0.0156 / p95 0.0349 / max 0.3005,
-    and the bar is 1.15 x that max. A change to the constant must move that
-    measurement, so this test pins the contract between them.
+    TWO measurements, both pinned here. ADAAAA-8844 measured same-surface
+    chromaticity drift on the labelled crop truth set (ADAAAA-8577 crops /
+    ADAAAA-8578 truth): p50 0.0156 / p95 0.0349 / max 0.3005, and `1.15 x max`
+    gives 0.35. ADAAAA-8922 then measured the distance the rule ACTUALLY compares
+    — a genuine (washed-out) plate against the saturated `blue` reference — on
+    natural traffic: 555 genuine plate readings over 5 broadcast clips, worst
+    0.381, so `1.15 x worst` = 0.438 -> 0.44 (ADAAAA-8927). A change to the
+    constant must move one of those measurements, so this test pins both bounds.
     """
-    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD == 0.35
+    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD == 0.44
     assert SURFACE_IDENTITY_MAX_PASSES == 2
-    # The bar clears the worst measured same-surface drift (recall) and stays far
-    # below the distance between two different kit families (precision).
-    assert 0.3005 < SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD < 0.6
+    # Recall: the bar clears the worst measured same-surface drift (8844) AND the
+    # worst measured genuine plate on natural traffic (8922: 0.381, x1.15 = 0.438).
+    assert 0.3005 < SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD
+    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD >= round(1.15 * 0.381, 2)
+    # Precision: it stays far below the distance between two different kit families.
+    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD < 0.6
 
 
 def test_chroma_distance_is_exposure_invariant():
@@ -272,11 +281,13 @@ def test_a_second_bug_cannot_take_a_proven_incumbent(client, monkeypatch):
 # bottom-right quadrant, so the two surfaces are separable in the frame itself.
 PRIMARY_PIN = [0.0, 0.0, 1.0, 0.25]
 PIP_BOX = (0.6, 0.7, 0.95, 0.9)
-FOREGIGN_PLATE = [230.0, 220.0, 20.0]
+# Green, not yellow: at the ADAAAA-8927 bar a yellow fill reads inside the `red`
+# reference's 0.44 (0.426), which would make the foreign surface `consistent`.
+FOREGIGN_PLATE = [0.0, 180.0, 60.0]
 
 
 def _pip_frame(w=160, h=80) -> str:
-    """Primary plate in the top band (red|blue) + a yellow PIP bug bottom-right."""
+    """Primary plate in the top band (red|blue) + a green PIP bug bottom-right."""
     arr = np.zeros((h, w, 3), dtype=np.uint8)
     arr[: h // 4, : w // 2] = np.array(RED, dtype=np.uint8)
     arr[: h // 4, w // 2 :] = np.array(BLUE, dtype=np.uint8)

@@ -15,8 +15,9 @@ bug. This suite pins the DATA change that closes that gap:
   * `Real Madrid` is NOT curated: its plate could not be measured (the home half
     stabilised once and read "red", not white), and this table is also the
     attribution KEY, so an unmeasured row would mis-link clusters.
-  * The rule and the shipped bar are untouched: `contradicted` still needs
-    `kits_differ AND not names_match`, at 0.35.
+  * The rule is untouched: `contradicted` still needs `kits_differ AND not
+    names_match`. The bar is 0.44 since ADAAAA-8927 measured the genuine-plate
+    population on natural traffic (1.15 x 0.381); this row is unchanged by it.
 """
 import base64
 import io
@@ -134,7 +135,9 @@ def test_the_measured_plate_sits_inside_the_shipped_bar():
     """The measurement, not a guess, has to clear the bar the rule uses."""
     blue = name_reference_rgb("blue")
     assert blue is not None
-    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD == 0.35, "the bar is not part of this change"
+    # ADAAAA-8927: the bar moved from 0.35 to the natural-traffic measurement
+    # (1.15 x worst genuine plate 0.381 = 0.44); this row is untouched by it.
+    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD == 0.44
     for plate in (MEASURED_AWAY_PLATE, MEASURED_STABLE_B1):
         assert chroma_distance(plate, blue) <= SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD
 
@@ -178,7 +181,10 @@ def test_a_foreign_plate_on_the_served_league_contradicts():
     assert identity["namesMatch"] is False
     note = demotion_note(identity)
     assert "contradicted score surface" in note
-    assert "0.35" in note, "the demotion names the bar it failed"
+    # ADAAAA-8927: the note prints the bar the reading failed, which is now 0.44.
+    assert str(SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD) in note, (
+        "the demotion names the bar it failed"
+    )
 
 
 def test_the_served_league_demotion_reaches_the_observation(client, monkeypatch):
