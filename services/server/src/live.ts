@@ -371,12 +371,22 @@ export class LiveIngest {
    * decide/perceive call and no extra clip debit either way. */
   async cut(
     ts: number,
-    opts: { maxFlushWaitMs?: number; requireFullWindow?: boolean; window?: ClipCutWindow; anchorTs?: number } = {}
+    opts: {
+      maxFlushWaitMs?: number;
+      requireFullWindow?: boolean;
+      window?: ClipCutWindow;
+      anchorTs?: number;
+      /** ADAAAA-8877: file-name suffix, so a RE-cut on a dive moment writes a
+       *  sibling file instead of overwriting the delivered one (`cut` removes
+       *  its own output on a truncated-window refusal). Absent = the historical
+       *  `${jobId}-${round(ts*10)}` name, byte-identical for every caller. */
+      outSuffix?: string;
+    } = {}
   ): Promise<ClipCut> {
     const { mkdir } = await import("node:fs/promises");
     const outDir = path.join(this.cfg.dataDir, "clips");
     await mkdir(outDir, { recursive: true });
-    const name = `${this.jobId}-${Math.round(ts * 10)}`;
+    const name = `${this.jobId}-${Math.round(ts * 10)}${opts.outSuffix ?? ""}`;
     const out = path.join(outDir, `${name}.mp4`);
     // ADAAAA-8714: the analyzer hands the PLACED window. A celebration-tail row
     // cuts `[cue - (window - tail), cue + tail]` — the whole judged window plus

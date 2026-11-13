@@ -18,6 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { ConfirmRecordSchema, HighlightRecordSchema } from "@highlights/events";
 import { Store } from "../src/store";
+import { attestConfirmDiveHighlight } from "../src/api";
 import {
   DIVE_REANCHOR_MIN_DRIFT_S,
   buildPersistedConfirmContext,
@@ -219,6 +220,173 @@ describe("the write path persists the dive anchor (not just the builder)", () =>
 });
 
 // --- (3) the re-anchor gate -------------------------------------------------
+
+/** A stored live row of the measured leg shape (job `1bf38e92`, ADAAAA-8877):
+ *  an accepted celebration carrying a provisional goal marker whose own window
+ *  MEASURED no score transition (`score_lane_read_no_transition`). */
+function legRow(over: Record<string, unknown> = {}) {
+  return {
+    id: "hl-8877-refuted",
+    ownerId: "owner",
+    jobId: "job-8877",
+    start: 150,
+    end: 166,
+    localizedTs: 158.66666666666666,
+    clipUri: "/clips/job-8877-1587.mp4",
+    eventType: "BIG_PLAY",
+    outcome: "big_play",
+    status: "accepted",
+    score: 71,
+    reason: "a striker finishes low past the keeper",
+    createdAt: "2026-11-13T04:08:35.666Z",
+    provisionalGoal: {
+      status: "provisional",
+      cues: ["asr_goal_call"],
+      declaredTs: 158.667,
+      note: "a goal call in the window transcript, waiting on a score read",
+    },
+    attestationUsed: {
+      scoreBoardChanged: false,
+      goalCrossed: false,
+      ballOutcome: "saved",
+      corroborated: false,
+      goalConfirmed: null,
+      scoreReads: 6,
+      preSamples: 3,
+      postSamples: 1,
+      need: 2,
+    },
+    ...over,
+  };
+}
+
+/** The dive result that refuted it: `confirmed_goal`, a cited in-window frame,
+ *  and a moment exactly 1.000 s before the accept anchor. */
+function legDive(over: Record<string, unknown> = {}) {
+  const { verdict: verdictOver, ...rest } = over as any;
+  return {
+    ok: true,
+    verdict: {
+      goalConfirmed: "confirmed_goal",
+      corroborated: true,
+      corroborationSource: "frame_attestation",
+      momentTs: 157.66666666666666,
+      momentConfidence: 1,
+      ...(verdictOver ?? {}),
+    },
+    context: { frames: [], keyframes: [], frameWindow: [{ seq: 3, ts: 157.5 }], contextDegraded: [] },
+    latencyMs: 2400,
+    framesSent: 6,
+    ...rest,
+  };
+}
+
+// --- (4) the moment hook is NOT promotion-gated (ADAAAA-8877) --------------
+
+describe("attestConfirmDiveHighlight hands the moment over on every confirmed_goal verdict", () => {
+  const spy = () => {
+    const calls: { highlightId: string; momentTs: number; confidence?: number; goalConfirmed?: string }[] = [];
+    return {
+      calls,
+      hook: (highlightId: string, momentTs: number, confidence?: number, goalConfirmed?: string) => {
+        calls.push({ highlightId, momentTs, confidence, goalConfirmed });
+      },
+    };
+  };
+
+  it("hands the moment over when the score lane REFUTED the dive", async () => {
+    const store = new Store();
+    const rec = HighlightRecordSchema.parse(legRow());
+    await store.addHighlight(rec);
+    const { calls, hook } = spy();
+    const res = await attestConfirmDiveHighlight(
+      { store } as any,
+      rec.id,
+      legDive() as any,
+      { diveAt: "2026-11-13T04:08:57.706Z", onDiveMoment: hook }
+    );
+    // The lane decision and the anchor decision are independent: refuted row…
+    expect(res?.kind).toBe("refuted");
+    // …but the moment it named is still handed to the cut.
+    expect(calls).toEqual([
+      { highlightId: rec.id, momentTs: 157.66666666666666, confidence: 1, goalConfirmed: "confirmed_goal" },
+    ]);
+    // and the drift the ONE gate sees clears the 1 s bar the AC grades.
+    const gate = diveReanchorDecision({
+      goalConfirmed: "confirmed_goal",
+      momentTs: 157.66666666666666,
+      acceptTs: rec.localizedTs,
+    });
+    expect(gate.apply).toBe(true);
+    expect(gate.driftSec).toBeCloseTo(-1, 6);
+    // the stored row carries the moment, so a cut that runs AFTER the verdict
+    // (the ingest rails) still reads it off `confirmAttestation.momentTs`.
+    expect((store.getHighlight(rec.id)?.confirmAttestation as any)?.momentTs).toBeCloseTo(157.66666666666666, 6);
+  });
+
+  it("still hands it over on a promoted row (the gate did not move)", async () => {
+    const store = new Store();
+    const rec = HighlightRecordSchema.parse({
+      ...legRow({ id: "hl-8877-promoted" }),
+      attestationUsed: { ...(legRow() as any).attestationUsed, scoreBoardChanged: true },
+    });
+    await store.addHighlight(rec);
+    const { calls, hook } = spy();
+    const res = await attestConfirmDiveHighlight(
+      { store } as any,
+      rec.id,
+      legDive({ verdict: { corroborationSource: "scoreboard" } }) as any,
+      { diveAt: "2026-11-13T04:08:57.706Z", onDiveMoment: hook }
+    );
+    expect(res?.kind).toBe("promoted");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("hands it over on a row already in the scoring lane (the unchanged arm)", async () => {
+    const store = new Store();
+    const rec = HighlightRecordSchema.parse(legRow({ id: "hl-8877-scoring", outcome: "scoring_play", eventType: "GOAL" }));
+    await store.addHighlight(rec);
+    const { calls, hook } = spy();
+    const res = await attestConfirmDiveHighlight(
+      { store } as any,
+      rec.id,
+      legDive() as any,
+      { diveAt: "2026-11-13T04:08:57.706Z", onDiveMoment: hook }
+    );
+    expect(res?.kind).toBe("unchanged");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("never hands over a moment from a verdict that did not confirm a goal", async () => {
+    for (const goalConfirmed of ["near_miss", "not_goal"] as const) {
+      const store = new Store();
+      const rec = HighlightRecordSchema.parse(legRow({ id: `hl-8877-${goalConfirmed}` }));
+      await store.addHighlight(rec);
+      const { calls, hook } = spy();
+      await attestConfirmDiveHighlight(
+        { store } as any,
+        rec.id,
+        legDive({ verdict: { goalConfirmed, corroborated: false } }) as any,
+        { diveAt: "2026-11-13T04:08:57.706Z", onDiveMoment: hook }
+      );
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it("never hands over an absent moment, even on a confirmed goal", async () => {
+    const store = new Store();
+    const rec = HighlightRecordSchema.parse(legRow({ id: "hl-8877-nomoment" }));
+    await store.addHighlight(rec);
+    const { calls, hook } = spy();
+    await attestConfirmDiveHighlight(
+      { store } as any,
+      rec.id,
+      legDive({ verdict: { momentTs: null } }) as any,
+      { diveAt: "2026-11-13T04:08:57.706Z", onDiveMoment: hook }
+    );
+    expect(calls).toEqual([]);
+  });
+});
 
 describe("diveReanchorDecision — when may a dive move the clip anchor", () => {
   it("moves it on a confirmed_goal whose moment drifted >= 1 s", () => {
