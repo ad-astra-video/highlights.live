@@ -2575,6 +2575,13 @@ export interface SummaryRetryDirective {
   sentences?: number;
   /** The violation tokens that refused it, e.g. `["too-few-words"]`. */
   violations?: string[];
+  /** ADAAAA-8968 (AC5): the MEASURED shortfall — how many words short of the
+   *  band floor the refused draft landed (`floorWords - words`, never negative).
+   *  This is the number the second sample must close, stated as a quantity
+   *  instead of only implied by "reach at least N words": the rev-8 lane told the
+   *  retry the violation token and a floor, the replacement re-landed the same
+   *  deleted clauses, and 9 of 9 retried rows dropped with the retry spent. */
+  shortfallWords?: number;
   /** ADAAAA-8934 (AC14): the sentences the clause repair DELETED from the refused
    *  draft because they carried no attested fact (possession / pressure /
    *  atmosphere / a venue the evidence lacks). A retry that only hears "too few
@@ -2694,6 +2701,17 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // against a 40-word floor (one-word margin), and the retried row re-landed at
   // 34 words because the retry re-read the same "at least 40 words" line.
   const retryMin = summaryRetryMinWords(band);
+  // ADAAAA-8968 (AC5): the retry is told the MEASURED shortfall as a number of
+  // words, not only the floor it must clear. A row refused at 34 words against a
+  // 40-word floor is "6 words short"; saying so is what makes the second sample
+  // different from re-reading the same band line. A refusal that already cleared
+  // the floor (a compliance refusal) reports a zero shortfall, so the directive
+  // cannot send the retry chasing words it does not need.
+  const retryShortfall = input.retry
+    ? typeof input.retry.shortfallWords === "number"
+      ? Math.max(0, input.retry.shortfallWords)
+      : Math.max(0, band.floorWords - input.retry.words)
+    : 0;
   // ADAAAA-8934: the retry now carries the DELETE list, not only the shortfall.
   // The rev-8 lane handed the refusal tokens to a second sample of the same prompt,
   // so the replacement draft re-landed the same possession/pressure clauses, the
@@ -2705,7 +2723,11 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
         `RETRY: the previous draft measured ${input.retry.words} words${
           typeof input.retry.sentences === "number" ? ` across ${input.retry.sentences} sentences` : ""
         } and was refused${input.retry.violations && input.retry.violations.length > 0 ? ` for: ${input.retry.violations.join(", ")}` : ""}.`,
-        `- Close the measured shortfall: this copy must reach at least ${retryMin} words inside ${band.minSentences}-${band.maxSentences} sentences. ${retryMin} is ${retryMin - band.floorWords} words above the ${band.floorWords}-word floor on purpose: a draft that only just clears the floor is the defect this retry exists to repair.`,
+        `- Close the measured shortfall: ${
+          retryShortfall > 0
+            ? `that draft measured ${retryShortfall} words short of the ${band.floorWords}-word floor once the filler sentences were removed`
+            : `that draft met the ${band.floorWords}-word floor`
+        }; this copy must reach at least ${retryMin} words inside ${band.minSentences}-${band.maxSentences} sentences. ${retryMin} is ${retryMin - band.floorWords} words above the ${band.floorWords}-word floor on purpose: a draft that only just clears the floor is the defect this retry exists to repair.`,
         `- Expand with facts, not filler: add ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}. The half or spell and the score line carry the most words without inventing anything.`,
         ...(retryDropped.length > 0
           ? [

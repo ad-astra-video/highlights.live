@@ -457,6 +457,61 @@
     "inferredAt": "2026-11-13T06:44:33.515125Z",
     "resolverVersion": 1
    }
+  },
+  {
+   "id": "23f9b28e-7ddc-4694-909f-4fa51d937ee2",
+   "rail": "live",
+   "sourceJob": "e4c2fe29-68fe-472c-91da-b96d1dd8ca93",
+   "body": "Barcelona maintains possession and works the ball forward during this sequence. At 1:42 into the clip, the team continues their sustained play.",
+   "reason": null,
+   "caption": "Scoreboard changes to RMA 2-1.",
+   "postTitle": null,
+   "windowTs": 102.66666666666666,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1092,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:12",
+    "ts": 101
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "matchContext": {
+    "sport": "soccer",
+    "teams": [
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "kitColors": [],
+      "confidence": 0.85,
+      "evidence": [
+       {
+        "source": "scorebug_ocr",
+        "snippet": "25:20 RMA2-2 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "26:00 RMA2-2 BAR"
+       }
+      ]
+     }
+    ],
+    "inferredAt": "2026-11-13T12:24:32.653531Z",
+    "resolverVersion": 1,
+    "ambiguous": false
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 24,
+   "expectGate": "refused"
   }
- ]
+ ],
+ "note": ""
 }
