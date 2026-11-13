@@ -68,6 +68,7 @@ from .scoreboard import (
 )
 from .match_context import (
     SPORT_UNKNOWN,
+    _dominant_swatch,
     printed_name_pair,
     sample_scorebug_swatches,
     sample_track_colors,
@@ -76,6 +77,14 @@ from .match_context import (
     scorebug_lines_have_team_text,
     scorebug_lines_sides,
     sport_key,
+)
+from .surface_identity import (
+    SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD,
+    SURFACE_IDENTITY_MAX_PASSES,
+    chroma_distance,
+    derive_surface_identity,
+    demotion_note as surface_demotion_note,
+    surface_reading,
 )
 from .scoreboard_vision import (
     ScoreboardVerdict,
@@ -388,6 +397,175 @@ def _apply_scoreboard_pin(state, raw, seq=None) -> None:
         seq,
         _roi_box_label(candidate),
     )
+
+
+_MAX_SURFACE_TEAMS = 8
+
+
+def _apply_match_context_teams(state, raw) -> None:
+    """Adopt the job's team reference for the surface-identity pass (ADAAAA-8844).
+
+    ``[{side, name, kitColors[{primary, secondary}]}]`` from the job's persisted
+    ``matchContext``, delivered on every ``/analyze`` like the pin. Only the two
+    things identity needs are kept (side -> name + kit colour NAMES), so the
+    session never holds the resolver's audit trail. A malformed item is dropped
+    and never fatal: with no usable teams the verdict stays ``absent`` and the
+    session behaves exactly as it does today.
+    """
+    if raw is None:
+        return
+    teams: list[dict] = []
+    try:
+        items = list(raw)[:_MAX_SURFACE_TEAMS]
+    except TypeError:
+        log.warning("bad matchContextTeams ignored session=%s value=%r", getattr(state, "session_id", "?"), raw)
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        side = str(item.get("side") or "")
+        if side not in ("home", "away"):
+            continue
+        kits: list[dict] = []
+        for k in (item.get("kitColors") or [])[:2]:
+            if isinstance(k, str):
+                kits.append({"primary": k})
+            elif isinstance(k, dict) and k.get("primary"):
+                entry = {"primary": str(k["primary"])}
+                if k.get("secondary"):
+                    entry["secondary"] = str(k["secondary"])
+                kits.append(entry)
+        name = str(item.get("name") or "")
+        if not name and not kits:
+            continue
+        teams.append({"side": side, "name": name, "kitColors": kits})
+    state.match_context_teams = teams
+
+
+def _surface_crop_plate(rgb, roi):
+    """Dominant plate colour of the scoreboard crop (the surface's appearance).
+
+    Same production sampler the resolver uses for kit swatches — one small pixel
+    scan over a crop the OCR pass already paid for, so it adds no read.
+    """
+    if rgb is None or roi is None:
+        return None
+    try:
+        box = roi.pixel_box(int(rgb.shape[1]), int(rgb.shape[0]))
+    except Exception:  # noqa: BLE001 - evidence only, never fatal
+        return None
+    if box is None:
+        return None
+    try:
+        return _dominant_swatch(rgb, box[0], box[2], box[1], box[3])
+    except Exception as e:  # noqa: BLE001 - evidence only, never fatal
+        log.debug("surface plate sample skipped session=%s: %s", getattr(state, "session_id", "?"), e)
+        return None
+
+
+def _surface_identity_pass(state, rgb, roi, lines, seq=None):
+    """The bounded one-off identity pass (ADAAAA-8844 AC2.4).
+
+    Runs at most ``SURFACE_IDENTITY_MAX_PASSES`` times per session: once for the
+    session's surface, plus at most once more when a DIFFERENT box takes over.
+    Every other frame returns a cached verdict, so this is not per-frame work and
+    it pays no OCR — the kit swatches and the printed names ride the crop and the
+    lines the frame already read.
+
+    The cache is keyed by the surface's own signature, because the verdict is a
+    property of the SURFACE: a proven bug that comes back after a foreign one was
+    measured keeps its own measured verdict with no new work. A surface that was
+    never measured (the pass budget is spent) returns ``None`` — absent, today's
+    behaviour — and never inherits a verdict measured on a different box, which
+    would demote a genuine surface (recall) or attest a foreign one (precision).
+
+    Returns the verdict dict (or the cached one), or ``None`` when no team
+    reference was delivered or the surface could not be measured.
+    """
+    teams = getattr(state, "match_context_teams", None)
+    if not teams or rgb is None or roi is None:
+        return None
+    sig = _roi_signature(roi)
+    cache = getattr(state, "surface_identity_by_sig", None) or {}
+    if sig is not None and sig in cache:
+        return cache[sig]
+    if int(getattr(state, "surface_identity_passes", 0) or 0) >= SURFACE_IDENTITY_MAX_PASSES:
+        return None
+    reading = surface_reading(rgb, roi, lines)
+    identity = derive_surface_identity(reading, teams)
+    state.surface_identity = identity
+    state.surface_identity_sig = sig
+    if sig is not None:
+        cache[sig] = identity
+        state.surface_identity_by_sig = cache
+    state.surface_identity_passes = int(getattr(state, "surface_identity_passes", 0) or 0) + 1
+    plate = _surface_crop_plate(rgb, roi)
+    state.surface_identity_plate = plate
+    # Per-surface plate, so the incumbent check compares against the PROVEN box's
+    # own appearance even after another surface has been measured (a foreign
+    # measurement must not become the reference the incumbent is defended with).
+    if sig is not None:
+        plates = getattr(state, "surface_identity_plates", None) or {}
+        plates[sig] = plate
+        state.surface_identity_plates = plates
+    log.info(
+        "score surface identity session=%s seq=%s verdict=%s kit_dist=%s threshold=%s "
+        "kits=%s names=%s matched=%s passes=%d (ADAAAA-8844)",
+        getattr(state, "session_id", "?"),
+        seq,
+        identity.get("verdict"),
+        identity.get("kitDistance"),
+        identity.get("threshold"),
+        list((identity.get("kits") or {}).keys()),
+        identity.get("names"),
+        identity.get("namesMatched"),
+        state.surface_identity_passes,
+    )
+    return identity
+
+
+def _incumbent_surface_kept(state, rgb, roi, seq=None) -> bool:
+    """A different box whose surface contradicts the proven incumbent cannot take over.
+
+    ADAAAA-8844 scope item 4: a second score bug appearing mid-stream must not
+    replace a proven incumbent region, and must not attest. The incumbent's own
+    plate colour is the reference; a candidate box whose plate sits outside the
+    measured chromaticity bar is a DIFFERENT surface, so the session keeps the
+    incumbent and this frame's read is discarded (its score/OCR came from the
+    foreign box).
+
+    Costs no OCR call: both plates are pixel scans of crops already taken. A
+    genuinely moved scoreboard still recovers through the existing digit-less
+    abandon path (``_abandon_digitless_scoreboard_roi``), which is untouched.
+    """
+    plate = getattr(state, "surface_identity_plate", None)
+    proven = getattr(state, "scoreboard_roi_proven", None)
+    if plate is None or proven is None or rgb is None or roi is None:
+        return False
+    # Prefer the PROVEN box's own plate: after a foreign surface was measured,
+    # `surface_identity_plate` is that foreign one, and defending the incumbent
+    # against itself would discard the primary bug's real reads.
+    plates = getattr(state, "surface_identity_plates", None) or {}
+    plate = plates.get(tuple(proven)) or plate
+    current = _surface_crop_plate(rgb, roi)
+    if current is None:
+        return False
+    distance = chroma_distance(current["rgb"], plate["rgb"])
+    if distance <= SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD:
+        return False
+    _set_scoreboard_roi(state, ScoreboardRoi(*proven), "incumbent_surface_kept", seq)
+    log.info(
+        "score surface incumbent kept session=%s seq=%s from_box=%s from_plate=%s to_box=%s plate_dist=%.3f > %.2f "
+        "(a second score bug cannot replace a proven region; ADAAAA-8844)",
+        getattr(state, "session_id", "?"),
+        seq,
+        _roi_box_label(roi),
+        plate.get("color"),
+        _roi_box_label(state.scoreboard_roi),
+        distance,
+        SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD,
+    )
+    return True
 
 
 def _lines_have_digit(lines) -> bool:
@@ -842,6 +1020,13 @@ class AnalyzeRequest(BaseModel):
     # with source `explicit`, AHEAD of discovery, and never falls back to a
     # read outside it. Absent -> today's resolution order, byte-identical.
     scoreboardRoi: Optional[list] = None
+    # ADAAAA-8844 (Inc 2): the job's match context teams — `[{side, name,
+    # kitColors[{primary, secondary}]}]` — delivered on every /analyze beside the
+    # pin (same additive carriage). It is the reference a score surface is
+    # checked against, so a foreign PIP bug's plate/names can be shown NOT to be
+    # this match's. Absent (no matchContext resolved, or a pre-Inc-2 caller) ->
+    # identity is `absent`, which keeps today's behaviour exactly.
+    matchContextTeams: Optional[list] = None
 
 
 class AudioChunkRequest(BaseModel):
@@ -1519,6 +1704,35 @@ def _scoreboard_ocr_fields(
     # stayed 0. Costs no read — it only interprets lines this frame already spent.
     if not _probe_frame:
         _abandon_digitless_scoreboard_roi(state, seq, roi, ocr_lines, _roi_source)
+    # ADAAAA-8844 (Inc 2): is the surface this crop read actually THIS match's?
+    # Two cheap questions, both answered from data the pass already paid for:
+    #   (a) a box whose plate contradicts the proven incumbent's cannot take
+    #       over, and the frame's read is discarded (scope item 4);
+    #   (b) the surface identity verdict — `contradicted` makes a score change a
+    #       CLAIM, so `scoreBoardChanged` is withheld below and the window rests
+    #       on decide's own verdict (scope item 2, AC2.3).
+    _surface_demoted = False
+    _surface_hold = False
+    _identity = None
+    if not _probe_frame:
+        # Measure FIRST, on this frame's own crop + lines: the verdict is evidence
+        # about the surface this read came from, so it must see the names the bug
+        # printed (the incumbent check below may discard them).
+        _identity = _surface_identity_pass(state, rgb, roi, ocr_lines, seq)
+        _sig_now = getattr(state, "surface_identity_sig", None)
+        if _identity is not None and _sig_now != getattr(state, "surface_identity_emitted_sig", None):
+            # Published once per measured surface (<= SURFACE_IDENTITY_MAX_PASSES
+            # frames per session), so the observation stream stays per-frame free.
+            out["scoreboardSurfaceIdentity"] = _identity
+            state.surface_identity_emitted_sig = _sig_now
+        if _incumbent_surface_kept(state, rgb, roi, seq):
+            score = None
+            ocr_lines = []
+            out["ocr"] = []
+            _surface_hold = True
+        if _identity is not None and _identity.get("verdict") == "contradicted":
+            _surface_demoted = True
+            _surface_hold = True
     # ADAAAA-7190: the auto-discovered region-of-interest crop can miss a
     # numeric scorebug that sits just outside the tight region (observed live
     # on an El-Clasico-style score overlay where the ROI crop OCR read only
@@ -1553,11 +1767,11 @@ def _scoreboard_ocr_fields(
     # No team text at all -> the whole-frame read may see the graphic the ROI
     # missed (ADAAAA-7190 fallback extended in ADAAAA-7909). ADAAAA-8835: never
     # on a pinned session — a whole-frame read is a read outside the pin.
-    _no_team_text = len(_sides) == 0 and _ocr_budget and not _pinned
+    _no_team_text = len(_sides) == 0 and _ocr_budget and not _pinned and not _surface_hold
     # One side only -> the active region is clipping part of the graphic;
     # repair the ROI before spending the whole-frame read (never on a pin: the
     # operator's box is the scope, not a clipping guess).
-    _need_roi_repair = 0 < len(_sides) < 2 and _ocr_budget and not _pinned
+    _need_roi_repair = 0 < len(_sides) < 2 and _ocr_budget and not _pinned and not _surface_hold
     _need_team_text = _no_team_text
     # ADAAAA-7909 ROI repair: the documented fallback prior is a TOP band
     # (`ScoreboardRoi.from_env()` -> 0,0,1,0.25), but a bottom-centre scorebug
@@ -1622,7 +1836,7 @@ def _scoreboard_ocr_fields(
     _score_budget = int(getattr(state, "score_fallback_reads", 0) or 0) < _score_fallback_allowance(state)
     # ADAAAA-8835: a pinned session never reads the whole frame, even when its
     # crop parses no score — the crop-only scope is the contract.
-    _need_score_fallback = score is None and _score_budget and not _pinned
+    _need_score_fallback = score is None and _score_budget and not _pinned and not _surface_hold
     if score is None and not _score_budget and not _pinned:
         _note_score_fallback_exhausted(state, seq)
     if visible and not _pinned and (_need_score_fallback or _need_team_text):
@@ -1715,7 +1929,25 @@ def _scoreboard_ocr_fields(
     # before); a type with no oracle yields an explicit no-signal instead of
     # inheriting soccer's confirmation.
     _verdict = profile.corroborate(timestamp, state.scoreboard_tracker)
-    if _verdict.corroborated:
+    if _verdict.corroborated and _surface_demoted:
+        # ADAAAA-8844 (Inc 2): the score moved, but the surface that moved is not
+        # provably this match's — a foreign PIP bug (different kits, different
+        # printed names). A change here is a CLAIM, not an attestation: withhold
+        # `scoreBoardChanged` so no force-goal path can fire, and name the
+        # demotion so the board can see why the window was not accepted.
+        note = surface_demotion_note(_identity) or (
+            "score change on an unattributed score surface: ignored"
+        )
+        out["scoreboardSurfaceDemoted"] = note
+        out["scoreboardSurfaceIdentity"] = _identity
+        state.surface_identity_emitted_sig = getattr(state, "surface_identity_sig", None)
+        log.info(
+            "score surface demotion session=%s seq=%s reason=%r (ADAAAA-8844)",
+            getattr(state, "session_id", "?"),
+            seq,
+            note,
+        )
+    elif _verdict.corroborated:
         out["scoreBoardChanged"] = True
         # ADAAAA-7844: carry the MEASURED delta (both parsed sides, sample
         # counts, transition instant) alongside the boolean so the server can
@@ -2707,6 +2939,10 @@ def create_app() -> FastAPI:
         # BEFORE the frame runs, ahead of discovery, so a fresh or re-reserved
         # session crops the operator's box on its first frame.
         _apply_scoreboard_pin(state, req.scoreboardRoi, req.seq)
+        # ADAAAA-8844 (Inc 2): adopt this job's team reference before the frame
+        # runs, so the surface-identity pass has something to compare against on
+        # the very first score-bearing crop. Absent -> identity stays `absent`.
+        _apply_match_context_teams(state, req.matchContextTeams)
         # Live path: the worker reserved a session with a control URL, so this
         # first proxied call opens this session's trickle channels and the rail
         # starts consuming video-in frames (plan §3.2/§3.5). The orchestrator
