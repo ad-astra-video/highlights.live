@@ -41,8 +41,22 @@ const ROW_48FE: SummaryEvidence = {
 const SERVED_36 =
   "Barcelona finds the back of the net to level the score at 2-2. The crowd erupts in celebration as the scoreboard updates during this scoring play. This goal occurs at the 1:27 mark of the clip.";
 
-/** The repaired row's body (44 words, 4 sentences) — inside the VOD target band. */
+/** A compliant row body (44 words, 4 sentences) — inside the VOD target band.
+ *  ADAAAA-8910: the fixture that used to sit here ("Real Madrid takes the lead in
+ *  this intense match … during the competition") is the exact copy the live-copy
+ *  seam now refuses: it asserted a direction no row attests and a competition the
+ *  match context does not carry. It is kept below as `SERVED_44_DEFECT` so the
+ *  refusal is pinned instead of being lost with the fixture swap. */
 const SERVED_44 =
+  "Barcelona works the ball through the middle after the scoreboard moves to 2-1 at 0:27 into the clip. " +
+  "The white kit presses high and forces a turnover near the touchline. " +
+  "A quick exchange opens space for a shot that is gathered. " +
+  "The move keeps the pressure on as both sides reset.";
+
+/** The body the served build stored on row `48fe4280` — the ADAAAA-8910 defects
+ *  3 and 4 in one paragraph (`takes the lead`, `this intense match`,
+ *  `the competition`). */
+const SERVED_44_DEFECT =
   "Real Madrid takes the lead in this intense match against Barcelona. The scoreboard updates from 1-1 to 2-1 at the 0:27 mark of the clip. A player in a white kit celebrates the successful scoring play. This goal shifts the momentum during the competition.";
 
 describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
@@ -72,8 +86,17 @@ describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
     const decision = gateSummaryDetail(SERVED_44, ROW_48FE);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(SERVED_44);
-    expect(decision.words).toBe(44);
+    expect(decision.words).toBe(51);
     expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
+  });
+
+  it("refuses the body the served build stored — it named the side that scored and a competition the row cannot attest (ADAAAA-8910)", () => {
+    const decision = gateSummaryDetail(SERVED_44_DEFECT, ROW_48FE);
+    expect(decision.summary).toBeFalsy();
+    // The depth bars all pass: this is a truth refusal, not a length one.
+    expect(decision.violations).not.toContain("too-few-words");
+    expect(decision.violations).toContain("unattested-venue");
+    expect(decision.violations).toContain("unattested-side");
   });
 
   it("keeps the prompt's fact menu and clip-offset clock rule unchanged", () => {

@@ -80,8 +80,10 @@ describe("storedSurfaceFor — postTitleGate names accept/refuse (PO constraint 
       decision({ postTitle: "Ordoñez scores" }),
       ctx("scoring_play", { corroborated: false })
     );
-    expect(surface.postTitle).toBeUndefined();
-    expect(surface.postTitleGate).toBe("refused:goal-claim");
+    // ADAAAA-8910: the claim is refused and the row's own label (`GOAL`) is what
+    // is stored; the token keeps the bar that refused the candidate.
+    expect(surface.postTitle).toBe("GOAL");
+    expect(surface.postTitleGate).toBe("label:goal-claim");
   });
 
   it("refuses a goal claim on a non-scoring verdict (the Phase B safety class)", () => {
@@ -89,8 +91,9 @@ describe("storedSurfaceFor — postTitleGate names accept/refuse (PO constraint 
       decision({ eventType: "AUDIO_BURST", outcome: "not_highlight", postTitle: "Ordoñez scores" }),
       ctx("not_highlight")
     );
-    expect(surface.postTitle).toBeUndefined();
-    expect(surface.postTitleGate).toBe("refused:goal-claim");
+    // The label follows the served verdict (`HIGHLIGHT`), never the refused claim.
+    expect(surface.postTitle).toBe("HIGHLIGHT");
+    expect(surface.postTitleGate).toBe("label:goal-claim");
   });
 
   it("repairs a place chain by deletion and records `trimmed`", () => {

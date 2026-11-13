@@ -54,8 +54,12 @@ GOLDEN = {
     # rule paragraph was rewritten for the Phase C residuals. FULL stays identical.
     # ADAAAA-8603 re-pins the two COMPACT rows again (+472 chars): the audit-field
     # reply trim. FULL rows above stay byte-identical.
-    ("compact", ""): (17245, "4de6eddf05e1cb1e0a3fd396713b6bfa4d9f687c077bb953e53f07648a04beaa"),
-    ("compact", STORY): (17497, "5e6a385950ca4ce562356a52dbd61bc9a0c167bada2adc71925aeac1a704a424"),
+    # ADAAAA-8910 re-pins the two COMPACT rows again (-760 chars): the POST TITLE
+    # RULES paragraph is now the NON-ASSERTING EVENT LABEL spec (the WHO + VERB
+    # shape contradicted the ADAAAA-8831 actor bar and stored 0/5 live titles).
+    # FULL rows above stay byte-identical — the VOD contract asks for no title.
+    ("compact", ""): (16485, "21a7fbef68bbd5913b726067fd99305154241d29d01aeb27a8560ac4b6d4970c"),
+    ("compact", STORY): (16737, "bb6f6c16c5612e09f1bfeecaf3bd45ab59c4bc9c19120625189d1a02cb5840db"),
 }
 
 

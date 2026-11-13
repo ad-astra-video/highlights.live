@@ -80,6 +80,12 @@ const ROW_8D52_EV: SummaryEvidence = {
 const DRAFT_8D52 =
   "Real Madrid takes a 2-1 lead after the scoreboard changes at the 1:42 mark. This scoring play shifts the momentum in favor of the Spanish side during the match.";
 
+/** The same row, after the ADAAAA-8910 direction claim is repaired: the digits
+ *  and the names are attested, WHICH SIDE levelled is not, so the sentence states
+ *  the scoreboard's line instead of crediting it. Same facts, same evidence. */
+const DRAFT_A482_FIXED =
+  "Real Madrid moves the ball forward as the scoreboard reads 2-2. The crowd erupted in celebration during this scoring play at the 2:43 mark.";
+
 describe("ADAAAA-8831 AC12 — an object-position role phrase is rewritten, not deleted", () => {
   it("keeps the sentence that holds the attested score line", () => {
     const n = neutraliseRoleNouns(DRAFT_A482, ROW_A482_EV);
@@ -93,15 +99,26 @@ describe("ADAAAA-8831 AC12 — an object-position role phrase is rewritten, not 
   });
 
   it("serves the row instead of dropping it, on the live band it advertises", () => {
-    const decision = gateSummaryDetail(DRAFT_A482, ROW_A482_EV);
+    const decision = gateSummaryDetail(DRAFT_A482_FIXED, ROW_A482_EV);
     expect(SUMMARY_LIVE_BAND.floorWords).toBe(18);
     expect(decision.violations).toEqual([]);
-    expect(decision.gate).toBe("neutralised");
+    expect(decision.gate).toBe("accepted");
     expect(decision.summary).toBeTruthy();
-    expect(decision.words).toBe(29);
+    expect(decision.words).toBe(24);
     expect(decision.sentences).toBe(2);
     expect(decision.droppedSentences).toBe(0);
     expect(summaryViolations(decision.summary!, ROW_A482_EV)).toEqual([]);
+  });
+
+  it("refuses the stored draft on the same evidence: it credited the levelling side (ADAAAA-8910 defect 4)", () => {
+    // `Real Madrid equalized the score to 2-2` names an attested team AND the
+    // direction, and the row's scorebug only attests `RMA 1-1 BAR` -> `RMA 2-1 BAR`
+    // digits — on the sibling row of the same transition the copy credited the
+    // other side. The role-noun neutraliser cannot repair a direction claim, so
+    // the row is refused and retried with the direction line.
+    const decision = gateSummaryDetail(DRAFT_A482, ROW_A482_EV);
+    expect(decision.summary).toBeFalsy();
+    expect(decision.violations).toContain("unattested-side");
   });
 });
 

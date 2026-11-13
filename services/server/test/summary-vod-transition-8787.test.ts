@@ -22,6 +22,12 @@ import { attestedSummaryFactKinds, gateSummaryDetail } from "@highlights/events"
 const VOD_ROW_48FE4280_REPLY =
   "Real Madrid takes the lead in this intense match against Barcelona. The scoreboard updates from 1-1 to 2-1 at the 0:27 mark of the clip. A player in a white kit celebrates the successful scoring play. This goal shifts the momentum during the competition.";
 
+// ADAAAA-8910: the same row's reply with the two clauses the row cannot attest
+// removed — the scoreboard LINE instead of the scoring side, and no competition.
+// Same facts (score + clock + the attested team's play), 51 words / 3 sentences.
+const VOD_ROW_48FE4280_REPLY_REPAIRED =
+  "The scoreboard updates from 1-1 to 2-1 at the 0:27 mark of the clip as Real Madrid works the ball through the middle. A player in a white kit celebrates the successful scoring play near the touchline. The restart comes quickly as both sides reset their shape for the next phase.";
+
 // The job's folded `matchContext` (one resolved team, away = Barcelona).
 const JOB_MATCH_CONTEXT = {
   sport: "soccer",
@@ -69,18 +75,24 @@ describe("ADAAAA-8787 — a VOD row's disclosed transition reaches the summary e
     expect(ev.windowTs).toBe(27);
   });
 
-  it("serves the stored reply row 48fe4280 dropped (accepted, >= 2 fact kinds)", () => {
-    const decision = gateSummaryDetail(VOD_ROW_48FE4280_REPLY, summaryEvidenceForRow(vodRow(), "vod"));
+  it("serves the disclosed transition in the fact menu (ADAAAA-8910 repairs the reply's two false clauses)", () => {
+    const ev = summaryEvidenceForRow(vodRow(), "vod");
+    // The measured fact shape from the ticket's own replay: score + clock. The
+    // transition the row persists is what makes the score line a fact.
+    expect(attestedSummaryFactKinds(VOD_ROW_48FE4280_REPLY, ev)).toEqual(["score", "clock"]);
+    // ADAAAA-8910: the STORED reply also asserted the scoring side ("Real Madrid
+    // takes the lead") and a competition the match context cannot carry, so it is
+    // refused on truth grounds — with the same menu in front of it, the repaired
+    // reply serves, which is what this ticket's transition fix was for.
+    const stored = gateSummaryDetail(VOD_ROW_48FE4280_REPLY, ev);
+    expect(stored.summary).toBeFalsy();
+    expect(stored.violations).toEqual(["unattested-venue", "unattested-side"]);
+    const decision = gateSummaryDetail(VOD_ROW_48FE4280_REPLY_REPAIRED, ev);
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("accepted");
-    // The measured acceptance shape from the ticket's own replay: score + clock.
-    expect(attestedSummaryFactKinds(VOD_ROW_48FE4280_REPLY, summaryEvidenceForRow(vodRow(), "vod"))).toEqual([
-      "score",
-      "clock",
-    ]);
-    // VOD value bar: the served body is inside the 40-90 word target.
-    expect(decision.words).toBe(44);
-    expect(decision.sentences).toBe(4);
+    // VOD value bar: the served body is inside the 45-55 word target band.
+    expect(decision.words).toBe(51);
+    expect(decision.sentences).toBe(3);
   });
 
   it("is the fact menu that caused the drop: without the transition the same reply refuses", () => {
@@ -89,8 +101,9 @@ describe("ADAAAA-8787 — a VOD row's disclosed transition reaches the summary e
     const ev = summaryEvidenceForRow(bare, "vod");
     expect(ev.scoreTransition).toBeNull();
     const decision = gateSummaryDetail(VOD_ROW_48FE4280_REPLY, ev);
-    expect(decision.gate).toBe("refused:too-few-facts");
-    expect(decision.violations).toEqual(["too-few-facts"]);
+    // ADAAAA-8910 adds its truth bars to whatever else the body earns, so the
+    // fact-density refusal is asserted directly rather than by gate-string equality.
+    expect(decision.violations).toContain("too-few-facts");
     expect(attestedSummaryFactKinds(VOD_ROW_48FE4280_REPLY, ev)).toEqual(["clock"]);
   });
 });

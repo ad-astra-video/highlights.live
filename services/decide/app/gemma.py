@@ -1685,10 +1685,11 @@ _OUTPUT_CONTRACT_COMPACT = (
     # has not written yet, and the caption description stays contiguous. The bars
     # ride IN the shape (the position the model attends to) with the contrast
     # named outright — the caption MUST name a place, the headline MUST NOT.
-    "\"postTitle\": \"<the card HEADLINE: exactly WHO + one present-tense VERB + "
-    "WHAT, three slots and no fourth — never WHERE, never a clock, second beat "
-    "or score/goal word. WHO is a jersey number or a role — NEVER a player name; "
-    "<=60 chars, <=10 words>\", "
+    "\"postTitle\": \"<the card HEADLINE: the NON-ASSERTING EVENT LABEL only — exactly "
+    "one of GOAL, NEAR MISS, BIG PLAY, SHOT, SAVE, TACKLE, CELEBRATION, HIGHLIGHT "
+    "(two words at most), chosen from YOUR OWN outcome. NO who, NO verb, NO name, "
+    "NO role noun, NO place, NO clock, NO score, NO second beat; <=60 chars, "
+    "<=10 words>\", "
     "\"runningSummary\": \"<CAPTION FOR THIS WINDOW ONLY, as ONE line (never append a "
     "second line): total target max 110 chars, HARD MAX 140 (was 220). Shape "
     "'<PLAY-BY-PLAY LEAD> — <optional COLOR BEAT>'. THIS WINDOW ONLY: describe "
@@ -1755,38 +1756,35 @@ _OUTPUT_CONTRACT_COMPACT = (
     # the model just wrote rather than the word "goal", the name rule pins
     # EXACT transcription (never a first name added to a surname), and the verb
     # set is closed so a quiet window cannot reach for "scores".
-    "POST TITLE RULES — postTitle is the card's HEADLINE, written FIRST from the "
-    "event itself. Fill exactly three slots and nothing else: WHO (a jersey "
-    "number you read in this window, or a role — keeper, defender, midfielder, "
-    "striker, winger, referee. NEVER a player or team name, on any window: not "
-    "from the transcript, not from a scorebug or graphic in the frames, not from "
-    "the story, not from the match context. The card cannot certify a name, so a "
-    "name in the headline is an invention — the CAPTION names the player, the "
-    "headline does not), one present-tense VERB, and WHAT (the "
-    "ball, a shot, a tackle, the keeper, the whistle). NO fourth slot: the "
-    "caption MUST name a place, the headline NEVER does — no zone, area, box, "
-    "third, wing, channel, circle, half, side, midfield, center, venue or "
-    "stadium, and never 'in', 'at', 'on' or 'from' followed by one, no clock, no "
-    "second beat, no consequence ('leads to', 'after', 'then'). If no player or "
-    "role is readable, name the unit (defence, midfield, attack) — never the "
-    "bare word Player or Players. The headline is NEVER more than FOUR WORDS "
-    "and carries NO PREPOSITION AT ALL — never in, at, on, from, near, into, "
-    "around, inside, of or to — because every one of them introduces a zone: if "
-    "your draft contains one, delete it and every word after it. ONE clause, no "
-    "trailing period, no em-dash, "
-    "semicolon or comma clause. NO score word at all on a window whose own "
-    "outcome is not_highlight or big_play — not scores, scored, scorer, goal, "
-    "gol, net, equalise, level, lead or a result like 2-1 — and no goal claim "
-    "unless YOUR OWN outcome here is scoring_play with a transcript or "
-    "scoreboard read that says so. Use an action verb: carries, drives, clears, "
-    "tackles, blocks, saves, shoots, passes, contests, loses, signals. Never "
-    "reuse a subject+verb you already titled this job. Start with a capital "
-    "letter. FINAL CHECK — before you answer, run these three deletions on the "
-    "headline you wrote: 1) delete every preposition (in, at, on, from, near, "
-    "into, around, inside, of, to) and every word after it; 2) delete every "
-    "capitalised person or team name and put the role in its place; 3) delete "
-    "every score word on a window whose outcome is not scoring_play. A headline "
-    "that still carries any of the three is WRONG — fix it, do not send it."
+    # ADAAAA-8910 (rev-7 live defect 1): 8318's shape asked for "exactly WHO +
+    # one present-tense VERB + WHAT" while the actor bar ADAAAA-8831 added REFUSES
+    # every role-noun subject. The two halves of one contract contradict, and live
+    # job `9bed3bd7` stored 0/5 titles — every row `refused:unattested-actor`,
+    # rows 4-5 also `goal-claim` — on a job whose own match context attests two
+    # teams. The headline is now the NON-ASSERTING EVENT LABEL: the write seam
+    # never refuses it for a claim it does not make, the card composes the clock
+    # (`GOAL · 1:42`), and a headline that still tries to say WHO is discarded.
+    "POST TITLE RULES — postTitle is the card's HEADLINE: the NON-ASSERTING EVENT "
+    "LABEL, and nothing else. Write exactly ONE label from this closed set, chosen "
+    "from YOUR OWN outcome: GOAL (no goal claim unless YOUR OWN outcome here is "
+    "scoring_play), "
+    "NEAR MISS (near_miss), BIG PLAY (big_play), CELEBRATION or HIGHLIGHT (a "
+    "demoted/quiet window), SHOT, SAVE, TACKLE. Two words at most ('NEAR MISS', "
+    "'BIG PLAY'). the caption MUST name a place, the headline NEVER does. There is "
+    "NO WHO slot and NO VERB slot: a role noun (keeper, "
+    "defender, midfielder, striker, winger, referee) is an ACTION CLAIM the card "
+    "cannot certify and the write seam REFUSES it, so a headline built from a role "
+    "is discarded; a player or team name is equally refused (not from the "
+    "transcript, not from a scorebug or graphic in the frames, not from the story, "
+    "not from the match context). NO place, zone, area, box, third, wing, channel, "
+    "circle, half, side, midfield, center, venue or stadium, no clock, no score, no "
+    "second beat, no consequence ('leads to', 'after', 'then'), no em-dash, "
+    "semicolon or comma clause, no trailing period. ONE clause, at most two words, "
+    "<=60 chars, <=10 words, starting with a capital letter. The card appends the "
+    "clip clock itself, so never write one. FINAL CHECK — before you answer, delete "
+    "every word except the label: a headline carrying any other word (a who, a "
+    "verb, a name, a role, a place, a clock, a number) is WRONG — fix it, do not "
+    "send it."
 )
 _OUTPUT_CONTRACT_FULL = (
         "Now answer with ONLY one JSON object, no markdown, no preamble, no "

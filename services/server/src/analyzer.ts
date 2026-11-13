@@ -14,7 +14,13 @@ import type { SupplyStallSnapshot } from "./live-supply-stall";
 import {
   attestationDetailCopy,
   captionColour,
+  composePostTitle,
+  deterministicPostTitle,
   gatePostTitleDetail,
+  isBareLabelTitle,
+  postTitleLabel,
+  postTitleTeamSubject,
+  storedLabelTitle,
   uniquePostTitle,
   groundCaption,
   isQuietVerdict,
@@ -7705,7 +7711,16 @@ export function storedSurfaceFor(
           ...grounding,
           ownCopy: [storedCaption, storedReason, decision.reason].filter(Boolean).join(" \n "),
         }
-      : grounding
+      : grounding,
+    // ADAAAA-8910: the row's own NON-ASSERTING label (`GOAL` / `BIG PLAY`). The
+    // FAST prompt asks for a role-noun WHO and the actor bar refuses every role
+    // noun, so the measured live job `9bed3bd7` stored 0/5 titles with
+    // `refused:unattested-actor` — a title that asserts nothing was dropped as if
+    // it had asserted something. A claim-shaped refusal now degrades to this
+    // label instead of storing nothing; the persist seam composes it with the
+    // row's own instant (`GOAL · 1:42`), which is the shape the read projection
+    // has always served.
+    { label: postTitleLabel(decision.eventType, decision.outcome) }
   );
   const postTitle = postTitleGate.title ?? undefined;
   return {
@@ -8597,15 +8612,42 @@ export async function acceptVideoDecision(
   // (AC6 measured 23 distinct titles over 25 cards). `run.highlights` holds the
   // rows already accepted for this job, so a repeat is dropped here and the read
   // projection derives the deterministic `LABEL · m:ss` title instead.
-  const rowPostTitle = uniquePostTitle(
-    surface.postTitle,
-    run.highlights.map((h) => h.postTitle)
-  );
+  //
+  // ADAAAA-8910: a bare LABEL (`GOAL`, from `gatePostTitleDetail`'s degradation
+  // or from the model's own non-asserting headline) is composed with THIS row's
+  // localized instant here — where the final instant exists — so the stored title
+  // is the `LABEL · m:ss` shape the read projection serves, distinct per row
+  // (a bare `GOAL` on three rows would collide on the uniqueness check and two of
+  // them would store nothing), and never asserts an actor or an action. The
+  // duplicate CHECK and the STORED value are both composed by `storedLabelTitle`
+  // because `uniquePostTitle` answers the check with the CLEANED value.
+  const usedTitles = run.highlights.map((h) => h.postTitle);
+  const composedLabel = isBareLabelTitle(surface.postTitle)
+    ? storedLabelTitle({
+        label: surface.postTitle as string,
+        windowTs: loc.ts,
+        subject: postTitleTeamSubject(
+          { postTitle: null, caption: surface.caption ?? null, reason: surface.reason ?? null },
+          cfg.calibration?.matchContextTeams?.length
+            ? { teams: cfg.calibration.matchContextTeams.map((t) => ({ name: t.name ?? null })) }
+            : null
+        ),
+        used: usedTitles,
+      })
+    : null;
+  const rowPostTitle = composedLabel ? composedLabel.title : uniquePostTitle(surface.postTitle, usedTitles);
   // ADAAAA-8356 (PO constraint 1): name WHY this row has or has not model copy.
   // A repeat is its own refusal class (`refused:duplicate`) so it cannot be
   // mistaken for a prompt miss (`absent`) or a barred title (`refused:<bar>`).
+  // ADAAAA-8910: a composed label reports `label` (the surface serves the
+  // deterministic non-asserting title, not the model's prose), keeping the
+  // degraded candidate's bar attribution when the gate supplied one.
   const rowPostTitleGate = rowPostTitle
-    ? surface.postTitleGate
+    ? composedLabel
+      ? (surface.postTitleGate ?? "").startsWith("label")
+        ? (surface.postTitleGate as string)
+        : "label"
+      : surface.postTitleGate
     : surface.postTitle
       ? "refused:duplicate"
       : surface.postTitleGate;

@@ -123,12 +123,15 @@ describe("write seam — a title refusal never touches the copy fields", () => {
   });
 
   it("keeps the copy when the title is refused by the GOAL grounding gate", () => {
-    // A goal claim on a window whose verdict is not scoring_play.
+    // A goal claim on a window whose verdict is not scoring_play. ADAAAA-8910:
+    // the claim is refused, the non-asserting label is stored instead — the copy
+    // fields stay untouched either way.
     const play = storedSurfaceFor(
       { isHighlight: true, score: 61, eventType: "BIG_PLAY", outcome: "big_play", reason: "Ordoñez strikes early.", postTitle: "Ordoñez scores the opener" },
       ctx("big_play")
     );
-    expect(play.postTitle).toBeUndefined();
+    expect(play.postTitle).toBe("BIG PLAY");
+    expect(play.postTitleGate).toBe("label:goal-claim");
     expect(play.caption).toBeTruthy();
     expect(play.cardTitles?.length).toBeGreaterThan(0);
   });

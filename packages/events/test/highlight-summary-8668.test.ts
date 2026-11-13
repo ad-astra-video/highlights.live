@@ -17,6 +17,7 @@ import {
   captionRestatesSummary,
   captionTokenOverlap,
   clampSummaryDepth,
+  clockFrameClaims,
   gateSummaryDetail,
   hasAttestedEntity,
   internalLabelPhrases,
@@ -509,12 +510,19 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       "The midfielder finds the back of the net to level the score at 2-2. " +
       "This goal occurs at the 2:40 mark of the match.";
     const decision = gateSummaryDetail(reply, served);
+    // ADAAAA-8910 (defect 2): `mark of the match` is no longer accepted copy — the
+    // offset is a clip offset, so the gate renames the frame before judging and
+    // the row still serves (`neutralised`, not dropped).
     expect(decision.violations).toEqual([]);
+    expect(decision.gate).toBe("neutralised");
     // AC10 (rev 3): `the midfielder` is a role claim the row's evidence does not
     // attest (postTitle/reason/caption are copy, not evidence), so the gate
     // neutralises the subject and still serves the body.
-    expect(decision.summary).toBe(reply.replace("The midfielder", "The shot"));
-    expect(decision.gate).toBe("neutralised");
+    expect(decision.summary).toBe(
+      reply.replace("The midfielder", "The shot").replace("mark of the match", "mark of the clip")
+    );
+    // … and the match-time frame never reaches the served copy.
+    expect(clockFrameClaims(decision.summary ?? "")).toEqual([]);
     // The pipeline's snake_case enum shape is still refused outright …
     const enumBody =
       "The move ends as a scoring_play in the second half. The crowd answers it around 2:40 at the near post.";

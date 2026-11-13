@@ -142,7 +142,28 @@ export function deterministicPostTitle(input: {
   windowTs?: number | null;
   subject?: string | null;
 }): string {
-  const label = postTitleLabel(input.eventType, input.outcome);
+  return composePostTitle({
+    label: postTitleLabel(input.eventType, input.outcome),
+    windowTs: input.windowTs,
+    subject: input.subject,
+  });
+}
+
+/**
+ * ADAAAA-8910: `LABEL · m:ss [· SUBJECT]` for a label the caller already
+ * resolved (the write seam stores this shape so a non-asserting title is a
+ * STORED fact, not only a read-time fallback). Same budget and same subject
+ * rules as `deterministicPostTitle`, which delegates here.
+ */
+export function composePostTitle(input: {
+  label: string;
+  windowTs?: number | null;
+  subject?: string | null;
+}): string {
+  // The label is from the closed label vocabulary (`GOAL`, `BIG PLAY`, …), never
+  // a sentence: `stripInternalTokens` would delete a leading all-caps word and
+  // turn `GOAL` into an empty segment, so only the SUBJECT is stripped.
+  const label = tidyTitle((input.label ?? "").trim()) || "HIGHLIGHT";
   const clock = postTitleClock(input.windowTs);
   const subject = tidyTitle(stripInternalTokens((input.subject ?? "").trim()));
   const build = (withSubject: boolean): string =>
@@ -160,6 +181,7 @@ export function deterministicPostTitle(input: {
   // Only reachable with an absurd label: the label alone is still a title.
   return label.slice(0, FALLBACK_TITLE_MAX_CHARS).trim();
 }
+
 
 /** EVERY reason a candidate title may not be served as customer copy. */
 export type PostTitleViolation =
@@ -297,8 +319,15 @@ export type PostTitleGate =
   | "accepted"
   /** accepted only after the extractive `trimPostTitleShape` deletion */
   | "trimmed"
+  /** ADAAAA-8910: the candidate was a bare label, or was refused ONLY by
+   *  claim-shaped bars, so the deterministic NON-ASSERTING label title serves
+   *  (`GOAL · 1:42`). `label:<bars>` keeps the attribution of the refused
+   *  candidate; a bare `label` means the model itself emitted the label. */
+  | "label"
+  | `label:${string}`
   /** refused: the candidate (and its trimmed form) failed these bars */
   | `refused:${string}`;
+
 
 export interface PostTitleGateDecision {
   /** The value the write seam may store; null => the deterministic title serves. */
@@ -326,6 +355,47 @@ const LABEL_ONLY_TITLE = new RegExp(
   String.raw`^\s*(?:${[...new Set(Object.values(TITLE_LABELS))].join("|")})(?:\s*·\s*\d{1,3}:\d{2})?\s*$`,
   "iu"
 );
+
+/** ADAAAA-8910: a title that is ONLY the event label (`GOAL`, `BIG PLAY`), with
+ *  no clock segment. The write seam stores the clocked form (`GOAL · 1:42`) so a
+ *  non-asserting title is distinct per row and carries the row's own instant. */
+export function isBareLabelTitle(title?: string | null): boolean {
+  const t = (title ?? "").trim();
+  if (!t || !LABEL_ONLY_TITLE.test(t)) return false;
+  return !/·/.test(t);
+}
+
+/** Every label the closed vocabulary can emit, so a stored `LABEL · m:ss` is
+ *  recognised by the LABEL and not by its shape alone. */
+const POST_TITLE_LABELS: ReadonlySet<string> = new Set([
+  ...Object.values(TITLE_LABELS),
+  ...Object.values(OUTCOME_LABELS),
+]);
+
+/** ADAAAA-8910: the STORED `LABEL · m:ss [· subject]` form the write seam emits.
+ *
+ *  `cleanPostTitle` is the read seam's normaliser and it deletes both halves of
+ *  this shape — the label is an all-caps internal token and the clock is a
+ *  provenance token — so a stored label title would otherwise serve as a bare
+ *  `1:42`. The composed shape is therefore read BEFORE cleaning, and only when
+ *  the label is in the closed vocabulary. */
+export function isComposedLabelTitle(title?: string | null): boolean {
+  const t = (title ?? "").trim();
+  const match = t.match(/^([A-Z][A-Z ]{0,19}?)\s*·\s*\d{1,3}:\d{2}(?:\s*·\s*.+)?$/u);
+  if (!match) return false;
+  return POST_TITLE_LABELS.has((match[1] ?? "").trim());
+}
+
+/** ADAAAA-8910: the violations that a NON-ASSERTING label title satisfies without
+ *  inventing anything. A candidate refused only by these bars is not dropped:
+ *  the deterministic `LABEL · m:ss` title serves instead (live job `9bed3bd7`
+ *  served 0/5 titles `refused:unattested-actor` on a job whose own match context
+ *  attests two teams, because the FAST prompt asks for `WHO + VERB` while the
+ *  actor bar refuses every role noun — the contradiction, measured). */
+export const LABEL_DEGRADABLE_VIOLATIONS: readonly PostTitleViolation[] = [
+  "unattested-actor",
+  "goal-claim",
+];
 
 /**
  * ADAAAA-8831 (AC9/AC10): the title asserts an action with NO attested actor.
@@ -404,7 +474,12 @@ export function postTitleViolations(title: string, ctx?: CaptionGroundingContext
  */
 export function gatePostTitleDetail(
   raw: string | null | undefined,
-  ctx?: CaptionGroundingContext
+  ctx?: CaptionGroundingContext,
+  /** ADAAAA-8910: the deterministic NON-ASSERTING label title for this row
+   *  (`GOAL`), supplied by the caller that owns the row's verdict. When present,
+   *  a candidate the claim bars refuse is not dropped: the label serves and the
+   *  gate token names WHY (`label:<bars>`). Absent => today's refusal. */
+  opts?: { label?: string | null }
 ): PostTitleGateDecision {
   const direct = cleanPostTitle(raw);
   if (!direct) return { title: null, gate: "absent", violations: ["empty"] };
@@ -421,12 +496,24 @@ export function gatePostTitleDetail(
     if (!candidate.title) continue;
     const violations = postTitleViolations(candidate.title, ctx);
     if (violations.length === 0) {
-      return { title: candidate.title, gate: candidate.trimmed ? "trimmed" : "accepted", violations: [] };
+      // ADAAAA-8910: the model emitted the bare label itself — the surface wants
+      // the clocked `LABEL · m:ss` form, so the caller composes it and the token
+      // says the served title is the label, not model prose.
+      return {
+        title: candidate.title,
+        gate: isBareLabelTitle(candidate.title) ? "label" : candidate.trimmed ? "trimmed" : "accepted",
+        violations: [],
+      };
     }
     for (const violation of violations) if (!refused.includes(violation)) refused.push(violation);
   }
+  const label = (opts?.label ?? "").trim();
+  if (label && refused.every((v) => LABEL_DEGRADABLE_VIOLATIONS.includes(v))) {
+    return { title: label, gate: `label:${refused.join(",")}`, violations: refused };
+  }
   return { title: null, gate: `refused:${refused.join(",")}`, violations: refused };
 }
+
 
 /** The fields the projection needs from a stored highlight row. */
 export interface PostTitleRow {
@@ -500,20 +587,65 @@ export function projectPostTitle(
   row: PostTitleRow,
   opts?: { subject?: string | null }
 ): string {
+  const rawStored = (row.postTitle ?? "").trim();
+  // ADAAAA-8910: the write seam's own non-asserting form is served verbatim —
+  // cleaning it would strip the label and then the clock (see
+  // `isComposedLabelTitle`). The claim bars still apply, and `internal-token` is
+  // exactly the shape this bar expects, so it is the one violation ignored.
+  if (rawStored && isComposedLabelTitle(rawStored)) {
+    const composedViolations = servedPostTitleViolations(rawStored, row).filter((v) => v !== "internal-token");
+    if (composedViolations.length === 0) return rawStored;
+  }
   const stored = cleanPostTitle(row.postTitle);
-  if (stored && servedPostTitleViolations(stored, row).length === 0) return stored;
-  const windowTs =
-    typeof row.localizedTs === "number" && Number.isFinite(row.localizedTs)
-      ? row.localizedTs
-      : typeof row.start === "number" && Number.isFinite(row.start)
-        ? row.start
-        : null;
+  if (stored && servedPostTitleViolations(stored, row).length === 0) {
+    // ADAAAA-8910: a stored BARE label (`GOAL`) is the non-asserting title the
+    // write seam degrades to; the surface composes the row's own clock (and the
+    // subject its own copy names) so the label form never loses the `m:ss`
+    // segment the deterministic projection has always served.
+    if (isBareLabelTitle(stored)) {
+      return composePostTitle({
+        label: stored,
+        windowTs: postTitleRowTs(row),
+        subject: opts?.subject ?? null,
+      });
+    }
+    return stored;
+  }
+  const windowTs = postTitleRowTs(row);
   return deterministicPostTitle({
     eventType: row.eventType,
     outcome: row.outcome,
     windowTs,
     subject: opts?.subject ?? null,
   });
+}
+
+/** The row's own clip instant, read the way every surface reads it. */
+function postTitleRowTs(row: PostTitleRow): number | null {
+  return typeof row.localizedTs === "number" && Number.isFinite(row.localizedTs)
+    ? row.localizedTs
+    : typeof row.start === "number" && Number.isFinite(row.start)
+      ? row.start
+      : null;
+}
+
+/** ADAAAA-8910: the value the write seam STORES for a non-asserting label.
+ *
+ *  `uniquePostTitle` answers the duplicate question but returns the CLEANED value,
+ *  and cleaning a `LABEL · m:ss` title deletes the label (an internal all-caps
+ *  token) and then the clock — so a seam that stored its return would store a bare
+ *  `1:42`. This composes the form the write seam stores, composes the collision
+ *  key the same way the existing guard does, and reports both. */
+export function storedLabelTitle(input: {
+  label: string;
+  windowTs?: number | null;
+  subject?: string | null;
+  /** The titles already stored for this job. */
+  used?: readonly (string | null | undefined)[];
+}): { title: string | null; composed: string; duplicate: boolean } {
+  const composed = composePostTitle({ label: input.label, windowTs: input.windowTs, subject: input.subject });
+  const duplicate = uniquePostTitle(composed, input.used ?? []) === null;
+  return { title: duplicate ? null : composed, composed, duplicate };
 }
 
 /**

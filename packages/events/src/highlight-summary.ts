@@ -778,7 +778,16 @@ export type SummaryViolation =
   | "too-few-facts"
   /** ADAAAA-8806 (AC9): the body asserts what the BALL did while the row's own
    *  attestation recorded no ball outcome. */
-  | "unattested-action";
+  | "unattested-action"
+  /** ADAAAA-8910: the body frames the CLIP OFFSET as match time ("at the 1:42
+   *  mark of the match" on a row whose attested match clock is 18:13). */
+  | "clock-frame"
+  /** ADAAAA-8910: a competition / venue the row's match context does not carry
+   *  ("in this high-stakes competition" on a job with no competition key). */
+  | "unattested-venue"
+  /** ADAAAA-8910: a direction claim ("Real Madrid takes the lead") on a row that
+   *  attests the score DIGITS and the sides' names, never which side scored. */
+  | "unattested-side";
 
 /**
  * ADAAAA-8773 / spec §13.2 (rev 7): the refusals a SECOND sample cannot repair.
@@ -1250,6 +1259,160 @@ function clockFactGrounded(factText: string, evidence: SummaryEvidence): boolean
   return Math.abs(seconds - windowsTs) <= SUMMARY_CLOCK_ANCHOR_TOLERANCE_S;
 }
 
+// --- ADAAAA-8910: three unattested claims the rev-7 live leg served ---------
+
+/** A clock token in the body (`1:42`, `18:13`). */
+const CLOCK_TOKEN_RE = /\b\d{1,3}:\d{2}\b/g;
+
+/** A frame phrase that turns a clock into MATCH time, and its clip-framed form.
+ *  The `Window:` label is an offset into the clip (ADAAAA-8773), so this framing
+ *  asserts a match stamp the row does not attest to the body gate (which
+ *  reconciles a body clock against `windowTs`). Measured on live job `9bed3bd7`:
+ *  "at the 1:42 mark of the match" for a 102.67 s window whose attested match
+ *  clock is `18:13` — the fact passed while the sentence named the wrong frame. */
+interface ClockFrameRule {
+  re: RegExp;
+  to: string;
+}
+
+const MATCH_CLOCK_WORD_FRAME: ClockFrameRule = { re: /\bmatch (clock|time)\b/i, to: "clip $1" };
+
+/** Frames that FOLLOW the clock ("at the 1:42 mark of the match"). */
+const CLOCK_FRAME_AFTER: readonly ClockFrameRule[] = [
+  { re: /\bmark of the (?:match|game)\b/i, to: "mark of the clip" },
+  { re: /\bminute of the (?:match|game)\b/i, to: "minute of the clip" },
+  { re: /\binto the (?:match|game)\b/i, to: "into the clip" },
+  MATCH_CLOCK_WORD_FRAME,
+  { re: /\bof the (?:match|game)\b/i, to: "of the clip" },
+];
+
+/** Frames that can PRECEDE the clock ("in match time, 18:13"). The postfix forms
+ *  are deliberately excluded here: "Barcelona maintains control of the match at
+ *  the 7:57 mark" is ordinary prose about the match, not a frame on the clock. */
+const CLOCK_FRAME_BEFORE: readonly ClockFrameRule[] = [MATCH_CLOCK_WORD_FRAME];
+
+interface ClockFrameHit {
+  /** The frame phrase as served. */
+  from: string;
+  start: number;
+  end: number;
+  /** The clip-framed replacement. */
+  replacement: string;
+}
+
+/** Every match-time frame attached to a clock token, with its span. Only a frame
+ *  ADJACENT TO A CLOCK counts: the defect is the clock's reference frame, not the
+ *  word "match". */
+function clockFrameHits(text: string): ClockFrameHit[] {
+  const body = text ?? "";
+  const hits: ClockFrameHit[] = [];
+  const take = (base: number, window: string, rules: readonly ClockFrameRule[]): boolean => {
+    for (const rule of rules) {
+      const found = window.match(rule.re);
+      if (!found || found.index === undefined) continue;
+      const start = base + found.index;
+      const end = start + found[0].length;
+      if (hits.some((hit) => start < hit.end && end > hit.start)) return true;
+      hits.push({ from: found[0], start, end, replacement: found[0].replace(rule.re, rule.to) });
+      return true;
+    }
+    return false;
+  };
+  for (const match of body.matchAll(CLOCK_TOKEN_RE)) {
+    const at = match.index ?? 0;
+    const afterStart = at + match[0].length;
+    if (take(afterStart, body.slice(afterStart, afterStart + 60), CLOCK_FRAME_AFTER)) continue;
+    const beforeStart = Math.max(0, at - 40);
+    take(beforeStart, body.slice(beforeStart, at), CLOCK_FRAME_BEFORE);
+  }
+  return hits;
+}
+
+/** Every place the body frames a clock as match time. Empty => no wrong frame. */
+export function clockFrameClaims(text: string): string[] {
+  return [...new Set(clockFrameHits(text).map((hit) => hit.from))];
+}
+
+/** ADAAAA-8910 (defect 2): the deterministic repair for a body that frames the
+ *  clip offset as match time. The `Window:` offset IS an offset into the clip, so
+ *  the repair renames the reference frame and keeps every other word — "at the
+ *  1:42 mark of the match" becomes "at the 1:42 mark of the clip". Only a frame
+ *  ADJACENT TO A CLOCK TOKEN is rewritten (see `clockFrameHits`), so ordinary
+ *  prose ("the best move of the match") is untouched. */
+/** What the clock-frame repair changed: the served text and every frame phrase
+ *  it renamed (the audit trail the gate reports as `neutralised`). */
+export interface SummaryClockFrameNeutralisation {
+  text: string;
+  neutralised: string[];
+}
+
+/** ADAAAA-8910: rename the match-time frame on the attestation the row actually
+ *  carries. A refusal here would drop an otherwise-factual body and spend the one
+ *  retry slot on a reference frame; the offset is a real fact and the clip is its
+ *  real frame, so the sentence is repaired in place. */
+export function neutraliseMatchClockFrame(text: string): SummaryClockFrameNeutralisation {
+  const body = text ?? "";
+  const hits = clockFrameHits(body);
+  if (hits.length === 0) return { text: body, neutralised: [] };
+  // Apply from the end backwards so earlier offsets stay valid.
+  const neutralised: string[] = [];
+  let out = body;
+  for (const hit of [...hits].sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, hit.start) + hit.replacement + out.slice(hit.end);
+    neutralised.unshift(hit.from);
+  }
+  return { text: out, neutralised };
+}
+
+/** The competition / venue vocabulary a body may not name on a row whose match
+ *  context carries none. Deliberately excludes the prose words VENUE_RE needs for
+ *  fact crediting (`final`, `ground`, `series`): those are ordinary English
+ *  ("the final whistle"), and refusing them would drop honest copy. */
+const COMPETITION_CLAIM_RE =
+  /\b(?:competitions?|tournaments?|leagues?|championships?|cup|derby|matchday|group[- ]stage|semi-?finals?|quarter-?finals?|round\s+of\s+\d+|stadium|arena|venue)\b/i;
+
+/** Every competition / venue claim the job's match context cannot support.
+ *  Measured on live job `9bed3bd7`: match context keys are `{sport, teams,
+ *  inferredAt, resolverVersion, ambiguous, trail}` — no competition, no venue —
+ *  and 2/3 bodies asserted "in this high-stakes / intense competition". */
+export function unattestedVenueClaims(text: string, evidence: SummaryEvidence): string[] {
+  if (matchContextVenueText(evidence.matchContext).length > 0) return [];
+  const claim = (text ?? "").match(COMPETITION_CLAIM_RE);
+  return claim ? [claim[0]] : [];
+}
+
+/** Scoring-DIRECTION vocabulary. A row attests the score DIGITS (`transitionKey
+ * 1-1>2-1`) and the sides' names, never WHICH SIDE scored: the scorebug's line
+ *  order is not persisted, so no row can certify the direction. Measured on live
+ *  job `9bed3bd7`: rows 1 and 3 carry the same transition and one says "Real
+ *  Madrid takes the lead" while the other says "Barcelona takes the lead". */
+const DIRECTION_CLAIM_RE =
+  /\b(?:takes?|took|taking)\s+(?:the\s+)?lead\b|\b(?:levels?|levelled|levelling|leveling)\s+(?:it|the\s+(?:score|scoreline|game|match|tie|deficit|scores))\b|\b(?:equalises?|equalised|equalizes?|equalized|equalising|equalizing)\b|\b(?:goes?|went|going)\s+(?:ahead|in\s+front)\b|\b(?:puts?|put|sends?|sent)\s+[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)*\s+(?:ahead|in\s+front)\b|\b(?:edges?|edged|pulls?|pulled|moves?|moved)\s+(?:ahead|in\s+front)\b|\b(?:makes?|made)\s+it\s+\d+\s*[-–]\s*\d+\b|\b(?:extends?|extended|doubles?|doubled|restores?|restored)\s+(?:the|its|their)\s+lead\b|\b(?:secures?|secured|claims?|claimed|grabs?|grabbed)\s+(?:a|the)\s+lead\b|\bopens?\s+the\s+scoring\b|\bscoring\s+opener\b/i;
+
+/** Every direction claim that attributes the score change to a NAMED actor. The
+ *  row's evidence never attests the side that scored, so this is a claim on every
+ *  rail — the sentence states who changed the score, which the digits alone
+ *  cannot certify.
+ *
+ *  Scoped to a sentence that NAMES an attested actor on purpose: a subjectless
+ *  goal claim ("the equaliser levels it at 2-2") is the announcer lane's own
+ *  claim and is already gated by `goal-claim`. The measured defect is actor
+ *  ATTRIBUTION — two rows of one transition, "Real Madrid takes the lead" and
+ *  "Barcelona takes the lead" — so this bar is exactly the named-actor shape and
+ *  nothing wider. */
+export function unattestedSideClaims(text: string, evidence: SummaryEvidence): string[] {
+  const body = text ?? "";
+  const names = attestedActorNames(evidence);
+  if (names.length === 0) return [];
+  const out: string[] = [];
+  for (const sentence of body.split(/(?<=[.!?…])\s+/)) {
+    if (!bodyNamesEntity(sentence, names)) continue;
+    const claim = sentence.match(DIRECTION_CLAIM_RE);
+    if (claim) out.push(claim[0]);
+  }
+  return [...new Set(out)];
+}
+
 /** AC9 read: the DISTINCT fact types the body relays that the row attests. */
 export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence): SummaryFactKind[] {
   const available = new Set(attestedFactKinds(evidence));
@@ -1390,6 +1553,14 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   // bar: two DISTINCT attested channels, never a clock on its own.
   if (unattestedRoleNouns(body, evidence).length > 0) out.push("unattested-role");
   if (bodyAssertsUnattestedAction(body, evidence)) out.push("unattested-action");
+  // ADAAAA-8910 (defects 2-4): the three claims the row's own evidence cannot
+  // support. Each one is a DETERMINISTIC fact-type absence (the row has one
+  // reference frame, no competition key, and the score digits without a side), so
+  // it is checkable from the body after the fact — the census can grade it off a
+  // row dump instead of needing another paid leg.
+  if (clockFrameClaims(body).length > 0) out.push("clock-frame");
+  if (unattestedVenueClaims(body, evidence).length > 0) out.push("unattested-venue");
+  if (unattestedSideClaims(body, evidence).length > 0) out.push("unattested-side");
   if (attestedSummaryFactKinds(body, evidence).length < SUMMARY_MIN_FACT_KINDS) out.push("too-few-facts");
   return out;
 }
@@ -1451,7 +1622,12 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     // that names "the midfielder" without attestation still serves with a
     // neutralised subject ("the move") instead of dropping the card's copy.
     const neutralised = neutraliseRoleNouns(candidate.text, evidence);
-    const judged = neutralised.text;
+    // ADAAAA-8910 (defect 2): the clip-offset frame is repaired BEFORE judging,
+    // for the same reason as the role nouns — the body's facts are attested, only
+    // the reference frame was wrong ("at the 1:42 mark of the match" -> "… of the
+    // clip" on a row whose attested match clock is 18:13).
+    const clockFrame = neutraliseMatchClockFrame(neutralised.text);
+    const judged = clockFrame.text;
     if (!judged) continue;
     lastJudged = judged;
     droppedSentences = neutralised.droppedSentences;
@@ -1459,7 +1635,12 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     if (violations.length === 0) {
       return {
         summary: judged,
-        gate: neutralised.neutralised.length > 0 ? "neutralised" : candidate.trimmed ? "trimmed" : "accepted",
+        gate:
+          neutralised.neutralised.length > 0 || clockFrame.neutralised.length > 0
+            ? "neutralised"
+            : candidate.trimmed
+              ? "trimmed"
+              : "accepted",
         violations: [],
         words: summaryWordCount(judged),
         sentences: summarySentenceCount(judged),
@@ -1626,9 +1807,21 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // and refused a celebration body that said "the current score remains
   // unchanged". So a celebration row is offered the clock/venue/action facts only.
   const attestsScoring = String(input.verdict ?? "") === "scoring_play";
-  const factMenu = attestsScoring
-    ? "the score line, the clock or spell, the competition or venue, or an attested team's or player's action"
-    : "the clock or spell, the competition or venue, or an attested team's or player's action";
+  // ADAAAA-8910 (defect 3): the fact menu offers the competition/venue ONLY when
+  // the match context carries one. The rev-7 live job `9bed3bd7` had no
+  // competition or venue key job-wide, the menu still offered "the competition or
+  // venue", and 2/3 bodies spent a clause on "in this high-stakes / intense
+  // competition" — an assertion with no evidence. A menu the row cannot fill is a
+  // prompt asking for an invented fact.
+  const attestsVenue = matchContextVenueText(input.matchContext).length > 0;
+  const factMenu = [
+    attestsScoring ? "the score line" : null,
+    "the clock or spell",
+    attestsVenue ? "the competition or venue" : null,
+    "an attested team's or player's action",
+  ]
+    .filter(Boolean)
+    .join(", ");
   // ADAAAA-8803: the depth instruction is a BAND, and the RETRY is told what the
   // refused draft measured. Both fixes answer the same measured defect on the
   // served VOD leg of job `4e5ddf8d`: a compliant draft landed on 41 words
@@ -1659,11 +1852,31 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, the competition or venue, or a named attested actor's action — rather than padding.`,
+    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, ${attestsVenue ? "the competition or venue, " : ""}or a named attested actor's action — rather than padding.`,
     ...retryLines,
     `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
     "- The clock fact is the `Window:` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.",
+    // ADAAAA-8910 (defect 2): the offset's own FRAME. The rev-7 live bodies said
+    // "at the 1:42 mark of the match" for a clip offset of 102.67 s; the fact
+    // passed the anchor bar while the sentence named a match time 16-19 minutes
+    // away from the attested stamp (`matchClock.token` 18:13).
+    "- Never call the `Window:` offset a time of the match: no 'mark of the match', 'of the match', 'match clock', 'match time' or 'minute of the match'. If you name it, frame it as the clip ('1:42 into the clip', 'in this clip at 1:42') — the match clock is not in this evidence.",
+    // ADAAAA-8910 (defect 3): a competition/venue the match context carries is a
+    // fact; one it does not carry is an invention.
+    ...(attestsVenue
+      ? []
+      : [
+          "- The match context carries NO competition and NO venue: never name one, and never write 'this competition', 'this tournament', 'this league', 'the stadium', 'the arena' or 'the atmosphere in the ground'. Describe the play, not the occasion.",
+        ]),
+    // ADAAAA-8910 (defect 4): the score digits and the sides' names are attested;
+    // WHICH SIDE scored is not. r1 and r3 of job `9bed3bd7` carry the same
+    // `1-1>2-1` transition and named opposite teams as the scorer.
+    ...(attestsScoring
+      ? [
+          "- The evidence attests the score CHANGE and the sides' names, never which side scored. Do NOT say who took the lead, levelled, equalised, went ahead, made it 2-1 or restored the lead — state the score line as the scoreboard shows it ('the scoreboard moves to 2-1') and name the attested team for what it is doing in this clip (pressing, holding possession, working the ball).",
+        ]
+      : []),
     "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.",
     ...(attestedActors.length > 0
       ? [
@@ -1681,7 +1894,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- Never invent a name, a team, a venue or a statistic. A role noun ('the midfielder', 'the keeper', 'the striker', 'the defender', 'the winger') is a claim: use it ONLY when the evidence below uses that word. Otherwise describe the play, the move or the shot, or name an attested team.",
     ...(attestsScoring
       ? []
-      : ["- Name the clock in your copy (the window label, e.g. `0:12`), but the clock alone is not enough: pair it with the competition/venue or an attested action."]),
+      : [`- Name the clock in your copy (the window label, e.g. \`0:12\`), but the clock alone is not enough: pair it with ${attestsVenue ? "the competition/venue or " : ""}an attested action.`]),
     "- Do not open with the same words as another card in this job: vary your first four words.",
     ...(input.avoidOpenings && input.avoidOpenings.length > 0
       ? [`- Do not open with any of these already-served runs: ${input.avoidOpenings.slice(0, 8).map((o) => `'${o}'`).join(", ")}.`]
@@ -1713,6 +1926,29 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       return [
         `- The previous draft named an entity this evidence does not attest. Name ONLY these attested actors: ${attestedActors.slice(0, 8).join(", ")}. Do not name any other team, player, venue or competition.`,
       ];
+    })(),
+    ...(() => {
+      // ADAAAA-8910 (defects 2-4): the retry is told WHICH unattested claim the
+      // draft made, so the second sample repairs the sentence instead of
+      // re-landing the same shape (the AC5 retry slot is the only second chance).
+      const violations = input.retry?.violations ?? [];
+      const lines: string[] = [];
+      if (violations.includes("clock-frame")) {
+        lines.push(
+          `- The previous draft called the ${typeof input.windowTs === "number" ? clockLabel(input.windowTs) : "window"} offset a time of the match. Say '${typeof input.windowTs === "number" ? clockLabel(input.windowTs) : "0:12"} into the clip' (or 'in this clip'), never 'mark of the match' or 'match time'.`
+        );
+      }
+      if (violations.includes("unattested-venue")) {
+        lines.push(
+          "- The previous draft named a competition or venue the match context does not carry. Delete every competition, league, tournament, cup, stadium and arena word; describe the play instead."
+        );
+      }
+      if (violations.includes("unattested-side")) {
+        lines.push(
+          "- The previous draft said which side scored or took the lead. Restate the scoreboard line only ('the scoreboard moves to 2-1') and name the attested team for its play (pressing, possession), never as the scorer."
+        );
+      }
+      return lines;
     })(),
     "- Do not restate the headline or the announcer line.",
     "- No em-dash continuations, no 'T+' prefixes, no internal tokens, no speculation ('appeared to', 'looked like').",
