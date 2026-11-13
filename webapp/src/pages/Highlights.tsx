@@ -4,6 +4,7 @@ import { Zap, Upload, MonitorPlay, Radio, Tv, Loader2, Trash2 } from "lucide-rea
 import { api, getToken, type Highlight, type Job, uploadVideo, VOD_MAX_UPLOAD_BYTES, formatBytes } from "../lib/api";
 import { readSSE } from "../lib/sse";
 import { isOverLimit, oversizedHelp } from "../lib/vodUpload";
+import { parseScoreboardRoiInput } from "../lib/scoreboardSurface";
 import { useAuth, useIsAdmin } from "../lib/auth";
 import {
   useProcessingJobs,
@@ -82,6 +83,10 @@ export function Highlights() {
   const [videoPath, setVideoPath] = useState("/data/test_vod.mp4");
   const [gameHint, setGameHint] = useState("Esports");
   const [lookFor, setLookFor] = useState(GAME_DEFAULTS.Esports);
+  // ADAAAA-8835 (Inc 1): the typed score-bug pin (normalized x0,y0,x1,y1).
+  // Blank = no pin = today's auto-detect behaviour. Click-to-draw on a preview
+  // frame is a later UX increment; this is the typed control only.
+  const [scoreboardRoiInput, setScoreboardRoiInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [job, setJob] = useState<any>(null);
@@ -113,6 +118,9 @@ export function Highlights() {
   const navigate = useNavigate();
 
   const isLive = source !== "file";
+  // ADAAAA-8835 (Inc 1): one parse of the typed pin per render — the form shows
+  // its error live and `run()` refuses a malformed box before POSTing.
+  const roiParse = parseScoreboardRoiInput(scoreboardRoiInput);
 
   // ADAAAA-8544 item 7: the per-stream decide knob. Cadence defaults to 5 s —
   // the CEO's economy ruling (spec rev 3 §7) — and the cap defaults to blank,
@@ -195,6 +203,14 @@ export function Highlights() {
     setJob(null);
     setAcceptedUploadId(null);
     setVodJobId(null);
+    // ADAAAA-8835 (Inc 1): a malformed score-bug box is refused BEFORE any upload
+    // or POST, so the user sees the box error instead of a server 422.
+    if (!roiParse.ok) {
+      setError(roiParse.message);
+      setBusy(false);
+      return;
+    }
+    const scoreboardRoi = roiParse.roi;
     // VOD "Upload / file" source with a local file chosen (not the URL
     // fallback): pre-check size client-side, then multipart upload with
     // progress; the server runs the same extractFrames -> analyzeJob -> clip
@@ -212,6 +228,7 @@ export function Highlights() {
           file,
           gameHint,
           preferLabels: lookFor.split(",").map((s) => s.trim()).filter(Boolean),
+          ...(scoreboardRoi ? { scoreboardRoi } : {}),
           onProgress: (f) => setUploadPct(f),
         });
         setUploadPct(null);
@@ -265,6 +282,8 @@ export function Highlights() {
           // rateCapPer300s}` and nothing else. A VOD upload sends the exact body
           // it always has (the knob has no meaning offline).
           ...(knobSubmission ? decideKnobRequestBody({ source, submission: knobSubmission }) : {}),
+          // ADAAAA-8835 (Inc 1): the score-bug pin (absent = auto-detect).
+          ...(scoreboardRoi ? { scoreboardRoi } : {}),
         },
       });
       if (isLive) {
@@ -449,6 +468,27 @@ export function Highlights() {
 
         <label className="mb-2 mt-5 block text-xs uppercase tracking-wide text-mut">What to look for</label>
         <input className="input-neon" value={lookFor} onChange={(e) => setLookFor(e.target.value)} />
+
+        {/* ADAAAA-8835 (Inc 1): pin the score bug for THIS job. A live stream can
+            carry a PIP of another game with its own score bug inside the default
+            top band; pinning scopes the scoreboard OCR to this normalized box and
+            nothing outside it. Blank keeps auto-detect. */}
+        <label className="mb-2 mt-5 block text-xs uppercase tracking-wide text-mut" htmlFor="scoreboard-roi">
+          Score bug box — normalized x0,y0,x1,y1 (optional)
+        </label>
+        <input
+          id="scoreboard-roi"
+          data-scoreboard-roi
+          className="input-neon"
+          value={scoreboardRoiInput}
+          onChange={(e) => setScoreboardRoiInput(e.target.value)}
+          placeholder="e.g. 0,0,0.55,0.18 — leave blank to auto-detect"
+        />
+        {roiParse && !roiParse.ok && (
+          <div className="mt-2 text-sm text-red" data-scoreboard-roi-error role="alert">
+            {roiParse.message}
+          </div>
+        )}
 
         {/* ADAAAA-8544 item 7 — the per-stream decide cost knob. It shows for
             every LIVE source (a VOD upload pays no decide, so it gets no knob).

@@ -137,7 +137,10 @@ export class Store {
     for (const d of datasets) this.datasets.set(d.id, d);
   }
 
-  async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number }): Promise<Job> {
+  async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number;
+    /** ADAAAA-8835 (Inc 1): the per-job score-bug pin + its declared provenance block. */
+    scoreboardRoi?: [number, number, number, number];
+    scoreboardSurface?: { roi: [number, number, number, number]; source: "explicit" | "discovery" | "default_top_band"; seqFirstSeen: number; verified: boolean } }): Promise<Job> {
     const id = input.id ?? randomUUID();
     const job: Job = JobSchema.parse({
       id,
@@ -147,6 +150,8 @@ export class Store {
       gameHint: input.gameHint,
       preferLabels: input.preferLabels ?? [],
       sampleFps: input.sampleFps,
+      ...(input.scoreboardRoi ? { scoreboardRoi: input.scoreboardRoi } : {}),
+      ...(input.scoreboardSurface ? { scoreboardSurface: input.scoreboardSurface } : {}),
       status: "queued",
       createdAt: new Date().toISOString(),
     });

@@ -1496,6 +1496,39 @@ export const ResumeCheckpointSchema = z.object({
 });
 export type ResumeCheckpoint = z.infer<typeof ResumeCheckpointSchema>;
 
+/**
+ * ADAAAA-8835 (Inc 1): the score-surface PROVENANCE block on a job.
+ *
+ * Which region of the frame the scoreboard OCR actually cropped for this job,
+ * where that region came from, the first observation seq that reported it, and
+ * whether that box produced a parseable score. This is the board-visible half of
+ * the per-job score-bug pin: without it the next "foreign score bug" report is
+ * undiagnosable from the board, because the pin (or a discovery guess, or the
+ * shipped top band) never leaves the perceive session.
+ *
+ * `source` is the truthful provenance, mapped from perceive's own
+ * `scoreboard_roi_source`:
+ *   explicit          — an operator/job PIN (`POST /jobs` `scoreboardRoi`), or
+ *                       the process-wide `PERCEIVE_SCOREBOARD_ROI` calibration
+ *   discovery         — the session auto-located/learned the box (locator,
+ *                       selector, learned crop, proven incumbent)
+ *   default_top_band  — the built-in top-band prior (full width x top 25 %)
+ * `seqFirstSeen` is the frame seq at which THIS box/source first appeared;
+ * `-1` means the pin was declared at job creation and no observation has
+ * reported it yet. `verified` is monotonic for a box: true once its crop
+ * produced a parseable score, reset to false when the box changes.
+ *
+ * Additive optional: absent on records written before this field existed, and on
+ * a job whose perceive session has not reported a crop yet.
+ */
+export const ScoreboardSurfaceSchema = z.object({
+  roi: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  source: z.enum(["explicit", "discovery", "default_top_band"]),
+  seqFirstSeen: z.number().int(),
+  verified: z.boolean(),
+});
+export type ScoreboardSurface = z.infer<typeof ScoreboardSurfaceSchema>;
+
 export const JobSchema = z.object({
   id: z.string(),
   ownerId: z.string().optional(),
@@ -1579,6 +1612,17 @@ export const JobSchema = z.object({
   // `vodSampleFpsDefault` config for this job; still bounded by runner
   // capability and `vodSampleMaxFps` in resolveSampleFps.
   sampleFps: z.number().positive().optional(),
+  // ADAAAA-8835 (Inc 1): the per-job score-bug PIN, normalized 0..1
+  // `[x0, y0, x1, y1]`. When present the server delivers it on every
+  // `/app/analyze` for this job (mirroring `homography`/`goalLine`) and perceive
+  // adopts it as the session ROI with source `explicit`, ahead of discovery.
+  // Absent => today's behaviour (env calibration / discovery / top band),
+  // byte-identical. Additive optional — absent on records that predate the pin.
+  scoreboardRoi: z.tuple([z.number(), z.number(), z.number(), z.number()]).optional(),
+  // ADAAAA-8835 (Inc 1): read-only provenance of the score surface perceive
+  // actually cropped (see ScoreboardSurfaceSchema). Additive optional — absent
+  // before the first reported crop and on records that predate it.
+  scoreboardSurface: ScoreboardSurfaceSchema.optional(),
   // ADAAAA-8544: the per-stream decide cost knob, resolved ONCE at job start and
   // FROZEN — never rewritten mid-stream (a mid-stream change would alter the
   // latency/spend profile of a stream already being measured; the user restarts

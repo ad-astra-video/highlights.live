@@ -586,6 +586,16 @@ export interface JobDetail {
     runningSummary?: string;
     summaryLog?: SummaryLogEntry[];
     sampleFps?: number;
+    // ADAAAA-8835 (Inc 1): the per-job score-bug pin + the read-only provenance
+    // of the surface perceive actually cropped. Additive optional — absent on
+    // records that predate the pin and before the first reported crop.
+    scoreboardRoi?: [number, number, number, number];
+    scoreboardSurface?: {
+      roi: [number, number, number, number];
+      source: "explicit" | "discovery" | "default_top_band";
+      seqFirstSeen: number;
+      verified: boolean;
+    };
     framesAnalyzed?: number;
     candidatesTriggered?: number;
     // ADAAAA-7624: which trigger path produced `candidatesTriggered`. `observe`
