@@ -102,6 +102,9 @@ export function buildRecenteredAlternative(input: {
   clipUri: string;
   clipWindow: { start: number; end: number };
   clipBytes?: number;
+  /** ADAAAA-8906: the measured position of the dive moment inside the option
+   *  file (seconds from its first frame). Absent when nothing was measured. */
+  momentDeliveredOffsetSec?: number | null;
   clipError?: string;
   createdAt?: string;
 }): HighlightAlternative {
@@ -135,6 +138,9 @@ export function buildRecenteredAlternative(input: {
     ...(Number.isFinite(conf as number) ? { momentConfidence: clamps01(conf as number) } : {}),
     ...(accept != null && Number.isFinite(accept) ? { acceptAnchorTs: accept } : {}),
     ...(accept != null && Number.isFinite(accept) ? { driftSec: input.momentTs - accept } : {}),
+    ...(Number.isFinite(input.momentDeliveredOffsetSec as number)
+      ? { momentDeliveredOffsetSec: Number(input.momentDeliveredOffsetSec) }
+      : {}),
     createdAt: input.createdAt ?? new Date().toISOString(),
   });
 }
@@ -184,7 +190,7 @@ export async function deliverRecenteredOption(input: {
   highlightId: string;
   dive: { ts: number; confidence?: number };
   /** Cut the option's OWN file from the rail that owns the footage. */
-  cut: () => Promise<{ clipUri: string; start: number; end: number; bytes?: number; clipError?: string }>;
+  cut: () => Promise<{ clipUri: string; start: number; end: number; bytes?: number; offsetSec?: number | null; clipError?: string }>;
 }): Promise<HighlightAlternative | null> {
   const { deps, jobId, highlightId, dive } = input;
   const log = deps.log ?? (() => {});
@@ -213,6 +219,7 @@ export async function deliverRecenteredOption(input: {
     clipUri: out.clipUri,
     clipWindow: { start: out.start, end: out.end },
     clipBytes: out.bytes,
+    momentDeliveredOffsetSec: out.offsetSec,
     clipError: out.clipError,
   });
   const { record, created } = await deps.addAlternative(alt);
@@ -221,7 +228,8 @@ export async function deliverRecenteredOption(input: {
   log(
     `[live-dive-option:${jobId}] ${highlightId} kept its accept-anchor clip ${row.clipUri} ` +
       `(sha unchanged); added re-centered option ${record.id} at ${dive.ts.toFixed(3)}s ` +
-      `(drift ${drift}s, ${out.bytes == null ? "?" : out.bytes} B, window [${out.start.toFixed(3)}, ${out.end.toFixed(3)}])`
+      `(drift ${drift}s, ${out.bytes == null ? "?" : out.bytes} B, window [${out.start.toFixed(3)}, ${out.end.toFixed(3)}], ` +
+      `moment at ${out.offsetSec == null ? "?" : out.offsetSec.toFixed(3)}s of the option)`
   );
   return record;
 }

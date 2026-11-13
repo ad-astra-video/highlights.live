@@ -8,7 +8,7 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { probeDuration, probeFlushedDuration } from "./ffmpeg";
-import { anchorCutOnEvidence, clipAuditFields, type ClipCut } from "./clip-anchor";
+import { anchorCutOnEvidence, clipAuditFields, isMomentAnchor, type ClipCut } from "./clip-anchor";
 import type { ClipCutWindow } from "./clip-placement";
 import { clipWindow } from "./config";
 import type { ServerConfig } from "./config";
@@ -431,6 +431,9 @@ export class LiveIngest {
         evidenceTs: anchorTs,
         evidenceFramePath,
         tag: `live-ingest:${this.jobId}`,
+        // ADAAAA-8906: a dive moment is placed on its own picture at
+        // `moment - window.start`, never on the score flip before it.
+        momentAnchor: isMomentAnchor(opts.anchorTs, ts),
         // ADAAAA-8714: on a celebration-tail row the cue IS the anchor — a score
         // flip found earlier would re-centre the card on the goal and push the
         // reaction off the end.

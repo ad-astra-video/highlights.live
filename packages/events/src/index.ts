@@ -2444,6 +2444,25 @@ export const HighlightRecordSchema = z.object({
   summaryDropped: z.number().int().min(0).optional(),
   summaryDroppedByReason: z.record(z.string(), z.number().int().min(0)).optional(),
   summaryP95Ms: z.number().min(0).optional(),
+  // ADAAAA-8903 (§15.4): the REFUSAL DETAIL a `dropped:*` row keeps, so the next
+  // census can separate a depth-threshold bug from a compliance refusal by
+  // reading the row instead of replaying it. `summaryDroppedByReason` is only an
+  // aggregate counter (`{gate: 1}`), which cannot say whether the copy was thin
+  // (`too-few-words` at/below the floor) or grounded-thin (`too-few-facts`) — the
+  // rev-7 grade therefore recorded §15.4 as `not_captured`. Declared HERE because
+  // `HighlightRecordSchema` is what persists a row (zod `.object()` strips any
+  // undeclared key, so a field the lane writes without this block stores NULL).
+  // `summaryViolations` carries the gate's own violation tokens; `summaryWordCount`
+  // is the word count of the text the gate JUDGED (post AC10 neutralisation, so it
+  // can differ from the raw reply) beside the band's `summaryFloorWords` /
+  // `summaryTargetMinWords`; `summaryDroppedSentences` names a neutraliser-caused
+  // shortfall (ADAAAA-8831). Additive optional: absent on legacy rows and on a
+  // row the lane served (a served row carries `summary` instead).
+  summaryViolations: z.array(z.string()).optional(),
+  summaryWordCount: z.number().int().min(0).optional(),
+  summaryFloorWords: z.number().int().min(0).optional(),
+  summaryTargetMinWords: z.number().int().min(0).optional(),
+  summaryDroppedSentences: z.number().int().min(0).optional(),
   // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
   // `reason` was derived from, with the frame that confirms it.
   colour: ColourSignalSchema.optional(),
@@ -2562,6 +2581,14 @@ export const HighlightAlternativeSchema = z.object({
   /** ADAAAA-8893 (D5): the option clip's own bytes, so the extra storage per
    *  re-anchored row is reportable (p50/p95) without a second file probe. */
   clipBytes: z.number().int().min(0).optional(),
+  /** ADAAAA-8906: where the dive moment ACTUALLY landed inside the option file,
+   *  measured from its first frame (seconds) — the delivered truth, not the
+   *  number the placement asked for. QA's D5 grade found the row fields right
+   *  while the file opened 1.0-1.2 s early; this field makes that class of
+   *  defect readable from the row instead of only from footage. Absent on a
+   *  content-clock fallback (nothing was measured) and on every non-recentered
+   *  alternative. */
+  momentDeliveredOffsetSec: z.number().optional(),
   /** Delivered clip window + the cut media path. */
   start: z.number(),
   end: z.number(),
