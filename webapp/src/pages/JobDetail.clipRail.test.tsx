@@ -291,3 +291,52 @@ describe("Theme — rail chrome is palette-coloured, not neutral overlay chrome"
     expect(block).not.toContain("rgba(");
   });
 });
+
+// ADAAAA-8883: the buttons must centre on the VIDEO box, not on the rail
+// wrapper. The wrapper's box also holds the identity strip (and an option row
+// on alternative slides), so a `top-1/2` anchored to it lands below the
+// player's centre. The fix nests the buttons in an overlay that is the same
+// box as the player (`w-full aspect-video`, exactly VideoClip's own root), so
+// these assertions pin that structure: the overlay must exist, must carry the
+// aspect box, and must be the buttons' parent — a later edit that re-parents
+// them back onto the wrapper would silently reintroduce the offset.
+describe("ADAAAA-8883 — prev/next are anchored to the aspect-video preview box", () => {
+  const html = card(hl({ alternatives: TWO_ALTS }));
+  const layerAt = html.indexOf("data-detail-clip-nav-layer");
+  const prevAt = html.indexOf("data-detail-clip-prev");
+  const nextAt = html.indexOf("data-detail-clip-next");
+
+  it("renders one nav layer, inside the rail wrapper and before both buttons", () => {
+    expect(count(html, "data-detail-clip-nav-layer")).toBe(1);
+    expect(layerAt).toBeGreaterThan(html.indexOf("data-detail-clip-rail-wrap"));
+    expect(layerAt).toBeLessThan(prevAt);
+    expect(prevAt).toBeLessThan(nextAt);
+  });
+
+  it("the nav layer IS the player's box: w-full aspect-video at the top of the wrapper", () => {
+    const tag = html.slice(html.lastIndexOf("<div", layerAt), html.indexOf(">", layerAt) + 1);
+    expect(tag).toContain("absolute");
+    expect(tag).toContain("inset-x-0");
+    expect(tag).toContain("top-0");
+    expect(tag).toContain("aspect-video");
+    // Transparent to pointers so the native player controls still get clicks;
+    // the buttons themselves opt back in.
+    expect(tag).toContain("pointer-events-none");
+  });
+
+  it("both buttons are nested in that layer, not siblings of the rail", () => {
+    // Nothing closes a div between the layer opening tag and the first button,
+    // so the button is a child of the layer.
+    expect(html.slice(layerAt, prevAt)).not.toContain("</div>");
+    for (const at of [prevAt, nextAt]) {
+      const tag = html.slice(html.lastIndexOf("<button", at), html.indexOf(">", at) + 1);
+      expect(tag).toContain("pointer-events-auto");
+      expect(tag).toContain("top-1/2");
+      expect(tag).toContain("-translate-y-1/2");
+    }
+  });
+
+  it("a single clip still renders no nav layer", () => {
+    expect(count(card(hl()), "data-detail-clip-nav-layer")).toBe(0);
+  });
+});
