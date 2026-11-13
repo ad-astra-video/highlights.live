@@ -291,6 +291,44 @@ class LauncherDetachmentTest(unittest.TestCase):
             self.assertIn("before arming", arm["reason"])
             self.assertIn("no supervised leg exists", proc.stdout.decode())
 
+    def test_a_leg_that_never_arms_is_stopped_by_the_launcher(self):
+        """Pass bar 2: an arm failure stops the job it can name, at $0."""
+        _StopHandler.received = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _StopHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as run_dir:
+                stub = os.path.join(run_dir, "half_harness.py")
+                with open(stub, "w", encoding="utf-8") as fh:
+                    # Creates the job, then dies before arming — the 8924 shape
+                    # minus the detached launch, which is what the arm check is
+                    # for.
+                    fh.write(
+                        "print('[leg] job stub-job-123 created 2026-11-13T12:21:00Z', flush=True)\n"
+                        "import sys\nsys.exit(0)\n"
+                    )
+                proc = subprocess.run(
+                    [
+                        sys.executable, LAUNCHER,
+                        "--run-dir", run_dir, "--no-supervisor", "--harness", stub,
+                        "--arm-timeout-s", "5", "--quiet",
+                        "--authorized-duration-s", "30", "--cap-usd", "0.10",
+                        "--token", "dry-run-token",
+                        "--job-base", f"http://127.0.0.1:{server.server_address[1]}",
+                    ],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60,
+                )
+                self.assertEqual(proc.returncode, 8, proc.stdout.decode()[-2000:])
+                arm = read_json(os.path.join(run_dir, "arm.json"))
+                self.assertEqual(arm["jobId"], "stub-job-123")
+                self.assertTrue(arm["stop"]["attempted"])
+                self.assertTrue(arm["stop"]["ok"], arm["stop"])
+                self.assertEqual(arm["stop"]["http"], 200)
+                self.assertIn("/jobs/stub-job-123/stop", _StopHandler.received)
+        finally:
+            server.shutdown()
+            server.server_close()
+
 
 class SupervisorDecisionTest(unittest.TestCase):
     """The fallback supervisor's rules, without a clock or a network."""
