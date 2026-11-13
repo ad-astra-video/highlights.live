@@ -139,6 +139,25 @@ export function shouldPollStill(mode: string | null | undefined, surface: unknow
   return mode === "nopreview" && !!surface;
 }
 
+/**
+ * ADAAAA-8970 (Inc 2): the four states this slot can be in, one policy.
+ *
+ *   inert    - there is no `scoreboardSurface` block: the hook never builds a
+ *              source, so 0 frame requests, 0 overlay nodes, 0 `<img>`.
+ *   waiting  - the block exists but perceive has not cropped a frame yet
+ *              (route answers `{frames: []}` or 404): a NAMED waiting state,
+ *              text only, at most one list read per poll, 0 `<img>`.
+ *   refused  - a frame read failed (401/403 for this token, or any other
+ *              transport failure): a NAMED refusal state, distinct from
+ *              "no frames yet", and the client does NOT fall back to a still it
+ *              already dropped nor loop the auth fetch.
+ *   ready    - there is a picture: 1 `<img>`, 1 box once measured, and the
+ *              frame's own seq/stamp/age (stale past 60 s).
+ */
+export type LiveStillStateKind = "waiting" | "refused" | "ready";
+/** Why a still could not be shown: the token was refused, or the read failed. */
+export type LiveStillRefusal = "auth" | "transport" | null;
+
 export interface LiveStillTransport {
   /** `GET /jobs/:id/frames` (auth required). */
   listFrames(jobId: string): Promise<unknown>;
@@ -147,11 +166,48 @@ export interface LiveStillTransport {
 }
 
 export interface LiveStillSnapshot {
+  state: LiveStillStateKind;
+  /**
+   * The frame whose BYTES ARE ON SCREEN — never merely the newest seq on the
+   * route. A failed read must not relabel an older picture as the newest frame
+   * (that would be a provenance lie: the caption would carry a seq the picture
+   * does not belong to).
+   */
   frame: LiveFrameRef | null;
-  /** Object URL of the still, or the previous one while a new fetch is failing. */
+  /** Newest seq the list served this poll (diagnostic; null when none/failed). */
+  newestSeq: number | null;
+  /** Object URL of the still; null whenever nothing is shown. */
   url: string | null;
-  /** Set when a request failed; the caption keeps the last honest frame. */
+  /** Set when a request failed, so the state can say WHY it is not rendering. */
   error: string | null;
+  refusal: LiveStillRefusal;
+}
+
+/** Waiting copy: the named "no frame extracted yet" state (never a blank box). */
+export const STILL_WAITING_TEXT =
+  "No analyzed frame yet — the still appears when perceive crops its first frame.";
+
+/** Refusal copy: distinct from the waiting state, and it names the reason. */
+export function stillRefusalText(refusal: LiveStillRefusal, error: string | null): string {
+  if (refusal === "auth") {
+    return `The newest analyzed frame could not be read — this session's token was refused (${error ?? "HTTP 401"}). Sign in again to restore the still.`;
+  }
+  return `The newest analyzed frame could not be read (${error ?? "request failed"}) — no still to overlay.`;
+}
+
+/** HTTP status carried by a frame-read failure: `authFetchFrame` throws a plain
+ *  Error with `HTTP <status>` in the message, a caller may attach `status`. */
+export function frameErrorStatus(e: unknown): number | null {
+  const status = (e as { status?: unknown } | null)?.status;
+  if (typeof status === "number" && Number.isFinite(status)) return status;
+  const msg = typeof (e as { message?: unknown } | null)?.message === "string" ? (e as { message: string }).message : String(e);
+  const m = /HTTP\s+(\d{3})/.exec(msg);
+  return m ? Number(m[1]) : null;
+}
+
+/** A 401/403 for the current token is an AUTH refusal, not "no frames yet". */
+export function isAuthRefusal(status: number | null): boolean {
+  return status === 401 || status === 403;
 }
 
 /**
@@ -160,13 +216,30 @@ export interface LiveStillSnapshot {
  * changed. `counts` exists so a test can measure that instead of trusting a
  * comment.
  *
+ * ADAAAA-8970 (degrade contract):
+ * - an empty/absent frame list is `waiting` (text only, 0 `<img>`, nothing
+ *   cached from a previous poll);
+ * - a 401/403 on the JPEG is a `refused` state that LATCHES: the same seq is
+ *   never re-attempted and neither is a later seq, so the client cannot loop the
+ *   auth route against a dead token. `reset()` (job change, or leaving the
+ *   no-preview state) clears the latch, so re-authenticating and returning
+ *   recovers;
+ * - an auth refusal DROPS the picture (`url: null`) instead of re-showing a still
+ *   the client already dropped; any other transport failure keeps the last
+ *   readable still, labelled with the frame it actually depicts (`frame`).
+ *
  * The source deliberately does not own revocation: the component revokes the
  * previous object URL from the effect cleanup that React runs after the new
- * `<img src>` has committed, so a swap never blanks the visible still.
+ * `<img src>` has committed, so a swap never blanks the visible still. Dropping
+ * the URL to `null` runs the same cleanup, so a refused frame is revoked too.
  */
 export class LiveStillSource {
   private loadedSeq: number | null = null;
   private url: string | null = null;
+  /** The frame the current `url` depicts (never the newest merely-listed seq). */
+  private shownFrame: LiveFrameRef | null = null;
+  /** Latched 401/403: no further image request until `reset()`. */
+  private authRefused = false;
   private listRequests = 0;
   private imageRequests = 0;
 
@@ -177,11 +250,31 @@ export class LiveStillSource {
     return { listRequests: this.listRequests, imageRequests: this.imageRequests };
   }
 
-  /** Forget the cached image (stage left the no-preview state): the next poll
-   *  re-fetches the frame it finds. */
+  /** Forget the cached image (stage left the no-preview state, or the job
+   *  changed): the next poll re-fetches the frame it finds, and a previously
+   *  refused token is allowed one fresh attempt. */
   reset(): void {
     this.loadedSeq = null;
     this.url = null;
+    this.shownFrame = null;
+    this.authRefused = false;
+  }
+
+  private snapshot(
+    state: LiveStillStateKind,
+    newestSeq: number | null,
+    error: string | null,
+    refusal: LiveStillRefusal,
+  ): LiveStillSnapshot {
+    return { state, frame: this.shownFrame, newestSeq, url: this.url, error, refusal };
+  }
+
+  /** The refusal state drops the picture: no `<img>` over a frame we may not read. */
+  private refuse(newestSeq: number | null, error: string, refusal: LiveStillRefusal): LiveStillSnapshot {
+    this.loadedSeq = null;
+    this.url = null;
+    this.shownFrame = null;
+    return { state: "refused", frame: null, newestSeq, url: null, error, refusal };
   }
 
   async poll(jobId: string): Promise<LiveStillSnapshot> {
@@ -190,25 +283,52 @@ export class LiveStillSource {
     try {
       payload = await this.transport.listFrames(jobId);
     } catch (e: unknown) {
-      return { frame: null, url: this.url, error: errorText(e) };
+      const text = errorText(e);
+      if (isAuthRefusal(frameErrorStatus(e))) {
+        this.authRefused = true;
+        return this.refuse(null, text, "auth");
+      }
+      // A list this poll could not read: keep an already-shown still (it is the
+      // last honest picture), otherwise say the read failed.
+      return this.snapshot(this.url ? "ready" : "refused", null, text, this.url ? null : "transport");
     }
 
     const frame = latestLiveFrame(payload);
     // No extracted frame yet (the job's frame dir does not exist or the writer
-    // has not landed one): an honest empty, not a placeholder picture.
-    if (!frame) return { frame: null, url: this.url, error: null };
+    // has not landed one): an honest, NAMED empty — never a placeholder picture.
+    if (!frame) {
+      this.loadedSeq = null;
+      this.url = null;
+      this.shownFrame = null;
+      return { state: "waiting", frame: null, newestSeq: null, url: null, error: null, refusal: null };
+    }
+
+    // The token was refused earlier: report the refusal, do not fetch again.
+    if (this.authRefused) {
+      return { state: "refused", frame: null, newestSeq: frame.seq, url: null, error: null, refusal: "auth" };
+    }
 
     if (frame.seq !== this.loadedSeq) {
       const uri = frame.uri.length > 0 ? frame.uri : `/jobs/${jobId}/frames/${frame.seq}`;
       this.imageRequests += 1;
       try {
-        this.url = await this.transport.fetchImage(uri);
+        const url = await this.transport.fetchImage(uri);
+        this.url = url;
         this.loadedSeq = frame.seq;
+        this.shownFrame = frame;
+        return this.snapshot("ready", frame.seq, null, null);
       } catch (e: unknown) {
-        return { frame, url: this.url, error: errorText(e) };
+        const text = errorText(e);
+        if (isAuthRefusal(frameErrorStatus(e))) {
+          this.authRefused = true;
+          return this.refuse(frame.seq, text, "auth");
+        }
+        // Transport failure: the still on screen (if any) stays, and it keeps the
+        // provenance of the frame it depicts — never the seq that failed.
+        return this.snapshot(this.url ? "ready" : "refused", frame.seq, text, this.url ? null : "transport");
       }
     }
-    return { frame, url: this.url, error: null };
+    return this.snapshot("ready", frame.seq, null, null);
   }
 }
 

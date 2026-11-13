@@ -59,6 +59,7 @@ describe("AC4.1 — one <img> and one box", () => {
   it("renders the honest empty state when no frame has been extracted yet", () => {
     const html = ssr({ frame: null, imgSrc: null });
     expect(html).toContain("data-live-stage-frame-still-empty");
+    expect(html).toContain("data-live-stage-frame-still-waiting");
     expect(html).toContain("No analyzed frame yet");
     expect(html).not.toContain("data-live-stage-frame-still-box=");
   });
@@ -66,6 +67,86 @@ describe("AC4.1 — one <img> and one box", () => {
   it("states a failed frame read instead of drawing an empty box", () => {
     const html = ssr({ frame: null, imgSrc: null, error: "HTTP 502" });
     expect(html).toContain("could not be read (HTTP 502)");
+  });
+});
+
+// ADAAAA-8970 (Inc 2): the degrade matrix in the SERVED markup. Counts are the
+// ticket's own columns — frame requests are measured in
+// `lib/liveFrameStill.test.ts`, and these are the `<img>` / box / label columns.
+describe("ADAAAA-8970 — the no-preview state matrix (markup)", () => {
+  const count = (html: string, marker: RegExp | string) => (html.match(marker as RegExp) ?? []).length;
+  const imgs = (html: string) => count(html, /<img/g);
+  const boxes = (html: string) => count(html, /data-live-stage-frame-still-box=/g);
+
+  it("frames empty: 0 `<img>`, 0 box, a NAMED waiting label that is not aria-hidden", () => {
+    const html = ssr({ frame: null, imgSrc: null, state: "waiting" });
+    expect(imgs(html)).toBe(0);
+    expect(boxes(html)).toBe(0);
+    expect(html).toContain('data-live-stage-frame-still-state="waiting"');
+    expect(html).toContain('data-live-stage-frame-still-waiting="true"');
+    expect(html).toContain('aria-hidden="false"');
+    expect(html).toContain("No analyzed frame yet");
+    // text only: no caption claiming a frame that is not there
+    expect(html).not.toContain("data-live-stage-frame-still-caption");
+  });
+
+  it("frame 401/403: 0 `<img>`, 0 box, a NAMED refusal label distinct from waiting", () => {
+    const html = ssr({
+      frame: null,
+      imgSrc: null,
+      error: "frame fetch failed: HTTP 401",
+      state: "refused",
+      refusal: "auth",
+    });
+    expect(imgs(html)).toBe(0);
+    expect(boxes(html)).toBe(0);
+    expect(html).toContain('data-live-stage-frame-still-state="refused"');
+    expect(html).toContain('data-live-stage-frame-still-refused="true"');
+    expect(html).toContain('data-live-stage-frame-still-refusal="auth"');
+    expect(html).toContain('aria-hidden="false"');
+    expect(html).toContain("token was refused (frame fetch failed: HTTP 401)");
+    expect(html).toContain("Sign in again");
+    // distinct from the waiting state, in marker AND copy
+    expect(html).not.toContain("data-live-stage-frame-still-waiting");
+    expect(html).not.toContain("No analyzed frame yet");
+  });
+
+  it("a 403 is classified as an auth refusal even when only the message carries it", () => {
+    const html = ssr({ frame: null, imgSrc: null, error: "frame fetch failed: HTTP 403" });
+    expect(html).toContain('data-live-stage-frame-still-refusal="auth"');
+    expect(html).toContain("token was refused");
+  });
+
+  it("a transport failure is a refusal, but says the read failed, not the token", () => {
+    const html = ssr({ frame: null, imgSrc: null, error: "HTTP 502" });
+    expect(html).toContain('data-live-stage-frame-still-refusal="transport"');
+    expect(html).toContain("could not be read (HTTP 502)");
+    expect(html).not.toContain("token was refused");
+  });
+
+  it("frame seq 4 min old: 1 `<img>`, 1 box, stale, with the served age", () => {
+    const html = ssr({ nowMs: ANCHOR + 112_300 + 240_000 });
+    expect(imgs(html)).toBe(1);
+    expect(boxes(html)).toBe(1);
+    expect(html).toContain('data-live-stage-frame-still-state="ready"');
+    expect(html).toContain('data-live-stage-frame-still-age="240s ago"');
+    expect(html).toContain('data-live-stage-frame-still-stale="true"');
+    expect(html).toContain("240s ago");
+    expect(html).toContain("· stale");
+    // the still carries its OWN seq and stamp
+    expect(html).toContain('data-live-stage-frame-still-seq="412"');
+    expect(html).toContain('data-live-stage-frame-still-stamp="T+01:52.3"');
+    // and the box is still mapped through the real geometry mapper
+    expect(html).toContain('data-live-stage-frame-still-box-px="76.8,21.6,384,64.8"');
+  });
+
+  it("a stale frame with a default_top_band source is never labelled pinned", () => {
+    const html = ssr({
+      surface: { ...SURFACE, source: "default_top_band", verified: false },
+      nowMs: ANCHOR + 112_300 + 240_000,
+    });
+    expect(html).toContain("prior — not measured");
+    expect(html).not.toContain("score bug: pinned");
   });
 });
 

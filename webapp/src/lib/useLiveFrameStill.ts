@@ -1,11 +1,16 @@
 /**
- * ADAAAA-8949 (Inc 4): the Live Stage no-preview still's data source.
+ * ADAAAA-8949 (Inc 4) + ADAAAA-8970 (Inc 2): the Live Stage no-preview still's
+ * data source and its degrade states.
  *
  * One `GET /jobs/:id/frames` per EXISTING detail poll (the page's 5 s
  * `VOD_DETAIL_POLL_MS` read drives `pollTick`), and the JPEG itself only when
  * the newest seq changed. There is deliberately no interval in here: the still
  * must not add a timer of its own, and it must not fetch at all unless the stage
  * is `nopreview` AND the job carries a `scoreboardSurface` block (AC4.1/AC4.7).
+ *
+ * Degrade policy (Inc 2) lives in `LiveStillSource`: this hook only forwards the
+ * state it reports and resets the source when the JOB changes, so a cached seq
+ * from the previous job can never be mistaken for this one's frame.
  *
  * The frame route serves the JPEG to an Authorization header, which `<img>`
  * cannot send, so the image is auth-fetched to a blob object URL through the
@@ -16,16 +21,25 @@
 import { useEffect, useRef, useState } from "react";
 import { api, getToken } from "./api";
 import { authFetchFrame } from "./jobDetail";
-import { createLiveStillSource, shouldPollStill, type LiveFrameRef, type LiveStillSource } from "./liveFrameStill";
+import {
+  createLiveStillSource,
+  shouldPollStill,
+  type LiveFrameRef,
+  type LiveStillRefusal,
+  type LiveStillSource,
+  type LiveStillStateKind,
+} from "./liveFrameStill";
 import type { ScoreboardSurface } from "./scoreboardSurface";
 
 export interface LiveFrameStillState {
+  state: LiveStillStateKind;
   frame: LiveFrameRef | null;
   imgSrc: string | null;
   error: string | null;
+  refusal: LiveStillRefusal;
 }
 
-const EMPTY: LiveFrameStillState = { frame: null, imgSrc: null, error: null };
+const EMPTY: LiveFrameStillState = { state: "waiting", frame: null, imgSrc: null, error: null, refusal: null };
 
 export function useLiveFrameStill(
   jobId: string,
@@ -35,6 +49,7 @@ export function useLiveFrameStill(
 ): LiveFrameStillState {
   const [state, setState] = useState<LiveFrameStillState>(EMPTY);
   const sourceRef = useRef<LiveStillSource | null>(null);
+  const jobRef = useRef(jobId);
   const active = shouldPollStill(mode, surface);
 
   if (!sourceRef.current) {
@@ -49,12 +64,19 @@ export function useLiveFrameStill(
           throw e;
         }
       },
+      // The frame route's 401/403 must be distinguishable from a transport
+      // failure: `authFetchFrame` only carries the status inside its message.
       fetchImage: (uri: string) => authFetchFrame(uri, getToken()),
     });
   }
 
   useEffect(() => {
     const source = sourceRef.current!;
+    // A different job on the same page: drop the previous job's seq/URL/refusal.
+    if (jobRef.current !== jobId) {
+      jobRef.current = jobId;
+      source.reset();
+    }
     if (!active) {
       // Leaving the no-preview state (or losing the surface block): forget the
       // cached seq so a return re-reads the newest frame instead of a stale one.
@@ -67,7 +89,13 @@ export function useLiveFrameStill(
       .poll(jobId)
       .then((snap) => {
         if (!live) return;
-        setState({ frame: snap.frame, imgSrc: snap.url, error: snap.error });
+        setState({
+          state: snap.state,
+          frame: snap.frame,
+          imgSrc: snap.url,
+          error: snap.error,
+          refusal: snap.refusal,
+        });
       })
       .catch(() => {
         /* a torn-down poll must never clobber the last honest still */

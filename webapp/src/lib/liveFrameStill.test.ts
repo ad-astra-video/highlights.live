@@ -11,15 +11,19 @@ import { describe, expect, it } from "vitest";
 import {
   LiveStillSource,
   LIVE_FRAME_STALE_SEC,
+  STILL_WAITING_TEXT,
   createLiveStillSource,
   formatContentStamp,
   formatFrameAge,
   frameAgeSeconds,
+  frameErrorStatus,
   frameStillLabel,
   frameWallClockMs,
+  isAuthRefusal,
   isFrameStale,
   latestLiveFrame,
   shouldPollStill,
+  stillRefusalText,
   type LiveFrameRef,
 } from "./liveFrameStill";
 import { contentRect, overlayBox } from "./scoreboardOverlay";
@@ -197,15 +201,20 @@ describe("AC4.1 / AC4.7 — <= 1 image fetch per poll", () => {
     const first = await source.poll("job-1");
     expect(first.url).toBe("blob:five");
     expect(first.error).toBeNull();
+    expect(first.state).toBe("ready");
 
     const bad = await source.poll("job-1");
-    // The still stays on screen; the failure is stated instead of a blank box.
-    expect(bad.frame?.seq).toBe(6);
+    // The still stays on screen, and it keeps the provenance of the frame it
+    // DEPICTS (5), not the seq that failed to load (6).
+    expect(bad.state).toBe("ready");
+    expect(bad.frame?.seq).toBe(5);
+    expect(bad.newestSeq).toBe(6);
     expect(bad.url).toBe("blob:five");
     expect(bad.error).toContain("HTTP 500");
 
     failSeq6 = false;
     const retried = await source.poll("job-1");
+    expect(retried.frame?.seq).toBe(6);
     expect(retried.url).toBe("blob:six");
     expect(retried.error).toBeNull();
     // The seq never advanced on the failure, so the retry re-fetched frame 6.
@@ -230,6 +239,9 @@ describe("AC4.1 / AC4.7 — <= 1 image fetch per poll", () => {
     expect(snap.frame).toBeNull();
     expect(snap.url).toBeNull();
     expect(snap.error).toContain("HTTP 502");
+    // ADAAAA-8970: a read failure is a REFUSAL state, never "no frames yet".
+    expect(snap.state).toBe("refused");
+    expect(snap.refusal).toBe("transport");
   });
 
   it("reset() forgets the cached seq so a return to the stage re-fetches", async () => {
@@ -239,6 +251,182 @@ describe("AC4.1 / AC4.7 — <= 1 image fetch per poll", () => {
     source.reset();
     await source.poll("job-1");
     expect(source.counts).toEqual({ listRequests: 2, imageRequests: 2 });
+  });
+});
+
+// ADAAAA-8970 (Inc 2): the degrade contract, measured against a fake transport.
+// Each row of the ticket's matrix is a REQUEST COUNT + a state, so both are
+// asserted from the source's own counters rather than described in prose.
+describe("ADAAAA-8970 — the no-preview degrade matrix", () => {
+  it("no surface: inert, so 0 frame requests (the hook never polls)", () => {
+    // `shouldPollStill` is the only gate: no block -> no source -> no request.
+    expect(shouldPollStill("nopreview", undefined)).toBe(false);
+    expect(shouldPollStill("nopreview", null)).toBe(false);
+    // And a source that is never polled has zero counters, by construction.
+    const { transport, calls } = fakeTransport([listOf([{ seq: 4, timestamp: 8 }])]);
+    const source = createLiveStillSource(transport);
+    expect(source.counts).toEqual({ listRequests: 0, imageRequests: 0 });
+    expect(calls).toEqual([]);
+  });
+
+  it("frames empty: waiting, 0 image requests, and at most 1 list per poll", async () => {
+    const { transport } = fakeTransport([{ frames: [] }, { frames: [] }, { frames: [] }]);
+    const source = createLiveStillSource(transport);
+    const a = await source.poll("job-1");
+    const b = await source.poll("job-1");
+    const c = await source.poll("job-1");
+    for (const snap of [a, b, c]) {
+      expect(snap.state).toBe("waiting");
+      expect(snap.frame).toBeNull();
+      expect(snap.url).toBeNull();
+      expect(snap.refusal).toBeNull();
+    }
+    expect(source.counts).toEqual({ listRequests: 3, imageRequests: 0 });
+  });
+
+  it("frames 404 (empty payload) is the same waiting state, not a failure", async () => {
+    const { transport } = fakeTransport([null, { frames: [] }]);
+    const source = createLiveStillSource(transport);
+    expect((await source.poll("job-1")).state).toBe("waiting");
+    expect((await source.poll("job-1")).state).toBe("waiting");
+    expect(source.counts).toEqual({ listRequests: 2, imageRequests: 0 });
+  });
+
+  it("frame 401: refused/auth, one image attempt TOTAL, never a loop", async () => {
+    const { transport, calls } = fakeTransport([
+      listOf([{ seq: 6, timestamp: 12 }]),
+      listOf([{ seq: 6, timestamp: 12 }]),
+      listOf([{ seq: 6, timestamp: 12 }]),
+    ]);
+    const fetchImage = async (uri: string) => {
+      calls.push(`image:${uri}`);
+      throw new Error("frame fetch failed: HTTP 401");
+    };
+    const source = new LiveStillSource({ ...transport, fetchImage });
+
+    const first = await source.poll("job-1");
+    expect(first.state).toBe("refused");
+    expect(first.refusal).toBe("auth");
+    expect(first.url).toBeNull();
+    expect(first.frame).toBeNull();
+    expect(first.error).toContain("HTTP 401");
+
+    const second = await source.poll("job-1");
+    const third = await source.poll("job-1");
+    expect(second.state).toBe("refused");
+    expect(third.state).toBe("refused");
+    // One attempt, not one per poll: the refusal is latched for this token.
+    expect(source.counts).toEqual({ listRequests: 3, imageRequests: 1 });
+    expect(calls.filter((c) => c.startsWith("image:"))).toHaveLength(1);
+  });
+
+  it("frame 403 on a NEW seq after a good frame drops the still instead of re-showing it", async () => {
+    let listIdx = 0;
+    const lists = [listOf([{ seq: 5, timestamp: 10 }]), listOf([{ seq: 5, timestamp: 10 }, { seq: 6, timestamp: 12 }])];
+    const source = new LiveStillSource({
+      async listFrames() {
+        const next = lists[Math.min(listIdx, lists.length - 1)];
+        listIdx += 1;
+        return next;
+      },
+      async fetchImage(uri: string) {
+        if (uri.endsWith("/6")) throw new Error("frame fetch failed: HTTP 403");
+        return "blob:five";
+      },
+    });
+    const good = await source.poll("job-1");
+    expect(good.state).toBe("ready");
+    expect(good.url).toBe("blob:five");
+
+    const refused = await source.poll("job-1");
+    // The client already dropped frame 6; it must NOT fall back to frame 5.
+    expect(refused.state).toBe("refused");
+    expect(refused.refusal).toBe("auth");
+    expect(refused.url).toBeNull();
+    expect(refused.frame).toBeNull();
+    expect(source.counts).toEqual({ listRequests: 2, imageRequests: 2 });
+  });
+
+  it("a latched auth refusal does NOT retry a later seq; reset() allows one fresh attempt", async () => {
+    let listIdx = 0;
+    const lists = [
+      listOf([{ seq: 7, timestamp: 14 }]),
+      listOf([{ seq: 7, timestamp: 14 }, { seq: 8, timestamp: 16 }]),
+      listOf([{ seq: 7, timestamp: 14 }, { seq: 8, timestamp: 16 }]),
+    ];
+    let attempts = 0;
+    const source = new LiveStillSource({
+      async listFrames() {
+        const next = lists[Math.min(listIdx, lists.length - 1)];
+        listIdx += 1;
+        return next;
+      },
+      async fetchImage(uri: string) {
+        attempts += 1;
+        if (attempts === 1) throw new Error("frame fetch failed: HTTP 401");
+        return `blob:${uri}`;
+      },
+    });
+    expect((await source.poll("job-1")).state).toBe("refused");
+    // seq 8 lands while the token is still refused: still no request.
+    const later = await source.poll("job-1");
+    expect(later.state).toBe("refused");
+    expect(later.newestSeq).toBe(8);
+    expect(attempts).toBe(1);
+
+    // Re-entering the stage (new token / new job) clears the latch.
+    source.reset();
+    const recovered = await source.poll("job-1");
+    expect(recovered.state).toBe("ready");
+    expect(recovered.frame?.seq).toBe(8);
+    expect(recovered.url).toBe("blob:/jobs/job-1/frames/8");
+    expect(attempts).toBe(2);
+    expect(source.counts).toEqual({ listRequests: 3, imageRequests: 2 });
+  });
+
+  it("a 4-minute-old frame: ready, 1 list + 1 image per poll, age 240 s, stale", async () => {
+    const { transport } = fakeTransport([
+      listOf([{ seq: 412, timestamp: 112.3 }]),
+      listOf([{ seq: 412, timestamp: 112.3 }]),
+    ]);
+    const source = createLiveStillSource(transport);
+    const anchor = Date.parse("2026-11-13T12:00:00Z");
+    const nowMs = anchor + 112_300 + 240_000;
+    const a = await source.poll("job-1");
+    const b = await source.poll("job-1");
+    for (const snap of [a, b]) {
+      expect(snap.state).toBe("ready");
+      expect(snap.frame?.seq).toBe(412);
+      const age = frameAgeSeconds(frameWallClockMs(snap.frame!.timestamp, anchor), nowMs);
+      expect(age).toBe(240);
+      expect(formatFrameAge(age)).toBe("240s ago");
+      expect(isFrameStale(age)).toBe(true);
+    }
+    // One list per poll; the JPEG is fetched once (same seq reused afterwards).
+    expect(source.counts).toEqual({ listRequests: 2, imageRequests: 1 });
+  });
+
+  it("classifies the auth status from `status` or the thrown message", () => {
+    const withStatus = Object.assign(new Error("nope"), { status: 403 });
+    expect(frameErrorStatus(withStatus)).toBe(403);
+    expect(frameErrorStatus(new Error("frame fetch failed: HTTP 401"))).toBe(401);
+    expect(frameErrorStatus(new Error("boom"))).toBeNull();
+    expect(isAuthRefusal(401)).toBe(true);
+    expect(isAuthRefusal(403)).toBe(true);
+    expect(isAuthRefusal(500)).toBe(false);
+    expect(isAuthRefusal(null)).toBe(false);
+  });
+
+  it("names the two degrade states differently", () => {
+    expect(STILL_WAITING_TEXT).toContain("No analyzed frame yet");
+    const auth = stillRefusalText("auth", "frame fetch failed: HTTP 401");
+    const transport = stillRefusalText("transport", "HTTP 502");
+    expect(auth).toContain("could not be read");
+    expect(auth).toContain("token was refused");
+    expect(auth).toContain("Sign in again");
+    expect(transport).toContain("could not be read (HTTP 502)");
+    expect(auth).not.toBe(transport);
+    expect(auth).not.toContain("No analyzed frame yet");
   });
 });
 
