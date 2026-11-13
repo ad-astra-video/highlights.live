@@ -775,14 +775,16 @@ export async function cutCenteredOnInstant(
   return { cutStart, dur: durS, clamped, recuts, cut, deliveredOffset };
 }
 
-/** Where the picture sits inside `filePath`, measured from the file's own first
- * frame (a player starts there regardless of the container's `start_time`). */
-async function measureOffsetInFile(
+/** Recording instant -> its position inside a delivered file, measured from the
+ * file's own first frame (a player starts there regardless of the container's
+ * `start_time`). Exported for the sink that places a DIVE moment rather than an
+ * accept anchor (ADAAAA-8906). */
+export async function measureOffsetInFile(
   ffmpegPath: string,
   filePath: string,
   imagePath: string,
   durS: number,
-  _expectedScore: number
+  _expectedScore?: number
 ): Promise<number | null> {
   const m = await locateImageInSource(ffmpegPath, filePath, imagePath, 0, durS).catch(() => null);
   if (!m || m.firstTs == null) return null;

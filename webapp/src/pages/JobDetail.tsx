@@ -1901,14 +1901,23 @@ export function HighlightMomentGrid({
             <LaneRowFacts h={h} admin={admin} lane="notable" />
           </div>
         ) : (
+          /* ADAAAA-8912 (D5b/AC5.3): the notable lane is not a different card.
+             A notable row whose payload carries `alternatives[]` (the dive's
+             re-centered cut and its celebration/replay kin) gets the SAME pick
+             row the postable card ships — `Use this clip` / `Serving — use
+             original` — because withholding `onClipChoice` here served the
+             re-centered slide with no way to choose it, which is unreachable by
+             definition on a job whose only populated lane is notable. The pick
+             only swaps the served clip: verdict slot and batch selection stay
+             postable-only below, and the rail order is untouched. */
           <HighlightCard
             key={h.id}
             highlight={h}
             notable={notable}
             onDecision={notable ? undefined : onDecision}
-            onClipChoice={notable ? undefined : onClipChoice}
+            onClipChoice={onClipChoice}
             pendingClipChoice={
-              !notable && pendingClipChoice && pendingClipChoice.id === h.id ? pendingClipChoice.alternativeId : null
+              pendingClipChoice && pendingClipChoice.id === h.id ? pendingClipChoice.alternativeId : null
             }
             pendingStatus={!notable && pendingStatus && pendingStatus.id === h.id ? pendingStatus.status : null}
             caption={captionOf?.(h) ?? ""}

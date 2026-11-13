@@ -115,21 +115,38 @@ function wideMoment(): JobDetailHighlight {
   return { ...moment({ id: "wide", start: 1606.599, end: 1621.599 }), siblingCount: 5, siblingClips: siblings };
 }
 
-function card(row: JobDetailHighlight, admin = true): string {
+function card(
+  row: JobDetailHighlight,
+  admin = true,
+  onClipChoice?: (h: JobDetailHighlight, alternativeId: string | null) => void
+): string {
   return text(
-    renderToString(React.createElement(HighlightCard, { highlight: row, notable: true, admin }))
+    renderToString(
+      React.createElement(HighlightCard, {
+        highlight: row,
+        notable: true,
+        admin,
+        ...(onClipChoice ? { onClipChoice } : {}),
+      })
+    )
   );
 }
 
 /** ADAAAA-8530: notable moments are rows of the ONE Highlights grid, so these
  *  moment-level assertions mount the grid rather than the removed notable lane. */
-function grid(highlights: JobDetailHighlight[], admin = true): string {
+function grid(
+  highlights: JobDetailHighlight[],
+  admin = true,
+  onClipChoice?: (h: JobDetailHighlight, alternativeId: string | null) => void,
+  pendingClipChoice: { id: string; alternativeId: string | null } | null = null
+): string {
   return text(
     renderToString(
       React.createElement(HighlightMomentGrid, {
         entries: highlightMomentEntries([], highlights),
         captionOf: () => "",
         admin,
+        ...(onClipChoice ? { onClipChoice, pendingClipChoice } : {}),
       })
     )
   );
@@ -168,9 +185,11 @@ describe("N1-AC1/AC2, N1b-AC1 — the rail carries the moment's sibling clips", 
     expect(count(html, "data-detail-sibling-clip")).toBe(3);
   });
 
-  it("each option is read-only: a label + its OWN download, never a pick button", () => {
-    const html = card(moment());
-    // ADAAAA-8321's picker is NOT offered for a notable moment (P2 follow-on).
+  it("a sibling option stays read-only even when a picker is wired", () => {
+    // ADAAAA-8422 (N1/P1): a SIBLING window's slide carries no alternativeId, so
+    // it never renders a pick button — passing a picker (as the notable grid now
+    // does for its own `alternatives[]`, ADAAAA-8912) must not change that.
+    const html = card(moment(), true, () => {});
     expect(html).not.toContain("data-detail-clip-pick=");
     expect(html).not.toContain("Use this clip");
     expect(html).not.toContain("Serving — use original");
@@ -307,5 +326,113 @@ describe("clipRailSlides — siblings ride the same rail, after the moment's cli
     );
     expect(slides.map((s) => s.kind)).toEqual(["highlight", "celebration"]);
     expect(slides[1].alternativeId).toBe("alt-1");
+  });
+});
+
+// ADAAAA-8912 (D5b/AC5.3): the notable lane's re-centered option had a slide and
+// no pick control. Served build 0685049 gated the picker on `notable`, so a job
+// whose ONLY populated lane is notable (job a0e60cc2: highlights 0,
+// notableHighlights 7) shipped the re-centered slide with 0
+// `[data-detail-clip-pick]` nodes on the whole document. These pin the wiring:
+// a notable row's `alternatives[]` render the SAME pick row the postable card
+// ships, one per alternative, labelled by the DIVE moment.
+describe("D5b/AC5.3 — a notable row's alternatives are pickable", () => {
+  /** Job a0e60cc2's measured notable moment 4f2859f9 + its dive's re-centered
+   *  option (windowAnchorTs 12.6667, so the label reads 13 s). */
+  function recenteredMoment(over: Partial<JobDetailHighlight> = {}): JobDetailHighlight {
+    return moment({
+      id: "4f2859f9",
+      clipUri: "/clips/a0e60cc2-4f2859f9.mp4",
+      start: 6,
+      end: 21,
+      siblingClips: undefined,
+      siblingCount: 1,
+      alternatives: [
+        {
+          id: "2595f933-0594-7a56-5006-0ed76ee18c5c",
+          jobId: "a0e60cc2-3119-40f2-981c-a5c8a315e0d8",
+          highlightId: "4f2859f9",
+          relation: "alternative_of",
+          eventType: "recentered",
+          outcome: "big_play",
+          windowAnchorTs: 12.6667,
+          start: 6,
+          end: 21,
+          clipUri: "/clips/a0e60cc2-87-recentered.mp4",
+          createdAt: "2026-11-13T04:11:00Z",
+        },
+      ],
+      ...over,
+    });
+  }
+
+  it("renders one pick row per alternative on the notable card", () => {
+    const html = grid([recenteredMoment()], true, () => {});
+    expect(count(html, 'data-detail-notable-card="true"')).toBe(1);
+    expect(count(html, "data-detail-recentered")).toBe(1);
+    expect(count(html, "data-detail-clip-pick=")).toBe(1);
+    expect(html).toContain('data-detail-clip-pick="2595f933-0594-7a56-5006-0ed76ee18c5c"');
+    // The label names the DIVE moment (12.6667 -> 13), not the clip start (6).
+    expect(html).toContain("Re-centered @ 13 s");
+    // Unpicked: the original is served, so the button offers the swap.
+    expect(html).toContain('aria-pressed="false"');
+    expect(html).toContain("Use this clip");
+    expect(html).not.toContain("Serving — use original");
+    // Slide 1 stays the row's own original clip (AC4 — the pick never reorders).
+    const slides = html.split("data-detail-clip-slide").slice(1);
+    expect(slides).toHaveLength(2);
+    // Slide 0 is the row's own clip (no alternative marker); slide 1 is the option.
+    expect(slides[0]).not.toContain("data-detail-recentered");
+    expect(slides[1]).toContain("data-detail-recentered");
+    expect(slides[1]).toContain("data-detail-alternative");
+  });
+
+  it("picked: pressed button, clear copy, slide 1 still the original", () => {
+    const html = grid([
+      recenteredMoment({
+        clipUri: "/clips/a0e60cc2-87-recentered.mp4",
+        clipChoice: {
+          alternativeId: "2595f933-0594-7a56-5006-0ed76ee18c5c",
+          clipUri: "/clips/a0e60cc2-87-recentered.mp4",
+          start: 6,
+          end: 21,
+          chosenAt: "2026-11-13T04:12:00Z",
+        },
+      }),
+    ], true, () => {});
+    expect(count(html, "data-detail-clip-pick=")).toBe(1);
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain("Serving — use original");
+    expect(html).not.toContain(">Use this clip<");
+    // The rail's slide ORDER is the payload's, unchanged by the pick.
+    const slides = html.split("data-detail-clip-slide").slice(1);
+    expect(slides).toHaveLength(2);
+    expect(slides[0]).not.toContain("data-detail-recentered");
+    expect(slides[1]).toContain("data-detail-recentered");
+  });
+
+  it("the in-flight pick disables its own button", () => {
+    const row = recenteredMoment();
+    const html = grid([row], true, () => {}, {
+      id: row.id,
+      alternativeId: "2595f933-0594-7a56-5006-0ed76ee18c5c",
+    });
+    expect(html).toMatch(/data-detail-clip-pick="2595f933[^>]*disabled=""/);
+  });
+
+  it("a notable row with no alternatives renders no pick row at all", () => {
+    const html = grid([moment()], true, () => {});
+    expect(count(html, "data-detail-clip-pick=")).toBe(0);
+    expect(html).not.toContain("Use this clip");
+  });
+
+  it("the notable card keeps its lane markers and gains no verdict/batch slot", () => {
+    const html = grid([recenteredMoment()], true, () => {});
+    expect(count(html, "data-detail-notable-card")).toBe(1);
+    expect(count(html, "data-detail-clip-rail-notable")).toBe(1);
+    // The pick swaps the served clip only — the card is still non-postable.
+    expect(html).not.toContain("data-detail-reject");
+    expect(html).not.toContain("data-detail-approve");
+    expect(html).not.toContain("data-detail-select");
   });
 });
