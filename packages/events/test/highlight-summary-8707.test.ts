@@ -81,7 +81,11 @@ describe("AC9 — fact density, not filler", () => {
   });
 
   it("serves a body that relays the clock plus the attested score change", () => {
-    const body = "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.";
+    // ADAAAA-8914 (AC14.1): the second sentence used to be "A low drive from the
+    // edge of the box finds the far corner." — no attested fact, so the clause
+    // repair deletes it and the body falls under the floor. The fixture keeps its
+    // NAME-FREE shape (the bar under test) by carrying the clock instead.
+    const body = "The equaliser levels it at 2-2 in the second half. The move ends at 2:38 into the clip after the restart.";
     const ev = live();
     // Rev 4 (ADAAAA-8735): the context names Northbridge/Riverside but the body
     // names nobody, so `action` is NOT credited — the score line plus the clock
@@ -120,7 +124,11 @@ describe("AC9 — fact density, not filler", () => {
 
   it("counts the competition only when the match context carries it", () => {
     const ev = live({ matchContext: { competition: "Champions League" }, scoreTransition: null });
-    const body = "The move develops at 2:38 in the Champions League tie. A low drive from the edge of the box finds the far corner.";
+    // ADAAAA-8914: the second sentence carries a clock fact instead of the old
+    // "A low drive … finds the far corner" (no attested fact). A sentence-initial
+    // "The Champions League …" run is read as a name by the grounding gate, so the
+    // fixture keeps the competition in the first sentence only.
+    const body = "The move develops at 2:38 in the Champions League tie. The clock still reads 2:38 through the next few passes.";
     // Rev 4 (ADAAAA-8735): action needs the body to NAME an attested actor, and
     // this body does not — clock + venue are the two facts it carries.
     expect(attestedSummaryFactKinds(body, ev)).toEqual(["clock", "venue"]);
@@ -131,8 +139,11 @@ describe("AC9 — fact density, not filler", () => {
 describe("AC10 — role nouns are attestation claims", () => {
   it("neutralises an unattested role subject and still serves the body", () => {
     const ev = live();
+    // ADAAAA-8914: the second sentence used to be "The crowd answers it before
+    // the restart." (an atmosphere clause AC14 deletes); it now carries the clip
+    // clock so the body keeps two fact sentences after the repair.
     const body =
-      "The midfielder drives forward and the move ends at 2-2 in the second half. The crowd answers it before the restart.";
+      "The midfielder drives forward and the move ends at 2-2 in the second half. The move ends at 2:38 into the clip before the restart.";
     expect(unattestedRoleNouns(body, ev).map((c) => c.canonical)).toEqual(["midfielder"]);
     const decision = gateSummaryDetail(body, ev);
     expect(decision.summary).not.toBeNull();
@@ -155,7 +166,7 @@ describe("AC10 — role nouns are attestation claims", () => {
     });
     expect(attestedRoleNouns(ev).has("midfielder")).toBe(true);
     const body =
-      "The midfielder drives forward and the move ends at 2-2 in the second half. The crowd answers it before the restart.";
+      "The midfielder drives forward and the move ends at 2-2 in the second half. The move ends at 2:38 into the clip before the restart.";
     const decision = gateSummaryDetail(body, ev);
     expect(decision.gate).toBe("accepted");
     expect(decision.summary).toBe(body);
@@ -164,7 +175,7 @@ describe("AC10 — role nouns are attestation claims", () => {
   it("keeps a role noun the transcript attests", () => {
     const ev = live({ transcript: "the midfielder wins it back and the move builds" });
     const body =
-      "The midfielder drives forward at 2-2 in the second half. The crowd answers at once as the move builds on the left.";
+      "The midfielder drives forward at 2-2 in the second half. The move builds on the left at 2:38 into the clip.";
     expect(gateSummaryDetail(body, ev).gate).toBe("accepted");
   });
 

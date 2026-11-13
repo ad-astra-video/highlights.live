@@ -68,8 +68,11 @@ const celebrationEvidence = () => ({
 const CLOCK_ONLY =
   "At 0:25, the action intensifies as the players compete for possession. This sequence captures a significant moment of play as both teams fight for control.";
 
+// ADAAAA-8914 (AC14.1): the second sentence now carries the attested actor's
+// play; "The crowd stays loud through the whole sequence." is an atmosphere
+// clause the repair deletes (and it took the body under the live floor).
 const NAMED =
-  "At 0:25, Barcelona drives forward as the team pushes toward the opponent's side of the pitch. The crowd stays loud through the whole sequence.";
+  "At 0:25, Barcelona drives forward as the team pushes toward the opponent's side of the pitch. Barcelona keeps possession through the next passage of play.";
 
 describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
   it("retries a clock-only reply when the row attests a second fact type", async () => {

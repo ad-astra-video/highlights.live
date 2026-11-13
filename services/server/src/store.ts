@@ -434,6 +434,10 @@ export class Store {
       summaryFloorWords?: number;
       summaryTargetMinWords?: number;
       summaryDroppedSentences?: number;
+      /** ADAAAA-8914 (AC14.5): what the filler clause repair deleted. */
+      summaryDroppedClauses?: number;
+      summaryClauseClaims?: string[];
+      summaryRepairedWords?: number;
     }
   ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);

@@ -49,17 +49,20 @@ const evidence = (extra: Partial<SummaryEvidence> = {}): SummaryEvidence => ({
  *  Rev 4 (ADAAAA-8735): each names the match context's team, because AC9 now
  *  credits `action` only off a NAMED attested actor; the opening collision is
  *  unchanged. */
+// ADAAAA-8914 (AC14.1): the second sentence used to be "The crowd answers it
+// before the restart." — an atmosphere clause the clause repair deletes, which
+// took each body under the live floor before the opening guard could even run.
 const SAME_OPENING_A =
-  "The midfielder drives forward for Northbridge at 0:12 as the move builds through midfield. The crowd answers it before the restart.";
+  "The midfielder drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge keeps possession as the move builds on the left.";
 const SAME_OPENING_B =
-  "The midfielder drives forward for Northbridge at 0:12 and the move opens up on the left. The crowd answers it before the restart.";
+  "The midfielder drives forward for Northbridge at 0:12 and the move opens up on the left. Northbridge keeps possession as the move opens up.";
 /** The SERVED form of `SAME_OPENING_A`: AC10 neutralises the unattested
  *  "the midfielder" subject, and the repeat guard compares served openings. */
 const NEUTRALISED_A =
-  "The move drives forward for Northbridge at 0:12 as the move builds through midfield. The crowd answers it before the restart.";
+  "The move drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge keeps possession as the move builds on the left.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT_OPENING =
-  "A low shot from the edge of the box is blocked by Northbridge at 0:12. The crowd answers it before the restart.";
+  "A low shot from the edge of the box is blocked by Northbridge at 0:12. Northbridge recycles the ball and switches play to the left.";
 
 function stubStore() {
   const patches: { id: string; patch: Record<string, unknown> }[] = [];

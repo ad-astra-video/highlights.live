@@ -2463,6 +2463,16 @@ export const HighlightRecordSchema = z.object({
   summaryFloorWords: z.number().int().min(0).optional(),
   summaryTargetMinWords: z.number().int().min(0).optional(),
   summaryDroppedSentences: z.number().int().min(0).optional(),
+  // ADAAAA-8914 (AC14.5): a `dropped:filler` row keeps WHAT the clause repair
+  // deleted — how many sentences, and the unattested vocabulary that caused it
+  // (`crowd`, `momentum`, `pivotal moment`, `competition`) — so the rev-8 grade can
+  // read the filler class off the row instead of replaying the reply. Additive
+  // optional: absent on every row the clause repair did not touch.
+  summaryDroppedClauses: z.number().int().min(0).optional(),
+  summaryClauseClaims: z.array(z.string()).optional(),
+  /** Words that survived the AC14.5 clause repair; beside `summaryFloorWords` it
+   *  is the floor check the ticket names. */
+  summaryRepairedWords: z.number().int().min(0).optional(),
   // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
   // `reason` was derived from, with the frame that confirms it.
   colour: ColourSignalSchema.optional(),

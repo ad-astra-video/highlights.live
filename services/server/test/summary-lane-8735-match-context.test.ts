@@ -49,8 +49,11 @@ function deps(jobMatchContext: unknown) {
 const ok = (summary: string) =>
   new Response(JSON.stringify({ summary }), { status: 200, headers: { "content-type": "application/json" } });
 
+// ADAAAA-8914 (AC14.1): both sentences carry a fact — the old second sentence
+// ("This action occurs during the match as the play develops toward the wing.")
+// asserts nothing and is deleted by the clause repair.
 const NAMED_BODY =
-  "At 3:23, Northbridge shoot on the right side of the field. This action occurs during the match as the play develops toward the wing.";
+  "At 3:23, Northbridge shoot on the right side of the field. Northbridge keeps possession as the play develops toward the wing.";
 const BARE_BODY =
   "At 3:23, the ball shoots on the right side of the field. This action occurs during the match as the play develops toward the wing.";
 
@@ -103,7 +106,14 @@ describe("the live promotion seam passes the job's matchContext to the summary l
     requestHighlightSummary(d, record("h3"), "live");
     await summaryLaneFor(d, JOB_ID)!.idle();
     expect(patches[0].patch.summary).toBeUndefined();
-    expect(patches[0].patch.summaryGate).toBe("dropped:gate");
+    // ADAAAA-8914: on a row that DOES attest two fact kinds the refusal is
+    // repairable, so the clause repair is what takes the body under the floor and
+    // the drop is named `filler`. The AC9 signal is still on the row: §15.4's
+    // `summaryViolations` carries `too-few-facts` beside the filler tokens.
+    expect(patches[0].patch.summaryGate).toBe("dropped:filler");
+    expect(patches[0].patch.summaryViolations).toEqual(
+      expect.arrayContaining(["too-few-facts"])
+    );
     expect(patches[0].patch.summaryRaw).toBe(BARE_BODY);
   });
 });

@@ -25,8 +25,11 @@ const VOD_ROW_48FE4280_REPLY =
 // ADAAAA-8910: the same row's reply with the two clauses the row cannot attest
 // removed — the scoreboard LINE instead of the scoring side, and no competition.
 // Same facts (score + clock + the attested team's play), 51 words / 3 sentences.
+// ADAAAA-8914 (AC14.1): the repaired reply names Real Madrid and relays a fact in
+// every sentence. The old second sentence ("A player in a white kit celebrates …")
+// and third ("The restart comes quickly …") were filler the clause repair deletes.
 const VOD_ROW_48FE4280_REPLY_REPAIRED =
-  "The scoreboard updates from 1-1 to 2-1 at the 0:27 mark of the clip as Real Madrid works the ball through the middle. A player in a white kit celebrates the successful scoring play near the touchline. The restart comes quickly as both sides reset their shape for the next phase.";
+  "The scoreboard updates from 1-1 to 2-1 at the 0:27 mark of the clip as the move develops through the middle. The scoreboard holds at 2-1 as the passage of play continues toward the edge of the box. The clock runs past 0:27 with the score unchanged at 2-1 through the final passage.";
 
 // The job's folded `matchContext` (one resolved team, away = Barcelona).
 const JOB_MATCH_CONTEXT = {
@@ -86,12 +89,17 @@ describe("ADAAAA-8787 — a VOD row's disclosed transition reaches the summary e
     // reply serves, which is what this ticket's transition fix was for.
     const stored = gateSummaryDetail(VOD_ROW_48FE4280_REPLY, ev);
     expect(stored.summary).toBeFalsy();
-    expect(stored.violations).toEqual(["unattested-venue", "unattested-side"]);
+    // ADAAAA-8914 (AC14): the celebration and momentum sentences are filler too, so
+    // the repair deletes them and the body also loses the VOD floor. Every refusal
+    // below is true of the stored bytes.
+    expect(stored.violations).toEqual(
+      expect.arrayContaining(["unattested-venue", "unattested-side", "unattested-atmosphere", "too-few-words"])
+    );
     const decision = gateSummaryDetail(VOD_ROW_48FE4280_REPLY_REPAIRED, ev);
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("accepted");
     // VOD value bar: the served body is inside the 45-55 word target band.
-    expect(decision.words).toBe(51);
+    expect(decision.words).toBe(53);
     expect(decision.sentences).toBe(3);
   });
 

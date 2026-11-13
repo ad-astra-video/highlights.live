@@ -62,7 +62,7 @@ const STORED_DRAFT_34 =
 
 /** A repair that clears the new 45-word target with facts, not filler. */
 const REPAIRED =
-  "Barcelona pulls level at 2-2 as the scoreboard moves on from 2-1 late in this clip. The equaliser lands at the 1:27 mark, and the away side's players turn away toward the near touchline. Barcelona works the ball into the box and finishes the move from close range. The scoreline stays level as the match restarts and both sides settle back into their shape.";
+  "Barcelona pulls level at 2-2 as the scoreboard moves on from 2-1 late in this clip. The equaliser lands at the 1:27 mark of the clip. Barcelona works the ball into the box and finishes the move from close range. The scoreline stays at 2-2 as Barcelona keeps possession through the restart.";
 
 const cfg = (over: Record<string, unknown> = {}) => ({
   decideUrl: "http://decide.test",
@@ -114,7 +114,10 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     expect(result.calls).toBe(2);
     const final = patches[patches.length - 1].patch;
     expect(final.summary).toBeUndefined();
-    expect(final.summaryGate).toBe("dropped:gate");
+    // ADAAAA-8914 (AC14.5): the stored 34-word draft is filler — its template and
+    // its "secure a draw" clause are deleted by the repair, which takes the body
+    // under the VOD floor, so the drop is named `filler`.
+    expect(final.summaryGate).toBe("dropped:filler");
     expect(final.summaryRaw).toBe(STORED_DRAFT_34);
     expect(final.summaryCalls).toBe(2);
     // The second call carried the escalated instruction, so this drop is the

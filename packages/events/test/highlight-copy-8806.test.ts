@@ -184,8 +184,12 @@ describe("ADAAAA-8806 — the entity-bearing body survives the gate", () => {
   });
 
   it("accepts the body once the refusal verb is not asserted", () => {
+    // ADAAAA-8914: the second sentence used to be "The crowd stays loud during
+    // the sequence." — an atmosphere clause AC14 deletes, and with it the body
+    // fell under the live floor. The fixture now carries an attested actor's play
+    // in both sentences, which is what a served body has to look like.
     const clean =
-      "At 1:34, Barcelona drives forward as the team moves toward the opponent's side of the pitch. The crowd stays loud during the sequence.";
+      "At 1:34, Barcelona drives forward as the team moves toward the opponent's side of the pitch. Barcelona keeps possession as the move develops toward the wing.";
     const evidence = evidenceFor(ROW_2, null);
     const decision = gateSummaryDetail(clean, evidence);
     expect(decision.violations).toEqual([]);

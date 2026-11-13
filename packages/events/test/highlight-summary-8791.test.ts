@@ -41,17 +41,23 @@ const ROW_48FE: SummaryEvidence = {
 const SERVED_36 =
   "Barcelona finds the back of the net to level the score at 2-2. The crowd erupts in celebration as the scoreboard updates during this scoring play. This goal occurs at the 1:27 mark of the clip.";
 
-/** A compliant row body (44 words, 4 sentences) — inside the VOD target band.
+/** A compliant row body (47 words, 4 sentences) — inside the VOD target band.
  *  ADAAAA-8910: the fixture that used to sit here ("Real Madrid takes the lead in
  *  this intense match … during the competition") is the exact copy the live-copy
  *  seam now refuses: it asserted a direction no row attests and a competition the
  *  match context does not carry. It is kept below as `SERVED_44_DEFECT` so the
- *  refusal is pinned instead of being lost with the fixture swap. */
+ *  refusal is pinned instead of being lost with the fixture swap.
+ *
+ *  ADAAAA-8914 (AC14.1): the second fixture that sat here ("The white kit presses
+ *  high …", "A quick exchange opens space …", "The move keeps the pressure on …")
+ *  was filler — none of those sentences carried an attested fact, because an
+ *  action is credited only when the sentence NAMES an attested actor. Every
+ *  sentence now names Barcelona and relays a fact. */
 const SERVED_44 =
-  "Barcelona works the ball through the middle after the scoreboard moves to 2-1 at 0:27 into the clip. " +
-  "The white kit presses high and forces a turnover near the touchline. " +
-  "A quick exchange opens space for a shot that is gathered. " +
-  "The move keeps the pressure on as both sides reset.";
+  "Barcelona works the ball through the middle as the scoreboard moves to 2-1 at 0:27 into the clip. " +
+  "Barcelona presses high to force a turnover near the touchline. " +
+  "Barcelona recycles the ball and switches play to the far side. " +
+  "The scoreboard reads 2-1 as Barcelona keeps possession through the restart.";
 
 /** The body the served build stored on row `48fe4280` — the ADAAAA-8910 defects
  *  3 and 4 in one paragraph (`takes the lead`, `this intense match`,
@@ -86,17 +92,23 @@ describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
     const decision = gateSummaryDetail(SERVED_44, ROW_48FE);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(SERVED_44);
-    expect(decision.words).toBe(51);
+    expect(decision.words).toBe(50);
     expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
   });
 
   it("refuses the body the served build stored — it named the side that scored and a competition the row cannot attest (ADAAAA-8910)", () => {
     const decision = gateSummaryDetail(SERVED_44_DEFECT, ROW_48FE);
     expect(decision.summary).toBeFalsy();
-    // The depth bars all pass: this is a truth refusal, not a length one.
-    expect(decision.violations).not.toContain("too-few-words");
+    // Two truth refusals AND the AC14 filler repair: the celebration sentence
+    // ("A player in a white kit celebrates …") and the momentum sentence are
+    // deleted as unattested clauses, which takes the body under the VOD floor. The
+    // depth bars therefore fire too — they are the CONSEQUENCE of the repair, and
+    // the repair numbers say so.
     expect(decision.violations).toContain("unattested-venue");
     expect(decision.violations).toContain("unattested-side");
+    expect(decision.droppedClauses).toHaveLength(3);
+    expect(decision.clauseClaims).toContain("momentum");
+    expect(decision.repairedWords).toBeLessThan(SUMMARY_VOD_BAND.floorWords);
   });
 
   it("keeps the prompt's fact menu and clip-offset clock rule unchanged", () => {

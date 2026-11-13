@@ -48,11 +48,17 @@ const EVIDENCE: SummaryEvidence = {
   transcript: null,
 };
 
+// ADAAAA-8914 (AC14.1/AC14.2): the served 36-word body's crowd clause is deleted
+// by the clause repair, so the SHORT fixture is the fact-only remnant of it — still
+// under the VOD band, which is what this ticket pins.
 const SHORT =
-  "Barcelona finds the back of the net to level the score at 2-2. The crowd erupts in celebration as the scoreboard updates during this scoring play. This goal occurs at the 1:27 mark of the clip.";
+  "Barcelona finds the back of the net to level the score at 2-2. This goal occurs at the 1:27 mark of the clip.";
 
+// ADAAAA-8914 (AC14.1): the retry's target-length body names Barcelona and relays
+// a fact in every sentence (the old fixture spent three sentences on the crowd, the
+// bench and the celebration, which the repair deletes).
 const LONG =
-  "Barcelona levels the scoring play at 2-2 with a strike that the scoreboard confirms at the 1:27 mark of the clip. The away side's players wheel away toward the near touchline as the crowd answers the goal. The restart comes quickly, with Barcelona still pressing high in the closing minutes. The bench is on its feet and the celebration carries through the next passage of play.";
+  "Barcelona levels the scoring play at 2-2 with a strike that the scoreboard confirms at the 1:27 mark of the clip. Barcelona presses high to force a turnover near the near touchline. Barcelona recycles the ball and switches play into the box. The scoreboard stays level at 2-2 as Barcelona keeps possession through the restart.";
 
 const cfg = (over: Record<string, unknown> = {}) => ({
   decideUrl: "http://decide.test",

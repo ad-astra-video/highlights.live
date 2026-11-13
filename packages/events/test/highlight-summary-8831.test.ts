@@ -78,13 +78,16 @@ const ROW_8D52_EV: SummaryEvidence = {
 };
 
 const DRAFT_8D52 =
-  "Real Madrid takes a 2-1 lead after the scoreboard changes at the 1:42 mark. This scoring play shifts the momentum in favor of the Spanish side during the match.";
+  "Real Madrid takes a 2-1 lead after the scoreboard changes at the 1:42 mark. Real Madrid keeps possession as the clip runs past 1:42.";
 
 /** The same row, after the ADAAAA-8910 direction claim is repaired: the digits
  *  and the names are attested, WHICH SIDE levelled is not, so the sentence states
- *  the scoreboard's line instead of crediting it. Same facts, same evidence. */
+ *  the scoreboard's line instead of crediting it. Same facts, same evidence.
+ *  ADAAAA-8914 (AC14.1): the second sentence was "The crowd erupted in
+ *  celebration …", an atmosphere clause the clause repair deletes; it now carries
+ *  the row's clip clock and an attested actor's play. */
 const DRAFT_A482_FIXED =
-  "Real Madrid moves the ball forward as the scoreboard reads 2-2. The crowd erupted in celebration during this scoring play at the 2:43 mark.";
+  "Real Madrid moves the ball forward as the scoreboard reads 2-2. Real Madrid keeps possession at the 2:43 mark into the clip.";
 
 describe("ADAAAA-8831 AC12 — an object-position role phrase is rewritten, not deleted", () => {
   it("keeps the sentence that holds the attested score line", () => {
@@ -104,7 +107,7 @@ describe("ADAAAA-8831 AC12 — an object-position role phrase is rewritten, not 
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("accepted");
     expect(decision.summary).toBeTruthy();
-    expect(decision.words).toBe(24);
+    expect(decision.words).toBe(22);
     expect(decision.sentences).toBe(2);
     expect(decision.droppedSentences).toBe(0);
     expect(summaryViolations(decision.summary!, ROW_A482_EV)).toEqual([]);
@@ -151,7 +154,10 @@ describe("ADAAAA-8831 AC12 — the match context trail grounds the teams it meas
     const decision = gateSummaryDetail(DRAFT_8D52, ROW_8D52_EV);
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("accepted");
-    expect(decision.words).toBe(29);
+    // ADAAAA-8914: the filler sentence ("This scoring play shifts the momentum …")
+    // is replaced by an attested play + the clip clock, so the body is 24 words
+    // instead of the old 29 — still well above the live floor.
+    expect(decision.words).toBe(24);
     expect(decision.sentences).toBe(2);
   });
 
