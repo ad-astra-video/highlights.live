@@ -13,6 +13,7 @@ import {
   SUMMARY_VOD_BAND,
   buildSummaryPrompt,
   gateSummaryDetail,
+  summaryFactMenu,
   summaryRetryMinWords,
   type SummaryEvidence,
 } from "../src/highlight-summary.js";
@@ -54,8 +55,11 @@ const DRAFT_34 =
  *  cannot certify. It is repaired here (same word count) so this fixture still
  *  proves the DEPTH gate did not move; the refusal of the original clause is
  *  pinned separately. */
+// ADAAAA-8934: the second fact type is a BOUNDED act by a named attested actor;
+// "keeps possession" / "recycles the ball" are sustained states the clause repair
+// now deletes (they assert a possession nobody measured).
 const SERVED_41 =
-  "Real Madrid moves the ball as the scoreboard updates from 1-1 to 2-1. This scoring play occurs at the 0:27 mark of the clip during the match against Barcelona. Real Madrid keeps possession as the clip runs past 0:27. Real Madrid recycles the ball through midfield before the restart.";
+  "Real Madrid moves the ball as the scoreboard updates from 1-1 to 2-1. This scoring play occurs at the 0:27 mark of the clip during the match against Barcelona. Real Madrid intercepts the ball and counters as the clip runs past 0:27. Barcelona recovers the ball and threads a pass before the restart.";
 
 /** The stored first clause of row `42c28962` (ADAAAA-8910 defect 4). */
 const SERVED_41_DEFECT =
@@ -93,10 +97,16 @@ describe("ADAAAA-8803 — the VOD target band sits above the floor", () => {
 
 describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
   const decision = gateSummaryDetail(DRAFT_34, ROW_2F5A);
-  const retryPrompt = buildSummaryPrompt({
-    ...ROW_2F5A,
-    retry: { words: decision.words, sentences: decision.sentences, violations: decision.violations },
-  });
+  // ADAAAA-8934: the lane hands the retry the DELETED clause list and the fact
+  // menu beside the measured shortfall, so the retry shape under test carries both.
+  const retryShape = {
+    words: decision.words,
+    sentences: decision.sentences,
+    violations: decision.violations,
+    droppedClauses: decision.droppedClauses,
+    factMenu: summaryFactMenu(ROW_2F5A),
+  };
+  const retryPrompt = buildSummaryPrompt({ ...ROW_2F5A, retry: retryShape });
 
   it("states the gate's own measurement and refusal", () => {
     expect(decision.words).toBe(34);
@@ -110,6 +120,9 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     // the clause repair deletes them and the body falls under the VOD floor. The
     // depth bars and the filler bars are both true of this draft, which is why the
     // rev-8 grade reads `summaryClauseClaims` beside `summaryViolations`.
+    // ADAAAA-8934: the repair now SUBSTITUTES a fact into the slots the deleted
+    // clauses left, so the sentence count clears the band and only the word floor
+    // remains — the starved-card half of the rev-8 defect.
     expect(decision.violations).toEqual([
       "too-few-words",
       "too-few-sentences",
@@ -117,6 +130,10 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
       "unattested-sentence",
       "unattested-atmosphere",
     ]);
+    // ADAAAA-8934: the repair substituted a fact into the filler slots, but the
+    // draft grounded only ONE sentence, so the repair may add only one sentence
+    // back (it may never become the body) and the band's sentence minimum stands.
+    expect(decision.substitutedClauses.length).toBeGreaterThan(0);
     expect(decision.droppedClauses).toHaveLength(2);
     expect(decision.clauseClaims).toContain("pivotal moment");
     expect(retryPrompt).toContain("RETRY: the previous draft measured 34 words across 3 sentences");
@@ -157,7 +174,10 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     // The retry slot is a pure function of the gate's own measurement, so a
     // re-scored row rebuilds the identical prompt (ADAAAA-8910 widened the
     // violation list; the shape did not change).
-    expect(buildSummaryPrompt({ ...ROW_2F5A, retry: decision })).toBe(retryPrompt);
+    expect(buildSummaryPrompt({ ...ROW_2F5A, retry: retryShape })).toBe(retryPrompt);
+    // … and the retry names the deleted clauses, so a second sample cannot re-land
+    // the same possession/atmosphere prose (AC14/AC5).
+    expect(retryPrompt).toContain("These sentences were DELETED from that draft");
   });
 });
 
@@ -169,6 +189,9 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
     // (the "This pivotal moment …" template and the "secure a draw" clause), which
     // is why the depth bars and the clause bars both appear here. The direction
     // claim (ADAAAA-8910) is still reported.
+    // ADAAAA-8934: the repair now SUBSTITUTES a fact into the slots the deleted
+    // clauses left, so the sentence count clears the band and only the word floor
+    // remains — the starved-card half of the rev-8 defect.
     expect(decision.violations).toEqual([
       "too-few-words",
       "too-few-sentences",
@@ -176,6 +199,10 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
       "unattested-sentence",
       "unattested-atmosphere",
     ]);
+    // ADAAAA-8934: the repair substituted a fact into the filler slots, but the
+    // draft grounded only ONE sentence, so the repair may add only one sentence
+    // back (it may never become the body) and the band's sentence minimum stands.
+    expect(decision.substitutedClauses.length).toBeGreaterThan(0);
     expect(decision.words).toBe(34);
     expect(decision.droppedClauses).toHaveLength(2);
     // The row's fact menu carries score + name + clock: the depth defect is still
@@ -185,7 +212,7 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
     expect(decision.violations).not.toContain("ungrounded-name");
   });
 
-  it("still serves the 41-word body that cleared the floor by one word", () => {
+  it("still serves a fact-per-sentence body above the floor", () => {
     const evidence = {
       ...ROW_2F5A,
       reason:
@@ -205,8 +232,8 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
     const decision = gateSummaryDetail(SERVED_41, evidence);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(SERVED_41);
-    expect(decision.words).toBe(49);
-    // 41 is inside the new target band's shadow but above the serve floor: the
+    expect(decision.words).toBe(53);
+    // Above the serve floor with room for the target band: the
     // gate keeps serving it, which is why this ticket changes generation depth
     // and not the gate.
     expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
@@ -220,6 +247,8 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
     expect(defect.summary).toBeFalsy();
     expect(defect.violations).toContain("unattested-side");
     expect(defect.droppedClauses.length).toBeGreaterThan(0);
-    expect(defect.repairedWords).toBeLessThan(SUMMARY_VOD_BAND.floorWords);
+    // ADAAAA-8934: the repair restores the depth from the row's own score line, so
+    // the refusal is the direction claim itself — not a starved body.
+    expect(defect.repairedWords).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
   });
 });

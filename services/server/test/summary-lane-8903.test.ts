@@ -128,37 +128,50 @@ const cfg = (over: Record<string, unknown> = {}) => ({
 // ---------------------------------------------------------------------------
 // 1. AC1-live falsifier: the two census bodies must SERVE, not refuse.
 // ---------------------------------------------------------------------------
-describe("ADAAAA-8903 — the two census replies serve instead of a bare card", () => {
-  it("credits sustained play as the row's second fact kind (row c3257097)", () => {
+// ADAAAA-8934 SUPERSEDES the ADAAAA-8903 credit measured below. 8903 widened the
+// action lexicon so a sustained-play clause earned `action` whenever the body named
+// an attested team; the rev-8 grade (ADAAAA-8925) then measured 7 of 18 served VOD
+// sentences carrying no attested fact at all through exactly that rule. The census
+// replies below are the same shape, so they now assert the clock and NOTHING else:
+// the row keeps its `action` slot in the fact menu, and the copy that fills it must
+// name an actor performing a BOUNDED act (an interception, a recovery, a counter),
+// which the prompt now asks for instead of the possession prose 8903 legalised.
+describe("ADAAAA-8903 → ADAAAA-8934 — the census replies assert no fact; a bounded act serves", () => {
+  /** The reply shape the fixed prompt asks for on this row: a bounded act by a
+   *  named attested actor plus the window clock, with no ball outcome claimed. */
+  const BOUNDED_ACT_C3257097 =
+    "Barcelona intercepts the ball near the wing at the 7:41 mark of the clip. Real Madrid recovers the ball and counters as the passage runs past 7:41.";
+
+  it("credits NO action for the stored sustained-play reply (row c3257097)", () => {
     const evidence = evidenceFor(ROW_C3257097);
-    // The row's own menu offers two kinds — eligibility is the instrument's rule.
+    // The row still offers two kinds — eligibility is the instrument's rule; the
+    // question is whether THIS copy earns the second one.
     expect(attestedFactKinds(evidence).length).toBeGreaterThanOrEqual(SUMMARY_MIN_FACT_KINDS);
     expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
-    // The body relays BOTH: the anchored clock and Barcelona's sustained action.
-    expect(summaryFacts(STORED_RAW_C3257097).map((f) => f.kind)).toEqual(expect.arrayContaining(["clock", "action"]));
-    expect(attestedSummaryFactKinds(STORED_RAW_C3257097, evidence)).toEqual(
-      expect.arrayContaining(["clock", "action"])
-    );
+    expect(summaryFacts(STORED_RAW_C3257097).map((f) => f.kind)).not.toContain("action");
+    expect(attestedSummaryFactKinds(STORED_RAW_C3257097, evidence)).toEqual(["clock"]);
     const decision = gateSummaryDetail(STORED_RAW_C3257097, evidence);
-    // The falsifier at base: `summary: null`, `violations: ["too-few-facts"]`.
-    expect(decision.violations).toEqual([]);
-    expect(decision.summary).toBe(STORED_RAW_C3257097);
+    // AC14: every sentence carries no attested fact, so the repair deletes both and
+    // the row refuses instead of serving the filler the rev-8 gate accepted.
+    expect(decision.summary).toBeNull();
+    // The clock-bearing sentence survives; the sustained-play clause is deleted.
+    expect(decision.droppedClauses).toHaveLength(1);
+    expect(decision.violations).toContain("too-few-facts");
   });
 
-  it("credits sustained play as the row's second fact kind (row eaf1da9f)", () => {
+  it("credits NO action for the stored sustained-play reply (row eaf1da9f)", () => {
     const evidence = evidenceFor(ROW_EAF1DA9F);
     expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
-    expect(attestedSummaryFactKinds(STORED_RAW_EAF1DA9F, evidence)).toEqual(
-      expect.arrayContaining(["clock", "action"])
-    );
+    expect(attestedSummaryFactKinds(STORED_RAW_EAF1DA9F, evidence)).toEqual(["clock"]);
     const decision = gateSummaryDetail(STORED_RAW_EAF1DA9F, evidence);
-    expect(decision.violations).toEqual([]);
-    expect(decision.summary).toBe(STORED_RAW_EAF1DA9F);
+    expect(decision.summary).toBeNull();
+    expect(decision.droppedClauses).toHaveLength(1);
+    expect(decision.violations).toContain("too-few-facts");
   });
 
-  it("serves on the FIRST call — the row no longer burns the retry slot", async () => {
+  it("serves a bounded-act reply on the FIRST call — no retry slot burned", async () => {
     const { store, patches } = stubStore();
-    const f = stubFetch([STORED_RAW_C3257097]);
+    const f = stubFetch([BOUNDED_ACT_C3257097]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
       jobId: "9bed3bd7",
       highlightId: ROW_C3257097.id,
@@ -167,7 +180,7 @@ describe("ADAAAA-8903 — the two census replies serve instead of a bare card", 
     expect(result.outcome).toBe("stored");
     expect(f.calls()).toBe(1);
     expect(result.calls).toBe(1);
-    expect(patches.at(-1)?.patch.summary).toBe(STORED_RAW_C3257097);
+    expect(patches.at(-1)?.patch.summary).toBe(BOUNDED_ACT_C3257097);
     expect(patches.at(-1)?.patch.summaryDropped).toBe(0);
   });
 

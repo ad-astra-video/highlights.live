@@ -202,9 +202,12 @@ describe("gateSummaryDetail", () => {
   });
 
   it("clamps an over-long reply and reports `trimmed`", () => {
+    // ADAAAA-8934: every sentence must carry an attested fact, so the fixture uses
+    // bounded acts rather than the possession/pressure prose the clause repair now
+    // deletes (a deleted sentence would gate `neutralised` before the clamp).
     const long =
-      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38. " +
-      "Riverside presses high to force a turnover. The scoreboard reads 2-2 at 2:41 into the clip.";
+      "The equaliser levels it at 2-2 in the second half. Northbridge intercepts the ball near the box as the clock runs to 2:38. " +
+      "Riverside recovers the ball and counters. The scoreboard reads 2-2 at 2:41 into the clip.";
     const decision = gateSummaryDetail(long, live());
     expect(decision.gate).toBe("trimmed");
     expect(decision.sentences).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.maxSentences);
