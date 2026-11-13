@@ -182,12 +182,16 @@ export function normalizeSurfaceIdentity(raw: unknown): ScoreboardSurfaceIdentit
       kits[side] = rgb as number[];
     }
   }
+  const reference = r.kitReference === "observed" || r.kitReference === "prior" ? r.kitReference : undefined;
   return {
     verdict: verdict as ScoreboardSurfaceIdentityVerdict,
     kitDistance: typeof r.kitDistance === "number" && Number.isFinite(r.kitDistance) ? Number(r.kitDistance) : null,
     threshold: num(r.threshold),
     kitsPresent: r.kitsPresent === true,
     kitsDiffer: r.kitsDiffer === true,
+    // ADAAAA-8908: the reference the distance was measured against. Omitted (not
+    // guessed) when an older runner does not report it.
+    ...(reference ? { kitReference: reference } : {}),
     namesMatch: r.namesMatch === true,
     namesMatched: list(r.namesMatched, 4),
     names: list(r.names, 8),

@@ -1533,6 +1533,12 @@ export const ScoreboardSurfaceIdentitySchema = z.object({
   threshold: z.number().optional(),
   kitsPresent: z.boolean().optional(),
   kitsDiffer: z.boolean().optional(),
+  // ADAAAA-8908: where the reported kit distance's reference came from —
+  // "observed" (the job's own kitColors, a measurement) or "prior" (the curated
+  // per-team colour, a reference used when the job carries no kit colour). The
+  // prior is never published as a kit observation; this field is the provenance
+  // that lets the board tell the two apart.
+  kitReference: z.enum(["observed", "prior"]).optional(),
   namesMatch: z.boolean().optional(),
   namesMatched: z.array(z.string()).max(8).optional(),
   names: z.array(z.string()).max(8).optional(),
