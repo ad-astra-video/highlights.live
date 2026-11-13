@@ -448,6 +448,13 @@ export function toDecideMatchContext(raw: unknown): DecideMatchContext | undefin
     ambiguous: src.ambiguous === true,
   };
 }
+/** ADAAAA-8841: the job's persisted sport for the score/delta parse, or
+ * `undefined` when the job has no usable `matchContext` (pre-8841 behaviour).
+ * One cheap persisted read per window — never a recompute, never GPU work. */
+export function liveJobSport(cfg: { getMatchContext?: () => unknown }): string | undefined {
+  return toDecideMatchContext(cfg.getMatchContext?.())?.sport;
+}
+
 /** ADAAAA-7232: deterministic highlight-instant localization from the defined
  * per-frame/per-tap signal. Prefers the highest-RMS audio tap strictly AFTER
  * the trigger within `maxLookaheadS` (peak-audio post-trigger, Acc-2/Acc-3);
@@ -1494,6 +1501,44 @@ function ocrPairTeamAdjacent(text: string, index: number, len: number): { left: 
  * `LALIGA|0JALIGA05-40 AL1UberFC B`. None of it is a scoreboard. */
 const OCR_CHROME_TOKEN_RE = /(?:laliga|stanley|spotify|whitebit|lauga|culers|nike\.com)/i;
 
+/** ADAAAA-8841: the sports whose score plate cannot reach two digits. Mirrored
+ * by `_SINGLE_DIGIT_SCORE_SPORTS` in `services/perceive/app/scoreboard.py`. */
+const SINGLE_DIGIT_SCORE_SPORTS: ReadonlySet<string> = new Set([
+  "soccer",
+  "football",
+  "association football",
+]);
+
+/** ADAAAA-8841: does this sport cap a score at a single digit?
+ *
+ * Basketball (`45-42`) and American football (`24-17`) legitimately print
+ * two-digit plates, so the dash-clock shape must never refuse those, and an
+ * `unknown` sport stays lenient — byte-identical to the pre-8841 gate. Only a
+ * sport that cannot print a two-digit score refuses the `M-mm` clock shape. */
+export function ocrSportScoresAreSingleDigit(sport: string | undefined): boolean {
+  const key = typeof sport === "string" ? sport.trim().toLowerCase() : "";
+  return SINGLE_DIGIT_SCORE_SPORTS.has(key);
+}
+
+/** ADAAAA-8841: is this dash pair the `mm:ss` split of the clock the SAME line
+ * carries (GT-2, {@link parseOcrMatchClockLine})?
+ *
+ * Sport-independent, because the line itself names the clock. The seconds
+ * field must be rendered as two digits exactly as the clock renders it, so a
+ * genuine `1-1` plate next to a `1:01` clock is NOT refused (the plate's right
+ * group is one character, the clock's is two). */
+function ocrPairEqualsLineClock(text: string, rawLeft: string, rawRight: string): boolean {
+  const clock = parseOcrMatchClockLine(text);
+  if (!clock || clock.seconds === null || !Number.isFinite(clock.seconds)) return false;
+  const seconds = clock.seconds;
+  const a = Number(rawLeft);
+  const b = Number(rawRight);
+  if (!Number.isInteger(a) || !Number.isInteger(b)) return false;
+  if (rawRight.length !== 2) return false;
+  if (a * 60 + b === seconds) return true;
+  return a === Math.floor(seconds / 60) && b === seconds % 60;
+}
+
 /**
  * ADAAAA-8507: is this dash pair a CLOCK / chrome fragment rather than a score
  * plate?
@@ -1514,13 +1559,30 @@ const OCR_CHROME_TOKEN_RE = /(?:laliga|stanley|spotify|whitebit|lauga|culers|nik
  *
  *  1. CLOCK GLUE — the pair sits immediately after a `H:` / `HH:` clock
  *     (`02:28-1`, `04:53-1`, `03:29-1`), or immediately before a `:MM` one.
- *  2. CLOCK SHAPE — a `mm:ss` clock that OCR'd with a dash (`05-40`, `09-40`,
- *     `08-10`). A two-digit group with a LEADING ZERO is the discriminator: a
- *     real double-digit basketball score (`45-42`, which perceive's suite pins)
- *     has none, so it stays legible.
+ *  2. CLOCK SHAPE — the pair has the shape of a `mm:ss` clock that OCR'd with
+ *     the score's dash (`05-40`, `24-35`, `0-034`). Three shape keys, all
+ *     fail-closed:
+ *       (a) a ZERO-PADDED group (`05`, `019`, `034`) is never a score plate:
+ *           plates do not render leading zeros, and every measured clock-dash
+ *           family zero-pads its seconds field;
+ *       (b) a token `M-mm` whose right group is a two/three digit field <= 59
+ *           and whose left group is a plausible clock minute is a clock — but
+ *           ONLY for a sport whose plate cannot reach two digits (football),
+ *           so `45-42` (a pinned basketball pair) stays legible;
+ *       (c) the pair EQUALS the `mm:ss` split of a clock parsed from the same
+ *           line (`{@link parseOcrMatchClockLine}`, GT-2). Sport-independent:
+ *           the line itself names the clock.
  *  3. CHROME LINE — the line carries a broadcast/sponsor token and the pair is
  *     not sandwiched between the two team tokens (a real LaLiga scorebug line
  *     still reads `…LALIGA RMA 1-1 BAR…`, whose pair IS sandwiched).
+ *
+ * ADAAAA-8841 (the live Sky Sports share `1ee3c97d`): keying (a) on a leading
+ * zero in the LEFT group only (`^0\d$`) was fitted to an early-match sample, so
+ * a `mm:ss` clock at minute >= 10 (`24-35`) and a minute-0 clock whose seconds
+ * field reached the pair as `0-019` / `0-034` both passed the gate and became
+ * the window's score reading. On that job two windows then attested a PHANTOM
+ * transition that was a pure clock tick (`0-19 -> 0-20`, `0-33 -> 0-34`) — a
+ * forward +1 on exactly one side, which the 8507 delta sanity cannot refuse.
  *
  * Pure + deterministic, so the parse, the delta derivation and the census all
  * read one verdict.
@@ -1531,13 +1593,22 @@ export function ocrScorePairIsNoise(
   rawRight: string,
   index: number,
   length: number,
-  adj: { left: boolean; right: boolean }
+  adj: { left: boolean; right: boolean },
+  sport?: string
 ): boolean {
   // 1. clock glue, both directions.
   if (/\d{1,2}:$/.test(text.slice(0, index))) return true;
   if (/^:\d{1,2}/.test(text.slice(index + length))) return true;
-  // 2. clock shape: `0H` on the left, `MM` (0..59) on the right.
-  if (/^0\d$/.test(rawLeft) && /^\d{2}$/.test(rawRight) && Number(rawRight) <= 59) return true;
+  // 2. clock shape.
+  //    (a) a zero-padded group is never a score plate (ADAAAA-8841).
+  if (/^0\d+$/.test(rawLeft) || /^0\d+$/.test(rawRight)) return true;
+  //    (b) sport-scoped ceiling: a plate that cannot reach two digits refuses
+  //        any pair with a two-digit side (a `mm:ss` clock at minute >= 10).
+  if (ocrSportScoresAreSingleDigit(sport) && (Number(rawLeft) > 9 || Number(rawRight) > 9)) {
+    return true;
+  }
+  //    (c) the pair IS the clock the same line carries (GT-2).
+  if (ocrPairEqualsLineClock(text, rawLeft, rawRight)) return true;
   // 3. chrome line with no score-plate sandwich.
   if (OCR_CHROME_TOKEN_RE.test(text) && !(adj.left && adj.right)) return true;
   return false;
@@ -1577,7 +1648,10 @@ export function ocrScorePairIsNoise(
  * `12:07`, `0:00` are colon-separated, and the glued families require a
  * single-digit on both sides between two team tokens.
  */
-export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [number, number] | null {
+export function parseOcrScoreLine(
+  lines: ReadonlyArray<string> | undefined,
+  sport?: string
+): [number, number] | null {
   let leftPick: [number, number] | undefined;
   let rightPick: [number, number] | undefined;
   let gluedPick: [number, number] | undefined;
@@ -1593,7 +1667,9 @@ export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [nu
       if (!Number.isInteger(a) || !Number.isInteger(b) || a > 99 || b > 99) continue;
       const adj = ocrPairTeamAdjacent(text, m.index, m[0].length);
       // ADAAAA-8507: a clock / sponsor-chrome fragment is not a score plate.
-      if (ocrScorePairIsNoise(text, m[1], m[2], m.index, m[0].length, adj)) continue;
+      // ADAAAA-8841: the verdict is sport-aware (a football plate cannot reach
+      // two digits, a basketball one can) and reads the line's own clock.
+      if (ocrScorePairIsNoise(text, m[1], m[2], m.index, m[0].length, adj, sport)) continue;
       if (adj.left && !leftPick) leftPick = [a, b];
       else if (adj.right && !rightPick) rightPick = [a, b];
       else if (!adj.left && !adj.right && !anyPick) anyPick = [a, b];
@@ -1607,12 +1683,13 @@ export function parseOcrScoreLine(lines: ReadonlyArray<string> | undefined): [nu
  * ordered by content ts. Records without a score line contribute nothing (an
  * unreadable scorebug is absent evidence, never a fabricated reading). */
 export function scoreReadingsFromTimeline(
-  records: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined
+  records: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined,
+  sport?: string
 ): TimelineScoreReading[] {
   const out: TimelineScoreReading[] = [];
   for (const r of records ?? []) {
     if (!Number.isFinite(r?.ts)) continue;
-    const score = parseOcrScoreLine(r.ocr);
+    const score = parseOcrScoreLine(r.ocr, sport);
     if (score) out.push({ ts: r.ts, score });
   }
   return out.sort((a, b) => a.ts - b.ts);
@@ -2169,6 +2246,10 @@ export function deriveWindowAttestation(
     frames: ReadonlyArray<{ ts: number }>;
     seeds?: ReadonlyArray<{ ts: number; ocr?: string[] }>;
     observations?: ReadonlyArray<{ ts: number; ocr?: string[] }>;
+    /** ADAAAA-8841: the job's sport (from the persisted `matchContext`). The
+     * score parse refuses a dash pair shaped like a `mm:ss` clock only where the
+     * plate cannot reach two digits (football); absent => pre-8841 behaviour. */
+    sport?: string;
     biasHints: ReadonlyArray<ObserveBiasHint>;
   },
   opts: {
@@ -2232,7 +2313,7 @@ export function deriveWindowAttestation(
     }
     if (!scoreboardDeltaLegible(out.scoreBoardDelta)) {
       const derived = scoreboardDeltaFromReadings(
-        scoreReadingsFromTimeline(payload.observations),
+        scoreReadingsFromTimeline(payload.observations, payload.sport),
         livePayloadWindow({
           centerTs: payload.centerTs,
           frames: payload.frames,
@@ -5720,8 +5801,11 @@ export class LiveRunShared {
    * Returns the number of NEW readings appended (audit/tests). Zero on a payload
    * with no parseable score line — an unreadable scorebug is absent evidence.
    */
-  noteScoreReadings(observations: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined): number {
-    const readings = scoreReadingsFromTimeline(observations);
+  noteScoreReadings(
+    observations: ReadonlyArray<{ ts: number; ocr?: string[] }> | undefined,
+    sport?: string
+  ): number {
+    const readings = scoreReadingsFromTimeline(observations, sport);
     if (!readings.length) return 0;
     // ADAAAA-8564 (Fix C): every parseable read raises the run's high-water, even
     // when the ledger drops it later for age — the high-water is what makes a
@@ -10118,6 +10202,10 @@ export interface LiveFrameRereadConfig {
   leadS?: number;
   /** Per-OCR-call timeout (default 5 s) so a hung perceive cannot park the rail. */
   ocrTimeoutMs?: number;
+  /** ADAAAA-8841: the job's persisted sport. A re-read frame's OCR goes through
+   * the same score parse as the rail, so it must see the same sport or a
+   * `mm:ss` clock read back here would re-enter the ledger as a score. */
+  sport?: string;
   log?: (line: string) => void;
 }
 
@@ -10185,7 +10273,7 @@ export async function rereadDemotedWindowsFromPersistedFrames(
     // Fold the re-read readings into the run ledger (one reading per content
     // frame; a frame the rail already read keeps its FIRST reading, so a
     // re-read can only ADD coverage, never rewrite evidence).
-    const added = readings.length ? run.noteScoreReadings(readings) : 0;
+    const added = readings.length ? run.noteScoreReadings(readings, opts.sport) : 0;
     result.readings += added;
     log(
       `[live-frame-reread:${cfg.jobId}] window [${plan.lo.toFixed(1)}, ${plan.hi.toFixed(1)}] ` +
@@ -10212,6 +10300,11 @@ export async function observeAcceptOnly(
   payload: ObserveDecidePayload,
   decision: DecisionResult
 ): Promise<boolean> {
+  // ADAAAA-8841: the job's persisted sport, read once per accepted window (the
+  // same `getMatchContext` read the decide payload already pays for). It is what
+  // lets the score parse refuse a `mm:ss` clock that OCR'd as a dash pair where
+  // the plate cannot reach two digits, without refusing a basketball `45-42`.
+  const liveSport = liveJobSport(cfg);
   // ADAAAA-7988: LIVE goal recall. The media node samples at 1 fps, so a judged
   // window usually misses the net-crossing instant and the decide brain rejects
   // a celebration it described correctly ("reacting to a previous event"). When
@@ -10258,7 +10351,7 @@ export async function observeAcceptOnly(
   // ADAAAA-8134: fold this window's own score reads into the run ledger FIRST, so
   // the pooled re-read sees every read the rail has paid for (this window's own
   // set included) and a PRE side that lives in the window that just closed.
-  const newScoreReads = liveRail ? run.noteScoreReadings(payload.observations) : 0;
+  const newScoreReads = liveRail ? run.noteScoreReadings(payload.observations, liveSport) : 0;
   // ADAAAA-8610: the run's READ high-water gates the accept lane. A window whose
   // own reads (or the pooled re-read) measure a forward single-goal step that
   // still LANDS BELOW a state this run already read is a rewind, not a new goal —
@@ -10274,7 +10367,7 @@ export async function observeAcceptOnly(
         refusal.reason = refusal.reason ?? reason;
       },
     });
-  const windowAttestation = deriveWindowAttestation(payload, {
+  const windowAttestation = deriveWindowAttestation({ ...payload, sport: liveSport }, {
     claimScoreTransition: (delta) => run.claimScoreTransition(delta),
     // ADAAAA-8610 + ADAAAA-8588: one admission gate for the accept lane. The
     // hint lane adopts a legible single-goal hint delta WITHOUT claiming it
