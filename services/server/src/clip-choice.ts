@@ -53,8 +53,14 @@ export function clipChoiceFor(
 }
 
 /** The label a picker renders for an alternative: "Replay @ 207 s" /
- * "Celebration @ 165 s". Customer-safe — never the event taxonomy or verdict. */
+ * "Celebration @ 165 s" / "Re-centered @ 47 s". Customer-safe — never the event
+ * taxonomy or verdict.
+ *
+ * ADAAAA-8893 (D5): the third role is the dive's re-centered option. It reads
+ * `Re-centered @ <t> s` (the dive moment), NOT "Celebration" — the customer must
+ * be able to tell "the same moment, cut differently" from "the aftermath". */
 export function alternativePickerLabel(alt: Pick<HighlightAlternative, "eventType" | "windowAnchorTs">): string {
-  const role = alt.eventType === "replay" ? "Replay" : "Celebration";
+  const role =
+    alt.eventType === "replay" ? "Replay" : alt.eventType === "recentered" ? "Re-centered" : "Celebration";
   return `${role} @ ${Math.round(alt.windowAnchorTs)} s`;
 }
