@@ -204,9 +204,13 @@ describe("ADAAAA-7988 promotion shape", () => {
     expect(promoted.isHighlight).toBe(false);
   });
 
-  it("does not fire the dive for an attested candidate (measured evidence exists)", () => {
+  it("fires the dive for an attested candidate too (ADAAAA-8894/D4 drops the measured skip)", () => {
     const promoted = applyLiveGoalRecall(rejected("The player is celebrating a previous event."), recall);
-    expect(shouldRunConfirm(cfg(), { eventType: "GOAL", goalCrossed: true }, promoted)).toBe(false);
+    // ADAAAA-7988 pinned the old skip: a measured attestation suppressed the dive
+    // on a goal-shaped non-accept. D4 drops it — the skip set is "has no card",
+    // and a near_miss recall row is exactly the 7357 population the dive
+    // adjudicates. Measured rows keep their lane through the D4 precision guard.
+    expect(shouldRunConfirm(cfg(), { eventType: "GOAL", goalCrossed: true }, promoted)).toBe(true);
   });
 
   it("the note names both instants and the bounded quotes", () => {
