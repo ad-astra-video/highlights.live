@@ -26,6 +26,7 @@ import {
   observeOnDecide,
   observeDecideOnly,
   observeAcceptOnly,
+  shapeMatchContextTeams,
   type AnalyzeEvent,
   type AnalyzerConfig,
   type AnalyzeOutcome,
@@ -9432,25 +9433,18 @@ export function withScoreboardRoi(
  * names) into the per-`/analyze` calibration, so perceive can show that the
  * surface it crops IS this match's — or is not. A job with no resolved
  * `matchContext` sends nothing, and identity stays `absent` (today's behaviour).
+ *
+ * ADAAAA-8902: this is the BUILD-TIME value only, a fallback for a job whose
+ * `matchContext` already exists when its config is assembled. The live delivery
+ * re-reads `getMatchContext()` per frame (`deliveredMatchContextTeams`), because
+ * the resolver lands seconds after job start and the frozen copy was `undefined`
+ * on every served job.
  */
 export function withMatchContextTeams(
   calibration: GoalLineCalibration | undefined,
   teams: unknown,
 ): GoalLineCalibration | undefined {
-  const list = Array.isArray(teams) ? teams : (teams as any)?.teams;
-  if (!Array.isArray(list) || !list.length) return calibration;
-  const shaped = list
-    .map((t: any) => ({
-      side: typeof t?.side === "string" ? t.side : undefined,
-      name: typeof t?.name === "string" ? t.name : undefined,
-      kitColors: Array.isArray(t?.kitColors)
-        ? t.kitColors
-            .filter((k: any) => k && typeof k.primary === "string")
-            .slice(0, 2)
-            .map((k: any) => ({ primary: k.primary, ...(k.secondary ? { secondary: String(k.secondary) } : {}) }))
-        : [],
-    }))
-    .filter((t: any) => (t.side === "home" || t.side === "away") && (t.name || t.kitColors.length));
+  const shaped = shapeMatchContextTeams(teams);
   if (!shaped.length) return calibration;
   return { ...(calibration ?? {}), matchContextTeams: shaped };
 }
