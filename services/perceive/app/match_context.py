@@ -2747,6 +2747,9 @@ _SOCCER_KIT_PRIORS: dict[str, tuple[str, Optional[str]]] = {
     # whose plate reads that pale could therefore demote a GENUINE surface, and
     # the served replay of 493b55ff's own frames reads 0.2823 (inside). That
     # margin is a measurement for QA on natural traffic, not a value changed here.
+    # ADAAAA-8922 measured it (555 genuine plate readings over 5 clips, worst
+    # 0.381), and ADAAAA-8927 widened `SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD` to
+    # 0.44 on that population — so this 0.357 bound now sits INSIDE the bar.
     #
     # PRIMARY only. `Real Madrid` (home side of 6 stored jobs) is deliberately
     # NOT curated: its plate could not be measured. The home half was stable on

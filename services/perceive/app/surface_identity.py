@@ -56,18 +56,61 @@ from .match_context import (
     sample_scorebug_swatches,
 )
 
-# ADAAAA-8844 AC2.5. Measured on the labelled crop truth set (ADAAAA-8577 crops
-# / ADAAAA-8578 truth, 62 crops carrying a surface reading) by
-# `evals/scoreboard_identity_threshold_8844.py`:
+# ADAAAA-8927 AC1. MEASURED ON NATURAL TRAFFIC — the population this rule actually
+# compares — not on same-surface drift. ADAAAA-8844 calibrated 0.35 as
+# `1.15 x worst same-surface DRIFT (0.3005)`, and drift between two readings of ONE
+# surface is a different quantity from the distance the rule computes: the rule
+# compares a plate read off a real broadcast crop to a SATURATED reference
+# (`name_reference_rgb("blue")` = [33.05, 33.05, 183.6], hue midpoint at sat 0.82 /
+# val 0.72), and a real plate is washed out by exposure. That distance was never
+# measured on genuine plates, so 0.35 demoted them.
 #
-#   same-surface chromaticity drift  p50 0.0156  p95 0.0349  max 0.3005
-#   threshold = 1.15 x max = 0.35
+# Measured by ADAAAA-8922 at $0 on the served build (`58f51ad`), with the SHIPPED
+# sampler (`sample_scorebug_swatches`) at each job's own verified ROI
+# `[0, 0, 1, 0.25]`, 640x360 @ 3 fps, every frame of each clip, over the 5 distinct
+# broadcast clips the natural (`file`/`browser`) Barcelona jobs replay:
 #
-# The margin is on the WORST measured reading, not on the typical one, because
-# demoting a genuine surface is the failure this increment must not cause
+#   555 genuine plate readings (`name_color` == "blue") on 2263 frames
+#     kids95_8483.mp4 80   kids180_8123.mp4 126  kids300_7935.mp4 210
+#     qa8092_90s.mp4  71   kids300_goals_7992b.mp4 68
+#   plate p50 0.349-0.353   p95 0.372-0.377   max 0.381
+#   286 of 555 (52%) sat OUTSIDE 0.35 -> false demotions of a genuine surface
+#
+#   threshold = 1.15 x worst measured genuine plate (0.381) = 0.438 -> 0.44
+#
+# Same rule, same margin as ADAAAA-8844, applied to the quantity the conjunct
+# compares. Recall at 0.44: 0 of 555 genuine readings demoted (was 286). Precision
+# at 0.44, distance from the UNCHANGED saturated reference: pink 0.491, white
+# 0.492, orange 0.651, gold 0.686, green (ADAAAA-8919 repaint) 0.797, red 0.894 —
+# all still outside. Purple (0.395; the saturated `purple` reference itself is
+# 0.313) moves INSIDE the bar; it was already only 0.045 outside and the
+# printed-name channel is what separates it, so it is the one documented in-set
+# colour on the blue arm and is excluded from the acceptance set. The bar is ONE
+# constant, so it widens every reference pair: against `red`, gold (0.370) and a
+# yellow fill (0.426) also fall inside (pink 0.313 / orange 0.248 were already
+# inside 0.35), and the constant is also read by `_incumbent_surface_kept` (is a
+# second box a DIFFERENT bug's surface?). Both consequences are pinned in
+# `tests/test_surface_identity_natural_bar_8927.py`.
+#
+# Rejected alternatives, both measured on the same population (ADAAAA-8922):
+#   (a) "reference at the measured saturation": rebuild the reference at the plate
+#       population's own saturation (mean [97.2, 102.5, 174.2], chroma
+#       [0.260, 0.274, 0.466]). Genuine plates fall to p50 0.031-0.038 / p95
+#       0.072-0.110 / max 0.163 — but a foreign WHITE fill also falls to 0.163,
+#       NAVY to 0.010 and PURPLE to 0.08, i.e. the precision arm collapses: an
+#       achromatic foreign surface would read `consistent` and its score change
+#       could attest. Rejected; the saturated reference stays the separator.
+#   (b) "per-frame recall guard on a stabilised reading": the FOLDED per-20 s-window
+#       reading (`stable_swatch_by_side`, the same fold the resolver uses) still
+#       reads 0.3486-0.3579 in 4 of 15 windows, so the MODAL genuine plate is itself
+#       outside 0.35 — stabilising cannot fix the bar. Kept as a second signal,
+#       rejected as a substitute for this measurement.
+#
+# The margin stays on the WORST measured genuine reading, not the typical one,
+# because demoting a genuine surface is the failure the increment must not cause
 # (AC2.2). Precision is carried by the conjunct below: names must ALSO disagree
 # before a surface is called contradicted.
-SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD = 0.35
+SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD = 0.44
 
 # AC2.4: the identity pass is a one-off per session, plus at most one re-read
 # when a proven incumbent is replaced. Never per-frame, never a new OCR call.

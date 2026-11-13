@@ -141,8 +141,9 @@ def test_the_reference_is_the_curated_prior_and_never_a_guess():
     # A sport with no curated table keeps the channel OFF.
     assert kit_prior_table("basketball") == {}
     assert kit_prior_primary("Portugal", kit_prior_table("basketball")) is None
-    # The shipped bar is untouched by this fix (both channels, same threshold).
-    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD == 0.35
+    # The shipped bar, widened by ADAAAA-8927 to the natural-traffic measurement
+    # (1.15 x 0.381 = 0.44); this fix is untouched by that value.
+    assert SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD == 0.44
 
 
 def test_prior_reference_reaches_contradicted_without_observed_kit_colours():
