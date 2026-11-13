@@ -1787,6 +1787,9 @@ export type ServedShapeViolation =
   | "verb-repeat"
   /** ADAAAA-8209: the model's window-relative `at t=…` audit marker as copy. */
   | "audit-marker"
+  /** ADAAAA-8830: the same provenance in the model's bare settler clock
+   *  (`at 18:12`, `at 19s`) — a caption is one beat and cites no clock. */
+  | "provenance-clock"
   /** ADAAAA-8830: a line whose lead clause is the model citing its own evidence
    *  (`ASR confirms a goal`) — provenance, never copy. */
   | "attestation-cite"
@@ -2019,10 +2022,21 @@ export function servedShapeViolations(
  * served as copy.
  * ------------------------------------------------------------------------- */
 
-/** The window-relative audit marker, as a source fragment (no flags): every
- *  form the model writes — `at t=-2.7s`, `at t=0.0` (unit-less), `t=-1.0`, the
- *  match-clock form `t=22:13`, and a range. */
-const AUDIT_MARKER_SRC = String.raw`\b(?:at\s+)?t\s*=\s*-?\d+(?:[:.]\d+)?\s*s?`;
+/** The window-relative audit marker, as a source fragment (no flags, grouped so
+ *  every composition site keeps its own quantifiers): every form the model
+ *  writes — `at t=-2.7s`, `at t=0.0` (unit-less), `t=-1.0`, the match-clock form
+ *  `t=22:13`, and a range. */
+const AUDIT_MARKER_SRC = String.raw`(?:\b(?:at\s+)?t\s*=\s*-?\d+(?:[:.]\d+)?\s*s?)`;
+
+/** The model's bare SETTLER clock — `at 18:12`, `at 19s`, `at 19.5s` — the same
+ *  provenance without the `t=` prefix. Kept OUT of `AUDIT_MARKER_SRC` on purpose:
+ *  that fragment feeds `stripInternalTokens` and `summaryViolations`, and the
+ *  depth lane's own bodies legitimately OPEN on a clock anchor
+ *  (`At 1:34, Barcelona drives forward…`, ADAAAA-8665 AC7). A CAPTION surface is
+ *  one beat and may not cite a clock at all, so the caption-source bar owns this
+ *  form. Measured residue: row `8faa641b` stored
+ *  `Scoreboard changes to 2-1 and ASR confirms goal at 18:12.` as `caption`. */
+const SETTLER_CLOCK_SRC = String.raw`(?:\bat\s+\d{1,3}(?::\d{2}|(?:\.\d+)?\s*s)\b)`;
 
 /** Does this text cite the model's OWN window clock (`at t=…`, any unit form)? */
 const AUDIT_MARKER_TEST = new RegExp(String.raw`${AUDIT_MARKER_SRC}\b`, "i");
@@ -2030,8 +2044,22 @@ export function carriesAuditMarker(text: string | null | undefined): boolean {
   return AUDIT_MARKER_TEST.test(text ?? "");
 }
 
+/** Does this text cite the model's own provenance clock in ANY form — the
+ *  `t=`-prefixed audit marker (`at t=0.0`, `at t=-1.0s`, `t=22:13`) or the bare
+ *  settler clock (`at 18:12`, `at 19s`)? This is the CAPTION-SURFACE test.
+ *
+ *  `SETTLER_CLOCK_SRC` stays out of `carriesAuditMarker` on purpose: that
+ *  predicate feeds `storedReasonViolations` and the summary bar, and the depth
+ *  lane's own bodies legitimately OPEN on a clock anchor
+ *  (`At 1:34, Barcelona drives forward…`, ADAAAA-8665 AC7). A caption is one
+ *  beat and may not cite a clock at all, so the caption surfaces use this one. */
+const PROVENANCE_CLOCK_TEST = new RegExp(String.raw`(?:${AUDIT_MARKER_SRC}\b)|${SETTLER_CLOCK_SRC}`, "i");
+export function carriesProvenanceClock(text: string | null | undefined): boolean {
+  return PROVENANCE_CLOCK_TEST.test(text ?? "");
+}
+
 /** Why a CAPTION SOURCE may not be served as copy; `""` when it may. */
-export type CaptionSourceViolation = "audit-marker" | "attestation-cite" | "";
+export type CaptionSourceViolation = "audit-marker" | "provenance-clock" | "attestation-cite" | "";
 
 /**
  * The caption-source bar (ADAAAA-8830): a served `caption`/`reason` must be
@@ -2039,6 +2067,9 @@ export type CaptionSourceViolation = "audit-marker" | "attestation-cite" | "";
  *
  *  - `audit-marker`: the line carries the window-relative marker in ANY form
  *    (`carriesAuditMarker`). Provenance is never copy on any surface.
+ *  - `provenance-clock`: the same provenance in the model's bare settler clock
+ *    (`at 18:12`, `at 19s`) — a caption is one beat and may not cite a clock,
+ *    even though a DEPTH-LANE body may legitimately open on one (AC7).
  *  - `attestation-cite`: the line's LEADING clause is an attestation read (a
  *    channel word + a reporting verb: `ASR confirms a goal`, `Commentary
  *    confirms …`), i.e. the model citing its own evidence as the sentence's
@@ -2050,6 +2081,11 @@ export function captionSourceViolation(text: string | null | undefined): Caption
   const src = (text ?? "").trim();
   if (!src) return "";
   if (carriesAuditMarker(src)) return "audit-marker";
+  // The bare settler clock (`at 18:12`, `at 19s`) is the same provenance in the
+  // other form: row `8faa641b` stored
+  // `Scoreboard changes to 2-1 and ASR confirms goal at 18:12.` as its `caption`,
+  // and the lead-only citation rule cannot see the citation riding the TAIL.
+  if (carriesProvenanceClock(src)) return "provenance-clock";
   const lead = (captionLead(src).split(/[—–;,]/)[0] ?? "").split(/\b(?:and|as|while|when|but)\b/i)[0] ?? "";
   if (ATTESTATION_CHANNEL.test(lead) && ATTESTATION_REPORT.test(lead)) return "attestation-cite";
   return "";
@@ -3100,14 +3136,16 @@ function remainderIsProvenanceOnly(remainder: string): boolean {
 
 function dropAttestationMarker(clause: string): string {
   return clause
-    // `at t=-3.3s`, the UNIT-LESS `at t=0.0` / `t=-1.0` (ADAAAA-8830), and a
-    // range (`at t=-1.0s to 0.0s`) — every form the model writes its own clock in.
+    // `at t=-3.3s`, the UNIT-LESS `at t=0.0` / `t=-1.0` (ADAAAA-8830), the
+    // match clock `t=22:13`, the bare settler `at 19s` / `at 18:12`, and a
+    // range (`at t=-1.0s to 0.0s`) — every form the model writes its own clock
+    // in. Detection (`carriesProvenanceClock`) and deletion read the SAME two
+    // fragments, so they cannot disagree about what a marker is.
     .replace(
       new RegExp(String.raw`\s*${AUDIT_MARKER_SRC}(?:\s*(?:to|-|–|—)\s*(?:t=)?-?\d+(?:\.\d+)?\s*s?)?`, "gi"),
       " "
     )
-    // `at 19s` / `at 19:00` — the same provenance in the other clock form
-    .replace(/\s*\bat\s+(?:\d{1,3}:\d{2}|\d+(?:\.\d+)?\s*s)\b/gi, " ")
+    .replace(new RegExp(String.raw`\s*${SETTLER_CLOCK_SRC}`, "gi"), " ")
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([,.;:!?])/g, "$1")
     .trim();
@@ -3121,8 +3159,10 @@ export function attestationDetailCopy(
   if (!src) return "";
   // ONLY the clock-bracketed attestation shape: a sentence that cites its own
   // window-relative marker. Every other sentence is the card gate's business.
-  // ADAAAA-8830: the marker is detected in EVERY form (`at t=0.0` too).
-  if (!carriesAuditMarker(src)) return "";
+  // ADAAAA-8830: the marker is detected in EVERY form (`at t=0.0` too), and the
+  // bare settler clock (`at 18:12`) counts — otherwise a row that stored its own
+  // evidence sentence as copy (row `8faa641b`) had no deletion lane to fall into.
+  if (!carriesProvenanceClock(src)) return "";
   const clauses = src
     .split(/\s*(?:[—–;,]|\b(?:and|as|while|when|but)\b)\s*/i)
     .map((c) => c.trim())
