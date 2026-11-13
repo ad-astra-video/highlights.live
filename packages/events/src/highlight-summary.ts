@@ -1294,13 +1294,31 @@ function venueFactGrounded(factText: string, evidence: SummaryEvidence): boolean
 }
 
 function clockFactGrounded(factText: string, evidence: SummaryEvidence): boolean {
+  // ADAAAA-8941 (AC14.4): the row's own scorebug reading is a fact wherever the
+  // body prints it — `windowTs` is the CLIP offset and can never anchor `18:12`
+  // (102.7 s window, 1092 s match clock), which is why a body that served the
+  // right stamp was refused `too-few-facts`.
+  if (factText === attestedMatchClockToken(evidence)) return true;
+  const seconds = clockSeconds(factText);
+  const matchSeconds = evidence.matchClock?.seconds;
+  if (seconds !== null && typeof matchSeconds === "number" && Math.abs(seconds - matchSeconds) <= 1) return true;
   const windowsTs = evidence.windowTs;
   if (typeof windowsTs !== "number" || !Number.isFinite(windowsTs)) return false;
-  const seconds = clockSeconds(factText);
   // A spell ("second half") is a clock fact the row's window anchor carries; an
   // explicit m:ss must anchor THIS window, not a fabricated instant.
   if (seconds === null) return true;
   return Math.abs(seconds - windowsTs) <= SUMMARY_CLOCK_ANCHOR_TOLERANCE_S;
+}
+
+/** ADAAAA-8941 (AC14.1): an `action` fact sourced from ADAAAA-8903's
+ *  SUSTAINED_ACTION_RE is atmosphere on a row whose attestation recorded NO ball
+ *  outcome — the possession/pressure vocabulary asserts what the row did not
+ *  measure, which is the same class as `crowd` / `momentum`. A row that DID
+ *  measure an outcome keeps the credit (and a ball-outcome verb is never affected:
+ *  `ACTION_RE` owns it and that class is judged by `unattested-action`). */
+function sustainedFactUnattested(factText: string, evidence: SummaryEvidence): boolean {
+  if (summaryBallActionAttested(evidence) !== false) return false;
+  return !ACTION_RE.test(factText) && SUSTAINED_ACTION_RE.test(factText);
 }
 
 // --- ADAAAA-8910: three unattested claims the rev-7 live leg served ---------
@@ -1342,6 +1360,10 @@ interface ClockFrameHit {
   end: number;
   /** The clip-framed replacement. */
   replacement: string;
+  /** The clock token this frame is attached to (`1:42`). ADAAAA-8941: a frame on
+   *  the row's OWN attested match clock is honest, so the repair and the bar both
+   *  need to know which stamp the frame belongs to. */
+  token: string;
 }
 
 /** Every match-time frame attached to a clock token, with its span. Only a frame
@@ -1350,31 +1372,47 @@ interface ClockFrameHit {
 function clockFrameHits(text: string): ClockFrameHit[] {
   const body = text ?? "";
   const hits: ClockFrameHit[] = [];
-  const take = (base: number, window: string, rules: readonly ClockFrameRule[]): boolean => {
+  const take = (base: number, window: string, rules: readonly ClockFrameRule[], token: string): boolean => {
     for (const rule of rules) {
       const found = window.match(rule.re);
       if (!found || found.index === undefined) continue;
       const start = base + found.index;
       const end = start + found[0].length;
       if (hits.some((hit) => start < hit.end && end > hit.start)) return true;
-      hits.push({ from: found[0], start, end, replacement: found[0].replace(rule.re, rule.to) });
+      hits.push({ from: found[0], start, end, replacement: found[0].replace(rule.re, rule.to), token });
       return true;
     }
     return false;
   };
   for (const match of body.matchAll(CLOCK_TOKEN_RE)) {
     const at = match.index ?? 0;
+    const token = match[0];
     const afterStart = at + match[0].length;
-    if (take(afterStart, body.slice(afterStart, afterStart + 60), CLOCK_FRAME_AFTER)) continue;
+    if (take(afterStart, body.slice(afterStart, afterStart + 60), CLOCK_FRAME_AFTER, token)) continue;
     const beforeStart = Math.max(0, at - 40);
-    take(beforeStart, body.slice(beforeStart, at), CLOCK_FRAME_BEFORE);
+    take(beforeStart, body.slice(beforeStart, at), CLOCK_FRAME_BEFORE, token);
   }
   return hits;
 }
 
-/** Every place the body frames a clock as match time. Empty => no wrong frame. */
-export function clockFrameClaims(text: string): string[] {
-  return [...new Set(clockFrameHits(text).map((hit) => hit.from))];
+/** The frame hits that are WRONG on this row. ADAAAA-8941: a body that prints the
+ *  row's own attested `matchClock.token` and frames it as match time is honest
+ *  ("Barcelona passes wide at the 18:12 mark of the match"), so only a frame on a
+ *  DIFFERENT stamp is the mislabelled clip offset ADAAAA-8910 named. Called with
+ *  no evidence, every frame counts — the pre-8941 behaviour, kept for the raw-body
+ *  replay tools and the callers that carry no row. */
+function unattestedClockFrameHits(text: string, evidence?: SummaryEvidence): ClockFrameHit[] {
+  const hits = clockFrameHits(text);
+  if (!evidence) return hits;
+  const token = attestedMatchClockToken(evidence);
+  if (token === null) return hits;
+  return hits.filter((hit) => hit.token !== token);
+}
+
+/** Every place the body frames a clock as match time. Empty => no wrong frame.
+ *  Pass the row's evidence to exempt a frame on its own attested match clock. */
+export function clockFrameClaims(text: string, evidence?: SummaryEvidence): string[] {
+  return [...new Set(unattestedClockFrameHits(text, evidence).map((hit) => hit.from))];
 }
 
 /** ADAAAA-8910 (defect 2): the deterministic repair for a body that frames the
@@ -1393,10 +1431,13 @@ export interface SummaryClockFrameNeutralisation {
 /** ADAAAA-8910: rename the match-time frame on the attestation the row actually
  *  carries. A refusal here would drop an otherwise-factual body and spend the one
  *  retry slot on a reference frame; the offset is a real fact and the clip is its
- *  real frame, so the sentence is repaired in place. */
-export function neutraliseMatchClockFrame(text: string): SummaryClockFrameNeutralisation {
+ *  real frame, so the sentence is repaired in place.
+ *
+ *  ADAAAA-8941: with evidence, a frame on the row's OWN `matchClock.token` is left
+ *  alone — that sentence is honest and must stay byte-identical. */
+export function neutraliseMatchClockFrame(text: string, evidence?: SummaryEvidence): SummaryClockFrameNeutralisation {
   const body = text ?? "";
-  const hits = clockFrameHits(body);
+  const hits = unattestedClockFrameHits(body, evidence);
   if (hits.length === 0) return { text: body, neutralised: [] };
   // Apply from the end backwards so earlier offsets stay valid.
   const neutralised: string[] = [];
@@ -1406,6 +1447,56 @@ export function neutraliseMatchClockFrame(text: string): SummaryClockFrameNeutra
     neutralised.unshift(hit.from);
   }
   return { text: out, neutralised };
+}
+
+/** ADAAAA-8941 (AC14.4): the served clock — what the write seam stores.
+ *  `served` names the clip offsets that were replaced (the audit trail), `token`
+ *  is the row's attested `matchClock.token`, and `text` is the body to judge/store. */
+export interface SummaryClockServing {
+  token: string | null;
+  served: string[];
+  text: string;
+}
+
+/** The clip-frame shapes a body can attach to a clock offset: the `Window:` anchor
+ *  writes "into the clip" (see `CLOCK_FRAME_AFTER`, which renames a match frame to
+ *  exactly these), and a writer may also say "of the clip" outright. `mark` is
+ *  kept in the replacement so "at the 1:42 mark of the clip" reads
+ *  "at the 18:12 mark of the match" instead of losing a word. */
+const CLIP_CLOCK_FRAME_RE =
+  /\b(\d{1,3}:\d{2})(\s+(?:mark\s+)?(?:into|of|in)\s+(?:the\s+|this\s+)?clip)\b/gi;
+
+/** AC14.4: serve the row's own MATCH clock instead of the offset into the clip.
+ *
+ *  The measured defect (live job `e4c2fe29`, served image `sha256:603797d3…`): all
+ *  three served bodies printed `1:42`, `2:40`, `5:12` "into the clip" while the
+ *  rows' own scorebug readings were `18:12`, `22:13`, `11:33`. The offset is real
+ *  but the card is about the match, so the stamp is the row's attested token.
+ *
+ *  Two bars keep this from fabricating: the frame must NAME the clip (a bare
+ *  stamp is left to the clock bars), and the offset must be anchored by the row's
+ *  own `windowTs` (the same anchor `clockFactGrounded` uses, to the second). A
+ *  stamp the row cannot certify is reported by `attestedMatchClockToken` /
+ *  `clockFrameClaims` instead of being rewritten here. */
+export function serveAttestedMatchClock(text: string, evidence: SummaryEvidence): SummaryClockServing {
+  const body = text ?? "";
+  const token = attestedMatchClockToken(evidence);
+  const windowTs = evidence.windowTs;
+  if (token === null || typeof windowTs !== "number" || !Number.isFinite(windowTs)) {
+    return { token, served: [], text: body };
+  }
+  const served: string[] = [];
+  const out = body.replace(CLIP_CLOCK_FRAME_RE, (whole: string, stamp: string, frame: string) => {
+    const seconds = clockSeconds(stamp);
+    // Only an offset this row's own window anchors: 1:42 on a 102.7 s window is
+    // the clip offset, 9:59 on the same window is a fabricated instant.
+    if (seconds === null || Math.abs(seconds - windowTs) > 1) return whole;
+    if (stamp === token) return whole;
+    if (!served.includes(stamp)) served.push(stamp);
+    const marks = /^\s+mark\b/i.test(frame);
+    return `${token}${marks ? " mark" : ""} of the match`;
+  });
+  return { token, served, text: out };
 }
 
 /** The competition / venue vocabulary a body may not name on a row whose match
@@ -1518,15 +1609,51 @@ const REACTION_CLAIM_RE =
 const VALUE_FILLER_RE =
   /\b(?:momentum|high[- ]stakes|intensit(?:y|ies)|intense|battle\s+for\s+(?:control|possession)|turning\s+point|pivotal\s+moment|dramatic|vital\s+point|crucial|dominance|dominant|against\s+their\s+opponent|secure\s+the\s+tie|shift\s+in\s+(?:momentum|the\s+game)|game[- ]changing|world[- ]class|at\s+its\s+peak)\b/i;
 
+/** ADAAAA-8941 (AC14.1/AC14.2): TACTICAL ATMOSPHERE — possession / ball-forward /
+ *  sustained-play vocabulary. It is a FACT only when the row's own attestation
+ *  records a ball outcome (ADAAAA-8903's credit, which this bar does not remove);
+ *  on a row that measured nothing it asserts a pattern the row never saw.
+ *
+ *  The measured defect (live job `e4c2fe29`, served image `sha256:603797d3…`):
+ *  all three surviving bodies were this template family — "maintains possession
+ *  and works the ball forward during this sequence … the team continues their
+ *  sustained play" — with `attestation.ballOutcome: null`, and the gate read
+ *  `accepted` on every one. 0 of 6 sentences carried a fact beyond the team name.
+ *  ADAAAA-8928 owns the prompt skew that produces the template; this bar refuses
+ *  the shape whichever prompt produced it. */
+const TACTICAL_CLAIM_RE =
+  /\b(?:(?:maintains?|maintained|maintaining|holds?|held|keeps?|kept|retains?|retained|has|had|takes?|took|keeps?)\s+(?:the\s+)?(?:possession|control|ball)\b|\b(?:works?|worked|working|moves?|moved|moving|plays?|played|playing)\s+the\s+ball\s+(?:forward|up|across|out|wide)\b|\bsustained\s+play\b|\bcontinues?\s+their\s+sustained\b)/i;
+
 /** Every unattested atmosphere / reaction / value clause in `text`. Matched per
  *  CLAUSE (sentence) so a body can be repaired by deleting exactly the sentence
- *  that carries it. */
-export function unattestedAtmosphereClaims(text: string): string[] {
+ *  that carries it.
+ *
+ *  ADAAAA-8941: pass the row's evidence to also refuse the tactical clause on a
+ *  row whose attestation recorded NO ball outcome. Called without evidence (raw
+ *  replay tools, rows that carry no attestation), the vocabulary behaves as it
+ *  did before this ticket. */
+export function unattestedAtmosphereClaims(text: string, evidence?: SummaryEvidence): string[] {
   const body = text ?? "";
   const hits: string[] = [];
   for (const re of [ATMOSPHERE_CLAIM_RE, REACTION_CLAIM_RE, VALUE_FILLER_RE]) {
     const found = body.match(re);
     if (found) hits.push(found[0].toLowerCase());
+  }
+  // `=== false` only: a row with no attestation at all (`null`) keeps today's
+  // behaviour, and a row that measured an outcome keeps ADAAAA-8903's credit.
+  // The tactical clause is judged PER SENTENCE and only where the sentence
+  // carries nothing but the clock: a sentence that pairs the score line with a
+  // possession tail is describing the play around an attested fact, while a
+  // sentence whose whole substance is possession/pressure asserts a pattern the
+  // row never measured — the rev-8 live deck's shape (0 of 6 sentences carried a
+  // fact beyond the team name and the offset).
+  if (evidence && summaryBallActionAttested(evidence) === false) {
+    for (const sentence of summarySentencesOf(body)) {
+      const facts = sentenceFactKinds(sentence, evidence);
+      if (!facts.every((kind) => kind === "clock")) continue;
+      const found = sentence.match(TACTICAL_CLAIM_RE);
+      if (found) hits.push(found[0].toLowerCase());
+    }
   }
   return [...new Set(hits)];
 }
@@ -1611,7 +1738,7 @@ export function sentenceFactKinds(sentence: string, evidence: SummaryEvidence): 
     if (fact.kind === "score" && !scoreFactGrounded(fact.text, evidence)) continue;
     if (fact.kind === "venue" && !venueFactGrounded(fact.text, evidence)) continue;
     if (fact.kind === "clock" && !clockFactGrounded(fact.text, evidence) && fact.text !== matchClockToken) continue;
-    if (fact.kind === "action" && !bodyNamesAttestedActor(sentence, evidence)) continue;
+    if (fact.kind === "action" && (!bodyNamesAttestedActor(sentence, evidence) || sustainedFactUnattested(fact.text, evidence))) continue;
     out.add(fact.kind);
   }
   return [...out];
@@ -1633,7 +1760,7 @@ export function summarySentenceFacts(text: string, evidence: SummaryEvidence): S
   return summarySentencesOf(text).map((sentence) => ({
     sentence,
     facts: sentenceFactKinds(sentence, evidence),
-    claims: unattestedAtmosphereClaims(sentence),
+    claims: unattestedAtmosphereClaims(sentence, evidence),
     venueClaims: unattestedVenueClaims(sentence, evidence),
     words: summaryWordCount(sentence),
   }));
@@ -1789,7 +1916,9 @@ export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence
     // ADAAAA-8735: an ACTION fact is credited only when the body NAMES the
     // attested team/player. A verb alone ("the ball shoots on the left") is a
     // bare action, not a fact the row attests — the measured rev-3 defect.
-    if (fact.kind === "action" && !bodyNamesAttestedActor(text, evidence)) continue;
+    // ADAAAA-8941: sustained-play vocabulary is credited only on a row that
+    // measured a ball outcome (`sustainedFactUnattested`).
+    if (fact.kind === "action" && (!bodyNamesAttestedActor(text, evidence) || sustainedFactUnattested(fact.text, evidence))) continue;
     out.add(fact.kind);
   }
   return [...out];
@@ -1922,7 +2051,7 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   // reference frame, no competition key, and the score digits without a side), so
   // it is checkable from the body after the fact — the census can grade it off a
   // row dump instead of needing another paid leg.
-  if (clockFrameClaims(body).length > 0) out.push("clock-frame");
+  if (clockFrameClaims(body, evidence).length > 0) out.push("clock-frame");
   if (unattestedVenueClaims(body, evidence).length > 0) out.push("unattested-venue");
   if (unattestedSideClaims(body, evidence).length > 0) out.push("unattested-side");
   if (attestedSummaryFactKinds(body, evidence).length < SUMMARY_MIN_FACT_KINDS) out.push("too-few-facts");
@@ -1931,7 +2060,7 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   // backstop for a clause that survived it; the shared helpers are exported so a
   // $0 replay reads a stored body with the SAME rules the live gate applies.
   if (unattestedSentences(body, evidence).length > 0) out.push("unattested-sentence");
-  if (unattestedAtmosphereClaims(body).length > 0) out.push("unattested-atmosphere");
+  if (unattestedAtmosphereClaims(body, evidence).length > 0) out.push("unattested-atmosphere");
   if (internalSentenceRepeats(body).length > 0) out.push("repeat-sentence");
   if (matchClockFrameClaims(body, evidence).length > 0) out.push("match-clock-frame");
   return out;
@@ -2018,15 +2147,19 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     // for the same reason as the role nouns — the body's facts are attested, only
     // the reference frame was wrong ("at the 1:42 mark of the match" -> "… of the
     // clip" on a row whose attested match clock is 18:13).
-    const clockFrame = neutraliseMatchClockFrame(neutralised.text);
+    const clockFrame = neutraliseMatchClockFrame(neutralised.text, evidence);
+    // ADAAAA-8941 (AC14.4): the clip offset is then SERVED as the row's own match
+    // clock, so the card's stamp matches the scorebug reading the row persists
+    // ("at 1:42 into the clip" on a 102.7 s window -> "at 18:12 of the match").
+    const clockServed = serveAttestedMatchClock(clockFrame.text, evidence);
     // ADAAAA-8914 (AC14.1/AC14.2/AC14.5): the FILLER clause is deleted BEFORE
     // judging, extractively and on the first sample — the one cheap repair the
     // contract allows. A body that keeps its facts in band still serves; one that
     // does not is judged as the WRITER wrote it, so the refusal names the bars the
     // writer failed instead of the ones a shortened body trips.
-    const filler = dropFillerSentences(clockFrame.text, evidence);
-    const repaired = filler.text && filler.text !== clockFrame.text ? filler.text : "";
-    const judgedCandidates = repaired ? [repaired, clockFrame.text] : [clockFrame.text];
+    const filler = dropFillerSentences(clockServed.text, evidence);
+    const repaired = filler.text && filler.text !== clockServed.text ? filler.text : "";
+    const judgedCandidates = repaired ? [repaired, clockServed.text] : [clockServed.text];
     let candidateRefused: SummaryViolation[] | null = null;
     for (const judged of judgedCandidates) {
       if (!judged) continue;
@@ -2040,7 +2173,10 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
         return {
           summary: judged,
           gate:
-            neutralised.neutralised.length > 0 || clockFrame.neutralised.length > 0 || filler.dropped.length > 0
+            neutralised.neutralised.length > 0 ||
+            clockFrame.neutralised.length > 0 ||
+            clockServed.served.length > 0 ||
+            filler.dropped.length > 0
               ? "neutralised"
               : candidate.trimmed
                 ? "trimmed"
@@ -2063,11 +2199,11 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     // The repair was applied and did not stand on its own: report the refusal the
     // writer's own body earns, and keep the repair numbers as evidence.
     const refusedHere = candidateRefused ?? [];
-    lastJudged = clockFrame.text;
+    lastJudged = clockServed.text;
     droppedSentences = neutralised.droppedSentences;
     droppedClauses = filler.dropped;
     clauseClaims = filler.claims;
-    repairedWords = filler.dropped.length > 0 ? (repaired ? summaryWordCount(repaired) : 0) : summaryWordCount(clockFrame.text);
+    repairedWords = filler.dropped.length > 0 ? (repaired ? summaryWordCount(repaired) : 0) : summaryWordCount(clockServed.text);
     if (repaired) {
       // A repaired body that fell under the floor is AC14.5's case: the DROP is
       // measured on the repaired text, so only the depth bars it earns are added

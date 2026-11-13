@@ -78,16 +78,19 @@ const ROW_8D52_EV: SummaryEvidence = {
 };
 
 const DRAFT_8D52 =
-  "Real Madrid takes a 2-1 lead after the scoreboard changes at the 1:42 mark. Real Madrid keeps possession as the clip runs past 1:42.";
+  "Real Madrid takes a 2-1 lead after the scoreboard changes at the 1:42 mark. Real Madrid passes wide as the clip runs past 1:42.";
 
 /** The same row, after the ADAAAA-8910 direction claim is repaired: the digits
  *  and the names are attested, WHICH SIDE levelled is not, so the sentence states
  *  the scoreboard's line instead of crediting it. Same facts, same evidence.
  *  ADAAAA-8914 (AC14.1): the second sentence was "The crowd erupted in
  *  celebration …", an atmosphere clause the clause repair deletes; it now carries
- *  the row's clip clock and an attested actor's play. */
+ *  the row's clip clock and an attested actor's play.
+ *  ADAAAA-8941: "keeps possession" was that sentence's whole substance on a row
+ *  with no measured ball outcome (the rev-8 LIVE filler shape, job `e4c2fe29`), so
+ *  it is a named attested actor's action now. Same word count. */
 const DRAFT_A482_FIXED =
-  "Real Madrid moves the ball forward as the scoreboard reads 2-2. Real Madrid keeps possession at the 2:43 mark into the clip.";
+  "Real Madrid moves the ball forward as the scoreboard reads 2-2. Real Madrid passes wide at the 2:43 mark into the clip.";
 
 describe("ADAAAA-8831 AC12 — an object-position role phrase is rewritten, not deleted", () => {
   it("keeps the sentence that holds the attested score line", () => {
