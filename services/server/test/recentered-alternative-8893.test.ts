@@ -176,7 +176,7 @@ describe("the option row states the dive's provenance", () => {
 });
 
 describe("delivery keeps the card's clip and never writes the owner row", () => {
-  function harness(existing: HighlightAlternative[] = [], cutResult?: { clipUri: string; start: number; end: number; bytes?: number }) {
+  function harness(existing: HighlightAlternative[] = [], cutResult?: { clipUri: string; start: number; end: number; bytes?: number; offsetSec?: number | null }) {
     const rows = new Map([[owner.id, structuredClone(owner)]]);
     const stored: HighlightAlternative[] = [...existing];
     const cutCalls: number[] = [];
@@ -216,6 +216,18 @@ describe("delivery keeps the card's clip and never writes the owner row", () => 
     // AC5.1/AC5.2: the card keeps its accept-anchor clip, byte for byte.
     expect(h.rows.get(owner.id)).toEqual(before);
     expect(h.rows.get(owner.id)?.clipUri).toBe("/clips/job-8893-1587.mp4");
+  });
+
+  it("stamps where the dive moment actually landed in the option file (ADAAAA-8906)", async () => {
+    // The D5 grade could only see this by probing footage, because the row did
+    // not record the delivered placement. The option row now carries the
+    // measured number, so a mis-anchored cut is readable from the row.
+    const h = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4", start: 150, end: 166, offsetSec: 11.02 });
+    const option = await h.deliver();
+    expect(option?.momentDeliveredOffsetSec).toBeCloseTo(11.02, 3);
+    // Absent (content-clock fallback / a rail that measured nothing) stays absent.
+    const noMeasure = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4", start: 150, end: 166 });
+    expect((await noMeasure.deliver())?.momentDeliveredOffsetSec).toBeUndefined();
   });
 
   it("never cuts a second option for the same row", async () => {

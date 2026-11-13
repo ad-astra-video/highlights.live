@@ -2575,6 +2575,14 @@ export const HighlightAlternativeSchema = z.object({
   /** ADAAAA-8893 (D5): the option clip's own bytes, so the extra storage per
    *  re-anchored row is reportable (p50/p95) without a second file probe. */
   clipBytes: z.number().int().min(0).optional(),
+  /** ADAAAA-8906: where the dive moment ACTUALLY landed inside the option file,
+   *  measured from its first frame (seconds) — the delivered truth, not the
+   *  number the placement asked for. QA's D5 grade found the row fields right
+   *  while the file opened 1.0-1.2 s early; this field makes that class of
+   *  defect readable from the row instead of only from footage. Absent on a
+   *  content-clock fallback (nothing was measured) and on every non-recentered
+   *  alternative. */
+  momentDeliveredOffsetSec: z.number().optional(),
   /** Delivered clip window + the cut media path. */
   start: z.number(),
   end: z.number(),
