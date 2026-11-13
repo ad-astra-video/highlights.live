@@ -53,11 +53,15 @@ const SERVED_36 =
  *  was filler — none of those sentences carried an attested fact, because an
  *  action is credited only when the sentence NAMES an attested actor. Every
  *  sentence now names Barcelona and relays a fact. */
+// ADAAAA-8934: every sentence carries an attested fact, and the second fact type
+// is a BOUNDED act by a named attested actor. The rev-8 shape ("presses high",
+// "recycles the ball", "keeps possession") is a sustained STATE that the clause
+// repair now deletes, so it cannot stand in for a fact.
 const SERVED_44 =
   "Barcelona works the ball through the middle as the scoreboard moves to 2-1 at 0:27 into the clip. " +
-  "Barcelona presses high to force a turnover near the touchline. " +
-  "Barcelona recycles the ball and switches play to the far side. " +
-  "The scoreboard reads 2-1 as Barcelona keeps possession through the restart.";
+  "Real Madrid intercepts the ball near the touchline and counters at 0:31 of the clip. " +
+  "Barcelona recovers the ball and threads a pass to the far side. " +
+  "The scoreboard reads 2-1 as the clip runs past 0:27.";
 
 /** The body the served build stored on row `48fe4280` — the ADAAAA-8910 defects
  *  3 and 4 in one paragraph (`takes the lead`, `this intense match`,
@@ -92,7 +96,7 @@ describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
     const decision = gateSummaryDetail(SERVED_44, ROW_48FE);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(SERVED_44);
-    expect(decision.words).toBe(50);
+    expect(decision.words).toBe(55);
     expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
   });
 

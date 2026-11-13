@@ -83,8 +83,12 @@ const ROW_5322 = {
 const evidenceFor = (row: Record<string, unknown>, rail: "live" | "vod") =>
   summaryEvidenceForRow({ ...(row as any), matchContext: MATCH_CONTEXT }, rail, null);
 
+// ADAAAA-8934: the second fact is a BOUNDED act by a named attested actor. The
+// rev-8 shape ("keeps possession … works the ball forward") is a sustained STATE
+// that no channel on this row measures, so the gate now deletes it instead of
+// crediting it as an action fact.
 const FACT_BODY_AED6 =
-  "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid keeps possession and works the ball forward through midfield near the box.";
+  "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid intercepts the ball near the box at the 1:35 mark of this clip.";
 
 const FILLER_VOD =
   "Barcelona finds the equalizer to level the score at 2-2. The crowd erupts in celebration as the team secures a vital point in this intense match. This scoring play shifts the momentum during the game. The atmosphere in the stadium is electric following this dramatic turn of events.";
@@ -184,7 +188,9 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
     const state = newSummaryJobState();
     // The previous card served this (factual) sentence; the next row's reply
     // reuses it, which is the AC14.3 defect one level below the template.
-    const servedSentence = "Real Madrid keeps possession and works the ball forward through midfield near the box.";
+    // ADAAAA-8934: a bounded act — a sustained-play clause would be DELETED by the
+    // clause repair, so it could never be the sentence the next card repeats.
+    const servedSentence = "Real Madrid intercepts the ball near the box at the 1:35 mark of this clip.";
     state.servedSentences.push(servedSentence);
     const repeated = `The scoreboard moves to 2-2 at the 2:35 mark of this clip. ${servedSentence}`;
     const { store, patches } = stubStore();
@@ -208,7 +214,7 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
 
   it("serves a body that repeats nothing", async () => {
     const state = newSummaryJobState();
-    state.servedSentences.push(...["Barcelona presses high to force a turnover near the wing."]);
+    state.servedSentences.push(...["Barcelona recovers the ball near the wing and counters at the 1:35 mark of this clip."]);
     const f = stubFetch([FACT_BODY_AED6]);
     const result = await runSummaryForRow(
       stubStore().store,
@@ -235,9 +241,18 @@ describe("ADAAAA-8914 AC14.5 — a filler reply drops as `filler`, cheaply", () 
       newSummaryJobState()
     );
     expect(result.outcome).toBe("dropped");
-    expect(result.reason).toBe("filler");
     expect(result.calls).toBe(2);
     const last = patches.at(-1)!.patch as Record<string, unknown>;
+    // ADAAAA-8934: this draft grounds ONE sentence and the other three are CLAIM
+    // deletions (atmosphere/momentum/crowd), which leave no slot for the repair —
+    // a true fact must not replace a false claim. The repair may contribute at
+    // most as many sentences as the draft itself kept (it may fill holes, never
+    // become the body), so the substitution stops at one fact sentence and the
+    // card still lands under the 40-word floor. That is the `filler` name this
+    // rule exists for: the writer had nothing to say, and the clause repair took
+    // the body under the floor. Lifting the cap would serve 40 words that are
+    // three restatements of one score transition.
+    expect(result.reason).toBe("filler");
     expect(last.summaryGate).toBe("dropped:filler");
     expect(last.summaryDroppedByReason).toEqual({ filler: 1 });
     // §15.4: what the repair deleted, and the word count that survived it.
@@ -252,10 +267,13 @@ describe("ADAAAA-8914 AC14.5 — a filler reply drops as `filler`, cheaply", () 
   });
 
   it("serves the second sample when the retry repairs the clause", async () => {
+    // ADAAAA-8934: the retry now draws on the fact menu (score line, clip clock,
+    // a bounded act by a named attested actor) instead of the possession prose the
+    // rev-8 prompt asked for.
     const repaired =
-      "Barcelona works the ball forward as the scoreboard changes from 2-1 to 2-2 at the 1:24 mark of the clip. " +
-      "Barcelona presses high to force a turnover near the byline. " +
-      "Real Madrid recycles the ball through midfield and looks to break forward. " +
+      "Barcelona is in the sequence as the scoreboard moves from 2-1 to 2-2 at the 1:24 mark of the clip. " +
+      "Real Madrid intercepts the ball near the byline and counters at 1:24 into the clip. " +
+      "Barcelona recovers the ball near the wing and threads a pass to the left flank at 1:24 of the clip. " +
       "The scoreboard holds at 2-2 as the clip runs past 1:24.";
     const { store, patches } = stubStore();
     const f = stubFetch([FILLER_VOD, repaired]);

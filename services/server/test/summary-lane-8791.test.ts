@@ -57,8 +57,10 @@ const SHORT =
 // ADAAAA-8914 (AC14.1): the retry's target-length body names Barcelona and relays
 // a fact in every sentence (the old fixture spent three sentences on the crowd, the
 // bench and the celebration, which the repair deletes).
+// ADAAAA-8934: the retry body carries BOUNDED acts (interception / recovery) as its
+// second fact type; possession/pressure prose is deleted by the clause repair.
 const LONG =
-  "Barcelona levels the scoring play at 2-2 with a strike that the scoreboard confirms at the 1:27 mark of the clip. Barcelona presses high to force a turnover near the near touchline. Barcelona recycles the ball and switches play into the box. The scoreboard stays level at 2-2 as Barcelona keeps possession through the restart.";
+  "Barcelona levels the scoring play at 2-2 with a strike that the scoreboard confirms at the 1:27 mark of the clip. Real Madrid intercepts the ball near the touchline at 1:27 into the clip. Barcelona recovers the ball and threads a pass into the box at 1:31 of the clip. The scoreboard stays level at 2-2 as the clip runs past 1:27.";
 
 const cfg = (over: Record<string, unknown> = {}) => ({
   decideUrl: "http://decide.test",

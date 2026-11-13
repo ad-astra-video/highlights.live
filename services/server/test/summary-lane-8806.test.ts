@@ -71,8 +71,10 @@ const CLOCK_ONLY =
 // ADAAAA-8914 (AC14.1): the second sentence now carries the attested actor's
 // play; "The crowd stays loud through the whole sequence." is an atmosphere
 // clause the repair deletes (and it took the body under the live floor).
+// ADAAAA-8934: the second fact is a BOUNDED act. "keeps possession through the
+// next passage" is a sustained state no channel measures, so the repair deletes it.
 const NAMED =
-  "At 0:25, Barcelona drives forward as the team pushes toward the opponent's side of the pitch. Barcelona keeps possession through the next passage of play.";
+  "At 0:25, Barcelona drives forward as the team pushes toward the opponent's side of the pitch. Barcelona intercepts the ball near the wing at 0:25 of the clip.";
 
 describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
   it("retries a clock-only reply when the row attests a second fact type", async () => {
