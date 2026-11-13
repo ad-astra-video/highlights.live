@@ -78,6 +78,7 @@ from .match_context import (
     scorebug_lines_have_team_text,
     scorebug_lines_sides,
     sport_key,
+    stable_swatch_by_side,
 )
 from .surface_identity import (
     SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD,
@@ -87,6 +88,7 @@ from .surface_identity import (
     demotion_note as surface_demotion_note,
     surface_reading,
 )
+from .surface_identity import _kits_from_crop as _surface_kits_from_crop
 from .scoreboard_vision import (
     ScoreboardVerdict,
     enabled as scoreboard_vision_enabled,
@@ -464,6 +466,73 @@ def _surface_crop_plate(rgb, roi):
         return None
 
 
+def _record_surface_kit_arm(state, sig, kits, seq):
+    """Remember the last per-side swatch MEASURED on this surface (ADAAAA-8960).
+
+    One entry per surface signature (a small, bounded dict), overwritten by the
+    next measurement of the SAME box. It is a measurement of this surface, so a
+    later observation of the same box may carry it; a different box can never
+    inherit it (keyed by signature, exactly like the verdict cache).
+    """
+    if sig is None or not kits:
+        return
+    pool = getattr(state, "surface_identity_kits_by_sig", None) or {}
+    pool[sig] = {"kits": {side: list(colour) for side, colour in kits.items()}, "seq": seq}
+    state.surface_identity_kits_by_sig = pool
+
+
+def _carried_surface_kit_arm(state, sig):
+    """The last swatch measured on this surface, or ``None`` (ADAAAA-8960)."""
+    if sig is None:
+        return None
+    return (getattr(state, "surface_identity_kits_by_sig", None) or {}).get(sig) or None
+
+
+def _carried_swatch_pool(state):
+    """The STABLE per-side swatch the session's own sampler measured (ADAAAA-8960).
+
+    ``state.scorebug_swatches`` is filled on every frame from the SAME ROI crop the
+    OCR pass reads (bounded to ``_MATCH_CONTEXT_MAX_SWATCHES``), so it is a
+    measurement of THIS session's surface. It is folded with
+    ``stable_swatch_by_side`` — the resolver's own instrument — so an advertising
+    board's per-frame colour noise is rejected (modal colour, >=2 repeats, >=60 %
+    share) and only a reading that REPEATS can be carried. This is the source that
+    exists on the served jobs, where both identity passes landed on crops with no
+    plate swatch but 38 of the first 60 sampler readings did carry one.
+    """
+    pool = list(getattr(state, "scorebug_swatches", None) or [])
+    stable = stable_swatch_by_side(pool)
+    kits = {
+        side: [round(float(v), 1) for v in rec.get("rgb") or []]
+        for side, rec in stable.items()
+        if side in ("home", "away") and rec.get("rgb") and len(rec.get("rgb") or []) == 3
+    }
+    if not kits:
+        return None
+    seqs = [int(sw["seq"]) for sw in pool if isinstance(sw, dict) and sw.get("seq") is not None]
+    return {"kits": kits, "seq": max(seqs) if seqs else None}
+
+
+def _kit_arm_for_surface(state, sig, reading, seq):
+    """The kit arm for THIS surface: this frame's reading, else the carried one.
+
+    Returns ``(kits, source, sample_seq)``. ``source`` is the provenance the
+    verdict publishes: ``measured`` (this frame's own crop), ``carried`` (an
+    EARLIER frame of the same surface measured it — the served jobs' shape: the
+    pass landed on a crop with no plate, the box published 272 frames later), or
+    ``none`` (no observation of this surface ever measured a swatch, and the
+    block says so instead of pretending the kit channel was consulted).
+    """
+    kits = dict(reading.get("kits") or {})
+    if kits:
+        _record_surface_kit_arm(state, sig, kits, seq)
+        return kits, "measured", seq
+    carried = _carried_surface_kit_arm(state, sig)
+    if carried and carried.get("kits"):
+        return dict(carried["kits"]), "carried", carried.get("seq")
+    return {}, "none", None
+
+
 def _surface_identity_pass(state, rgb, roi, lines, seq=None):
     """The bounded one-off identity pass (ADAAAA-8844 AC2.4).
 
@@ -493,6 +562,13 @@ def _surface_identity_pass(state, rgb, roi, lines, seq=None):
     if int(getattr(state, "surface_identity_passes", 0) or 0) >= SURFACE_IDENTITY_MAX_PASSES:
         return None
     reading = surface_reading(rgb, roi, lines)
+    # ADAAAA-8960: the kit arm is measured for the SURFACE, not for one frame. If
+    # this pass frame's crop carries no per-side swatch, the swatch an EARLIER
+    # frame of the same box measured is carried (provenance `carried`), and when
+    # no observation of this surface ever measured one the block says `none`.
+    kits, kit_source, kit_sample_seq = _kit_arm_for_surface(state, sig, reading, seq)
+    if kits:
+        reading = {**reading, "kits": kits}
     identity = derive_surface_identity(
         reading,
         teams,
@@ -501,6 +577,8 @@ def _surface_identity_pass(state, rgb, roi, lines, seq=None):
         # the kit channel can disagree and `contradicted` is reachable at all. A
         # sport without a curated table keeps this channel exactly as it was.
         kit_priors=kit_prior_table(sport_key(getattr(state, "game_hint", "") or "")),
+        kit_source=kit_source,
+        kit_sample_seq=kit_sample_seq,
     )
     state.surface_identity = identity
     state.surface_identity_sig = sig
@@ -533,7 +611,7 @@ def _surface_identity_pass(state, rgb, roi, lines, seq=None):
     return identity
 
 
-def _publish_surface_identity(state, sig, out):
+def _publish_surface_identity(state, sig, out, rgb=None, roi=None, seq=None):
     """Publish the verdict for the box ``sig`` on the observation that reports it.
 
     ADAAAA-8939: a verdict is evidence ABOUT A SURFACE, so it may only ride an
@@ -551,14 +629,89 @@ def _publish_surface_identity(state, sig, out):
     verdict is cached per signature) still publishes on the frame that first
     reports it. Emitted once per measured surface, so the observation stream
     stays per-frame free.
+
+    ADAAAA-8960: the same move made the KIT arm a frame property of the wrong
+    frame. The verdict published here was folded at the pass (seq 6 on the served
+    jobs) whose crop carried no per-side swatch, while the publishing frame 272
+    frames later DOES carry one (`home red / away gold`) and 147 frames of the
+    session carry one. So the published verdict's kit arm is now taken from the
+    SURFACE: this frame's own crop first (``measured``), else the last swatch an
+    earlier frame of this same box measured (``carried``), and only when no
+    observation ever measured one does it publish ``kits: {}`` — explicitly, with
+    ``kitSource: "none"`` so the block never claims the channel was consulted.
+    `rgb`/`roi` are the publishing frame's own crop; when they are absent (a
+    caller that only has the cached verdict) only the carried arm is available.
     """
     if sig is None:
-        return
-    verdict = (getattr(state, "surface_identity_by_sig", None) or {}).get(sig)
+        return None
+    cache = getattr(state, "surface_identity_by_sig", None) or {}
+    verdict = cache.get(sig)
     if verdict is None or sig == getattr(state, "surface_identity_emitted_sig", None):
-        return
+        return None
+    verdict = _published_kit_arm(state, sig, verdict, rgb, roi, seq)
     out["scoreboardSurfaceIdentity"] = verdict
     state.surface_identity_emitted_sig = sig
+    return verdict
+
+
+def _published_kit_arm(state, sig, verdict, rgb, roi, seq):
+    """Give the PUBLISHED verdict the kit arm of the surface it rides (ADAAAA-8960).
+
+    The rule that consumes this block is unchanged (`contradicted = kits_differ AND
+    not names_match`); what changes is only WHICH observation's swatch feeds it. A
+    surface that carries a swatch on any frame can no longer publish `kits: {}`,
+    which is what made `contradicted` unreachable on the served jobs.
+    """
+    if verdict.get("kitsPresent"):
+        return verdict
+    kits: dict[str, list[float]] = {}
+    source: Optional[str] = None
+    sample_seq: Optional[int] = None
+    if rgb is not None and roi is not None:
+        kits = _surface_kits_from_crop(rgb, roi)
+        if kits:
+            source, sample_seq = "measured", seq
+    if not kits:
+        carried = _carried_surface_kit_arm(state, sig)
+        if carried and carried.get("kits"):
+            kits, source, sample_seq = dict(carried["kits"]), "carried", carried.get("seq")
+    if not kits:
+        carried = _carried_swatch_pool(state)
+        if carried and carried.get("kits"):
+            kits, source, sample_seq = dict(carried["kits"]), "carried", carried.get("seq")
+    if not kits:
+        # No observation of this surface ever measured a swatch: kits:{} is
+        # allowed here and ONLY here, and the block says so explicitly.
+        verdict["kitSource"] = "none"
+        verdict["kitSampleSeq"] = None
+        return verdict
+    teams = getattr(state, "match_context_teams", None) or []
+    reading = {"kits": kits, "names": list(verdict.get("names") or []), "ts": None}
+    fresh = derive_surface_identity(
+        reading,
+        teams,
+        kit_priors=kit_prior_table(sport_key(getattr(state, "game_hint", "") or "")),
+        kit_source=source,
+        kit_sample_seq=sample_seq,
+    )
+    cache = getattr(state, "surface_identity_by_sig", None) or {}
+    cache[sig] = fresh
+    state.surface_identity_by_sig = cache
+    # The next frame's pass reads this cache, so the surface keeps the measured
+    # arm for the rest of the session (demotion included).
+    state.surface_identity = fresh
+    _record_surface_kit_arm(state, sig, kits, sample_seq)
+    log.info(
+        "score surface identity kit arm session=%s seq=%s source=%s sample_seq=%s "
+        "kit_dist=%s verdict=%s (ADAAAA-8960)",
+        getattr(state, "session_id", "?"),
+        seq,
+        source,
+        sample_seq,
+        fresh.get("kitDistance"),
+        fresh.get("verdict"),
+    )
+    return fresh
 
 
 def _incumbent_surface_kept(state, rgb, roi, seq=None) -> bool:
@@ -1946,7 +2099,10 @@ def _scoreboard_ocr_fields(
         # ADAAAA-8939: the verdict rides THIS box. `_sig` is the signature of the
         # box this frame's read came from, so a cached verdict measured on it is
         # published here — the frame the server can actually fold it on.
-        _publish_surface_identity(state, _sig, out)
+        # ADAAAA-8960: the publishing frame's own crop is passed so the kit arm is
+        # measured for THIS surface (or carried from an earlier frame of it)
+        # instead of publishing the empty kit reading of the pass frame.
+        _publish_surface_identity(state, _sig, out, rgb=rgb, roi=roi, seq=seq)
     state.scoreboard_tracker.record(timestamp, score)
     # ADAAAA-7855: sample the home/away kit swatches off the SAME ROI crop
     # the OCR pass just read (CPU only, no GPU). These are the Stage-3
@@ -1955,6 +2111,10 @@ def _scoreboard_ocr_fields(
     if _match_context_enabled() and roi is not None and len(state.scorebug_swatches) < _MATCH_CONTEXT_MAX_SWATCHES:
         try:
             for sw in sample_scorebug_swatches(rgb, roi, timestamp):
+                # ADAAAA-8960: the seq this reading came from, so the identity
+                # publish can carry an EARLIER frame's measurement with its
+                # provenance (`kitSampleSeq`) instead of a frame-less blob.
+                sw["seq"] = seq
                 state.scorebug_swatches.append(sw)
         except Exception as e:  # noqa: BLE001 - evidence only, never fatal
             log.debug("match-context scorebug swatch skipped frame %s: %s", seq, e)

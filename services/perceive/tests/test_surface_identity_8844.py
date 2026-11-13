@@ -219,6 +219,10 @@ def test_identity_pass_is_bounded_and_costs_no_extra_reads(client, monkeypatch):
     published = [o for o in obs if "scoreboardSurfaceIdentity" in o]
     assert 1 <= len(published) <= SURFACE_IDENTITY_MAX_PASSES
     assert published[0]["scoreboardSurfaceIdentity"]["verdict"] == "consistent"
+    # ADAAAA-8960: the published block also carries the kit ARM, measured on the
+    # observation that publishes it (or carried from one earlier on this surface).
+    assert published[0]["scoreboardSurfaceIdentity"]["kitsPresent"] is True
+    assert published[0]["scoreboardSurfaceIdentity"]["kitSource"] in ("measured", "carried")
     # ADAAAA-8939: and it rides the box it was measured on — the server can only
     # fold an identity onto a box the SAME observation reports.
     assert all("scoreboardRoi" in o for o in published)
@@ -230,8 +234,6 @@ def test_identity_pass_is_bounded_and_costs_no_extra_reads(client, monkeypatch):
 
 def test_verdict_rides_the_box_it_was_measured_on():
     """ADAAAA-8939: a verdict may only ride the observation naming its own box.
-
-    The served build measured a verdict on every VOD job and stored none: the
     publish fired on the pass frame, and when that frame reported no box (the
     visibility gate was closed) the server's fold dropped the identity and the
     once-per-surface publish never retried it (job 591f4088: verdicts at seq 6
@@ -256,6 +258,122 @@ def test_verdict_rides_the_box_it_was_measured_on():
     other = {}
     _publish_surface_identity(state, "sigB", other)
     assert other == {}
+
+
+# --- the kit arm of the PUBLISHED verdict (ADAAAA-8960) -----------------------
+
+def _plate_rgb(home_rgb, away_rgb, w=160, h=80):
+    arr = np.zeros((h, w, 3), dtype=np.uint8)
+    arr[:, : w // 2] = np.array(home_rgb, dtype=np.uint8)
+    arr[:, w // 2 :] = np.array(away_rgb, dtype=np.uint8)
+    return arr
+
+
+def _blank_rgb(w=160, h=80):
+    """A crop with no per-side swatch: both halves read the same colour."""
+    return np.full((h, w, 3), 128, dtype=np.uint8)
+
+
+SURFACE_ROI = ScoreboardRoi(0.0, 0.0, 1.0, 1.0)
+
+
+def test_publish_measures_the_kit_arm_on_the_frame_that_carries_the_box():
+    """S1: the publishing observation carries a MEASURED kit reading.
+
+    The served jobs published `kits:{}` because the verdict was folded on the
+    frame the PASS ran on (seq 6, a crop with no plate swatch), while the box
+    published 272 frames later on a crop that DOES carry one.
+    """
+    pass_verdict = derive_surface_identity({"kits": {}, "names": ["RMA", "BAR"]}, TEAMS)
+    assert pass_verdict["kitsPresent"] is False
+    state = SimpleNamespace(
+        surface_identity_by_sig={"sigA": pass_verdict},
+        match_context_teams=TEAMS,
+        game_hint="soccer",
+    )
+    out = {}
+    _publish_surface_identity(state, "sigA", out, rgb=_plate_rgb(RED, BLUE), roi=SURFACE_ROI, seq=276)
+    identity = out["scoreboardSurfaceIdentity"]
+    assert identity["kitsPresent"] is True
+    assert isinstance(identity["kitDistance"], float)
+    assert identity["kits"], "the published block must carry the swatch it measured"
+    assert identity["kitSource"] == "measured"
+    assert identity["kitSampleSeq"] == 276
+    # Recall guard: a genuine surface whose printed names match stays consistent.
+    assert identity["verdict"] == "consistent"
+    assert demotion_note(identity) == ""
+
+
+def test_publish_carries_an_earlier_frames_swatch_when_the_publishing_frame_has_none():
+    """S2/S3 (PIP): the swatch exists only on an EARLIER frame of the same surface.
+
+    The reported class (ADAAAA-8833): a PIP bug from another game sits inside the
+    band printing a foreign plate, so a score change there must not attest. The
+    publishing frame's own crop is blank here — the only measurement of this
+    surface is the stable swatch the session's sampler took earlier.
+    """
+    pass_verdict = derive_surface_identity({"kits": {}, "names": ["LALIGA", "AL1"]}, TEAMS)
+    assert pass_verdict["verdict"] == "absent"  # unreadable on the pass frame
+    pool = []
+    for seq in (1, 2, 3):
+        pool += [
+            {"side": "home", "rgb": FOREIGN_HOME, "color": "green", "ts": seq / 3.0, "seq": seq},
+            {"side": "away", "rgb": FOREIGN_AWAY, "color": "cyan", "ts": seq / 3.0, "seq": seq},
+        ]
+    state = SimpleNamespace(
+        surface_identity_by_sig={"sigF": pass_verdict},
+        match_context_teams=TEAMS,
+        game_hint="soccer",
+        scorebug_swatches=pool,
+    )
+    out = {}
+    _publish_surface_identity(state, "sigF", out, rgb=_blank_rgb(), roi=SURFACE_ROI, seq=276)
+    identity = out["scoreboardSurfaceIdentity"]
+    assert identity["verdict"] == "contradicted"
+    assert identity["kitsPresent"] is True
+    assert identity["kitsDiffer"] is True
+    assert identity["namesMatch"] is False
+    assert identity["kitSource"] == "carried"
+    assert identity["kitSampleSeq"] == 3
+    assert "contradicted score surface" in demotion_note(identity)
+
+
+def test_publish_declares_none_when_no_frame_of_the_surface_measured_a_swatch():
+    """S2: `kits:{}` is allowed only when nothing measured one, and says so."""
+    verdict = derive_surface_identity({"kits": {}, "names": ["RMA", "BAR"]}, TEAMS)
+    state = SimpleNamespace(
+        surface_identity_by_sig={"sigN": verdict},
+        match_context_teams=TEAMS,
+        game_hint="soccer",
+    )
+    out = {}
+    _publish_surface_identity(state, "sigN", out, rgb=_blank_rgb(), roi=SURFACE_ROI, seq=276)
+    identity = out["scoreboardSurfaceIdentity"]
+    assert identity["kitsPresent"] is False
+    assert identity["kits"] == {}
+    assert identity["kitSource"] == "none"
+    assert identity["kitSampleSeq"] is None
+    # No swatch anywhere is ABSENCE, not contradiction: recall is untouched.
+    assert identity["verdict"] == "consistent"
+
+
+def test_publish_never_carries_another_boxs_swatch():
+    """A different signature may not inherit the measured box's kit arm."""
+    measured = derive_surface_identity({"kits": {"home": RED, "away": BLUE}, "names": ["RMA"]}, TEAMS)
+    state = SimpleNamespace(
+        surface_identity_by_sig={
+            "sigA": measured,
+            "sigB": derive_surface_identity({"kits": {}, "names": ["LALIGA", "AL1"]}, TEAMS),
+        },
+        surface_identity_kits_by_sig={"sigA": {"kits": {"home": RED, "away": BLUE}, "seq": 4}},
+        match_context_teams=TEAMS,
+        game_hint="soccer",
+    )
+    out = {}
+    _publish_surface_identity(state, "sigB", out, rgb=_blank_rgb(), roi=SURFACE_ROI, seq=276)
+    identity = out["scoreboardSurfaceIdentity"]
+    assert identity["kitsPresent"] is False
+    assert identity["kitSource"] == "none"
 
 
 def test_contradicted_surface_withholds_scoreboardchanged(client, monkeypatch):
