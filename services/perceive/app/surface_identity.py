@@ -361,6 +361,8 @@ def derive_surface_identity(
     *,
     threshold: float = SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD,
     kit_priors: Optional[Mapping[str, Any]] = None,
+    kit_source: Optional[str] = None,
+    kit_sample_seq: Optional[int] = None,
 ) -> dict[str, Any]:
     """Fold one surface reading + the job's teams into a verdict (AC2.3's input).
 
@@ -374,6 +376,15 @@ def derive_surface_identity(
     sampler read nothing. It never becomes an observation: ``kits`` below is
     always the swatches the crop printed, and ``kitReference`` records which
     source the reported distance came from.
+
+    ``kit_source`` / ``kit_sample_seq`` (ADAAAA-8960) are PROVENANCE only, and
+    they are additive: absent unless the caller names them. ``measured`` means
+    the reading's swatch came off this observation's own crop, ``carried`` means
+    it was measured on an EARLIER observation of the same surface/signature (the
+    served jobs' publish frame, 272 frames after the pass that measured it), and
+    ``none`` is the explicit statement that no pass of this surface measured a
+    swatch at all. The rule below never reads them: ``contradicted`` stays
+    ``kits_differ AND not names_match``, whatever the provenance.
     """
     kits = dict(reading.get("kits") or {})
     names = list(reading.get("names") or [])
@@ -405,6 +416,13 @@ def derive_surface_identity(
         "namesMatched": matched,
         "names": names[:_MAX_TOKENS],
         "kits": {side: list(colour) for side, colour in kits.items()},
+        # ADAAAA-8960: additive provenance, present only when the caller names it
+        # (a direct derive call stays byte-identical to the shipped shape).
+        **(
+            {"kitSource": kit_source, "kitSampleSeq": None if kit_sample_seq is None else int(kit_sample_seq)}
+            if kit_source is not None
+            else {}
+        ),
     }
 
 
