@@ -57,6 +57,11 @@ const EVIDENCE: SummaryEvidence = {
 const CLOCK_ANCHORED_MATCH_CLOCK =
   "Manuel Ordoñez finds the back of the net for Real Madrid to secure the scoring play. The goal occurs at the 18:02 mark following a cross into the box. After the ball enters the net, the player in the blue kit celebrates the successful strike.";
 
+/** ADAAAA-8903: the row as `EVIDENCE` minus every second fact channel — the clock
+ *  is the only kind this row can attest, so a fact-poor reply is a DETERMINISTIC
+ *  refusal (the ADAAAA-8806 classifier reads the row's own menu). */
+const CLOCK_ONLY_EVIDENCE: SummaryEvidence = { ...EVIDENCE, matchContext: null, transcript: null };
+
 const cfg = (over: Record<string, unknown> = {}) => ({
   decideUrl: "http://decide.test",
   decideFee: 0.0033,
@@ -102,12 +107,21 @@ describe("ADAAAA-8773 — the §13.2 deterministic set ends the row on ONE call"
 
 describe("ADAAAA-8773 — deterministic refusal ends the row on ONE call", () => {
   it("bills one call on `too-few-facts` and keeps the row fee inside the AC5 ceiling", async () => {
+    // ADAAAA-8903: this pin measured 2 calls on master@0685049, because ADAAAA-8806
+    // reclassified `too-few-facts` as REPAIRABLE on a row whose own menu offers two
+    // fact kinds and redid the fixtures for the other suites — this one was not
+    // updated, so the row legitimately spent its retry slot. The COST bound is what
+    // this test exists to pin, so the fixture is now a row that cannot nourish a
+    // second kind: with no `matchContext` and no ASR transcript the only attested
+    // channel is the clock, `too-few-facts` is deterministic again, and the row
+    // ends on one call. The two-kind case is pinned by
+    // `summary-lane-8806.test.ts` ("retries ... when the row attests a second fact type").
     const { store, patches } = stubStore();
     const f = stubFetch([ok(CLOCK_ANCHORED_MATCH_CLOCK)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
       jobId: "70400b1d",
       highlightId: "5f32f6f4",
-      evidence: EVIDENCE,
+      evidence: CLOCK_ONLY_EVIDENCE,
     });
 
     expect(result.outcome).toBe("dropped");

@@ -28,6 +28,10 @@ import {
   SUMMARY_DETERMINISTIC_REFUSALS,
   SUMMARY_FEE_RATIO,
   SUMMARY_MAX_CALLS_PER_ROW,
+  SUMMARY_MIN_FACT_KINDS,
+  attestedFactKinds,
+  bodyNamesAttestedActor,
+  summaryRefusalDetail,
   summaryRefusalIsRepairable,
   SUMMARY_RAW_MAX_CHARS,
   buildSummaryPrompt,
@@ -54,6 +58,13 @@ export interface SummaryLaneStore {
       summaryDropped?: number;
       summaryDroppedByReason?: Record<string, number>;
       summaryP95Ms?: number;
+      /** ADAAAA-8903 (§15.4): the refusal detail (violations + the judged word
+       *  count beside the band) a `dropped:*` row persists. */
+      summaryViolations?: string[];
+      summaryWordCount?: number;
+      summaryFloorWords?: number;
+      summaryTargetMinWords?: number;
+      summaryDroppedSentences?: number;
     }
   ): Promise<unknown>;
 }
@@ -316,15 +327,42 @@ export async function runSummaryForRow(
   // only the violation token. Still never a `summary`: the card renders on its
   // headline exactly as before (AC6).
   const raw = lastGate ? lastGate.raw.slice(0, SUMMARY_RAW_MAX_CHARS) : undefined;
+  // ADAAAA-8903 (§15.4): the refusal DETAIL rides the row, not just the ordered
+  // `gate` counter — the next census must be able to tell a depth-threshold
+  // refusal from a compliance one by reading the row.
+  const detail = lastGate ? summaryRefusalDetail(lastGate, evidence.rail) : null;
   await store.patchHighlightSummary(descriptor.highlightId, {
     summaryGate: `dropped:${reason}`,
     ...(raw ? { summaryRaw: raw } : {}),
     ...(lastGate ? { summaryCaptionOverlap: lastGate.captionOverlap } : {}),
+    ...(detail
+      ? {
+          summaryViolations: detail.violations,
+          summaryWordCount: detail.words,
+          summaryFloorWords: detail.floorWords,
+          summaryTargetMinWords: detail.targetMinWords,
+          summaryDroppedSentences: detail.droppedSentences,
+        }
+      : {}),
     summaryCalls: calls,
     summaryDropped: 1,
     summaryDroppedByReason: { [reason]: 1 },
     summaryP95Ms: latencyMs,
   });
+  // ADAAAA-8903 (AC1-live): a `too-few-facts` refusal on a row whose OWN evidence
+  // offers two fact kinds AND whose judged body names an attested actor is the
+  // lane contradicting itself — the prompt asked for a fact type the gate could
+  // not credit (the measured class: sustained-play prose on a `ballOutcome: null`
+  // row). Name it in the log so a census can count the class without replaying
+  // replies; a body that names nobody is a sampling miss, not a contradiction.
+  if (lastGate && lastGate.violations.includes("too-few-facts")) {
+    const offered = attestedFactKinds(evidence);
+    if (offered.length >= SUMMARY_MIN_FACT_KINDS && bodyNamesAttestedActor(lastGate.raw, evidence)) {
+      log(
+        `[summary:${descriptor.jobId}] fact-menu-contradiction highlight=${descriptor.highlightId} offered=${offered.join(",")} words=${lastGate.words} raw=${JSON.stringify((raw ?? "").slice(0, 200))}`
+      );
+    }
+  }
   log(
     `[summary:${descriptor.jobId}] dropped (${reason}) highlight=${descriptor.highlightId} calls=${calls}${lastGate ? ` violations=${lastGate.violations.join(",")} raw=${JSON.stringify((raw ?? "").slice(0, 200))}` : ""}`
   );

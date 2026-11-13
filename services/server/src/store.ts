@@ -427,6 +427,13 @@ export class Store {
       summaryDropped?: number;
       summaryDroppedByReason?: Record<string, number>;
       summaryP95Ms?: number;
+      /** ADAAAA-8903 (§15.4): the refusal detail a `dropped:*` row keeps, so the
+       *  next census can grade §15.4 off the row rather than a replay. */
+      summaryViolations?: string[];
+      summaryWordCount?: number;
+      summaryFloorWords?: number;
+      summaryTargetMinWords?: number;
+      summaryDroppedSentences?: number;
     }
   ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);
