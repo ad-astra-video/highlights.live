@@ -151,14 +151,21 @@ export function LiveStageViewBlock({
         // ADAAAA-8886 (Inc 3): same <video> element and `data-live-stage-video`
         // marker, now inside a positioned wrapper that is exactly the video box,
         // so the score-bug box can be mapped through the video CONTENT rect.
-        <div className="relative mt-3 aspect-video w-full max-w-3xl" data-live-stage-video-wrap>
+        <div
+          className="relative mt-3 aspect-video w-full max-w-3xl rounded-lg border border-neon/30"
+          data-live-stage-video-wrap
+        >
+          {/* No border on the video: the overlay is positioned against the
+              wrapper's padding box, which is then EXACTLY the video's border box
+              (and the picture's containing block). A 1 px border here would
+              shift the measured stage by 1 px per side. */}
           <video
             ref={videoRef}
             data-live-stage-video
             muted
             autoPlay
             playsInline
-            className="h-full w-full rounded-lg border border-neon/30 bg-black"
+            className="h-full w-full rounded-lg bg-black"
           />
           <ScoreboardOverlay
             surface={scoreboardSurface}
