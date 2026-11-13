@@ -97,6 +97,20 @@ export function servedHighlightRow(
  * options — each its OWN stored row, served from its own already-cut `clipUri`
  * (no re-encode, no decide) with a per-caller export URL minted against that
  * row's id. Shared so the delta cannot serve a moment's rail differently.
+ *
+ * ADAAAA-8912 (D5b ruling): only the moment OWNER can carry an alternative. A
+ * sibling row's own `highlight_alternatives[]` (measured: `daa53f58` on job
+ * `a0e60cc2` carries `11d4d688`, a `recentered` option at window 416) is
+ * deliberately NOT projected here, because a sibling is served as a read-only
+ * option (`ClipRailSlide` with no `alternativeId`): it has no pick row, and
+ * picking it would swap which MOMENT the card serves, not which clip — a
+ * product decision the D5 contract does not take.
+ *
+ * A write-seam refusal is not available for the same reason: `siblingClips` /
+ * owner is a READ-time anchor clustering over the whole row set
+ * (`notableMomentCluster`), so a row is not yet "sibling-eligible" when the
+ * dive delivers its option. The contract is therefore stated at the read seam
+ * (here) and in the D5 spec's "sibling windows" section, not enforced on write.
  */
 export function servedSiblingClips(m: NotableMomentCluster, ctx: ServedRowContext) {
   return m.options.map((o) => {
