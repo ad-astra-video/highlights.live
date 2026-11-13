@@ -21,6 +21,7 @@ import {
   captionSourceText,
   captionSourceViolation,
   carriesAuditMarker,
+  carriesProvenanceClock,
   groundCaption,
   quietStoredCopy,
   storedCardSurface,
@@ -355,5 +356,111 @@ describe("ADAAAA-8830 — the audit marker is never served copy", () => {
         eventType: "GOAL",
       })
     ).toBe("The crowd erupts.");
+  });
+
+  it("matches the BARE settler form (`at 18:12`, `at 19s`) detection AND deletion share", () => {
+    // The deletion path already treated a bare `at 18:12` / `at 19s` as
+    // provenance; detection did not, so a row whose whole sentence was the
+    // evidence read served it unchanged (row `8faa641b`, job `2c4124fe`).
+    for (const marker of ["at 18:12", "at 19s", "at 19.5s", "at 3:30"]) {
+      expect(carriesProvenanceClock(`Scoreboard changes to 2-1 ${marker}.`)).toBe(true);
+      expect(captionSourceViolation(`Scoreboard changes to 2-1 ${marker}.`)).toBe("provenance-clock");
+    }
+    // A place or a spelled-out duration is not a clock.
+    expect(carriesProvenanceClock("The ball is cleared at the far post.")).toBe(false);
+    expect(carriesProvenanceClock("The keeper reacts at 30 seconds of the clip.")).toBe(false);
+    // The `t=` forms stay `audit-marker` (the caption surfaces report both).
+    expect(carriesAuditMarker("Scoreboard changes to 2-1 at t=0.0.")).toBe(true);
+    expect(captionSourceViolation("Scoreboard changes to 2-1 at t=0.0.")).toBe("audit-marker");
+    // The settler clock is a CAPTION-surface form only: a depth-lane body may
+    // open on a clock anchor (ADAAAA-8665 AC7), so `carriesAuditMarker` and the
+    // summary bar must not start refusing it.
+    expect(carriesAuditMarker("Scoreboard changes to 2-1 at 18:12.")).toBe(false);
+  });
+
+  it("never serves a stored `reason` that carries the caption-only diagnostic tail", () => {
+    // Rows `1f965fea` / `ccab232a` (job `bc2d3460`): the legacy row stores the
+    // `| live scoring lane:` refusal paragraph ON its `reason` (ADAAAA-8139 keeps
+    // the marker on the audit value), and the read projection served it verbatim
+    // as the card's announcer line — the whole evidence paragraph as copy.
+    const LIVE_LANE =
+      " | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=2 preSamples=2 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score — delivered as a celebration, not a GOAL";
+    const laneRow = {
+      id: "1f965fea",
+      caption: null,
+      reason: `A driven cross is turned in at the far post.${LIVE_LANE}`,
+      reasonRaw: null,
+      outcome: "big_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 42.2,
+    };
+    const laneServed = projectAnnouncerCaption(laneRow as never, "Big play · 0:42");
+    expect(laneServed).toBe("A driven cross is turned in at the far post.");
+    expect(laneServed).not.toContain("|");
+    expect(laneServed.toLowerCase()).not.toContain("live scoring lane");
+
+    // Rows `61e9439a` / `74deffd0`: the `| provisional shot:` tail reached the
+    // served card the same way.
+    const shotRow = {
+      id: "61e9439a",
+      caption: null,
+      reason:
+        "confirms shot by Manuel Ordoñez at 19s; scoreboard shows 2-1; players celebrate. | provisional shot: frame_celebration in the judged window, no measured scoreboard change yet in midfield.",
+      reasonRaw:
+        "ASR confirms goal by Manuel Ordoñez at 19s; scoreboard shows 2-1; players celebrate. | provisional goal: frame_celebration in the judged window, no measured scoreboard change yet.",
+      outcome: "big_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 19.3,
+    };
+    const shotServed = projectAnnouncerCaption(shotRow as never, "Near miss · 0:19");
+    expect(shotServed).not.toContain("|");
+    expect(shotServed).not.toContain("provisional");
+    // The model line carries the settler clock inline (`at 19s`), so the whole
+    // sentence is provenance now; the row falls to its DERIVED fact line. That
+    // deterministic shape (`<label> at <m:ss>.`) is composed by the projection
+    // itself, not model copy: the bar reads model-authored sources only.
+    expect(shotServed).toBe("Big play at 0:19.");
+    expect(captionSourceViolation("confirms shot by Manuel Ordoñez at 19s; scoreboard shows 2-1.")).toBe(
+      "provenance-clock"
+    );
+  });
+
+  it("never serves a stored caption/reason that IS the row's own `reason_raw`", () => {
+    // Row `8faa641b` (job `2c4124fe`, file-sim): `caption == reason == reason_raw
+    // == "Scoreboard changes to 2-1 and ASR confirms goal at 18:12."` — the model's
+    // evidence sentence stored as UI copy, the AC13 shape verbatim. The bare clock
+    // brings it inside the bar, so the read seam falls to the deletion lane and
+    // serves the measured scoreline the sentence already carried.
+    const echoRow = {
+      id: "8faa641b",
+      caption: "Scoreboard changes to 2-1 and ASR confirms goal at 18:12.",
+      reason: "Scoreboard changes to 2-1 and ASR confirms goal at 18:12.",
+      reasonRaw: "Scoreboard changes to 2-1 and ASR confirms goal at 18:12",
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 1092.4,
+    };
+    const served = projectAnnouncerCaption(echoRow as never, "Goal · 18:12");
+    expect(served).toBe("Scoreboard changes to 2-1.");
+    expect(served.toLowerCase()).not.toContain("asr");
+  });
+
+  it("keeps a clean stored caption byte-identical (the strip only fires on a tail)", () => {
+    const clean =
+      "Scoreboard changes to 2-1 and commentary confirms the shot on the left.";
+    const row = {
+      id: "8209-clean",
+      caption: clean,
+      reason: clean,
+      reasonRaw: null,
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 100,
+    };
+    expect(projectAnnouncerCaption(row as never, "Midfielder scores")).toBe(clean);
   });
 });

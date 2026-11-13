@@ -28,6 +28,7 @@
 // never disagree with a rendered one.
 import {
   attestationDetailCopy,
+  captionSourceText,
   captionSourceViolation,
   gateGoalClaims,
   gateAbsenceClaims,
@@ -536,15 +537,25 @@ export function projectPostTitle(
 export function projectAnnouncerCaption(row: PostTitleRow, servedTitle: string): string {
   // ADAAAA-8830: the READ gate mirrors the write gate. A row stored before
   // ADAAAA-8830 can carry the model's SCORING-LANE sentence as its `caption`
-  // and/or `reason` — the window audit marker (`at t=0.0`, `at t=-1.0s`) and the
-  // `ASR confirms …` citation are provenance, never copy (live leg `27bd816f`
-  // rows `8d521507`/`a4827973` served them verbatim). `captionSourceViolation`
-  // is the same bar `storedReasonViolations` applies at the write seam, so the
-  // two surfaces cannot disagree: such a row falls through to the row's own
-  // attested fact sentence below — never to `reason_raw` prose.
-  const stored = (row.caption ?? "").trim();
+  // and/or `reason` — the window audit marker (`at t=0.0`, `at t=-1.0s`, the
+  // match clock `t=22:13`, the bare settler `at 18:12`) and the `ASR confirms …`
+  // citation are provenance, never copy (live leg `27bd816f` rows
+  // `8d521507`/`a4827973` served them verbatim). `captionSourceViolation` is the
+  // same bar `storedReasonViolations` applies at the write seam, so the two
+  // surfaces cannot disagree: such a row falls through to the row's own attested
+  // fact sentence below — never to `reason_raw` prose.
+  //
+  // ADAAAA-8806: every caption source strips the CAPTION-ONLY diagnostic tails
+  // (`| provisional goal:`, `| provisional shot:`, the `| live scoring lane:`
+  // refusal paragraph) before serving. A legacy row stores that marker on its
+  // `reason` on purpose (ADAAAA-8139 keeps it as the audit value), so serving
+  // `reason` verbatim served the whole evidence paragraph as the card's copy —
+  // measured on the 10-day corpus: 4 rows (`1f965fea`, `ccab232a`, `61e9439a`,
+  // `74deffd0`). `captionSourceText` is the same strip the write seam applies, so
+  // the strip stays ONE definition; a clean stored row is byte-identical.
+  const stored = captionSourceText(row.caption ?? "").trim();
   if (stored && captionSourceViolation(stored) === "") return stored;
-  const own = (row.reason ?? "").trim();
+  const own = captionSourceText(row.reason ?? "").trim();
   // Never serve a caption byte-identical to the title: that is the degrade the
   // bar exists to catch, so a `reason` that repeats the title is not detail.
   if (own && own !== servedTitle.trim() && captionSourceViolation(own) === "") return own;
