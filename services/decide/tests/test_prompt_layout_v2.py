@@ -75,8 +75,8 @@ GOLDEN_V3_FULL = (
 # the static block) so the decode-bound live reply drops ~44 tokens. The FULL
 # rows below are byte-identical, which is the VOD-parity proof.
 GOLDEN_V3_COMPACT = (
-    17925,
-    "e351be08c0095dd3f8ef4fba82a55a62cf5a2604c64a40fdb0a6d3a034702a16",
+    17165,
+    "bf741031567d878ff79a3c76566686851031e828e497eda4a5bcaa695a55e978",
 )
 GOLDEN_V3_FULL_MC_PG = (
     13404,
@@ -376,9 +376,12 @@ def test_compact_golden_hash_pinned():
     4640 -> 4785 chars; ADAAAA-8356 rebuilt the title spec as its own rule
     paragraph: 4785 -> 5678 -> 5782 chars, and the key now precedes
     the caption; ADAAAA-8405 rewrote that paragraph for the Phase C copy
-    residuals: 5782 -> 6353 chars)."""
-    assert len(_OUTPUT_CONTRACT_COMPACT) == 7634
-    assert _sha(_OUTPUT_CONTRACT_COMPACT) == _sha(_OUTPUT_CONTRACT_COMPACT)
+    # residuals: 5782 -> 6353 chars; ADAAAA-8910 replaced the WHO/VERB headline
+    # spec with the NON-ASSERTING EVENT LABEL: 7634 -> 6874 chars)."""
+    assert len(_OUTPUT_CONTRACT_COMPACT) == 6874
+    # ADAAAA-8910: this used to be a tautology (`_sha(x) == _sha(x)`), so the
+    # compact contract was guarded by its LENGTH only. Pin the bytes.
+    assert _sha(_OUTPUT_CONTRACT_COMPACT) == "32660fc52bec0fd9dacd3de98e65b0ec30910e53461df3bb770cb0912da8fee0"
     # the compact flat prompt is the pinned v3 golden
     compact = build_prompt(
         "GOAL", EV, "soccer", n_frames=8, has_audio=True,

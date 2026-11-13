@@ -141,12 +141,16 @@ def test_title_spec_owns_its_own_paragraph_and_bars():
     assert "not from the story, not from the match context" in contract
     # the claim bar is keyed to the model's OWN verdict, not a generic "a goal" (AC3)
     assert "unless YOUR OWN outcome here is scoring_play" in contract
-    # one event / three slots, no second beat, and the distinctness rule (AC2/AC6)
-    assert "Fill exactly three slots" in contract
-    assert "NO fourth slot" in contract
-    assert "Never reuse a subject+verb you already titled this job" in contract
-    # the model is told to delete the zone itself before answering
-    assert "delete every preposition (in, at, on, from, near, into, around, inside, of, to)" in contract
+    # ADAAAA-8910: the headline is the NON-ASSERTING EVENT LABEL — the shape asks
+    # for no WHO/VERB slot at all, so the actor bar can never refuse it.
+    assert "NON-ASSERTING EVENT" in contract
+    assert "NO WHO slot and NO VERB slot" in contract
+    # one event, no second beat, one clause, and no clock (the card appends it)
+    assert "no second beat" in contract
+    assert "ONE clause" in contract
+    assert "The card appends the" in contract
+    # the model is told to delete everything that is not the label
+    assert "delete every word except the label" in contract
 
 
 def test_normalize_decision_carries_the_title():

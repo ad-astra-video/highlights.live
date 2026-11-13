@@ -87,7 +87,10 @@ describe("write seam — storedSurfaceFor gates the post title", () => {
 
   it("charges no goal claim to a non-scoring window", () => {
     const surface = storedSurfaceFor(decision({ postTitle: "Ordoñez scores the opener" }), ctx("big_play"));
-    expect(surface.postTitle).toBeUndefined();
+    // ADAAAA-8910: the CLAIM is never stored; the row's own non-asserting label is
+    // (`BIG PLAY` for a big_play window), so the card still has a title.
+    expect(surface.postTitle).toBe("BIG PLAY");
+    expect(surface.postTitleGate).toBe("label:goal-claim");
   });
 
   it("keeps a goal claim on a confirmed goal", () => {

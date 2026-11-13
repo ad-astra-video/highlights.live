@@ -82,7 +82,9 @@ GOLDEN_PROMPT_SHA = {
     #: for the Phase C copy residuals. The absent-context invariant is unchanged.
     #: ADAAAA-8603 re-pins ONLY `True` once more: the audit-field reply trim moved
     #: the compact contract (+472 chars); the absent-context invariant still holds.
-    True: "6d1926b9ef208d8c3502c7cfddc2b285472fbc916f761aecc6c3e4c665796038",
+    #: ADAAAA-8910 re-pins ONLY `True` again: the compact headline spec became the
+    #: NON-ASSERTING EVENT LABEL paragraph. FULL is byte-identical.
+    True: "5ae45f15351842f663c100927f3ba396b76b0aa9e7ead986cd5fbc758ee2fb04",
 }
 
 PORTUGAL_SPAIN = {

@@ -36,26 +36,30 @@ def test_vod_contract_is_byte_identical():
 
 
 def test_place_ban_names_the_leak_shape_and_the_unit_fallback():
+    """ADAAAA-8910: the headline is the NON-ASSERTING EVENT LABEL, so a place has
+    no slot at all — the zone vocabulary is named as closed, exactly as 8405
+    required, and the label set is the substitute the model writes instead."""
     c = _OUTPUT_CONTRACT_COMPACT
-    # the measured leak shapes are "in <zone>" — name the prepositions, not just "a place"
-    assert "never 'in', 'at', 'on' or 'from' followed by one" in c
-    # the zones the model actually used (box, center, penalty area, midfield)
-    for zone in ("box", "midfield", "center", "penalty "):
+    for zone in ("place", "zone", "area", "box", "third", "wing", "venue", "stadium"):
         assert zone in c
-    # the bare subject that carried most of them is banned, with a usable fallback
-    assert "never the bare word Player or Players" in c
-    assert "name the unit (defence, midfield, attack)" in c
+    # the label set is closed and enumerated (the substitute for WHO/WHERE)
+    for label in ("GOAL", "NEAR MISS", "BIG PLAY", "SHOT", "SAVE", "TACKLE"):
+        assert label in c
+    assert "NON-ASSERTING EVENT" in c
+    # two words at most, so a label cannot grow back into a sentence
+    assert "Two words at most" in c
 
 
 def test_claim_ban_is_keyed_to_the_outcome_value_and_lists_the_vocabulary():
     c = _OUTPUT_CONTRACT_COMPACT
-    assert "NO score word at all on a window whose own outcome is not_highlight or big_play" in c
-    for word in ("scores", "scored", "scorer", "goal", "equalise", "level", "lead"):
-        assert word in c
-    # a scoreline is still a claim
-    assert "2-1" in c
-    # the scoring allowance is unchanged (the gate keys on the same fact)
-    assert "unless YOUR OWN outcome here is scoring_play with a transcript or scoreboard read that says so" in c
+    # a GOAL label is allowed only on the model's OWN scoring verdict; every
+    # other outcome has its own non-claiming label.
+    assert "no goal claim unless YOUR OWN outcome here is scoring_play" in c
+    assert "NEAR MISS (near_miss)" in c
+    assert "BIG PLAY (big_play)" in c
+    # a score/clock is never part of the label (the card composes the clip clock)
+    assert "no clock, no score" in c
+    assert "The card appends the" in c
 
 
 def test_name_rule_closes_the_headline_to_names():
@@ -63,26 +67,29 @@ def test_name_rule_closes_the_headline_to_names():
     read off an on-screen scorebug ("Manuel Ordonez scores") on a window whose
     transcript and OCR were both empty — the exact AC3 class, and not fixable by
     asking: the vision model treats the graphic as a read. The headline is now
-    closed to names (WHO is a jersey number or a role), so 0 absent names holds
-    by construction; the CAPTION still names the player, grounded by the write
-    seam's name gate."""
+    closed to names AND to role nouns (ADAAAA-8831 refuses a role-noun subject at
+    the write seam, and ADAAAA-8910 removed the slot that required one), so 0
+    absent names holds by construction; the CAPTION still names the player,
+    grounded by the write seam's name gate."""
     c = _OUTPUT_CONTRACT_COMPACT
-    assert "NEVER a player or team name, on any window" in c
     assert "not from a scorebug or graphic in the frames" in c
-    assert "the CAPTION names the player, the " in c
-    assert "headline does not" in c
-    # the role vocabulary is spelled out so the model has a substitute
+    assert "not from the story, not from the match context" in c
+    # the role vocabulary is spelled out AND named as refused (the 8910 lesson:
+    # asking for a role while the gate refuses it stored 0/5 live titles)
     for role in ("keeper", "defender", "midfielder", "striker", "winger", "referee"):
         assert role in c
+    assert "the write seam REFUSES it" in c
+    assert "NO WHO slot and NO VERB slot" in c
 
 
 def test_closed_verb_set_and_single_clause_kept():
     c = _OUTPUT_CONTRACT_COMPACT
-    assert "Use an action verb: carries, drives, clears, tackles, blocks, saves" in c
-    assert "ONE clause, no trailing period, no em-dash" in c
-    assert "Fill exactly three slots and nothing else" in c
-    assert "Never reuse a subject+verb you already titled this job" in c
-    assert "delete every preposition (in, at, on, from, near, into, around, inside, of, to)" in c
+    # ADAAAA-8910: no verb slot at all — the label carries the event, the caption
+    # carries the play-by-play verb.
+    assert "NO VERB slot" in c
+    assert "ONE clause" in c
+    assert "no trailing period" in c
+    assert "delete every word except the label" in c
 
 
 def test_caption_contract_is_untouched_by_this_fix():
