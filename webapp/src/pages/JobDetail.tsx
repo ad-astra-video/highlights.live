@@ -1319,13 +1319,25 @@ function ClipRail({
         </span>
       )}
       {count > 1 && (
-        <>
+        // ADAAAA-8883: the prev/next buttons hang off the VIDEO box, not the
+        // rail wrapper. The wrapper also contains each slide's identity strip
+        // (and an option row on alternative slides), so `top-1/2` against it
+        // landed ~half that strip below the player's centre — next to the
+        // native video controls. This layer is the same box as the player
+        // (`w-full aspect-video`, matching VideoClip's own root), so `top-1/2`
+        // inside it IS the vertical centre of the video preview. It stays a
+        // sibling of the rail (buttons must not scroll with the clips) and is
+        // pointer-transparent so the player's own controls still receive clicks.
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 aspect-video"
+          data-detail-clip-nav-layer
+        >
           <button
             type="button"
             aria-label="Previous clip"
             onClick={() => goTo(activeRef.current - 1)}
             data-detail-clip-prev
-            className="absolute left-1 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full border border-neon/50 bg-void/75 text-neon transition hover:border-neon hover:bg-neon/20 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+            className="pointer-events-auto absolute left-1 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full border border-neon/50 bg-void/75 text-neon transition hover:border-neon hover:bg-neon/20 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
             <ChevronLeft className="h-4 w-4" aria-hidden />
           </button>
@@ -1334,11 +1346,11 @@ function ClipRail({
             aria-label="Next clip"
             onClick={() => goTo(activeRef.current + 1)}
             data-detail-clip-next
-            className="absolute right-1 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full border border-neon/50 bg-void/75 text-neon transition hover:border-neon hover:bg-neon/20 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+            className="pointer-events-auto absolute right-1 top-1/2 z-10 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-full border border-neon/50 bg-void/75 text-neon transition hover:border-neon hover:bg-neon/20 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
           >
             <ChevronRight className="h-4 w-4" aria-hidden />
           </button>
-        </>
+        </div>
       )}
     </div>
   );
