@@ -2459,10 +2459,23 @@ export const CELEBRATION_ALTERNATIVE_EVENT_TYPE = "celebration" as const;
 /** ADAAAA-8321: a replay window delivered as an alternative of the moment it
  * repeats. Never a highlight, never "GOAL". */
 export const REPLAY_ALTERNATIVE_EVENT_TYPE = "replay" as const;
+/** ADAAAA-8893 (D5): the Stage-2 dive named a different instant than the one
+ * the card was accepted on, so the dive's cut is delivered as an OPTION of that
+ * card — the card keeps its accept-anchor clip byte-identical. Never replaces
+ * the row's clip, never its own highlight, never "GOAL". */
+export const RECENTERED_ALTERNATIVE_EVENT_TYPE = "recentered" as const;
 /** The explicit alternative relation a surface groups on. */
 export const HIGHLIGHT_ALTERNATIVE_RELATION = "alternative_of" as const;
 /** Hard cap per owning highlight (board decision: "2 per goal cap makes sense"). */
 export const MAX_ALTERNATIVES_PER_HIGHLIGHT = 2;
+/** ADAAAA-8893 (D5): the re-centered option does NOT consume the celebration /
+ * replay cap above — its slot is reserved separately, one per row (bounded:
+ * at most 1 re-cut attempt per row). */
+export const MAX_RECENTERED_ALTERNATIVES_PER_HIGHLIGHT = 1;
+/** The most slides a card's clip rail can carry: its own clip + the two
+ * celebration/replay options + the one re-centered option. */
+export const MAX_CLIP_RAIL_SLIDES =
+  1 + MAX_ALTERNATIVES_PER_HIGHLIGHT + MAX_RECENTERED_ALTERNATIVES_PER_HIGHLIGHT;
 
 // --- ADAAAA-8443 (N1b): the NOTABLE lane's moment grouping + rail cap --------
 // A notable moment is a PROXIMITY grouping, not an overlap grouping. The board's
@@ -2498,8 +2511,15 @@ export const HighlightAlternativeSchema = z.object({
   /** Explicit alternative relation so a surface groups instead of listing. */
   relation: z.literal(HIGHLIGHT_ALTERNATIVE_RELATION),
   /** ADAAAA-7984 §3: `celebration` (new non-scoring value) — never `GOAL`.
-   * ADAAAA-8321 adds `replay`: a footage repeat of the owning moment. */
-  eventType: z.enum([CELEBRATION_ALTERNATIVE_EVENT_TYPE, REPLAY_ALTERNATIVE_EVENT_TYPE]),
+   * ADAAAA-8321 adds `replay`: a footage repeat of the owning moment.
+   * ADAAAA-8893 (D5) adds `recentered`: the Stage-2 dive's cut of the SAME
+   * moment on a different instant, delivered as an option so the card's own
+   * clip is never replaced. */
+  eventType: z.enum([
+    CELEBRATION_ALTERNATIVE_EVENT_TYPE,
+    REPLAY_ALTERNATIVE_EVENT_TYPE,
+    RECENTERED_ALTERNATIVE_EVENT_TYPE,
+  ]),
   /** Never `scoring_play` for a celebration: it inherits the celebration
    * window's non-scoring verdict class (`big_play` / `near_miss`). A replay may
    * repeat a scoring moment, so it carries the repeated record's own outcome. */
@@ -2523,6 +2543,19 @@ export const HighlightAlternativeSchema = z.object({
   distanceToGoalEndS: z.number().min(0),
   /** The celebration window's decide confidence (selection tie-break, audit). */
   score: z.number().min(0).max(100),
+  /** ADAAAA-8893 (D5): the Dive's own moment confidence (0-1) for a `recentered`
+   *  option — the provenance the AC reads to prove the option came from THIS
+   *  row's dive. Absent on every celebration/replay row. */
+  momentConfidence: z.number().min(0).max(1).optional(),
+  /** ADAAAA-8893 (D5): the accept anchor the owner clip rests on, so the option
+   *  states what it moved off (content clock). */
+  acceptAnchorTs: z.number().min(0).optional(),
+  /** ADAAAA-8893 (D5): signed drift the dive applied (`momentTs - acceptTs`),
+   *  negative when the dive's instant is EARLIER than the accept anchor. */
+  driftSec: z.number().optional(),
+  /** ADAAAA-8893 (D5): the option clip's own bytes, so the extra storage per
+   *  re-anchored row is reportable (p50/p95) without a second file probe. */
+  clipBytes: z.number().int().min(0).optional(),
   /** Delivered clip window + the cut media path. */
   start: z.number(),
   end: z.number(),
