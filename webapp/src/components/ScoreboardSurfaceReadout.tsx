@@ -17,6 +17,7 @@ import { describeScoreboardSurface, type ScoreboardSurface } from "../lib/scoreb
 
 export function ScoreboardSurfaceReadout({ surface }: { surface?: ScoreboardSurface }) {
   return (
+    <>
     <span
       className="rounded-full border border-neon/30 px-2 py-0.5 text-xs text-mut"
       data-scoreboard-surface
@@ -25,5 +26,17 @@ export function ScoreboardSurfaceReadout({ surface }: { surface?: ScoreboardSurf
     >
       score bug: {describeScoreboardSurface(surface)}
     </span>
+    {surface?.demotion ? (
+      // ADAAAA-8844 (Inc 2, scope item 5): the board sees WHY a window's score
+      // change was not accepted, instead of a window that looks evidence-free.
+      <span
+        className="ml-2 rounded-full border border-neon/40 px-2 py-0.5 text-xs text-mut"
+        data-scoreboard-surface-demotion
+        title="A score change on this surface was ignored for goal attestation"
+      >
+        {surface.demotion}
+      </span>
+    ) : null}
+    </>
   );
 }
