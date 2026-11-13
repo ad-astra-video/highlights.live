@@ -4,7 +4,10 @@ import { api, getToken } from "./api";
 import { readSSE } from "./sse";
 import { captureEndedNotice } from "./captureLoss";
 import { useSettings } from "./settings";
-import { blobToBase64 } from "./blobToBase64";
+import { DISPLAY_CAPTURE_CONSTRAINTS, applySenderBounds } from "./captureBounds";
+import { BoundedRecordingQueue, RECORDING_QUEUE_LIMIT, recordingGapNotice, type RecordingGap } from "./recordingQueue";
+import { postRecordingChunk } from "./recordingUpload";
+import { createFrameSampler, createTickGate, type FrameSampler } from "./frameSampler";
 import {
   ENCODER_PROBE_MS,
   ENCODER_PROBE_MIN_BYTES,
@@ -97,6 +100,10 @@ export interface LiveCaptureValue {
   /** The live "recording not captured" copy, `null` while the recorder is
    *  healthy or still starting. */
   recordingNotice: string | null;
+  /** ADAAAA-8848: a truthful recording-gap notice once the bounded chunk queue
+   *  had to drop bytes because upload could not keep up with capture. `null`
+   *  while every produced chunk made it to the server. */
+  recordingGapNotice: string | null;
   start: (gameHint: string, decideKnob?: { cadenceSec: 3 | 5; rateCapPer300s: number | null }) => Promise<void>;
   stop: () => Promise<void>;
   dismissError: () => void;
@@ -117,6 +124,7 @@ const LiveCaptureContext = createContext<LiveCaptureValue>({
   healthChips: [],
   recording: "pending",
   recordingNotice: null,
+  recordingGapNotice: null,
   start: noop,
   stop: noop,
   dismissError: () => {},
@@ -156,20 +164,29 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
   // Guards a double start (quick double click or a StrictMode remount): one
   // getDisplayMedia + one POST /jobs per start, ever.
   const startingRef = useRef(false);
-  // In-flight MediaRecorder chunk uploads to the /recording rail. Finalize awaits
-  // these (plus the rec.stop() flush) BEFORE POST /stop so the recording is
-  // complete when the server cuts clips (ADAAAA-6522).
-  const pendingUploadsRef = useRef<Set<Promise<void>>>(new Set());
+  // ADAAAA-8848: the bounded chunk queue owns the in-flight recording uploads.
+  // Finalize awaits its flush (plus the rec.stop() flush) BEFORE POST /stop so
+  // the recording is complete when the server cuts clips (ADAAAA-6522).
   // Bytes the recorder has PRODUCED (before upload) this share, plus the type it
   // actually chose. Feeds the live health readout below (ADAAAA-8055/8105).
   const recStatsRef = useRef<{ bytes: number; startedAt: number }>({ bytes: 0, startedAt: 0 });
-  // ADAAAA-8105: chunks are uploaded through ONE promise chain so the server's
+  // ADAAAA-8105: chunks are uploaded through ONE serial queue so the server's
   // append-only recording file keeps chunk order (two overlapping POSTs could
   // land out of order and corrupt the container), and so the chunks a probe
   // buffered before commit are flushed ahead of the ones that follow.
-  const uploadChainRef = useRef<Promise<void>>(Promise.resolve());
+  // ADAAAA-8848: that queue is now BOUNDED (30 chunks = ~30 s): overflow drops
+  // the oldest chunk and raises a recording-gap notice, so memory tracks a fixed
+  // buffer instead of growing with the share's duration.
+  const queueRef = useRef<BoundedRecordingQueue | null>(null);
+  // ADAAAA-8848 (F4): the whole share keeps ONE canvas + ONE 2d context, and the
+  // HTTP ingest rail allows at most one POST in flight.
+  const frameSamplerRef = useRef<FrameSampler | null>(null);
+  const ingestGateRef = useRef<ReturnType<typeof createTickGate> | null>(null);
   const healthTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [recording, setRecording] = useState<RecordingHealth>("pending");
+  // ADAAAA-8848: set once the bounded queue drops a chunk, so the share says its
+  // recording has a gap instead of silently shipping an incomplete clip.
+  const [recordingGap, setRecordingGap] = useState<RecordingGap | null>(null);
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Stream-health strip sources (ADAAAA-7730): only ARRIVAL times and a clip
   // count are read from the job event feed (frame seq etc. stay admin-only).
@@ -186,6 +203,17 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
   // not stop a live share (the remount cancels the timer below).
   const mountedRef = useRef(false);
   const teardownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Release the share-scoped bounded queue, sampler canvas and ingest gate.
+   *  A function (not inline assignments) so TypeScript's narrowing of a ref's
+   *  `.current` cannot turn a later call into `never` (ADAAAA-8848). */
+  function resetCaptureResources() {
+    queueRef.current?.close();
+    queueRef.current = null;
+    frameSamplerRef.current?.dispose();
+    frameSamplerRef.current = null;
+    ingestGateRef.current = null;
+  }
 
   /** Build the WebRTC offer -> answer + ICE signaling to the media server. */
   function establishRtc(origin: string, sid: string, capture: MediaStream, iceServers?: RTCIceServer[]) {
@@ -205,7 +233,10 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
       }).catch(() => {});
     };
     const track = capture.getVideoTracks()[0];
-    if (track) pc.addTransceiver(track, { direction: "sendonly" });
+    // ADAAAA-8848 (F1): cap the sender's encode budget. Without this the browser
+    // encodes at whatever the capture gives it (a 4K share = 31.6 MB decoded
+    // frames) and the encoder pool scales with it.
+    const videoSender = track ? pc.addTransceiver(track, { direction: "sendonly" }).sender : null;
     // ADAAAA-7594: attach the captured audio track when the user shared a TAB.
     const audioTrack = capture.getAudioTracks()[0];
     if (audioTrack) pc.addTransceiver(audioTrack, { direction: "sendonly" });
@@ -238,6 +269,9 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
       .then(async ({ answer, pcId: id }) => {
         pcId = id;
         await pc.setRemoteDescription(answer);
+        // ADAAAA-8848 (F1): place the 2.5 Mbps / maintain-resolution cap once the
+        // sender is negotiated (setParameters rejects before an answer lands).
+        await applySenderBounds(videoSender);
         pendingCandidates.forEach(sendCandidate);
         pendingCandidates.length = 0;
       });
@@ -332,31 +366,39 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     }, delay);
   }
 
-  /** Upload one MediaRecorder chunk, retrying a transient failure before
-   *  surfacing. The promise is tracked so finalize can await every chunk. */
-  function uploadRecordingChunk(b64: string, mime: string): Promise<void> {
+  /** Upload one MediaRecorder chunk as RAW BYTES (ADAAAA-8848 F3 — no base64 /
+   *  data-URL copy in the hot path), retrying a transient failure before
+   *  surfacing. The queue serialises chunks because the server appends them to
+   *  one file. */
+  async function uploadRecordingChunk(blob: Blob, mime: string): Promise<void> {
     const id = jobIdRef.current;
-    if (!id) return Promise.resolve();
-    const attempt = async (): Promise<boolean> => {
+    if (!id) return;
+    for (let i = 0; i < 4; i++) {
       try {
-        await api(`/jobs/${id}/recording`, { body: { base64: b64, mime } });
-        return true;
+        await postRecordingChunk(id, blob, mime, getToken());
+        return;
       } catch {
-        return false;
-      }
-    };
-    const doRetry = async (): Promise<void> => {
-      for (let i = 0; i < 4; i++) {
-        if (await attempt()) return;
+        if (i === 3) {
+          if (jobIdRef.current === id) {
+            setError("Recording upload failed — highlight clips may be incomplete. Check your connection and stop again.");
+          }
+          return;
+        }
         await sleep(400 * (i + 1));
       }
-      if (jobIdRef.current === id) {
-        setError("Recording upload failed — highlight clips may be incomplete. Check your connection and stop again.");
-      }
-    };
-    const p = doRetry().finally(() => pendingUploadsRef.current.delete(p));
-    pendingUploadsRef.current.add(p);
-    return p;
+    }
+  }
+
+  /** The queue belongs to ONE share: created on start, closed on stop. */
+  function ensureRecordingQueue(): BoundedRecordingQueue {
+    if (!queueRef.current) {
+      queueRef.current = new BoundedRecordingQueue({
+        limit: RECORDING_QUEUE_LIMIT,
+        upload: ({ blob, mime }) => uploadRecordingChunk(blob, mime),
+        onGap: (gap) => setRecordingGap(gap),
+      });
+    }
+    return queueRef.current;
   }
 
   /** Queue one MediaRecorder chunk for upload, in order. Every chunk of a share
@@ -364,19 +406,7 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
    *  bytes and corrupt the container — and the chunks a probe buffered before
    *  commit must go out ahead of the chunks that follow it. */
   function queueRecordingChunk(data: Blob, mime: string) {
-    let tracked: Promise<void>;
-    const queued = uploadChainRef.current.then(async () => {
-      await uploadRecordingChunk(await blobToBase64(data), mime);
-    });
-    // The chain continues past a failed chunk; `uploadRecordingChunk` already
-    // retried and surfaced it.
-    uploadChainRef.current = queued.catch(() => {});
-    tracked = queued
-      .catch(() => {})
-      .finally(() => {
-        pendingUploadsRef.current.delete(tracked);
-      });
-    pendingUploadsRef.current.add(tracked);
+    ensureRecordingQueue().push(data, mime);
   }
 
   /** One ladder arm kept running while we decide whether it can encode. The
@@ -558,14 +588,12 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
   }
 
 
-  /** Await every in-flight recording chunk upload, re-sampling (bounded). */
+  /** Await the share's bounded chunk queue before `POST /stop`, bounded at 5 s
+   *  (the same budget the old pending-upload wait used, ADAAAA-6522). */
   async function flushRecordingUploads() {
-    for (let i = 0; i < 20; i++) {
-      const pending = [...pendingUploadsRef.current];
-      if (pending.length === 0) return;
-      await Promise.race([Promise.allSettled(pending), sleep(250)]);
-      if (pendingUploadsRef.current.size === 0) return;
-    }
+    const queue = queueRef.current;
+    if (!queue) return;
+    await Promise.race([queue.flush(), sleep(5000)]);
   }
 
   function stopJobPoll() {
@@ -579,6 +607,8 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     setRecording("pending");
     if (ivRef.current) clearInterval(ivRef.current);
     ivRef.current = null;
+    // ADAAAA-8848: release the share's bounded queue, sampler canvas and gate.
+    resetCaptureResources();
     try {
       wsRef.current?.close();
     } catch {
@@ -712,9 +742,16 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     setBusy(true);
     setError(null);
     setStopped(false);
+    // ADAAAA-8848: a share owns ONE bounded queue, ONE sampler canvas and one
+    // ingest gate. Reset them at start so a stopped share's buffer or drop count
+    // can never leak into the next one.
+    setRecordingGap(null);
+    resetCaptureResources();
     try {
-      // audio:true carries tab sound so clips + audio analysis get real audio.
-      const capture = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      // ADAAAA-8848 (F1): ask for at most 1080p30. Native pixels (a 4K share =
+      // 31.6 MB decoded per frame) are not read by anything downstream, and they
+      // are the largest single contributor to the tab OOM on share.
+      const capture = await navigator.mediaDevices.getDisplayMedia(DISPLAY_CAPTURE_CONSTRAINTS);
       if (stoppingRef.current) {
         capture.getTracks().forEach((t) => t.stop());
         return;
@@ -758,24 +795,36 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
 
       // WS / HTTP fallback only: sample the stream -> JPEG -> push to the media
       // WS (or /ingest). In RTC mode the media server decodes the track itself.
+      // ADAAAA-8848 (F4): ONE canvas + ONE 2d context for the whole share (not a
+      // new pair per tick), and at most one ingest POST in flight.
       if (modeRef.current === "ws" || modeRef.current === "ingest") {
+        const sampler = (frameSamplerRef.current ??= createFrameSampler());
+        const gate = (ingestGateRef.current ??= createTickGate());
         ivRef.current = setInterval(() => {
           const v = sampleVideoRef.current;
           if (!v || !v.videoWidth) return;
-          const cv = document.createElement("canvas");
-          cv.width = 320;
-          cv.height = 180;
-          const ctx = cv.getContext("2d")!;
-          ctx.drawImage(v, 0, 0, cv.width, cv.height);
-          const image = cv.toDataURL("image/jpeg", 0.6).split(",")[1];
-          const seq = seqRef.current++;
+          const seq = seqRef.current;
           const id = jobIdRef.current;
           if (modeRef.current === "ws") {
+            const image = sampler.capture(v);
+            if (!image) return;
+            seqRef.current = seq + 1;
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
               wsRef.current.send(JSON.stringify({ seq, timestamp: seq, image, reasoningEffort }));
             }
-          } else if (id) {
-            api(`/jobs/${id}/ingest`, { body: { seq, timestamp: seq, image, reasoningEffort } }).catch(() => {});
+          } else if (id && gate.tryEnter()) {
+            // Skip the tick entirely while one ingest POST is pending: a slow
+            // uplink must not stack requests (ADAAAA-8848 F4).
+            try {
+              const image = sampler.capture(v);
+              if (!image) return;
+              seqRef.current = seq + 1;
+              api(`/jobs/${id}/ingest`, { body: { seq, timestamp: seq, image, reasoningEffort } })
+                .catch(() => {})
+                .finally(() => gate.leave());
+            } catch {
+              gate.leave();
+            }
           }
         }, 1000);
       }
@@ -809,6 +858,7 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
       sharingRef.current = false;
       setSharing(false);
       setStopped(true);
+      resetCaptureResources();
       const sample = sampleVideoRef.current;
       if (sample) {
         sample.srcObject = null;
@@ -910,6 +960,9 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
     // loss is visible DURING the share (the job page the user is routed to
     // rendered no capture health at all before this).
     recordingNotice: sharing && recording === "stalled" ? RECORDING_STALL_NOTICE : null,
+    // ADAAAA-8848: once the bounded queue had to drop recording, say so — a gap
+    // is truthful and stays visible (the server file really lacks those bytes).
+    recordingGapNotice: recordingGap ? recordingGapNotice(recordingGap) : null,
     start,
     stop,
     dismissError: () => setError(null),

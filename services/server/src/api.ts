@@ -966,6 +966,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   });
 
+  // ADAAAA-8848: raw-binary recording chunks. The browser now POSTs each
+  // MediaRecorder chunk as an `application/octet-stream` Blob (no base64,
+  // no 33%-inflated JSON), with the recorder's MIME in `?mime=` / the
+  // `x-recording-mime` header so the capture file keeps its extension.
+  app.addContentTypeParser(
+    ["application/octet-stream", "video/webm", "video/mp4"],
+    { parseAs: "buffer", bodyLimit: 8 * 1024 * 1024 },
+    function (req: any, body: Buffer, done) {
+      done(null, body);
+    },
+  );
+
   const authReq = authRequired(auth);
   const adminReq = adminRequired(auth);
   const adminReadOnlyReq = adminReadonlyRequired(auth);
@@ -7871,9 +7883,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   );
 
-  // Browser-capture rail: client appends a chunk of the recorded capture (base64)
-  // so the server can cut highlight clips from it at stop.
-  app.post<{ Params: { id: string }; Body: { base64?: string; mime?: string } }>(
+  // Browser-capture rail: client appends a chunk of the recorded capture so the
+  // server can cut highlight clips from it at stop.
+  //
+  // ADAAAA-8848: chunks arrive as RAW BYTES (`application/octet-stream` Blob
+  // body; MIME in `?mime=` or `x-recording-mime`), which removes the client's
+  // base64 string + 33% JSON inflation and their transient copies. The JSON
+  // `{ base64, mime }` shape stays accepted so an older tab in flight during a
+  // deploy keeps recording.
+  app.post<{ Params: { id: string }; Body: Buffer | { base64?: string; mime?: string } }>(
     "/jobs/:id/recording",
     // Allow larger chunk bodies than Fastify's 1 MiB JSON default: a 1 s chunk of
     // a 3 Mbps MediaRecorder stream base64-encodes well over that on a burst,
@@ -7885,14 +7903,19 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!job) return reply.code(404).send({ error: "no job" });
       const bj = browserJobs.get(req.params.id);
       if (job.source !== "browser" || !bj) return reply.code(409).send({ error: "not a browser capture job" });
-      const { base64, mime } = req.body ?? {};
-      if (!base64) return reply.code(400).send({ error: "base64 required" });
+      const binary = Buffer.isBuffer(req.body);
+      const mime = String((binary ? req.query?.mime ?? req.headers["x-recording-mime"] : req.body?.mime) ?? "");
+      const buf = binary
+        ? req.body
+        : req.body?.base64
+          ? Buffer.from(req.body.base64, "base64")
+          : null;
+      if (!buf || buf.length === 0) return reply.code(400).send({ error: "recording chunk required" });
       try {
         const { mkdir, writeFile, appendFile, stat } = await import("node:fs/promises");
         if (mime && !bj.recordingExt) bj.recordingExt = mime.includes("mp4") ? ".mp4" : ".webm";
         const p = browserRecordingPath(req.params.id);
         await mkdir(path.dirname(p), { recursive: true });
-        const buf = Buffer.from(base64, "base64");
         if (existsSync(p) && (await stat(p)).size > 0) await appendFile(p, buf);
         else await writeFile(p, buf);
         return { ok: true, bytes: buf.length };
