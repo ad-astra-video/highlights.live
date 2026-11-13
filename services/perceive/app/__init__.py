@@ -1433,7 +1433,7 @@ def _scoreboard_ocr_fields(
         ):
             ocr_lines = [verdict.score_text]
     out["ocr"] = ocr_lines
-    score = parse_ocr_score(ocr_lines, roi=roi)
+    score = parse_ocr_score(ocr_lines, roi=roi, sport=_ocr_sport)
     # ADAAAA-8641: a crop that PARSED a score is proof its box is a scoreboard
     # region, so adopt it (after two consecutive parsed frames) instead of
     # letting a later discovery guess replace it. Measured on browser session
@@ -1513,7 +1513,7 @@ def _scoreboard_ocr_fields(
         else:
             try:
                 bottom_lines = detector.ocr(rgb, roi=bottom) or []
-                bottom_score = parse_ocr_score(bottom_lines, roi=bottom)
+                bottom_score = parse_ocr_score(bottom_lines, roi=bottom, sport=_ocr_sport)
                 # The retry is charged as soon as it runs, success or not, so a
                 # broadcast whose bottom band never reads cannot pay it forever.
                 state.team_fallback_reads = getattr(state, "team_fallback_reads", 0) + 1
@@ -1556,7 +1556,7 @@ def _scoreboard_ocr_fields(
     if visible and (_need_score_fallback or _need_team_text):
         try:
             full_ocr = detector.ocr(rgb) or []
-            alt = parse_ocr_score(full_ocr)  # whole-frame, no ROI filter
+            alt = parse_ocr_score(full_ocr, sport=_ocr_sport)  # whole-frame, no ROI filter
         except Exception as e:  # noqa: BLE001
             log.warning("scoreboard whole-frame OCR fallback skipped frame %s: %s", seq, e)
         else:
