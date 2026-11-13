@@ -76,6 +76,7 @@ import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeFlushedDuration, probeHasAudio, centerClipOnEvidence, locateScoreboardFlip, cutCenteredOnInstant } from "./ffmpeg";
+import { cutMomentAnchoredClip, isMomentAnchor } from "./clip-anchor";
 import type { ScoreFlipProbe } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
@@ -1598,6 +1599,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     const diveTs = !cueTail && Number.isFinite(opts.anchorTs as number) ? Number(opts.anchorTs) : null;
     const acceptTs = Number.isFinite(h.localizedTs as number) ? Number(h.localizedTs) : span.start;
     const evidenceTs = diveTs ?? acceptTs;
+    // ADAAAA-8906: a dive moment is NOT an accept anchor. The option cut places
+    // the moment on its own picture at `moment - window.start`; the score-flip
+    // substitution below would slide the window to the flip (earlier) and land
+    // the moment 1.0-1.2 s late in the file. Same rule as the ingest rail.
+    const momentAnchor = diveTs != null && isMomentAnchor(diveTs, acceptTs);
     const before = Math.max(0, Math.min(dur, evidenceTs - span.start));
     const framePath = browserEvidenceFramePath(jobId, evidenceTs);
     // The recording's own length — the FOOTAGE THAT HAS BEEN FLUSHED to disk,
@@ -1612,7 +1618,27 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // evidence frame is missing/unmatched — and the row says which path ran.
     let placement: ClipPlacement;
     let cut;
-    if (framePath) {
+    if (momentAnchor) {
+      // The option's ONE placement path (shared with the ingest rail): the dive
+      // moment's own picture at `moment - window.start`.
+      const shared = await cutMomentAnchoredClip({
+        ffmpegPath: cfg.ffmpegPath,
+        source: recPath,
+        outPath: out,
+        contentStart: span.start,
+        dur,
+        momentTs: evidenceTs,
+        evidenceFramePath: framePath,
+        tag: `browser:${jobId}`,
+      });
+      placement = shared.placement;
+      cut = shared.cut;
+      console.log(
+        `[browser:${jobId}] option ${name}.mp4 placed on the dive moment ${evidenceTs.toFixed(3)}s ` +
+          `(method ${placement.method}, cut [${placement.cutStart.toFixed(3)}, ${(placement.cutStart + dur).toFixed(3)}], ` +
+          `moment at ${placement.deliveredOffsetSec == null ? "?" : placement.deliveredOffsetSec.toFixed(3)}s of ${dur}s)`
+      );
+    } else if (framePath) {
       const centered = await centerClipOnEvidence(cfg.ffmpegPath, recPath, out, framePath, before, dur, {
         searchStartS: Math.max(0, span.start - 2),
         searchDurS: dur + 6,
@@ -2230,9 +2256,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           );
           return {
             clipUri: rec.uri,
-            start: rec.placement.cutStart,
-            end: rec.placement.cutStart + rec.placement.dur,
+            // ADAAAA-8906: BOTH rails state the OWNER's window on the option row
+            // (the spec's "same span as the card"); the option's own footage
+            // placement is carried by `offsetSec` instead, so a grader can see
+            // where the dive moment actually landed without re-probing pixels.
+            start: Number.isFinite(cur.start) ? cur.start : rec.placement.cutStart,
+            end: Number.isFinite(cur.end) ? cur.end : rec.placement.cutStart + rec.placement.dur,
             bytes: rec.bytes,
+            offsetSec: rec.placement.deliveredOffsetSec,
           };
         },
       });
@@ -2326,6 +2357,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             start: win.start,
             end: win.end,
             bytes: await clipBytesForUri(rec.clipUri),
+            offsetSec: rec.clipAudit?.clipAnchorDeliveredOffsetSec,
           };
         },
       });
@@ -2427,6 +2459,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               start: Number.isFinite(cur.start) ? cur.start : ts,
               end: Number.isFinite(cur.end) ? cur.end : ts,
               bytes: await clipBytesForUri(opt.clipUri),
+              offsetSec: opt.clipAudit?.clipAnchorDeliveredOffsetSec,
             };
           },
         }).catch((e: any) =>
@@ -2518,7 +2551,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               });
               const start = Number.isFinite(h.start) ? h.start : ts;
               const end = Number.isFinite(h.end) ? h.end : ts;
-              return { clipUri: opt.clipUri, start, end, bytes: await clipBytesForUri(opt.clipUri) };
+              return {
+                clipUri: opt.clipUri,
+                start,
+                end,
+                bytes: await clipBytesForUri(opt.clipUri),
+                offsetSec: opt.clipAudit?.clipAnchorDeliveredOffsetSec,
+              };
             },
           }).catch((e: any) =>
             console.error(
@@ -2733,9 +2772,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
                 });
                 return {
                   clipUri: opt.uri,
-                  start: opt.placement.cutStart,
-                  end: opt.placement.cutStart + opt.placement.dur,
+                  start: Number.isFinite(h.start) ? h.start : opt.placement.cutStart,
+                  end: Number.isFinite(h.end) ? h.end : opt.placement.cutStart + opt.placement.dur,
                   bytes: opt.bytes,
+                  offsetSec: opt.placement.deliveredOffsetSec,
                 };
               },
             }).catch((e: any) =>
