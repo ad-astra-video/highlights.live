@@ -42,6 +42,7 @@ export function LiveStageViewBlock({
   stopping = false,
   stopError = null,
   captureNotice = null,
+  gapNotice = null,
   onStop,
 }: {
   view: LiveStageView;
@@ -55,6 +56,9 @@ export function LiveStageViewBlock({
   /** ADAAAA-8105: live "recording not captured" copy while this tab owns the
    *  share and its recorder is producing no video bytes. */
   captureNotice?: string | null;
+  /** ADAAAA-8848: the recording-gap notice once the bounded upload queue had to
+   *  drop bytes (upload slower than capture). */
+  gapNotice?: string | null;
   onStop?: () => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -119,6 +123,16 @@ export function LiveStageViewBlock({
           role="alert"
         >
           {captureNotice}
+        </div>
+      )}
+
+      {gapNotice && (
+        <div
+          className="mt-3 rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-2 text-sm font-bold text-yellow"
+          data-live-stage-gap-notice
+          role="alert"
+        >
+          {gapNotice}
         </div>
       )}
 
@@ -217,6 +231,7 @@ export function LiveStage({ job, liveProgress, staleSec = 0 }: LiveStageProps) {
       stopping={stopping}
       stopError={stopError}
       captureNotice={cap.jobId === job.id ? cap.recordingNotice : null}
+      gapNotice={cap.jobId === job.id ? cap.recordingGapNotice : null}
       onStop={() => void onStop()}
     />
   );
