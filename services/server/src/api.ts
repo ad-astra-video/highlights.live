@@ -87,9 +87,6 @@ import {
   decideRailForSource,
   resolveDecideKnob,
   validateDecideKnobInput,
-  postTitleTeamSubject,
-  projectAnnouncerCaption,
-  projectPostTitle,
   type Dataset,
   type DecideKnobStamp,
   type DetectionTrainingSample,
@@ -111,6 +108,9 @@ import { buildPostableHighlights, countsFromPostable, postableCountFields, quota
 import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./celebration-alternatives";
 import { attachReplayWindows, partitionAttachedReplays, replayAlternativeFrom } from "./replay-alternatives";
 import { clipChoiceFor, servedClipUri } from "./clip-choice";
+// ADAAAA-8854: the ONE served highlight / notable row shape, shared by the
+// composite detail read and the incremental sections-delta stream.
+import { servedHighlightRow, servedNotableRow, type ServedRowContext } from "./served-highlight-rows";
 // ADAAAA-8530: the read-side confirmation lane a served highlight card states.
 import { confirmationForHighlightRow, laneConfirmsGoal } from "./confirmation-lane";
 import { buildSummaryLadder } from "./summary-ladder";
@@ -993,6 +993,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
   function exportUriForHighlight(h: HighlightRecord, userId: string): string {
     if (!h.clipUri) return "";
     return exportUriFor(h.clipUri, mintExportToken(cfg.exportTokenSecret, h.id, userId));
+  }
+
+  /** ADAAAA-8854: the celebration/replay alternatives grouped under their owning
+   * highlight — ONE builder for both read surfaces (composite detail and the
+   * incremental sections-delta), so a refresh can never drop a card's clip rail.
+   * ADAAAA-7984: they are delivered grouped, never as their own highlight cards.
+   * ADAAAA-8321: replay windows attached to a moment join the same lane (their
+   * clip already exists, so nothing is re-cut and nothing is billed twice). */
+  function servedAlternativesByOwner(jobId: string) {
+    const highlights = store.highlightsForJob(jobId);
+    const attachedReplays = partitionAttachedReplays(highlights);
+    const byOwner = groupAlternativesByOwner(store.alternativesForJob(jobId));
+    for (const [ownerId, replays] of attachedReplays.byOwner) {
+      const owner = highlights.find((h) => h.id === ownerId);
+      const list = byOwner.get(ownerId) ?? [];
+      for (const r of replays) list.push(replayAlternativeFrom(r, owner?.end));
+      list.sort((a, b) => a.windowAnchorTs - b.windowAnchorTs);
+      byOwner.set(ownerId, list);
+    }
+    return { byOwner, attached: attachedReplays.attached };
   }
 
   /** R7: exactly ONE `clip_exported` usage row per first mark, `extra` carries
@@ -6755,12 +6775,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // their owning highlight — never as their own highlight cards, never in the
     // notable lane. Same pass, so `job.alternativeClipsDelivered` below cannot
     // disagree with the grouped lists.
-    const alternativesByOwner = groupAlternativesByOwner(store.alternativesForJob(job.id));
-    // ADAAAA-8321: replay windows attached to a moment are delivered in the SAME
-    // alternative lane (their clip already exists, so nothing is re-cut and
-    // nothing is billed twice). They are derived from the marked stored rows, so
-    // a read never has to re-run the detector.
-    const jobHighlights = store.highlightsForJob(job.id);
+    const servedAlternatives = servedAlternativesByOwner(job.id);
+    const alternativesByOwner = servedAlternatives.byOwner;
     // ADAAAA-8530: EVERY served clip row states which lane confirmed its window,
     // derived read-side by the SAME `deriveConfirmation()` the decide note uses —
     // through the row's own `candidateId`, so a card and the note above it can
@@ -6777,116 +6793,34 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       confirmationForHighlightRow(h, h.candidateId ? candidatesById.get(h.candidateId) : undefined, {
         confirmEnabled: confirmGateFor(job.source),
       });
-    const attachedReplays = partitionAttachedReplays(jobHighlights);
-    for (const [ownerId, replays] of attachedReplays.byOwner) {
-      const owner = jobHighlights.find((h) => h.id === ownerId);
-      const list = alternativesByOwner.get(ownerId) ?? [];
-      for (const r of replays) list.push(replayAlternativeFrom(r, owner?.end));
-      list.sort((a, b) => a.windowAnchorTs - b.windowAnchorTs);
-      alternativesByOwner.set(ownerId, list);
-    }
-    // ADAAAA-8318 (ADAAAA-8302 Option 2): every card carries a copy target.
-    // The stored `postTitle` is served byte-for-byte while it satisfies the title
-    // shape bar; a legacy row (or one whose title the write gate refused) gets the
-    // deterministic `LABEL · m:ss · subject` title — pure, no model call at read
-    // time, never empty. The subject is only ever a team the row's own stored copy
-    // names from the job's `matchContext`, so no name is invented here.
-    const copyTargetFor = (h: HighlightRecord): string =>
-      // ADAAAA-8405 S3: the READ gate re-checks a stored title's names against
-      // the row's OWN copy, so the audit line the write seam kept must ride along.
-      projectPostTitle(
-        { ...h, reasonRaw: h.reason_raw ?? null },
-        { subject: postTitleTeamSubject(h, job.matchContext) }
-      );
-    // ADAAAA-8328 (Defect 2, ADAAAA-8319 QA FAIL of AC4): the announcer DETAIL
-    // never goes missing. The write seam legitimately refuses copy it cannot
-    // gate (a score claim this window never measured), so a row can carry
-    // `reason_raw` and NO `caption`/`cardTitles`/`reason` — measured on job
-    // 55a0eb33, 2 of 3 rows. Losing the card's "What happened" line is exactly
-    // what the parent ticket forbids, and it has nothing to do with the model's
-    // `postTitle`: a refused/absent title must NEVER take the announcer line
-    // with it (the title is a SEPARATE surface, gated separately, and the copy
-    // fields below are spread from the stored row untouched).
+    // ADAAAA-8854: the served card SHAPE lives in exactly one place
+    // (`served-highlight-rows.ts`), because the incremental sections-delta stream
+    // merges over this payload and used to rebuild the same lists WITHOUT the
+    // per-row confirmation / postTitle / caption — a delta refresh then degraded
+    // every card it touched (CONFIRMED → UNCONFIRMED, title → raw row). Both
+    // routes now call the same builders, so the shape cannot drift again.
     //
-    // The degrade is the SAME fact-only derivation the copy target uses — the
-    // stored label plus the row's own window instant plus, only when the row's
-    // own copy names one, a team from the job's `matchContext`. Pure, no model
-    // call, never empty, and it asserts nothing this window did not store. A
-    // stored caption is served byte-for-byte.
-    const announcerDetailFor = (h: HighlightRecord): string => {
-      // ADAAAA-8405 S4: the detail route mirrors the write seam. A row written
-      // before that seam change stores its gated announcer sentence as `reason`
-      // and no `caption`, so serving the title here collapsed 6 of 10 postable
-      // stored cards onto `caption == postTitle` — a headline, not announcer
-      // copy. Serve the row's own gated sentence; the title stays the last
-      // resort for a row with no sentence at all (only `reason_raw`).
-      return projectAnnouncerCaption(
-        { ...h, reasonRaw: h.reason_raw ?? null },
-        copyTargetFor(h)
-      );
+    // The builders carry: the served clip (ADAAAA-8321), the copy target
+    // (ADAAAA-8318, pure, never empty), the never-empty announcer detail
+    // (ADAAAA-8328), the per-caller export URL (ADAAAA-7896), the card's own
+    // confirmation lane (ADAAAA-8530, absent when nothing could be derived) and
+    // any grouped celebration/replay alternatives (ADAAAA-7984).
+    const servedCtx: ServedRowContext = {
+      matchContext: job.matchContext,
+      exportUriFor: (row) => exportUriForHighlight(row, user.id),
     };
-    const postableHighlights = postable.highlights.map((h) => {
-      // ADAAAA-8321 (AC6): a moment that has a picked alternative serves THAT
-      // clip everywhere (card, download/export, post); with no pick this is the
-      // record's own clip and nothing changes.
-      const served = { ...h, clipUri: servedClipUri(h) };
-      // ADAAAA-8530: the card's confirmation state (lane + label), derived from
-      // this row's own window. Absent when nothing could be derived.
-      const confirmation = confirmationFor(h);
-      return {
-        ...served,
-        postTitle: copyTargetFor(h),
-        caption: announcerDetailFor(h),
-        exportUri: exportUriForHighlight(served, user.id),
-        ...(confirmation ? { confirmation } : {}),
-        ...(alternativesByOwner.get(h.id)?.length ? { alternatives: alternativesByOwner.get(h.id) } : {}),
-      };
-    });
+    const postableHighlights = postable.highlights.map((h) =>
+      servedHighlightRow(h, confirmationFor(h), servedCtx, {
+        alternatives: alternativesByOwner.get(h.id),
+      })
+    );
     // ADAAAA-8178: a notable row is rendered by the SAME card the postable feed
-    // uses, so its Download / Copy Link must work too. The export token is minted
-    // per caller for EVERY row (the /clips/* export path verifies the token
-    // against the highlight id and marks it; it has no postability gate), so a
-    // notable clip downloads and marks exactly like a postable one.
-    const notableHighlights = postable.notableMoments.moments.map((m) => {
-      const served = { ...m.owner, clipUri: servedClipUri(m.owner) };
-      // ADAAAA-8530: a notable moment now lives INSIDE the Highlights grid, so
-      // its card states the same confirmation lane a postable card does —
-      // derived from the moment's own window, absent when nothing derived.
-      const confirmation = confirmationFor(m.owner);
-      // ADAAAA-8422 (N1): the cluster's other windows are the moment's clip
-      // options. Each is its OWN stored row, served from its own already-cut
-      // `clipUri` (no re-encode, no decide), with a per-caller export URL minted
-      // against that row's id — read-only in P1 (pick/serve is the follow-on).
-      const siblingClips = m.options.map((o) => {
-        const row = { ...o, clipUri: servedClipUri(o) };
-        return {
-          id: row.id,
-          start: row.start,
-          end: row.end,
-          clipUri: row.clipUri,
-          ...(row.clipError ? { clipError: row.clipError } : {}),
-          ...(row.eventType ? { eventType: row.eventType } : {}),
-          exportUri: exportUriForHighlight(row, user.id),
-        };
-      });
-      return {
-        ...served,
-        // ADAAAA-8318: the notable lane mounts the same card, so it needs the same
-        // copy target (the deterministic title for a non-goal moment).
-        postTitle: copyTargetFor(m.owner),
-        // ADAAAA-8328: and the same never-empty announcer detail.
-        caption: announcerDetailFor(m.owner),
-        exportUri: exportUriForHighlight(served, user.id),
-        // ADAAAA-8530: a notable moment now lives INSIDE the Highlights grid, so
-        // its card states the same confirmation lane a postable card does —
-        // derived from the moment's own window, absent when nothing derived.
-        ...(confirmation ? { confirmation } : {}),
-        // One card per moment: how many windows the moment holds, and the sibling
-        // windows offered on its clip rail (absent on a lone window).
-        siblingCount: m.memberCount,
-        ...(siblingClips.length ? { siblingClips } : {}),
-      };
-    });
+    // uses, so its Download / Copy Link must work too. ADAAAA-8530: it states the
+    // same confirmation lane. ADAAAA-8422 (N1): its sibling windows ride along as
+    // clip options. All of it from the shared notable builder.
+    const notableHighlights = postable.notableMoments.moments.map((m) =>
+      servedNotableRow(m, confirmationFor(m.owner), servedCtx)
+    );
 
     // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
     // narratives) derived from STORED data only. Zero decide calls / GPU
@@ -6934,7 +6868,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         rowAccounting: postable.rowAccounting,
         // ADAAAA-8321: how many replay windows this job attached as alternatives
         // (never their own highlights). Additive top-level field.
-        replaysAttached: attachedReplays.attached,
+        replaysAttached: servedAlternatives.attached,
         duplicateHighlights: postable.duplicates,
         traces,
         sections: sectionList,
@@ -7028,40 +6962,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // are small next to the accumulated sections, so an incremental refresh can
       // carry them and keep highlights/summary streaming with the windows.
       const postable = buildPostableHighlights(store.highlightsForJob(job.id));
-      // ADAAAA-7896: the delta stream carries the same per-caller export URLs as
-      // the composite read, so an open detail page never loses the export path
-      // when it appends windows.
-      const postableHighlights = postable.highlights.map((h) => ({
-        ...h,
-        exportUri: exportUriForHighlight(h, user.id),
-      }));
-      // ADAAAA-8178: the delta stream carries the notable cards' export URLs too,
-      // so an open live page does not lose Download / Copy Link on the notable
-      // lane when it appends windows (same per-caller minting as above).
-      // ADAAAA-8422 (N1): the delta carries the SAME one-card-per-moment grouping
-      // as the composite read, so an appended refresh can never re-split a moment
-      // into one card per window.
-      const notableHighlights = postable.notableMoments.moments.map((m) => ({
-        ...m.owner,
-        exportUri: exportUriForHighlight(m.owner, user.id),
-        siblingCount: m.memberCount,
-        ...(m.options.length
-          ? {
-              siblingClips: m.options.map((o) => ({
-                id: o.id,
-                start: o.start,
-                end: o.end,
-                clipUri: o.clipUri,
-                ...(o.clipError ? { clipError: o.clipError } : {}),
-                ...(o.eventType ? { eventType: o.eventType } : {}),
-                exportUri: exportUriForHighlight(o, user.id),
-              })),
-            }
-          : {}),
-      }));
-      // ADAAAA-8645: the delta refresh carries the same badge predicate as the
-      // composite read, so an appended ladder cannot re-introduce a banner that
-      // disagrees with the cards.
+      // ADAAAA-8854: the delta MUST ship the composite read's served card SHAPE,
+      // not a reduced one. The webapp merges this response over its arrays
+      // wholesale, so a row missing `confirmation` flipped a stored
+      // `measured`/`dive` card back to UNCONFIRMED on every incremental refresh,
+      // and a row missing `postTitle`/`caption` degraded to raw stored copy. Both
+      // routes now build rows through `served-highlight-rows.ts`. Keep the lane
+      // derivation ABOVE the maps: the maps consume it, and the ladder below uses
+      // the same helper so banner and cards cannot disagree (ADAAAA-8645).
       const deltaCandidatesById = new Map(candidates.map((c) => [c.id, c]));
       // ADAAAA-8721 (D3): the delta refresh names the same skip reason the
       // composite read does, from the same rail gate.
@@ -7070,6 +6978,26 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           confirmEnabled:
             job.source !== "file" ? cfg.decideConfirmEnabled && cfg.liveDecideConfirm : cfg.decideConfirmEnabled,
         });
+      const deltaServedCtx: ServedRowContext = {
+        matchContext: job.matchContext,
+        exportUriFor: (row) => exportUriForHighlight(row, user.id),
+      };
+      // ADAAAA-7984 / ADAAAA-8321: the grouped celebration/replay alternatives ride
+      // the delta too (same one builder as the composite), so an incremental
+      // refresh cannot take a card's clip rail away either.
+      const alternativesByOwner = servedAlternativesByOwner(job.id).byOwner;
+      // ADAAAA-7896: same per-caller export URLs; ADAAAA-8530: same per-row
+      // confirmation; ADAAAA-8318/8328: same copy target and announcer detail.
+      const postableHighlights = postable.highlights.map((h) =>
+        servedHighlightRow(h, deltaConfirmationFor(h), deltaServedCtx, {
+          alternatives: alternativesByOwner.get(h.id),
+        })
+      );
+      // ADAAAA-8178 / ADAAAA-8422 (N1): the same notable cards, export URLs,
+      // confirmation lanes and one-card-per-moment grouping as the composite.
+      const notableHighlights = postable.notableMoments.moments.map((m) =>
+        servedNotableRow(m, deltaConfirmationFor(m.owner), deltaServedCtx)
+      );
       const summaryLadder = buildSummaryLadder({
         summaryLog: job.summaryLog,
         highlights: postable.highlights,
