@@ -47,6 +47,16 @@ interface StoredRow {
   storedSummaryGate: string | null;
   storedWords: number;
   jobMatchContext?: unknown;
+  /** ADAAAA-8968: a row carried from a DIFFERENT job than the dump's own. The
+   *  live-rail filler body (`23f9b28e`, job `e4c2fe29`) is pinned this way. */
+  sourceJob?: string;
+  /** ADAAAA-8968: the row's own job `matchContext`, when it is not the dump's. */
+  matchContext?: unknown;
+  /** ADAAAA-8968: the disposition this row is PINNED to. `refused` means a later
+   *  gate/prompt change that re-admits the body is a regression the replay fails
+   *  on — the rev-7 corpus only asked "refused or repaired", which would let a
+   *  prompt change repair this filler body back onto a card. */
+  expectGate?: "refused" | "repaired" | "served";
 }
 
 interface StoredDump {
@@ -72,7 +82,8 @@ const evidenceOf = (row: StoredRow): SummaryEvidence => ({
   windowTs: row.windowTs,
   windowDurationS: row.windowDurationS,
   scoreTransition: row.scoreTransition,
-  matchContext: row.rail === "vod" ? (row.jobMatchContext ?? dump.matchContext) : dump.matchContext,
+  matchContext:
+    row.matchContext ?? (row.rail === "vod" ? (row.jobMatchContext ?? dump.matchContext) : dump.matchContext),
   transcript: null,
   attestation: row.attestation,
   matchClock: row.matchClock,
@@ -95,6 +106,7 @@ for (const row of dump.rows) {
   const band = row.rail === "vod" ? SUMMARY_VOD_BAND : SUMMARY_LIVE_BAND;
 
   line(`## ${row.id.slice(0, 8)} (${row.rail}) — stored ${row.storedWords} words / ${summarySentencesOf(row.body).length} sentences`);
+  line(`   source job: ${row.sourceJob ?? dump.jobId}`);
   line(`   served gate: ${row.storedSummaryGate}`);
   line(
     `   AC14.1 sentences: ${reports.length} | facts/sentence: ${reports
@@ -116,6 +128,16 @@ for (const row of dump.rows) {
   const repaired = decision.summary !== null;
   const refused = decision.summary === null;
   line(`   AC14 verdict: ${repaired ? "REPAIRED (serves, filler deleted)" : refused ? "REFUSED (no copy served)" : "SERVED AS-IS"}`);
+  // ADAAAA-8968: a PINNED row must land on its stated disposition. The rev-7
+  // corpus tolerated "refused OR repaired", which is enough for the generic AC14
+  // rule and not enough for the live-rail filler shape: a prompt change could
+  // repair `23f9b28e` into a served body and the replay would still pass. This
+  // row is pinned REFUSED, so re-admitting it fails the `$0` gate.
+  if (row.expectGate) {
+    const got = refused ? "refused" : "repaired";
+    line(`   pinned: ${row.expectGate} -> ${got}${got === row.expectGate ? " (ok)" : " (REGRESSION)"}`);
+    if (got !== row.expectGate) failures.push(`${row.id}: pinned ${row.expectGate}, corpus gate reports ${got}`);
+  }
   if (repaired) {
     // A repair still serves the row: the surviving sentences are all fact sentences.
     const survivors = summarySentenceFacts(decision.summary!, evidence);

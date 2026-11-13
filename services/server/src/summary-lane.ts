@@ -316,6 +316,17 @@ export async function runSummaryForRow(
           words: decision.words,
           sentences: decision.sentences,
           violations: decision.violations,
+          // ADAAAA-8968 (AC5): the MEASURED shortfall, so the second sample is
+          // asked to close a number of words rather than re-read the band line.
+          // Measured on the body that SURVIVED the clause repair: a 48-word draft
+          // the repair emptied to 25 is 15 short of the 40-word floor, and the
+          // raw 48 would report no shortfall at all — the retry would re-land the
+          // same filler and the depth refusal would repeat.
+          shortfallWords: Math.max(
+            0,
+            summaryBand(evidence.rail).floorWords -
+              (decision.repairedWords > 0 ? decision.repairedWords : decision.words)
+          ),
           ...(decision.droppedClauses.length > 0 ? { droppedClauses: decision.droppedClauses } : {}),
           factMenu: summaryFactMenu(evidence),
         };
