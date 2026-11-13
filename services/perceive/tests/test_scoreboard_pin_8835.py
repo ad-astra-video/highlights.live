@@ -217,14 +217,24 @@ def _overlaps(roi, box) -> bool:
 
 
 class PipDet:
-    """Two score bugs on one frame, separated by geometry (the PIP repro)."""
+    """Two score bugs on one frame, separated by geometry (the PIP repro).
+
+    `roi_passes` / `roi_tiles` are the TRACKING ROI tiling counters the real
+    detector reports (perceive mirrors their deltas into `roiPasses` /
+    `roiTiles`). They are driven here by the tracking pass, never by the
+    scoreboard crop, which is what AC5 measures: the pin may not change them.
+    """
 
     def __init__(self):
         self.ocr_calls = []
         self.whole_frame_calls = 0
         self.frame = 0
+        self.roi_passes = 0
+        self.roi_tiles = 0
 
     def detect(self, rgb, vocabulary=None):
+        self.roi_passes += 1
+        self.roi_tiles += 2
         return []
 
     def ocr(self, rgb, roi=None):
@@ -307,6 +317,10 @@ def test_ac5_pin_changes_crop_coordinates_only(client, monkeypatch):
 
     assert [o.get("roiPasses") for o in obs_pin] == [o.get("roiPasses") for o in obs_raw]
     assert [o.get("roiTiles") for o in obs_pin] == [o.get("roiTiles") for o in obs_raw]
+    # The counters are live in this fixture (the tracking pass fires), so the
+    # equality above is a real reading, not 0 == 0.
+    assert any((o.get("roiPasses") or 0) > 0 for o in obs_pin)
+    assert sum((o.get("roiTiles") or 0) for o in obs_pin) == sum((o.get("roiTiles") or 0) for o in obs_raw)
     assert len(det_pin.ocr_calls) <= len(det_raw.ocr_calls)
     assert det_pin.whole_frame_calls == 0
 
