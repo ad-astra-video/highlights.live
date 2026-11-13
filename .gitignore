@@ -3,6 +3,10 @@ dist/
 build/
 *.log
 .tmp/
+# Commit-message scratch. A `git commit -F .commit_msg_<ticket>.txt` habit left
+# one tracked in ADAAAA-8831's build commit; scratch belongs on disk, not in the
+# tree.
+.commit_msg_*.txt
 coverage/
 .env
 .env.local
