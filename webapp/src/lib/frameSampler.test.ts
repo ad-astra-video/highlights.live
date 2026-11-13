@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { SAMPLE_HEIGHT, SAMPLE_WIDTH, createFrameSampler, createTickGate } from "./frameSampler";
+import {
+  SAMPLE_HEIGHT,
+  SAMPLE_WIDTH,
+  createFrameSampler,
+  createTickGate,
+  runIngestTick,
+} from "./frameSampler";
 
 /** A node-side stand-in for the canvas the sampler owns. */
 function fakeCanvas() {
@@ -59,5 +65,45 @@ describe("reused frame sampler (ADAAAA-8848 F4)", () => {
     gate.leave();
     expect(gate.inFlight).toBe(false);
     expect(gate.tryEnter()).toBe(true);
+  });
+
+  it("a frame-less ingest tick RELEASES the gate instead of stalling the rail", () => {
+    const { canvas } = fakeCanvas();
+    const sampler = createFrameSampler({ createCanvas: () => canvas as unknown as HTMLCanvasElement });
+    const gate = createTickGate();
+    const post = vi.fn(async () => ({}));
+    // drawImage throws => capture yields nothing. The next tick must still run.
+    const broken = {
+      videoWidth: 1920,
+      videoHeight: 1080,
+    } as unknown as HTMLVideoElement;
+    const deadSampler = {
+      ...sampler,
+      canvas: canvas as unknown as HTMLCanvasElement,
+      capture: () => null,
+    };
+    expect(runIngestTick({ gate, sampler: deadSampler, source: broken, post })).toBe(false);
+    expect(post).not.toHaveBeenCalled();
+    expect(gate.inFlight).toBe(false);
+
+    // The gate is genuinely reusable: the healthy frame after the blank one posts.
+    expect(runIngestTick({ gate, sampler, source: video, post })).toBe(true);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the gate when the ingest POST rejects, and sequences seq only on a start", async () => {
+    const { canvas } = fakeCanvas();
+    const sampler = createFrameSampler({ createCanvas: () => canvas as unknown as HTMLCanvasElement });
+    const gate = createTickGate();
+    const frames: string[] = [];
+    const reject = () => Promise.reject(new Error("offline"));
+    expect(runIngestTick({ gate, sampler, source: video, post: reject, onFrame: (i) => frames.push(i) })).toBe(
+      true,
+    );
+    expect(gate.inFlight).toBe(true);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gate.inFlight).toBe(false);
+    expect(frames).toEqual(["AAAA"]);
   });
 });

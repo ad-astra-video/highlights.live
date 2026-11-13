@@ -7,7 +7,7 @@ import { useSettings } from "./settings";
 import { DISPLAY_CAPTURE_CONSTRAINTS, applySenderBounds } from "./captureBounds";
 import { BoundedRecordingQueue, RECORDING_QUEUE_LIMIT, recordingGapNotice, type RecordingGap } from "./recordingQueue";
 import { postRecordingChunk } from "./recordingUpload";
-import { createFrameSampler, createTickGate, type FrameSampler } from "./frameSampler";
+import { createFrameSampler, createTickGate, runIngestTick, type FrameSampler } from "./frameSampler";
 import {
   ENCODER_PROBE_MS,
   ENCODER_PROBE_MIN_BYTES,
@@ -812,19 +812,21 @@ export function LiveCaptureProvider({ children }: { children: React.ReactNode })
             if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
               wsRef.current.send(JSON.stringify({ seq, timestamp: seq, image, reasoningEffort }));
             }
-          } else if (id && gate.tryEnter()) {
+          } else if (id) {
             // Skip the tick entirely while one ingest POST is pending: a slow
-            // uplink must not stack requests (ADAAAA-8848 F4).
-            try {
-              const image = sampler.capture(v);
-              if (!image) return;
-              seqRef.current = seq + 1;
-              api(`/jobs/${id}/ingest`, { body: { seq, timestamp: seq, image, reasoningEffort } })
-                .catch(() => {})
-                .finally(() => gate.leave());
-            } catch {
-              gate.leave();
-            }
+            // uplink must not stack requests (ADAAAA-8848 F4). `runIngestTick`
+            // also releases the gate on a frame-less tick, so a source that has
+            // not painted yet cannot stall the rail for the rest of the share.
+            runIngestTick({
+              gate,
+              sampler,
+              source: v,
+              post: (image) =>
+                api(`/jobs/${id}/ingest`, { body: { seq, timestamp: seq, image, reasoningEffort } }),
+              onFrame: () => {
+                seqRef.current = seq + 1;
+              },
+            });
           }
         }, 1000);
       }
