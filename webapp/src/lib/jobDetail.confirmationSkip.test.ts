@@ -41,6 +41,13 @@ describe("confirmationSkipText — every skip names its own case", () => {
     );
   });
 
+  it("names the live density-cap withhold (ADAAAA-8894/D4)", () => {
+    // A bare `density_cap` reads as admission control, never as a transport drop.
+    expect(confirmationSkipText(hl({ lane: "unconfirmed", label: "x", skipReason: "density_cap" }))).toBe(
+      "No deep dive: live dive-density cap reached (48 dives/stream-hour)"
+    );
+  });
+
   it("names a dropped dive's stored cause in words", () => {
     expect(confirmationSkipText(hl({ lane: "unconfirmed", label: "x", skipReason: "dropped:pool_busy" }))).toBe(
       "No deep dive: dropped (dive pool was busy)"

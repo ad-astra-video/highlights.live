@@ -142,14 +142,19 @@ describe("D1 trigger — a promoted row with no measured attestation is dived (A
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, GOAL_ACCEPT)).toBe(true);
   });
 
-  it("keeps the measured-attestation cost bound on both rails", () => {
+  it("dives a MEASURED promoted row too (ADAAAA-8894/D4 dropped this skip)", () => {
+    // D1 kept a cost bound here: a promoted row that already measured its own goal
+    // was skipped ("the measured lane is its own corroboration"). D4 removed that
+    // skip — it was the last class where a promoted card got no dive — and bounded
+    // the added population by admission instead (`density_cap`). See
+    // `live-confirm-coverage-8894.test.ts` for the precision and cost halves.
     const live = liveCfg();
     for (const candidate of [
       { eventType: "SPORTING_EVENT", goalCrossed: true },
       { eventType: "SPORTING_EVENT", ballOutcome: "goal" },
       { eventType: "SPORTING_EVENT", scoreBoardChanged: true },
     ]) {
-      expect(shouldRunConfirm(live, candidate, BIG_PLAY)).toBe(false);
+      expect(shouldRunConfirm(live, candidate, BIG_PLAY)).toBe(true);
     }
     const vod = vodCfg();
     for (const candidate of [
@@ -157,7 +162,7 @@ describe("D1 trigger — a promoted row with no measured attestation is dived (A
       { eventType: "SPORTING_EVENT", ballOutcome: "goal" },
       { eventType: "SPORTING_EVENT", scoreBoardChanged: true },
     ]) {
-      expect(shouldRunConfirm(vod, candidate, BIG_PLAY)).toBe(false);
+      expect(shouldRunConfirm(vod, candidate, BIG_PLAY)).toBe(true);
     }
   });
 
