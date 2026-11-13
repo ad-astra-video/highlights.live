@@ -26,8 +26,10 @@ import {
   canAddRecenteredAlternative,
   deliverRecenteredOption,
   recenteredAlternativeId,
+  recenteredCutSpec,
   recenteredDedupeKey,
   recenteredMomentBucket,
+  type RecenteredCutSpec,
 } from "../src/recentered-alternative";
 
 /** The owning card of a live goal (the shape the dive re-anchors on: a promoted
@@ -175,33 +177,39 @@ describe("the option row states the dive's provenance", () => {
   });
 });
 
-describe("delivery keeps the card's clip and never writes the owner row", () => {
-  function harness(existing: HighlightAlternative[] = [], cutResult?: { clipUri: string; start: number; end: number; bytes?: number; offsetSec?: number | null }) {
-    const rows = new Map([[owner.id, structuredClone(owner)]]);
-    const stored: HighlightAlternative[] = [...existing];
-    const cutCalls: number[] = [];
-    const deps = {
-      getHighlight: (id: string) => rows.get(id),
-      alternativesForHighlight: (id: string) => stored.filter((a) => a.highlightId === id),
-      addAlternative: async (a: HighlightAlternative) => {
-        stored.push(a);
-        return { record: a, created: true };
+// One option delivery against a live-shaped row: the cut records the spec the
+// seam handed it, so a test can assert the PLACEMENT the rail was asked for.
+function harness(existing: HighlightAlternative[] = [], cutResult?: { clipUri: string; bytes?: number; offsetSec?: number | null }) {
+  const rows = new Map([[owner.id, structuredClone(owner)]]);
+  const stored: HighlightAlternative[] = [...existing];
+  const cutCalls: number[] = [];
+  const specs: RecenteredCutSpec[] = [];
+  const deps = {
+    getHighlight: (id: string) => rows.get(id),
+    alternativesForHighlight: (id: string) => stored.filter((a) => a.highlightId === id),
+    addAlternative: async (a: HighlightAlternative) => {
+      stored.push(a);
+      return { record: a, created: true };
+    },
+    log: () => {},
+  };
+  const deliver = (dive = { ts: 162.25, confidence: 0.82 }) =>
+    deliverRecenteredOption({
+      deps,
+      jobId: "job-8893",
+      highlightId: owner.id,
+      dive,
+      cut: async (spec) => {
+        cutCalls.push(dive.ts);
+        specs.push(spec);
+        return cutResult ?? { clipUri: "/clips/job-8893-1587-recentered.mp4", bytes: 1_204_214 };
       },
-      log: () => {},
-    };
-    const deliver = (dive = { ts: 162.25, confidence: 0.82 }) =>
-      deliverRecenteredOption({
-        deps,
-        jobId: "job-8893",
-        highlightId: owner.id,
-        dive,
-        cut: async () => {
-          cutCalls.push(dive.ts);
-          return cutResult ?? { clipUri: "/clips/job-8893-1587-recentered.mp4", start: 150, end: 166, bytes: 1_204_214 };
-        },
-      });
-    return { rows, stored, cutCalls, deliver };
-  }
+    });
+  return { rows, stored, cutCalls, specs, deliver };
+}
+
+
+describe("delivery keeps the card's clip and never writes the owner row", () => {
 
   it("adds exactly one option and leaves the owner row byte-identical", async () => {
     const h = harness();
@@ -218,15 +226,15 @@ describe("delivery keeps the card's clip and never writes the owner row", () => 
     expect(h.rows.get(owner.id)?.clipUri).toBe("/clips/job-8893-1587.mp4");
   });
 
-  it("stamps where the dive moment actually landed in the option file (ADAAAA-8906)", async () => {
+  it("stamps where the card's anchor actually landed in the option file (ADAAAA-8906)", async () => {
     // The D5 grade could only see this by probing footage, because the row did
     // not record the delivered placement. The option row now carries the
-    // measured number, so a mis-anchored cut is readable from the row.
-    const h = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4", start: 150, end: 166, offsetSec: 11.02 });
+    // measured number, so a mis-placed cut is readable from the row.
+    const h = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4", offsetSec: 7.02 });
     const option = await h.deliver();
-    expect(option?.momentDeliveredOffsetSec).toBeCloseTo(11.02, 3);
+    expect(option?.momentDeliveredOffsetSec).toBeCloseTo(7.02, 3);
     // Absent (content-clock fallback / a rail that measured nothing) stays absent.
-    const noMeasure = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4", start: 150, end: 166 });
+    const noMeasure = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4" });
     expect((await noMeasure.deliver())?.momentDeliveredOffsetSec).toBeUndefined();
   });
 
@@ -239,7 +247,7 @@ describe("delivery keeps the card's clip and never writes the owner row", () => 
   });
 
   it("a failed option cut stores nothing and keeps the card serving", async () => {
-    const h = harness([], { clipUri: "", start: 150, end: 166 });
+    const h = harness([], { clipUri: "" });
     const before = structuredClone(h.rows.get(owner.id));
     const option = await h.deliver();
     expect(option).toBeNull();
@@ -258,9 +266,59 @@ describe("delivery keeps the card's clip and never writes the owner row", () => 
       jobId: "job-8893",
       highlightId: "hl-gone",
       dive: { ts: 1 },
-      cut: async () => ({ clipUri: "/clips/x.mp4", start: 0, end: 15 }),
+      cut: async () => ({ clipUri: "/clips/x.mp4" }),
     });
     expect(option).toBeNull();
+  });
+});
+
+describe("the option's cut is placed on the CARD, never on the dive moment (ADAAAA-8906)", () => {
+  // QA measured the defect on build `0685049` (grade on ADAAAA-8904): the option
+  // row held the owner window `[1.6667, 16.6667]` and the dive moment 12.6667 s,
+  // but the delivered file opened 1.0-1.2 s early, so the moment measured 12.2 s
+  // instead of 11.0 s. Row-level re-cuts on the served build showed WHY the dive
+  // moment cannot anchor a shared-window option: its frame labels run behind the
+  // footage, by 0.3 s on row `-87` and by 2.5 s on `-6787`. The seam therefore
+  // hands the rail a spec built from the CARD and the rail must obey it.
+
+  it("states the card's own window and accept anchor", async () => {
+    const h = harness();
+    await h.deliver();
+    expect(h.specs).toHaveLength(1);
+    const spec = h.specs[0];
+    expect(spec.start).toBeCloseTo(150, 6);
+    expect(spec.end).toBeCloseTo(166, 6);
+    // the card's accept anchor (localizedTs), NOT the dive moment 162.25
+    expect(spec.anchorTs).toBeCloseTo(158.667, 6);
+    expect(spec.cueTail).toBe(false);
+  });
+
+  it("is unchanged by how far the dive moment drifts (both signs)", async () => {
+    for (const diveTs of [162.25, 152.5, 161.0, 166.4]) {
+      const h = harness();
+      await h.deliver({ ts: diveTs, confidence: 1 });
+      expect(h.specs[0].anchorTs).toBeCloseTo(158.667, 6);
+      expect(h.specs[0].start).toBeCloseTo(150, 6);
+      expect(h.specs[0].end).toBeCloseTo(166, 6);
+    }
+  });
+
+  it("keeps the stored window equal to the card's, whatever the cut reports", async () => {
+    const h = harness([], { clipUri: "/clips/opt.mp4", offsetSec: 7.02 });
+    const option = await h.deliver();
+    expect(option?.start).toBeCloseTo(150, 6);
+    expect(option?.end).toBeCloseTo(166, 6);
+    expect(option?.windowAnchorTs).toBeCloseTo(162.25, 6); // dive moment = row provenance
+    expect(option?.acceptAnchorTs).toBeCloseTo(158.667, 6);
+    expect(option?.driftSec).toBeCloseTo(162.25 - 158.667, 3);
+  });
+
+  it("a celebration-tail card keeps its cue as the END", () => {
+    const spec = recenteredCutSpec({ ...owner, clipPlacementReason: "celebration_tail" } as HighlightRecord);
+    expect(spec.cueTail).toBe(true);
+    expect(spec.start).toBeCloseTo(150, 6);
+    expect(spec.end).toBeCloseTo(166, 6);
+    expect(recenteredCutSpec(owner).cueTail).toBe(false);
   });
 });
 
