@@ -55,14 +55,38 @@ describe("deriveLiveProgress (ADAAAA-7741 AC1)", () => {
     expect(second.lagSec - first.lagSec).toBeCloseTo(5, 5);
   });
 
-  it("reads caught_up when the newest decided window is within 5 s of the edge", () => {
+  it("reads caught_up while the newest decided window trails the edge by less than 10 s (ADAAAA-8944)", () => {
+    // 7 s behind is the healthy band: one gemma decide costs ~8-13 s wall per
+    // ~3 s of content, so this is normal processing and must read green.
     const p = deriveLiveProgress({
-      job: liveJob({ summaryLog: [{ seq: 1, ts: new Date(T0 + 8_000).toISOString(), windowTs: 7 }] }),
-      nowMs: T0 + 10_000,
+      job: liveJob({ summaryLog: [{ seq: 1, ts: new Date(T0 + 53_000).toISOString(), text: "", windowTs: 53 }] }),
+      nowMs: T0 + 60_000,
     });
-    expect(p.lagSec).toBe(3);
-    expect(p.lagSec).toBeLessThanOrEqual(LIVE_PROGRESS_CAUGHT_UP_S);
+    expect(p.lagSec).toBe(7);
+    expect(LIVE_PROGRESS_CAUGHT_UP_S).toBe(10);
     expect(p.state).toBe("caught_up");
+  });
+
+  it("keeps the boundary strict: 9.999 s is caught_up, exactly 10 s is behind (ADAAAA-8944 AC2)", () => {
+    const under = deriveLiveProgress({
+      job: liveJob({ summaryLog: [{ seq: 1, ts: new Date(T0 + 50_001).toISOString(), text: "", windowTs: 50.001 }] }),
+      nowMs: T0 + 60_000,
+    });
+    expect(under.lagSec).toBe(9.999);
+    expect(under.state).toBe("caught_up");
+
+    const at = deriveLiveProgress({
+      job: liveJob({ summaryLog: [{ seq: 1, ts: new Date(T0 + 50_000).toISOString(), text: "", windowTs: 50 }] }),
+      nowMs: T0 + 60_000,
+    });
+    expect(at.lagSec).toBe(10);
+    expect(at.state).toBe("behind");
+  });
+
+  it("still reads behind for a lag well past the boundary (ADAAAA-8944 AC3)", () => {
+    const p = deriveLiveProgress({ job: liveJob(), nowMs: T0 + 60_000 });
+    expect(p.lagSec).toBe(26);
+    expect(p.state).toBe("behind");
   });
 
   it("uses the newest persisted observation as a live-edge estimate but never produces a negative lag", () => {

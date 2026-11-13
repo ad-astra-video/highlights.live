@@ -24,7 +24,11 @@ import { analysePositionLabel } from "../lib/liveProgress";
 export function AnalyzePositionChip({ progress }: { progress?: LiveProgress | null }) {
   const label = analysePositionLabel(progress);
   if (!label) return null;
-  const behind = Number(progress?.analysedLagSec) > 0;
+  // ADAAAA-8944: the same boundary the processing chip uses — green while the
+  // analysis trails the edge by less than 10 s, cyan from 10 s on. Kept local to
+  // this number because the chip carries its own lag reading; the processing
+  // chip still reads the server projection's `state`.
+  const behind = Number(progress?.analysedLagSec) >= 10;
   const strideState =
     progress?.strideData === false ? "no-data" : Number(progress?.strideFramesSkipped) > 0 ? "skipped" : "none";
   return (

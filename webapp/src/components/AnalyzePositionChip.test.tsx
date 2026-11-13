@@ -65,6 +65,28 @@ describe("AnalyzePositionChip (ADAAAA-8121 AC-1/AC-3/AC-4; ADAAAA-8419 AC-1/AC-2
     expect(positions).toEqual(["T+3:35"]);
   });
 
+  it("renders green while the analysis trails the edge by under 10 s (ADAAAA-8944 AC6)", () => {
+    // ADAAAA-8944 AC6: analysedLagSec = 8 now reads green (was always cyan), and
+    // the label/machine attributes are unchanged by the boundary move.
+    const html = render({ ...base, analysedLagSec: 8 });
+    expect(html).toContain(LABEL);
+    expect(html).toContain("border-green/40 bg-green/10 text-green");
+    expect(html).not.toContain("text-neon");
+    expect(html).toContain('data-analyze-position-lag="8.000"');
+  });
+
+  it("renders green below the boundary and cyan from exactly 10 s (ADAAAA-8944 AC6)", () => {
+    const under = render({ ...base, analysedLagSec: 9.999 });
+    expect(under).toContain("Analysing T+3:35 · 10 s behind live");
+    expect(under).toContain("border-green/40 bg-green/10 text-green");
+    expect(under).not.toContain("text-neon");
+
+    const at = render({ ...base, analysedLagSec: 10 });
+    expect(at).toContain("Analysing T+3:35 · 10 s behind live");
+    expect(at).toContain("border-neon/40 bg-neon/10 text-neon");
+    expect(at).not.toContain("text-green");
+  });
+
   it("renders no 'no stride data' clause when the record carries no stride evidence (8419 AC-1, 8121 AC-6)", () => {
     const html = render({ ...base, strideData: false, strideFramesSeen: undefined, strideFramesSkipped: undefined });
     expect(html).not.toMatch(STRIDE_CLAUSE);

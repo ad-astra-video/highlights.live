@@ -36,6 +36,19 @@ describe("liveProgressChipLabel", () => {
     expect(liveProgressChipLabel({ ...base, lagSec: 3, state: "caught_up" })).toBe("Live - caught up (3 s)");
   });
 
+  it("keeps the same customer copy across the whole 5-10 s caught-up band (ADAAAA-8944)", () => {
+    // ADAAAA-8944: the server projection decides `caught_up` for any lag under
+    // 10 s, so the band that used to read yellow now reads this same green label.
+    // The copy itself is unchanged — only the boundary moved.
+    for (const lagSec of [5, 7, 9]) {
+      expect(liveProgressChipLabel({ ...base, lagSec, state: "caught_up" })).toBe(`Live - caught up (${lagSec} s)`);
+    }
+    // The display rounds to whole seconds (unchanged), so a 9.999 s lag prints 10 s
+    // while still reading green — the inspection number (`lagSec=9.999`) stays in
+    // the chip title.
+    expect(liveProgressChipLabel({ ...base, lagSec: 9.999, state: "caught_up" })).toBe("Live - caught up (10 s)");
+  });
+
   it("explains skipped windows as a bounded budget, singular and plural", () => {
     expect(liveProgressChipLabel({ ...base, skippedWindows: 2 })).toBe(
       `Processing - 26 s behind live · 2 windows skipped past the ${LIVE_PROGRESS_BUDGET_S} s budget`

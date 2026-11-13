@@ -42,6 +42,40 @@ describe("LiveProgressChip (ADAAAA-7741 AC3/AC4/AC6)", () => {
     expect(html).toContain('data-live-progress-state="caught_up"');
   });
 
+  it("renders green for the 5-10 s band that used to read yellow (ADAAAA-8944 AC1)", () => {
+    // ADAAAA-8944 AC1: lagSec = 7 now reads `caught_up` server-side and must
+    // render green — the yellow classes must be absent from the markup entirely.
+    const html = render({ ...base, processedThroughTs: 53, lagSec: 7, state: "caught_up" });
+    expect(html).toContain("Live - caught up (7 s)");
+    expect(html).toContain('data-live-progress-state="caught_up"');
+    expect(html).toContain("border-green/40 bg-green/10 text-green");
+    expect(html).not.toContain("text-yellow");
+    expect(html).not.toContain("bg-yellow/10");
+    expect(html).not.toContain("border-yellow/40");
+  });
+
+  it("renders green up to the boundary and yellow at exactly 10 s (ADAAAA-8944 AC2)", () => {
+    const under = render({ ...base, processedThroughTs: 50.001, lagSec: 9.999, state: "caught_up" });
+    expect(under).toContain('data-live-progress-state="caught_up"');
+    expect(under).toContain("border-green/40 bg-green/10 text-green");
+    expect(under).not.toContain("text-yellow");
+    // The exact lag survives in the chip title even though the label rounds.
+    expect(under).toContain("lagSec=9.999");
+
+    const at = render({ ...base, processedThroughTs: 50, lagSec: 10, state: "behind" });
+    expect(at).toContain("Processing - 10 s behind live");
+    expect(at).toContain('data-live-progress-state="behind"');
+    expect(at).toContain("border-yellow/40 bg-yellow/10 text-yellow");
+    expect(at).not.toContain("text-green");
+  });
+
+  it("keeps the behind copy and colour far past the boundary (ADAAAA-8944 AC3)", () => {
+    const html = render(base);
+    expect(html).toContain("Processing - 26 s behind live");
+    expect(html).toContain("border-yellow/40 bg-yellow/10 text-yellow");
+    expect(html).not.toContain("text-green");
+  });
+
   it("explains skipped windows as a bounded budget", () => {
     const html = render({ ...base, skippedWindows: 2 });
     expect(html).toContain("2 windows skipped past the 30 s budget");
@@ -51,6 +85,19 @@ describe("LiveProgressChip (ADAAAA-7741 AC3/AC4/AC6)", () => {
     expect(render(undefined)).toBe("");
     expect(render(null)).toBe("");
     expect(render({ ...base, state: "unknown" })).toBe("");
+  });
+
+  it("lets staleness win over caught_up — yellow with the stale clause (ADAAAA-8944 AC4)", () => {
+    // ADAAAA-8944 AC4: a projected `caught_up` at 7 s whose light read has been
+    // failing for 10 s+ must still be yellow and say so; the boundary move must
+    // not turn a frozen reading green.
+    const atThreshold = render({ ...base, processedThroughTs: 53, lagSec: 7, state: "caught_up" }, 10);
+    expect(atThreshold).toContain("Live - caught up (7 s)");
+    expect(atThreshold).toContain("stale: last read 10 s ago");
+    expect(atThreshold).toContain('data-live-progress-state="caught_up"');
+    expect(atThreshold).toContain('data-live-progress-stale="true"');
+    expect(atThreshold).toContain("border-yellow/40 bg-yellow/10 text-yellow");
+    expect(atThreshold).not.toContain("text-green");
   });
 
   it("states staleness in the markup when the light read keeps failing (ADAAAA-7759)", () => {
