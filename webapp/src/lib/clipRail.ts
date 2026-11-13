@@ -19,7 +19,7 @@ import { momentRangeLabel } from "./highlightPost";
  * is separate from the GOAL/celebration rail above, whose cap stays 2.
  */
 
-export type ClipRailSlideKind = "highlight" | "celebration" | "replay" | "sibling";
+export type ClipRailSlideKind = "highlight" | "celebration" | "replay" | "recentered" | "sibling";
 
 export interface ClipRailSlide {
   kind: ClipRailSlideKind;
@@ -42,6 +42,9 @@ export interface ClipRailSlide {
   /** ADAAAA-8325 (Inc 2): the alternative's footage phase from the decide
    * verdict (`replay` on an attached replay window). Operator-facing only. */
   phase?: "live" | "replay";
+  /** ADAAAA-8893 (D5): a `recentered` option's dive moment (`windowAnchorTs`),
+   * so the picker labels the instant the dive named, not the clip start. */
+  momentTs?: number;
   /** ADAAAA-8325: TRUE when the attach needed the phase-corroborated band (the
    * Inc 1 hash bar alone missed it), so the picker names that provenance. */
   phaseCorroborated?: boolean;
@@ -71,7 +74,9 @@ export function clipRailSlides(h: JobDetailHighlight): ClipRailSlide[] {
   ];
   for (const a of h.alternatives ?? []) {
     slides.push({
-      kind: a.eventType === "replay" ? "replay" : "celebration",
+      // ADAAAA-8893 (D5): a dive's re-centered cut is its own slide ROLE, so the
+      // identity line and the picker label never call it a Celebration.
+      kind: a.eventType === "replay" ? "replay" : a.eventType === "recentered" ? "recentered" : "celebration",
       alternativeId: a.id,
       key: `alternative:${a.id}`,
       src: a.clipUri,
@@ -79,6 +84,8 @@ export function clipRailSlides(h: JobDetailHighlight): ClipRailSlide[] {
       start: a.start,
       end: a.end,
       eventType: a.eventType,
+      // ADAAAA-8893 (D5): the moment the option is re-centered on.
+      ...(a.eventType === "recentered" ? { momentTs: a.windowAnchorTs } : {}),
       // ADAAAA-8325 (Inc 2): carry the phase provenance so the picker can say
       // WHY this alternative is offered.
       ...(a.phase ? { phase: a.phase } : {}),
@@ -122,8 +129,12 @@ export function clipRailDefaultIndex(h: JobDetailHighlight): number {
  * signal names that provenance ("Replay @ 207 s · phase") so an operator can see
  * WHY the alternative is offered — a hash match alone reads as the plain label. */
 export function clipRailPickerLabel(slide: ClipRailSlide): string {
-  const role = slide.kind === "replay" ? "Replay" : "Celebration";
-  const base = `${role} @ ${Math.round(slide.start)} s`;
+  const role = slide.kind === "replay" ? "Replay" : slide.kind === "recentered" ? "Re-centered" : "Celebration";
+  // ADAAAA-8893 (D5): a re-centered option is labelled by the DIVE MOMENT its
+  // row is anchored on, not by its clip start (the clip's own window is the
+  // card's window; the whole point is the instant inside it that moved).
+  const at = slide.kind === "recentered" && typeof slide.momentTs === "number" ? slide.momentTs : slide.start;
+  const base = `${role} @ ${Math.round(at)} s`;
   return slide.phaseCorroborated ? `${base} · phase` : base;
 }
 
@@ -146,7 +157,14 @@ export function clipRailIdentityLabel(slide: ClipRailSlide, notable = false): st
     const role = slide.kind === "sibling" ? "Clip" : "Moment";
     return `${role} · ${momentRangeLabel(slide.start, slide.end)}`;
   }
-  const role = slide.kind === "highlight" ? "Highlight" : slide.kind === "replay" ? "Replay" : "Celebration";
+  const role =
+    slide.kind === "highlight"
+      ? "Highlight"
+      : slide.kind === "replay"
+        ? "Replay"
+        : slide.kind === "recentered"
+          ? "Re-centered"
+          : "Celebration";
   return `${role} · ${momentRangeLabel(slide.start, slide.end)}`;
 }
 
