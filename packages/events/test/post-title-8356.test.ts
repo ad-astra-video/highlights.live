@@ -80,9 +80,19 @@ describe("gatePostTitleValue — the trimmed form must still pass every bar", ()
   });
 
   it("still accepts a plain clean title and an empty string stays absent", () => {
-    expect(gatePostTitleValue("Goalkeeper holds ball", ctx("not_highlight"))).toBe("Goalkeeper holds ball");
+    expect(gatePostTitleValue("Crowd erupts", ctx("not_highlight"))).toBe("Crowd erupts");
     expect(gatePostTitleValue("", ctx("not_highlight"))).toBeNull();
     expect(gatePostTitleValue(undefined, ctx("not_highlight"))).toBeNull();
+  });
+
+  it("refuses a role-noun subject (ADAAAA-8831 AC9/AC10 supersedes `Goalkeeper holds ball`)", () => {
+    // The 8356 bar accepted this because a role noun was deliberately kept out of
+    // the NAME set. Live leg `27bd816f` then served `Midfielder scores` /
+    // `Defender scores` with no attested actor, so a bare role subject is now its
+    // own refusal and the card serves the deterministic `LABEL · m:ss` title.
+    const d = gatePostTitleDetail("Goalkeeper holds ball", ctx("not_highlight"));
+    expect(d.title).toBeNull();
+    expect(d.violations).toContain("unattested-actor");
   });
 });
 

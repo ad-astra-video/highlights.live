@@ -1787,6 +1787,12 @@ export type ServedShapeViolation =
   | "verb-repeat"
   /** ADAAAA-8209: the model's window-relative `at t=…` audit marker as copy. */
   | "audit-marker"
+  /** ADAAAA-8830: the same provenance in the model's bare settler clock
+   *  (`at 18:12`, `at 19s`) — a caption is one beat and cites no clock. */
+  | "provenance-clock"
+  /** ADAAAA-8830: a line whose lead clause is the model citing its own evidence
+   *  (`ASR confirms a goal`) — provenance, never copy. */
+  | "attestation-cite"
   /** ADAAAA-8209: the quiet §3.3 lead budget (<= 8 words) exceeded. */
   | "quiet-budget";
 
@@ -1988,6 +1994,103 @@ export function servedShapeViolations(
   return [...new Set(out)];
 }
 
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8830 — the audit marker in EVERY form, and the caption-source bar.
+ *
+ * Measured defect (live leg `27bd816f`, build `fedc717f`, two of two rows): the
+ * served `caption` was the model's own SCORING-LANE sentence, marker and all —
+ *
+ *     The scoreboard changes to 2-1 at t=0.0 and ASR confirms a goal.   (8d521507)
+ *     Ball enters net at t=-1.0s, scoreboard changes to 2-2, and crowd erupts. (a4827973)
+ *
+ * Both stored `reason`/`caption`/`cardTitles` verbatim, so the read projection
+ * served them byte-for-byte. Two independent holes in ONE gate family:
+ *
+ *  1. the marker test required the trailing unit (`at t=-2.7s`). The model also
+ *     writes the UNIT-LESS form (`at t=0.0`, `t=-1.0`), which slipped every
+ *     marker check — it is the same provenance either way, so the marker is now
+ *     matched in every form, with or without `s`, with or without a leading `at`.
+ *  2. a row whose CARD was accepted (`corroborated: true` from the lane-1
+ *     attestation — §3.4 lets a measured goal claim stand) set
+ *     `storedReason = card.caption`, so the store-time post-condition
+ *     (`storedReasonViolations`) never ran on it: `storedCardSurface` applies
+ *     `servedShapeViolations` only. The marker reached `reason` AND `caption`
+ *     through the card path on a row whose letter the post-condition refuses.
+ *
+ * `captionSourceViolation` is the ONE caption-source bar both surfaces call, so
+ * the write seam and the read projection cannot disagree about what may be
+ * served as copy.
+ * ------------------------------------------------------------------------- */
+
+/** The window-relative audit marker, as a source fragment (no flags, grouped so
+ *  every composition site keeps its own quantifiers): every form the model
+ *  writes — `at t=-2.7s`, `at t=0.0` (unit-less), `t=-1.0`, the match-clock form
+ *  `t=22:13`, and a range. */
+const AUDIT_MARKER_SRC = String.raw`(?:\b(?:at\s+)?t\s*=\s*-?\d+(?:[:.]\d+)?\s*s?)`;
+
+/** The model's bare SETTLER clock — `at 18:12`, `at 19s`, `at 19.5s` — the same
+ *  provenance without the `t=` prefix. Kept OUT of `AUDIT_MARKER_SRC` on purpose:
+ *  that fragment feeds `stripInternalTokens` and `summaryViolations`, and the
+ *  depth lane's own bodies legitimately OPEN on a clock anchor
+ *  (`At 1:34, Barcelona drives forward…`, ADAAAA-8665 AC7). A CAPTION surface is
+ *  one beat and may not cite a clock at all, so the caption-source bar owns this
+ *  form. Measured residue: row `8faa641b` stored
+ *  `Scoreboard changes to 2-1 and ASR confirms goal at 18:12.` as `caption`. */
+const SETTLER_CLOCK_SRC = String.raw`(?:\bat\s+\d{1,3}(?::\d{2}|(?:\.\d+)?\s*s)\b)`;
+
+/** Does this text cite the model's OWN window clock (`at t=…`, any unit form)? */
+const AUDIT_MARKER_TEST = new RegExp(String.raw`${AUDIT_MARKER_SRC}\b`, "i");
+export function carriesAuditMarker(text: string | null | undefined): boolean {
+  return AUDIT_MARKER_TEST.test(text ?? "");
+}
+
+/** Does this text cite the model's own provenance clock in ANY form — the
+ *  `t=`-prefixed audit marker (`at t=0.0`, `at t=-1.0s`, `t=22:13`) or the bare
+ *  settler clock (`at 18:12`, `at 19s`)? This is the CAPTION-SURFACE test.
+ *
+ *  `SETTLER_CLOCK_SRC` stays out of `carriesAuditMarker` on purpose: that
+ *  predicate feeds `storedReasonViolations` and the summary bar, and the depth
+ *  lane's own bodies legitimately OPEN on a clock anchor
+ *  (`At 1:34, Barcelona drives forward…`, ADAAAA-8665 AC7). A caption is one
+ *  beat and may not cite a clock at all, so the caption surfaces use this one. */
+const PROVENANCE_CLOCK_TEST = new RegExp(String.raw`(?:${AUDIT_MARKER_SRC}\b)|${SETTLER_CLOCK_SRC}`, "i");
+export function carriesProvenanceClock(text: string | null | undefined): boolean {
+  return PROVENANCE_CLOCK_TEST.test(text ?? "");
+}
+
+/** Why a CAPTION SOURCE may not be served as copy; `""` when it may. */
+export type CaptionSourceViolation = "audit-marker" | "provenance-clock" | "attestation-cite" | "";
+
+/**
+ * The caption-source bar (ADAAAA-8830): a served `caption`/`reason` must be
+ * human-readable copy, never the model's evidence read.
+ *
+ *  - `audit-marker`: the line carries the window-relative marker in ANY form
+ *    (`carriesAuditMarker`). Provenance is never copy on any surface.
+ *  - `provenance-clock`: the same provenance in the model's bare settler clock
+ *    (`at 18:12`, `at 19s`) — a caption is one beat and may not cite a clock,
+ *    even though a DEPTH-LANE body may legitimately open on one (AC7).
+ *  - `attestation-cite`: the line's LEADING clause is an attestation read (a
+ *    channel word + a reporting verb: `ASR confirms a goal`, `Commentary
+ *    confirms …`), i.e. the model citing its own evidence as the sentence's
+ *    subject. A TRAILING attribution on a real beat
+ *    (`Scoreboard changes to 2-1 and commentary confirms the shot on the left.`)
+ *    stays sanctioned by ADAAAA-8209, so the bar reads the lead clause only.
+ */
+export function captionSourceViolation(text: string | null | undefined): CaptionSourceViolation {
+  const src = (text ?? "").trim();
+  if (!src) return "";
+  if (carriesAuditMarker(src)) return "audit-marker";
+  // The bare settler clock (`at 18:12`, `at 19s`) is the same provenance in the
+  // other form: row `8faa641b` stored
+  // `Scoreboard changes to 2-1 and ASR confirms goal at 18:12.` as its `caption`,
+  // and the lead-only citation rule cannot see the citation riding the TAIL.
+  if (carriesProvenanceClock(src)) return "provenance-clock";
+  const lead = (captionLead(src).split(/[—–;,]/)[0] ?? "").split(/\b(?:and|as|while|when|but)\b/i)[0] ?? "";
+  if (ATTESTATION_CHANNEL.test(lead) && ATTESTATION_REPORT.test(lead)) return "attestation-cite";
+  return "";
+}
+
 /**
  * ADAAAA-8209: the post-conditions a STORED `reason` must cross.
  *
@@ -2017,8 +2120,11 @@ export function storedReasonViolations(
   const out = (candidate ?? "").trim();
   if (!out) return ["empty"];
   const violations = servedShapeViolations(out, sources);
-  // Evidence provenance is never copy, on every path.
-  if (/\bat\s+t=-?[\d.]+\s*s\b/i.test(out)) violations.push("audit-marker");
+  // Evidence provenance is never copy, on every path. ADAAAA-8830: the marker is
+  // matched in EVERY form (`at t=-3.3s` and the unit-less `at t=0.0`), because
+  // the unit-less form reached served copy on live leg `27bd816f`.
+  const source = captionSourceViolation(out);
+  if (source) violations.push(source);
   // The quiet §3.3 budget, measured on the LEAD (the same measure the quiet gate
   // uses), so a folded colour clause does not count against it. Scoped to a
   // LEDGER line that carries the `from X to Y` transition (the shape this ticket
@@ -2569,6 +2675,13 @@ export function storedCardSurface(input: StoredCardSurfaceInput): StoredCardSurf
   const clean = (text: string): boolean =>
     fits(text) &&
     (!quiet || !QUIET_COLOUR_PHRASE.test(text)) &&
+    // ADAAAA-8830: the card path is where a row's `reason` is set
+    // (`storedReason = card.caption || …`), so an accepted card BYPASSES the
+    // store-time post-condition that guards the letter. A line carrying the
+    // window audit marker or leading an attestation read is provenance, not
+    // copy, and may not become a card caption, a card option, or (through
+    // `card.caption`) the row's `reason`.
+    captionSourceViolation(text) === "" &&
     // ADAAAA-8043 (v7 §3.2): a card caption is a delivered line, so it carries
     // actor + action + place exactly like a ladder row. A card whose only
     // honest string is incomplete is not stored (it was the source of the
@@ -2917,8 +3030,10 @@ const FRAME_DISPLAY_VERB =
  * never a beat: `confirmed by ball in net at t=-2.0s`, `ASR confirms a goal for
  * Real Madrid`, `commentary confirms the shot`, `… and crowd erupts at t=-5.0s`.
  */
-const PROVENANCE_CLAUSE =
-  /\b(?:confirmed|confirms)\b|\b(?:asr|commentary|commentator|replay)\s+(?:confirms?|confirmed)\b|\bat\s+t=-?[\d.]+\s*s\b/i;
+const PROVENANCE_CLAUSE = new RegExp(
+  String.raw`\b(?:confirmed|confirms)\b|\b(?:asr|commentary|commentator|replay)\s+(?:confirms?|confirmed)\b|${AUDIT_MARKER_SRC}\b`,
+  "i"
+);
 
 /**
  * ADAAAA-8130: the event LEDGER — a scoreboard/graphic/clock line or a raw
@@ -2979,8 +3094,9 @@ const SUBSTITUTED_QUIET_TAIL =
  * `projectAnnouncerCaption`) and never serves the sentence as written.
  * ------------------------------------------------------------------------- */
 
-/** The window-relative AUDIT marker the model cites for its own evidence. */
-const ATTESTATION_MARKER_TEST = /\bat\s+t=-?[\d.]+\s*s\b/i;
+/** The window-relative AUDIT marker the model cites for its own evidence.
+ *  ADAAAA-8830: `carriesAuditMarker` now owns this test (every marker form), so
+ *  this constant is deliberately gone — one marker definition, one gate. */
 
 /** A channel word (`ASR`, `commentary`, `OCR` …) — evidence, never copy. */
 const ATTESTATION_CHANNEL =
@@ -3020,10 +3136,16 @@ function remainderIsProvenanceOnly(remainder: string): boolean {
 
 function dropAttestationMarker(clause: string): string {
   return clause
-    // `at t=-3.3s`, optionally a range (`at t=-3.3s to 0.0s`)
-    .replace(/\s*\bat\s+t=-?[\d.]+\s*s(?:\s*(?:to|-|–|—)\s*(?:t=)?-?[\d.]+\s*s)?/gi, " ")
-    // `at 19s` / `at 19:00` — the same provenance in the other clock form
-    .replace(/\s*\bat\s+(?:\d{1,3}:\d{2}|\d+(?:\.\d+)?\s*s)\b/gi, " ")
+    // `at t=-3.3s`, the UNIT-LESS `at t=0.0` / `t=-1.0` (ADAAAA-8830), the
+    // match clock `t=22:13`, the bare settler `at 19s` / `at 18:12`, and a
+    // range (`at t=-1.0s to 0.0s`) — every form the model writes its own clock
+    // in. Detection (`carriesProvenanceClock`) and deletion read the SAME two
+    // fragments, so they cannot disagree about what a marker is.
+    .replace(
+      new RegExp(String.raw`\s*${AUDIT_MARKER_SRC}(?:\s*(?:to|-|–|—)\s*(?:t=)?-?\d+(?:\.\d+)?\s*s?)?`, "gi"),
+      " "
+    )
+    .replace(new RegExp(String.raw`\s*${SETTLER_CLOCK_SRC}`, "gi"), " ")
     .replace(/\s{2,}/g, " ")
     .replace(/\s+([,.;:!?])/g, "$1")
     .trim();
@@ -3037,7 +3159,10 @@ export function attestationDetailCopy(
   if (!src) return "";
   // ONLY the clock-bracketed attestation shape: a sentence that cites its own
   // window-relative marker. Every other sentence is the card gate's business.
-  if (!ATTESTATION_MARKER_TEST.test(src)) return "";
+  // ADAAAA-8830: the marker is detected in EVERY form (`at t=0.0` too), and the
+  // bare settler clock (`at 18:12`) counts — otherwise a row that stored its own
+  // evidence sentence as copy (row `8faa641b`) had no deletion lane to fall into.
+  if (!carriesProvenanceClock(src)) return "";
   const clauses = src
     .split(/\s*(?:[—–;,]|\b(?:and|as|while|when|but)\b)\s*/i)
     .map((c) => c.trim())
@@ -3188,6 +3313,16 @@ const NAME_STOPWORDS = new Set(
     "centerback","centre-back","center-back","fullback","full-back","wingback",
     "wing-back","defenders","midfielders","strikers","wingers","keepers","children",
     "kids","boys","girls","teammate","teammates","squad",
+    // ADAAAA-8831: an ADJECTIVE of nationality is not a name. Live leg
+    // `27bd816f` row `8d521507` wrote "in favor of the Spanish side"; the gate
+    // read `Spanish` as an unsourced proper name, so `roleFor` rewrote it to
+    // `the No. 9` (nonsense copy) and the row was refused `ungrounded-name` with
+    // the attested score line intact. These words describe a side, they never
+    // identify one — the same class as `home`/`away` above.
+    "spanish","french","italian","german","english","dutch","portuguese","brazilian",
+    "argentine","argentinian","uruguayan","mexican","american","catalan","belgian",
+    "croatian","serbian","polish","swedish","norwegian","danish","swiss","austrian",
+    "turkish","greek","scottish","welsh","irish","japanese","korean","african","european",
     "team","teams","player","players","coach","manager","fans","keeper's","saturday",
     "sunday","monday","tuesday","wednesday","thursday","friday","january","february",
     "march","april","may","june","july","august","september","october","november",
@@ -3219,8 +3354,80 @@ function promptHas(prompt: string, needle: string): boolean {
   return stripDiacritics(prompt).includes(stripDiacritics(needle));
 }
 
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8831: the ROLE-NOUN vocabulary, shared by the copy targets that must
+ * agree about what a role noun is.
+ *
+ * It lived in `highlight-summary` (the AC10 body neutraliser) and the post
+ * TITLE had no access to it, which is how a served `postTitle` came to assert
+ * `Midfielder scores` / `Defender scores` on a row whose attested actor was
+ * `Barcelona` (AC9/AC10 FAIL on 2/2 promoted rows of live leg `27bd816f`): the
+ * write seam's name gate treats a role noun as a non-name, so nothing refused
+ * an unattested role subject. The vocabulary belongs beside the name gate that
+ * shares the same judgement, so both seams read ONE table.
+ * ------------------------------------------------------------------------- */
+
+/** One role noun a copy surface uses, with the phrase that carries it. */
+export interface SummaryRoleNoun {
+  /** The canonical role ("midfielder", "goalkeeper", ...). */
+  canonical: string;
+  /** The matched phrase, e.g. "the midfielder". */
+  text: string;
+}
+
+/** AC10 (spec ADAAAA-8665 rev 3): the role nouns a body may only use when the
+ *  row's own evidence attests the role. Each group is one ATTESTATION UNIT: the
+ *  evidence saying "keeper" attests "the goalkeeper" for the same row, because it
+ *  is the same role. A bare `forward` is deliberately NOT matched unless a
+ *  determiner precedes it — "drives forward" is an adverb, not a claim about a
+ *  person. */
+export const SUMMARY_ROLE_NOUN_GROUPS: readonly { canonical: string; forms: readonly string[] }[] = [
+  {
+    canonical: "midfielder",
+    forms: ["midfielder", "midfielders", "midfield player", "central midfielder", "holding midfielder"],
+  },
+  {
+    canonical: "goalkeeper",
+    forms: ["goalkeeper", "goalkeepers", "keeper", "keepers", "goalie", "netminder"],
+  },
+  {
+    canonical: "striker",
+    forms: ["striker", "strikers", "forward", "forwards", "attacker", "attackers", "frontman", "poacher", "marksman", "number 9"],
+  },
+  {
+    canonical: "defender",
+    forms: [
+      "defender",
+      "defenders",
+      "centre-back",
+      "centre back",
+      "center-back",
+      "center back",
+      "fullback",
+      "full-back",
+      "wing-back",
+      "wing back",
+    ],
+  },
+  { canonical: "winger", forms: ["winger", "wingers"] },
+  { canonical: "playmaker", forms: ["playmaker", "playmakers"] },
+  { canonical: "captain", forms: ["captain", "captains", "skipper"] },
+  { canonical: "sweeper", forms: ["sweeper", "sweepers"] },
+];
+
+const roleEscapeRe = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Every role form as one regex alternation, longest first so "central
+ *  midfielder" wins over "midfielder". Shared so a title and a body can never
+ *  disagree about which words are role nouns. */
+export const ROLE_NOUN_FORM_ALT: string = [...SUMMARY_ROLE_NOUN_GROUPS]
+  .flatMap((g) => g.forms)
+  .sort((a, b) => b.length - a.length)
+  .map(roleEscapeRe)
+  .join("|");
+
 /** Roles a grounded name is replaced with, shortest-first so the rewrite can
- * never lengthen the line more than the name it replaced. */
+ *  never lengthen the line more than the name it replaced. */
 const ROLE_FOR_ACTION: [RegExp, string][] = [
   [/\b(?:save|saves|saved|keeper|parr(?:y|ies)|tip(?:s)? over)\b/i, "the No. 1"],
   [/\b(?:shot|shoots|shooting|strike|strikes|fires|header|volley|curler)\b/i, "the striker"],

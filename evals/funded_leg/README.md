@@ -17,7 +17,7 @@ cap.
 | quiet-window preflight | samples the gate for the whole window before any metered call: 0 nonterminal jobs, media `capacity.activeSessions 0`, all lease counters 0, 0 pool `session=` markers (the workers log `session=<jobId>`; `session=cyc-` is a subset). Any bad sample, unreadable probe, or missing pool container refuses the leg. | `3` |
 | hard wall-clock stop | stop fires at `--authorized-duration-s`, driven only by the monotonic clock. Media progress / `liveEdge` is never a stop input. | — |
 | stop confirmation | if the job is not terminal within `--hard-stop-slack-s` (<= 10 s) the run exits non-zero; it never reports an unconfirmed stop as a valid leg. | `4` |
-| metered-cost guard | aborts at `--abort-at-usd` (default: cap minus $0.05, i.e. **$0.60** on the $0.65 cap) on whichever is higher: the live `costUsd` read or `perceiveSessionS x --metered-rate-usd-per-s`. A wall-clock-only stop cannot hold the cap when metered seconds inflate (8483: 544.5 s metered inside a 300 s window). | — |
+| metered-cost guard | aborts at `--abort-at-usd` (default: cap minus $0.05, i.e. **$0.60** on the $0.65 cap) on the money the leg has accounted. A **readable** `costUsd` is that money and is never overridden by a projection; a dark record falls back to `metered x the billed-unit rate` (`--billing-basis decide` prices `decideFee / cadence + perceive accrual`, `perceive` prices `--metered-rate-usd-per-s`). A wall-clock-only stop cannot hold the cap when metered seconds inflate (8483: 544.5 s metered inside a 300 s window). | — |
 | no cost source | if neither `costUsd` nor `perceiveSessionS` is readable within `--cost-source-grace-s`, the leg is stopped and refused (exit 5). A leg with no metered guard is not authorized to run. | `5` |
 | authorized-vs-actual | evidence JSON `shape` block + a ready-to-paste table and `AUTHORIZED-VS-ACTUAL:` line. Cost is graded on the same figure the guard uses (`max(costUsd, projection)`), so a projection-only leg that would meter over the cap reads `OVER`, not `WITHIN`. Overshoot is a field, not a discovery. | `0` within / `2` over |
 | setup failure | job/session/driver failure stops whatever was created. | `5` |
@@ -37,6 +37,32 @@ reading as a busy box.
 The harness owns **stop + preflight + metered abort**. It does not grade a leg:
 PASS/FAIL/UNMEASURED belongs to the offline grader on `origin/master` 123da6b
 (`services/server/src/live-leg-grade.ts`, `scripts/live-leg-grade.ts`).
+
+### The guard prices the unit the build bills (ADAAAA-8832)
+
+`costUsd` on this build is `decideFee x (decideCalls + confirmCalls) +
+summaryFee x summaryCalls + perceiveSessionS/3600 x $0.01`
+(`packages/events/src/decide-knob.ts`, `services/server/src/api.ts`). The guard
+therefore defaults to `--billing-basis decide`: a decide-billed live leg's clock
+projection is `elapsed x (decideFee / cadence + perceive accrual)` (~$0.00067/s
+at the shipped $0.0033324 fee and 5 s cadence), read from the server's
+`LIVE_OBSERVE_CADENCE_S`. Pricing the same clock at the perceive-second rate
+($0.0011381/s) is ~1.7x the real spend, and that is what stopped leg `27bd816f`
+at 357 s of a 540 s shape with $0.2247 of a $0.46 cap unspent. Pass
+`--billing-basis perceive` only for a cell that really bills by the perceive
+second.
+
+Two rules come out of that leg:
+
+- a **readable** `costUsd` wins: a projection that disagrees with the money
+  already accounted never stops a leg;
+- the projection is frozen at the stop instant — settlement must not keep
+  advancing it, or a stopped leg grades as over its cap.
+
+The evidence names the basis on every block (`authorized.billing`,
+`leg.projectedBasis`, `leg.meteredUsdPerS`, `shape.meteredRateBasis`), so a
+reader never has to guess which unit a cost headroom was measured in.
+
 
 ## Dry-run (how the guard is proved, $0)
 
@@ -60,6 +86,12 @@ python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario busy \
 python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario clean-no-cost \
   --authorized-duration-s 480 --cap-usd 0.65 --metered-rate-usd-per-s 0.06 \
   --evidence-out /tmp/funded-leg-metered-abort.json
+
+# a decide-billed leg whose record is dark (the live rail mid-leg) keeps running
+# to its shape: the clock is priced per decide, not per perceive second
+python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario decide-dark \
+  --authorized-duration-s 5 --cap-usd 0.005 \
+  --evidence-out /tmp/funded-leg-decide-basis.json
 ```
 
 Unit tests (stdlib `unittest`, ~1 min, no network beyond localhost):
