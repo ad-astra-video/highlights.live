@@ -9,7 +9,7 @@
 // (composite AND delta both call it).
 import { describe, expect, it } from "vitest";
 import { HighlightAlternativeSchema, HighlightRecordSchema, JobDetailSchema } from "@highlights/events";
-import { servedNotableRow } from "../src/served-highlight-rows";
+import { countSuppressedSiblingAlternatives, servedNotableRow } from "../src/served-highlight-rows";
 
 const owner = HighlightRecordSchema.parse({
   id: "hl-notable-8893",
@@ -78,5 +78,70 @@ describe("the notable card serves its own re-centered option", () => {
     const row = servedNotableRow(cluster, undefined, ctx);
     expect(row.alternatives).toBeUndefined();
     expect(row.clipUri).toBe("/clips/job-8893-1587.mp4");
+  });
+});
+
+// ADAAAA-8912 (D5b/AC5.6b): an option delivered on a moment's SIBLING window is
+// not projected (only the owner can carry one), so the read must COUNT it. The
+// measured case is job a0e60cc2: sibling row `daa53f58` carries option
+// `11d4d688` (recentered, window 416) and `-4150-recentered.mp4` appears nowhere
+// in /detail — the option is suppressed, and the contract says report it.
+describe("sibling-window options are counted, not silently dropped (AC5.6b)", () => {
+  const siblingAlternative = HighlightAlternativeSchema.parse({
+    ...recentered,
+    id: "alt-sibling-8893",
+    highlightId: "hl-sibling-8893",
+    windowAnchorTs: 416,
+    clipUri: "/clips/job-8893-4150-recentered.mp4",
+    dedupeKey: "alt:hl-sibling-8893:recentered:416.000",
+  });
+  const sibling = HighlightRecordSchema.parse({
+    ...owner,
+    id: "hl-sibling-8893",
+    start: 400,
+    end: 430,
+    localizedTs: 416,
+    clipUri: "/clips/job-8893-4150.mp4",
+  });
+  const withSibling = { owner, options: [sibling], memberCount: 2 } as any;
+
+  it("counts an option attached to a sibling window and names the row", () => {
+    const counted = countSuppressedSiblingAlternatives(
+      [withSibling],
+      new Map([[sibling.id, [siblingAlternative]]])
+    );
+    expect(counted.count).toBe(1);
+    expect(counted.rows).toEqual([
+      { rowId: "hl-sibling-8893", ownerId: "hl-notable-8893", alternativeIds: ["alt-sibling-8893"] },
+    ]);
+  });
+
+  it("counts 0 when the only option belongs to the owner (projected, not suppressed)", () => {
+    const counted = countSuppressedSiblingAlternatives(
+      [withSibling],
+      new Map([[owner.id, [recentered]]])
+    );
+    expect(counted.count).toBe(0);
+    expect(counted.rows).toEqual([]);
+  });
+
+  it("survives the payload parse, with the sibling row still carrying no alternativeId", () => {
+    // The card serves the sibling as a read-only option: no `alternativeId` on the
+    // sibling clip, so the rail cannot offer a pick for it.
+    const row = servedNotableRow(withSibling, undefined, ctx, { alternatives: [] });
+    expect(row.siblingClips?.[0]).not.toHaveProperty("alternativeId");
+    const counted = countSuppressedSiblingAlternatives(
+      [withSibling],
+      new Map([[sibling.id, [siblingAlternative]]])
+    );
+    const parsed = JobDetailSchema.parse({
+      job: { id: "job-8893", ownerId: "owner", source: "file-sim", status: "done", createdAt: "2026-11-13T06:47:00.000Z" },
+      highlights: [],
+      notableHighlights: [row],
+      maxTraces: 3,
+      suppressedSiblingAlternatives: counted,
+    });
+    expect(parsed.suppressedSiblingAlternatives?.count).toBe(1);
+    expect(parsed.suppressedSiblingAlternatives?.rows[0].rowId).toBe("hl-sibling-8893");
   });
 });
