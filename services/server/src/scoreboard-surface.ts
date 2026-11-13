@@ -249,6 +249,17 @@ export function normalizeSurfaceIdentity(raw: unknown): ScoreboardSurfaceIdentit
     }
   }
   const reference = r.kitReference === "observed" || r.kitReference === "prior" ? r.kitReference : undefined;
+  // ADAAAA-8960: the kit arm's provenance. `kitsPresent:false` used to be
+  // indistinguishable between "this surface has no kit reading anywhere" and "the
+  // frame we happened to publish on had none"; `kitSource` makes the difference.
+  const kitSource =
+    r.kitSource === "measured" || r.kitSource === "carried" || r.kitSource === "none"
+      ? r.kitSource
+      : undefined;
+  const kitSampleSeq =
+    typeof r.kitSampleSeq === "number" && Number.isFinite(r.kitSampleSeq)
+      ? Math.trunc(r.kitSampleSeq)
+      : undefined;
   return {
     verdict: verdict as ScoreboardSurfaceIdentityVerdict,
     kitDistance: typeof r.kitDistance === "number" && Number.isFinite(r.kitDistance) ? Number(r.kitDistance) : null,
@@ -258,6 +269,9 @@ export function normalizeSurfaceIdentity(raw: unknown): ScoreboardSurfaceIdentit
     // ADAAAA-8908: the reference the distance was measured against. Omitted (not
     // guessed) when an older runner does not report it.
     ...(reference ? { kitReference: reference } : {}),
+    // ADAAAA-8960: additive provenance, omitted when an older runner is silent.
+    ...(kitSource ? { kitSource } : {}),
+    ...(kitSampleSeq !== undefined ? { kitSampleSeq } : {}),
     namesMatch: r.namesMatch === true,
     namesMatched: list(r.namesMatched, 4),
     names: list(r.names, 8),
