@@ -45,6 +45,9 @@ import {
   nextScoreboardSurface,
   parseScoreboardRoi,
   sameScoreboardSurface,
+  withSurfaceDemotion,
+  scoreboardSurfaceAttests,
+  scoreboardSurfaceDemotionNote,
   type ReportedScoreboardSurface,
   type ScoreboardRoiBox,
   type ScoreboardSurfaceBlock,
@@ -2740,7 +2743,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       clipWindow: cw,
       // ADAAAA-8835 (Inc 1): persist the score surface perceive reports (which
       // box, which provenance, whether it parsed a score) on the job record.
-      onScoreboardSurface: scoreboardSurfaceRecorder(store, job.id),
+      // ADAAAA-8844 (Inc 2): the same fold answers whether that surface may
+      // attest a score change, and what verdict decide should see.
+      ...liveSurfaceWiring(store, job.id),
       // ADAAAA-8437: size the per-stream in-flight depth from the DISCOVERED
       // decide admission (the routed 5090 set advertises 6), not the static
       // funded number.
@@ -3491,7 +3496,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         clipWindow: cw,
         // ADAAAA-8835 (Inc 1): persist the score surface perceive reports (which
         // box, which provenance, whether it parsed a score) on the job record.
-        onScoreboardSurface: scoreboardSurfaceRecorder(store, job.id),
+        // ADAAAA-8844 (Inc 2): the same fold answers whether that surface may
+        // attest a score change, and what verdict decide should see.
+        ...liveSurfaceWiring(store, job.id),
         // ADAAAA-8544: the knob frozen on the record at job start, read from the
         // STORE (not from `cfg`) so this run honours the posture the user bought.
         decideKnob: store.getJob(job.id)?.decideKnob,
@@ -4515,13 +4522,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ballOutcome and the metric reports not_captured (never a fabricated
       // signal). Keyed by job id, then the clip filename/source, then `default`
       // ADAAAA-7163 Blocker 1).
-      calibration: withScoreboardRoi(
-        resolveGoalLineCalibration(cfg, [jobId, stableClipCalibrationKey(videoPath)]),
-        store.getJob(jobId)?.scoreboardRoi
+      calibration: withMatchContextTeams(
+        withScoreboardRoi(
+          resolveGoalLineCalibration(cfg, [jobId, stableClipCalibrationKey(videoPath)]),
+          store.getJob(jobId)?.scoreboardRoi
+        ),
+        store.getJob(jobId)?.matchContext?.teams
       ),
       // ADAAAA-8835 (Inc 1): fold the score surface perceive reports (which box,
       // which provenance, whether it parsed a score) onto the job record.
-      onScoreboardSurface: scoreboardSurfaceRecorder(store, jobId),
+      // ADAAAA-8844 (Inc 2): + the verdict/demotion reads for this job (VOD
+      // carries the SAME rule as live — AC2.6).
+      ...liveSurfaceWiring(store, jobId),
       // ADAAAA-6797: Stage-2 goal/near-miss confirmation pass. ADAAAA-7663: the
       // live pass builds the same gate through `buildLiveAnalyzerConfig`, so
       // `DECIDE_CONFIRM_ENABLED` now covers both passes; off is a strict no-op
@@ -8928,6 +8940,10 @@ export interface LiveAnalyzerConfigDeps {
   /** ADAAAA-8835 (Inc 1): fold the score surface perceive reports for each
    *  perceived frame into the job record's `scoreboardSurface` block. */
   onScoreboardSurface?: AnalyzerConfig["onScoreboardSurface"];
+  /** ADAAAA-8844 (Inc 2): may this job's measured surface attest a score change
+   *  (false only when it is contradicted), and the verdict decide should see. */
+  getScoreboardSurfaceAttests?: AnalyzerConfig["getScoreboardSurfaceAttests"];
+  getScoreboardSurfaceVerdict?: AnalyzerConfig["getScoreboardSurfaceVerdict"];
 }
 
 /**
@@ -8995,6 +9011,8 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     decideEffectiveAdmission,
     deferLiveClipCut,
     onScoreboardSurface,
+    getScoreboardSurfaceAttests,
+    getScoreboardSurfaceVerdict,
   } = deps;
   return {
     jobId: job.id,
@@ -9155,10 +9173,17 @@ export function buildLiveAnalyzerConfig(deps: LiveAnalyzerConfigDeps): AnalyzerC
     // ADAAAA-8835 (Inc 1): the per-job score-bug PIN rides the same per-analyze
     // calibration delivery, so perceive crops the operator's box ahead of
     // discovery. Absent on an unpinned job => today's body, byte-identical.
-    calibration: withScoreboardRoi(resolveGoalLineCalibration(cfg, [job.id]), job.scoreboardRoi),
+    calibration: withMatchContextTeams(
+      withScoreboardRoi(resolveGoalLineCalibration(cfg, [job.id]), job.scoreboardRoi),
+      (getMatchContext?.() as any)?.teams
+    ),
     // ADAAAA-8835 (Inc 1): fold the score surface perceive reports (which box,
     // which provenance, whether it parsed a score) onto the job record.
     ...(onScoreboardSurface ? { onScoreboardSurface } : {}),
+    // ADAAAA-8844 (Inc 2): the surface verdict + demotion gate, read from the
+    // same folded block the recorder above maintains.
+    ...(getScoreboardSurfaceAttests ? { getScoreboardSurfaceAttests } : {}),
+    ...(getScoreboardSurfaceVerdict ? { getScoreboardSurfaceVerdict } : {}),
     // ADAAAA-7663: Stage-2 goal/near-miss confirmation pass on the LIVE pass.
     // The live pass previously left this unset, so shouldRunConfirm() returned
     // false on every live read and no gNNN:confirm row could ever be written.
@@ -9242,6 +9267,34 @@ export function withScoreboardRoi(
 }
 
 /**
+ * ADAAAA-8844 (Inc 2): carry the job's team reference (side + name + kit colour
+ * names) into the per-`/analyze` calibration, so perceive can show that the
+ * surface it crops IS this match's — or is not. A job with no resolved
+ * `matchContext` sends nothing, and identity stays `absent` (today's behaviour).
+ */
+export function withMatchContextTeams(
+  calibration: GoalLineCalibration | undefined,
+  teams: unknown,
+): GoalLineCalibration | undefined {
+  const list = Array.isArray(teams) ? teams : (teams as any)?.teams;
+  if (!Array.isArray(list) || !list.length) return calibration;
+  const shaped = list
+    .map((t: any) => ({
+      side: typeof t?.side === "string" ? t.side : undefined,
+      name: typeof t?.name === "string" ? t.name : undefined,
+      kitColors: Array.isArray(t?.kitColors)
+        ? t.kitColors
+            .filter((k: any) => k && typeof k.primary === "string")
+            .slice(0, 2)
+            .map((k: any) => ({ primary: k.primary, ...(k.secondary ? { secondary: String(k.secondary) } : {}) }))
+        : [],
+    }))
+    .filter((t: any) => (t.side === "home" || t.side === "away") && (t.name || t.kitColors.length));
+  if (!shaped.length) return calibration;
+  return { ...(calibration ?? {}), matchContextTeams: shaped };
+}
+
+/**
  * ADAAAA-8835 (Inc 1): the per-observation writer for a job's
  * `scoreboardSurface` block.
  *
@@ -9256,14 +9309,59 @@ export function scoreboardSurfaceRecorder(
   store: Pick<Store, "getJob" | "patchJob">,
   jobId: string
 ): (observation: ReportedScoreboardSurface) => void {
+  return scoreboardSurfaceTracker(store, jobId).onObservation;
+}
+
+/** Everything a live/VOD analyzer config needs from the surface fold, in one
+ * object: the per-observation writer plus the two reads the accept path (and the
+ * decide request) take off the SAME folded block. */
+export function liveSurfaceWiring(
+  store: Pick<Store, "getJob" | "patchJob">,
+  jobId: string
+): Pick<
+  AnalyzerConfig,
+  "onScoreboardSurface" | "getScoreboardSurfaceAttests" | "getScoreboardSurfaceVerdict"
+> {
+  const tracker = scoreboardSurfaceTracker(store, jobId);
+  return {
+    onScoreboardSurface: tracker.onObservation,
+    getScoreboardSurfaceAttests: tracker.attests,
+    getScoreboardSurfaceVerdict: tracker.verdict,
+  };
+}
+
+/** The recorder plus the two live reads the accept path needs from it
+ * (ADAAAA-8844): whether this job's surface may attest a score change, and the
+ * verdict string forwarded to decide. Both read the SAME folded block the
+ * recorder persists, so the board, decide and the accept lane can never disagree
+ * about which surface they are judging. */
+export function scoreboardSurfaceTracker(
+  store: Pick<Store, "getJob" | "patchJob">,
+  jobId: string
+): {
+  onObservation: (observation: ReportedScoreboardSurface) => void;
+  attests: () => boolean;
+  verdict: () => string | undefined;
+  current: () => ScoreboardSurfaceBlock | undefined;
+} {
   let current: ScoreboardSurfaceBlock | undefined = store.getJob(jobId)?.scoreboardSurface;
-  return (observation) => {
-    const next = nextScoreboardSurface(current, observation ?? {});
-    if (!next || sameScoreboardSurface(current, next)) return;
-    current = next;
-    void store.patchJob(jobId, { scoreboardSurface: next }).catch((e: any) =>
-      console.warn(`[scoreboard-surface:${jobId}] persist failed:`, String(e?.message || e))
-    );
+  return {
+    onObservation: (observation) => {
+      // A demotion can arrive on an observation that reports no box (an unpinned
+      // session), so fold the NAME too — the board must see why a window's score
+      // change was ignored even when the surface block itself is unchanged.
+      const next =
+        nextScoreboardSurface(current, observation ?? {}) ??
+        withSurfaceDemotion(current, (observation as ReportedScoreboardSurface | undefined)?.scoreboardSurfaceDemoted);
+      if (!next || sameScoreboardSurface(current, next)) return;
+      current = next;
+      void store.patchJob(jobId, { scoreboardSurface: next }).catch((e: any) =>
+        console.warn(`[scoreboard-surface:${jobId}] persist failed:`, String(e?.message || e))
+      );
+    },
+    attests: () => scoreboardSurfaceAttests(current ?? store.getJob(jobId)?.scoreboardSurface),
+    verdict: () => (current ?? store.getJob(jobId)?.scoreboardSurface)?.identity?.verdict,
+    current: () => current,
   };
 }
 

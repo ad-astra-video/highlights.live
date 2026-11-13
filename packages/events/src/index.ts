@@ -1521,11 +1521,34 @@ export type ResumeCheckpoint = z.infer<typeof ResumeCheckpointSchema>;
  * Additive optional: absent on records written before this field existed, and on
  * a job whose perceive session has not reported a crop yet.
  */
+// ADAAAA-8844 (Inc 2): the surface-identity verdict perceive measured off the
+// crop it took — kit swatch colours (up to two per side) compared with the job's
+// `matchContext.teams[].kitColors`, plus the printed team names. `contradicted`
+// means the score that moved belongs to a DIFFERENT score surface; a score change
+// there can never attest a goal. `absent` keeps today's behaviour (an unreadable
+// surface is not evidence of a foreign one). Additive optional.
+export const ScoreboardSurfaceIdentitySchema = z.object({
+  verdict: z.enum(["consistent", "contradicted", "absent"]),
+  kitDistance: z.number().nullable().optional(),
+  threshold: z.number().optional(),
+  kitsPresent: z.boolean().optional(),
+  kitsDiffer: z.boolean().optional(),
+  namesMatch: z.boolean().optional(),
+  namesMatched: z.array(z.string()).max(8).optional(),
+  names: z.array(z.string()).max(8).optional(),
+  kits: z.record(z.array(z.number())).optional(),
+  seqFirstSeen: z.number().int().optional(),
+});
+export type ScoreboardSurfaceIdentity = z.infer<typeof ScoreboardSurfaceIdentitySchema>;
+
 export const ScoreboardSurfaceSchema = z.object({
   roi: z.tuple([z.number(), z.number(), z.number(), z.number()]),
   source: z.enum(["explicit", "discovery", "default_top_band"]),
   seqFirstSeen: z.number().int(),
   verified: z.boolean(),
+  // ADAAAA-8844 (Inc 2): the surface identity + the last named demotion.
+  identity: ScoreboardSurfaceIdentitySchema.optional(),
+  demotion: z.string().max(240).optional(),
 });
 export type ScoreboardSurface = z.infer<typeof ScoreboardSurfaceSchema>;
 

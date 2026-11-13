@@ -2238,6 +2238,12 @@ export interface ObserveBiasHint {
    * Absent when perceive did not measure one — the decide pass then refuses to
    * label the corroboration "scoreboard". */
   scoreBoardDelta?: ScoreboardDeltaEvidence;
+  /** ADAAAA-8844 (Inc 2): the window's score change landed on a CONTRADICTED
+   * score surface (a different game's bug printed different kits and none of
+   * this match's names), so it is a CLAIM, not an attestation. Carried as the
+   * REASON the change was ignored so the demoted row says why; never sets
+   * `scoreBoardChanged`. */
+  surfaceDemotion?: string;
 }
 
 /**

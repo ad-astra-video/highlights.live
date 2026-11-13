@@ -1,0 +1,122 @@
+{
+ "issue": "ADAAAA-8844",
+ "ac": "AC2.5",
+ "truth_set": {
+  "truth": "/tmp/eval8551/truth8578/scorebug-truth.json",
+  "crops": "/tmp/eval8551/truth8578/crops",
+  "rows_in_truth": 91,
+  "crops_read": 62,
+  "crops_with_a_surface_reading": 62,
+  "crops_missing": [
+   "ks-n2-0008",
+   "ks-n-0054",
+   "ks-n2-0060",
+   "ks-n-0090",
+   "ks-n-0105",
+   "ks-g-0117",
+   "ks-n-0130",
+   "ks-n-0144",
+   "ks-n-0162",
+   "ks-n-0178",
+   "ks-n-0201",
+   "ks-n2-0214",
+   "ks-n-0237",
+   "ks-n-0244",
+   "ks-n-0254",
+   "ks-g-0280",
+   "ks-n-0282",
+   "ks-n-0312",
+   "ks-g-0341",
+   "ks-n-0351",
+   "ks-n-0359",
+   "ks-n2-0374",
+   "ks-n-0402",
+   "ks-g-0413",
+   "ks-n-0426",
+   "ks-g-0435",
+   "ks-n2-0450",
+   "ks-n2-0484",
+   "ks-g-0541"
+  ],
+  "clip_ids": [
+   "top"
+  ]
+ },
+ "sampler": "services/perceive/app/match_context.py:_dominant_swatch (the production crop sampler)",
+ "metric": "euclidean distance over normalized chromaticity rgb/sum(rgb)",
+ "surface_consensus": {
+  "rgb": [
+   156.02,
+   39.67,
+   25.21
+  ],
+  "chroma": [
+   0.71045,
+   0.17794,
+   0.1116
+  ]
+ },
+ "A_same_surface_drift": {
+  "n": 62,
+  "chroma": {
+   "p50": 0.0156,
+   "p90": 0.0292,
+   "p95": 0.0349,
+   "p99": 0.1427,
+   "max": 0.3005
+  },
+  "raw_rgb_reference_only": {
+   "p50": 4.2371,
+   "p95": 7.7152,
+   "max": 129.08,
+   "note": "exposure-dominated; the washed-out crop reads ~129 raw while sitting on the same hue"
+  },
+  "worst": [
+   {
+    "wid": "ks-w-024.0",
+    "rgb": [
+     204.6,
+     121.3,
+     112.6
+    ],
+    "color": "red",
+    "chroma_dist": 0.3005
+   },
+   {
+    "wid": "ks-w-510.0",
+    "rgb": [
+     156.1,
+     42.3,
+     31.7
+    ],
+    "color": "red",
+    "chroma_dist": 0.0418
+   },
+   {
+    "wid": "ks-w-174.0",
+    "rgb": [
+     154.4,
+     35.2,
+     19.4
+    ],
+    "color": "red",
+    "chroma_dist": 0.0353
+   }
+  ]
+ },
+ "B_printed_names": {
+  "n": 62,
+  "crops_printing_two_or_more_team_tokens": 62,
+  "crops_printing_a_score_pair": 62,
+  "tokens_on_80pct_or_more_crops": [
+   "BAR",
+   "RMA"
+  ],
+  "example": "RMA 0 - 0 BAR",
+  "reading": "the printed-name channel is legible on a clean bug; it must also read 3-letter codes (RMA/BAR), so the matcher accepts full tokens, initials and 3-letter codes"
+ },
+ "threshold": 0.35,
+ "threshold_rule": "1.15 x max measured same-surface drift, rounded up to 2 dp",
+ "threshold_source": "max same-surface drift over the 62 crops that carry a surface reading",
+ "separable": true
+}

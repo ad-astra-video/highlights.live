@@ -1,0 +1,987 @@
+{
+ "issue": "ADAAAA-8844",
+ "acs": [
+  "AC2.2",
+  "AC2.4"
+ ],
+ "truth_set": {
+  "truth": "/tmp/eval8551/truth8578/scorebug-truth.json",
+  "crops": "/tmp/eval8551/truth8578/crops",
+  "crops_read": 62
+ },
+ "match_context": [
+  {
+   "side": "home",
+   "name": "Real Madrid",
+   "kitColors": [
+    {
+     "primary": "white",
+     "secondary": "red"
+    }
+   ]
+  },
+  {
+   "side": "away",
+   "name": "FC Barcelona",
+   "kitColors": [
+    {
+     "primary": "blue",
+     "secondary": "grey"
+    }
+   ]
+  }
+ ],
+ "AC2_2_recall": {
+  "baseline_accepted": 62,
+  "patched_accepted": 62,
+  "tolerance": 0,
+  "pass": true,
+  "verdicts": {
+   "consistent": 62
+  },
+  "contradicted_crops": []
+ },
+ "AC2_4_cost": {
+  "identity_passes_per_session_cap": 2,
+  "per_frame_additions": 0,
+  "identity_pass_ms": {
+   "n": 62,
+   "p50": 8.0113,
+   "p95": 8.7879,
+   "max": 9.273
+  },
+  "note": "one bounded local pixel pass per session surface; no OCR, no model call"
+ },
+ "per_crop": [
+  {
+   "wid": "ks-w-024.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-030.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-042.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-048.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-060.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-072.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-078.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-084.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-096.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-102.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-108.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-114.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-120.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-138.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-150.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-156.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-174.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-186.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-192.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-198.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-210.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-216.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-228.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-234.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-240.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-252.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-264.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-270.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-276.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-288.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-294.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-300.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-318.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-324.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-330.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-336.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-348.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-366.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-372.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-384.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-390.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-396.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-408.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-420.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-432.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-438.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-444.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-450.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-462.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-468.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-474.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-480.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-486.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-498.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-504.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-510.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-516.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-522.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-528.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-534.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-546.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  },
+  {
+   "wid": "ks-w-552.0",
+   "verdict": "consistent",
+   "kitDistance": null,
+   "kits": {},
+   "names": [
+    "RMA",
+    "BAR"
+   ],
+   "namesMatched": [
+    "Real Madrid",
+    "FC Barcelona"
+   ],
+   "demotion": ""
+  }
+ ]
+}

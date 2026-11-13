@@ -14,11 +14,47 @@
 
 export type ScoreboardRoi = [number, number, number, number];
 
+export interface ScoreboardSurfaceIdentity {
+  verdict: "consistent" | "contradicted" | "absent";
+  kitDistance?: number | null;
+  threshold?: number;
+  namesMatched?: string[];
+  names?: string[];
+}
+
 export interface ScoreboardSurface {
   roi: ScoreboardRoi;
   source: "explicit" | "discovery" | "default_top_band";
   seqFirstSeen: number;
   verified: boolean;
+  /** ADAAAA-8844 (Inc 2): whether this surface can be shown to be this match's. */
+  identity?: ScoreboardSurfaceIdentity;
+  /** ADAAAA-8844: why a score change on this surface was ignored. */
+  demotion?: string;
+}
+
+/**
+ * ADAAAA-8844 (Inc 2): the identity verdict in one short phrase.
+ *
+ * `contradicted` is the only verdict that demotes a score change, so it names the
+ * measurement (`kits Δ` vs the bar) rather than just the word — the board has to
+ * be able to tell a foreign surface from an unreadable one.
+ */
+export function describeSurfaceIdentity(
+  identity: ScoreboardSurfaceIdentity | undefined
+): string {
+  if (!identity) return "";
+  if (identity.verdict === "contradicted") {
+    const d = identity.kitDistance;
+    const bar = identity.threshold;
+    const measured =
+      typeof d === "number" && typeof bar === "number"
+        ? ` (kits Δ=${d.toFixed(2)} > ${bar})`
+        : "";
+    return `different match${measured}`;
+  }
+  if (identity.verdict === "consistent") return "this match";
+  return "unreadable surface";
 }
 
 export type ScoreboardRoiParse =
@@ -81,5 +117,7 @@ export function describeScoreboardSurface(surface: ScoreboardSurface | undefined
   const where =
     surface.seqFirstSeen >= 0 ? `first seen at frame ${surface.seqFirstSeen}` : "declared — no frame yet";
   const read = surface.verified ? "score read" : "score not read yet";
-  return `${box} · ${scoreboardSourceLabel(surface.source)} · ${where} · ${read}`;
+  const identity = describeSurfaceIdentity(surface.identity);
+  const tail = identity ? ` · surface: ${identity}` : "";
+  return `${box} · ${scoreboardSourceLabel(surface.source)} · ${where} · ${read}${tail}`;
 }
