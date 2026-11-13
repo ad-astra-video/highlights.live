@@ -27,16 +27,37 @@
  *    crop produced a parseable score, and resets to false when the box changes.
  */
 
+import type { ScoreboardSurfaceIdentity as EventsScoreboardSurfaceIdentity } from "@highlights/events";
+
 export type ScoreboardRoiBox = [number, number, number, number];
 
 /** The three provenance classes the board exposes (ADAAAA-8835 AC6). */
 export type ScoreboardSurfaceSource = "explicit" | "discovery" | "default_top_band";
+
+/**
+ * ADAAAA-8844 (Inc 2): whether the surface the crop read can be shown to be THIS
+ * match's surface. Computed in perceive from the crop it already took (kit
+ * swatches + the printed team tokens) against the job's `matchContext`, and
+ * folded here so the job page, the decide request and the accept lane all read
+ * ONE verdict.
+ */
+export type ScoreboardSurfaceIdentityVerdict = "consistent" | "contradicted" | "absent";
+
+/** The stored shape is the SHARED contract (`ScoreboardSurfaceIdentitySchema` in
+ * @highlights/events), so the job record, the job API and the webapp cannot drift
+ * from what this module writes. */
+export type ScoreboardSurfaceIdentity = EventsScoreboardSurfaceIdentity;
 
 export interface ScoreboardSurfaceBlock {
   roi: ScoreboardRoiBox;
   source: ScoreboardSurfaceSource;
   seqFirstSeen: number;
   verified: boolean;
+  /** ADAAAA-8844: the surface-identity verdict for this box, once measured. */
+  identity?: ScoreboardSurfaceIdentity;
+  /** ADAAAA-8844: the most recent named demotion on this surface (scope item 5),
+   * so the board can see WHY a window's score change was not accepted. */
+  demotion?: string;
 }
 
 export type ScoreboardSurfaceParseResult =
@@ -130,6 +151,75 @@ export interface ReportedScoreboardSurface {
   scoreboardRoi?: unknown;
   scoreboardRoiSource?: unknown;
   scoreboardRoiVerified?: unknown;
+  /** ADAAAA-8844: the surface-identity verdict, published on the one-off pass. */
+  scoreboardSurfaceIdentity?: unknown;
+  /** ADAAAA-8844: the named demotion when a score change on this surface was
+   * ignored (scope item 5). */
+  scoreboardSurfaceDemoted?: unknown;
+}
+
+const IDENTITY_VERDICTS: ReadonlySet<string> = new Set(["consistent", "contradicted", "absent"]);
+const DEMOTION_MAX_CHARS = 240;
+
+/** Coerce one reported identity into the stored shape (never throws, never guesses:
+ * an unrecognised verdict is absent, which keeps today's behaviour). */
+export function normalizeSurfaceIdentity(raw: unknown): ScoreboardSurfaceIdentity | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const verdict = String(r.verdict || "");
+  if (!IDENTITY_VERDICTS.has(verdict)) return undefined;
+  const num = (v: unknown, fallback = 0): number =>
+    typeof v === "number" && Number.isFinite(v) ? v : fallback;
+  const list = (v: unknown, cap: number): string[] =>
+    Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, cap).map((x) => String(x).slice(0, 40)) : [];
+  const kits: Record<string, number[]> = {};
+  if (r.kits && typeof r.kits === "object") {
+    for (const [side, colour] of Object.entries(r.kits as Record<string, unknown>)) {
+      if (side !== "home" && side !== "away") continue;
+      if (!Array.isArray(colour) || colour.length !== 3) continue;
+      const rgb = colour.map((c) => (typeof c === "number" && Number.isFinite(c) ? Math.round(c) : NaN));
+      if (rgb.some((c) => Number.isNaN(c))) continue;
+      kits[side] = rgb as number[];
+    }
+  }
+  return {
+    verdict: verdict as ScoreboardSurfaceIdentityVerdict,
+    kitDistance: typeof r.kitDistance === "number" && Number.isFinite(r.kitDistance) ? Number(r.kitDistance) : null,
+    threshold: num(r.threshold),
+    kitsPresent: r.kitsPresent === true,
+    kitsDiffer: r.kitsDiffer === true,
+    namesMatch: r.namesMatch === true,
+    namesMatched: list(r.namesMatched, 4),
+    names: list(r.names, 8),
+    kits,
+  };
+}
+
+/**
+ * Whether a score change measured on this surface may ATTEST a goal (ADAAAA-8844).
+ *
+ * `contradicted` is the only verdict that demotes: the kits sit outside the
+ * measured bar AND the printed names do not match this match, so the surface is
+ * demonstrably a different one. `absent` is NOT contradiction — an unreadable
+ * surface keeps today's behaviour (AC2.3), because demoting what we cannot read
+ * would spend recall on nothing.
+ */
+export function scoreboardSurfaceAttests(block: ScoreboardSurfaceBlock | undefined): boolean {
+  return block?.identity?.verdict !== "contradicted";
+}
+
+/** The named demotion for a contradicted surface (scope item 5). */
+export function scoreboardSurfaceDemotionNote(identity: ScoreboardSurfaceIdentity | undefined): string {
+  if (!identity || identity.verdict !== "contradicted") return "";
+  const d = identity.kitDistance;
+  const kit =
+    d === null || d === undefined
+      ? "kits differ"
+      : `kits Δ=${d.toFixed(2)} > ${identity.threshold ?? "the measured bar"}`;
+  const matched = identity.namesMatched ?? [];
+  const printed = identity.names ?? [];
+  const names = matched.length ? matched.join(", ") : printed.join(", ");
+  return `score change on a contradicted score surface: ignored (${kit}; printed names ${names || "none"} unmatched)`;
 }
 
 /**
@@ -152,8 +242,17 @@ export function nextScoreboardSurface(
   );
   const observedVerified = obs.scoreboardRoiVerified === true;
   const seq = typeof obs.seq === "number" && Number.isFinite(obs.seq) ? Math.trunc(obs.seq) : -1;
+  // ADAAAA-8844: identity and the demotion note ride the same observation. The
+  // verdict is a property of the SURFACE, so it is sticky while the box is; a new
+  // box starts without one (it has not been measured yet).
+  const reportedIdentity = normalizeSurfaceIdentity(obs.scoreboardSurfaceIdentity);
+  const demotion =
+    typeof obs.scoreboardSurfaceDemoted === "string" && obs.scoreboardSurfaceDemoted.trim()
+      ? obs.scoreboardSurfaceDemoted.trim().slice(0, DEMOTION_MAX_CHARS)
+      : undefined;
+  const sameSurface = Boolean(prev && prev.source === source && sameRoi(prev.roi, roi));
 
-  if (prev && prev.source === source && sameRoi(prev.roi, roi)) {
+  if (prev && sameSurface) {
     // Same surface: latch `verified`, and fill in the declared-not-yet-observed
     // marker the first time an observation actually reports this pin.
     return {
@@ -161,8 +260,36 @@ export function nextScoreboardSurface(
       source: prev.source,
       seqFirstSeen: prev.seqFirstSeen < 0 ? seq : prev.seqFirstSeen,
       verified: prev.verified || observedVerified,
+      ...(reportedIdentity
+        ? { identity: { ...reportedIdentity, seqFirstSeen: seq } }
+        : prev.identity
+          ? { identity: prev.identity }
+          : {}),
+      ...(demotion ? { demotion } : prev.demotion ? { demotion: prev.demotion } : {}),
     };
   }
-  // New box (or new provenance): a new surface starts its own seq + verification.
-  return { roi, source, seqFirstSeen: seq, verified: observedVerified };
+  // New box (or new provenance): a new surface starts its own seq + verification,
+  // and its identity must be measured before it can attest anything.
+  return {
+    roi,
+    source,
+    seqFirstSeen: seq,
+    verified: observedVerified,
+    ...(reportedIdentity ? { identity: { ...reportedIdentity, seqFirstSeen: seq } } : {}),
+    ...(demotion ? { demotion } : {}),
+  };
+}
+
+/** ADAAAA-8844: fold an observation that carried ONLY a demotion (no reported box
+ * — a pinned session reports one every frame, an unpinned one may not) so the
+ * job page still names why a window's score change was ignored. Returns
+ * `undefined` when there is nothing to change. */
+export function withSurfaceDemotion(
+  prev: ScoreboardSurfaceBlock | undefined,
+  note: unknown
+): ScoreboardSurfaceBlock | undefined {
+  const text = typeof note === "string" ? note.trim().slice(0, DEMOTION_MAX_CHARS) : "";
+  if (!prev || !text) return undefined;
+  if (prev.demotion === text) return undefined;
+  return { ...prev, demotion: text };
 }
