@@ -160,6 +160,61 @@ export function acceptAnchorOf(
   return Number.isFinite(trig) ? trig : null;
 }
 
+/** ADAAAA-8906 (fix for the D5 grade): everything the option's OWN cut needs,
+ * decided in ONE place so no rail (and no call site) can place the option's file
+ * on the dive moment again. */
+export interface RecenteredCutSpec {
+  /** The card's own window (content clock) — the option covers the SAME span,
+   * because the option row stores `start`/`end` = the owner's window. */
+  start: number;
+  end: number;
+  /** The card's placement reason: a celebration-tail row's cue is its END, so
+   * the score flip must not re-centre the window. */
+  cueTail: boolean;
+  /** The instant the file is placed on = the card's ACCEPT anchor. NEVER the
+   * dive moment (see {@link recenteredCutSpec}). */
+  anchorTs: number | null;
+}
+
+/** The instant the option's own cut is placed on — the card's ACCEPT anchor.
+ *
+ * Placement is footage truth, not window arithmetic: the accept-anchor chain
+ * (`anchorCutOnEvidence` / `cutBrowserHighlightClip`) locates the score flip in
+ * the RECORDING and puts it `anchorTs - window.start` into the delivered file, so
+ * the option opens on the same footage instant as the card and the card's own
+ * measured `clipAnchorDeliveredOffsetSec` reads back on the option.
+ *
+ * Placing the SAME window on the dive moment instead was measured wrong on the
+ * D5 population (job `a0e60cc2`, ADAAAA-8904 grade + row-level re-cut on the
+ * served build): the dive's frame labels run BEHIND the footage they show, and by
+ * a different amount per row. Re-cutting the four stored rows with the moment as
+ * the anchor put the score-band change at 6.7 s where the card's own is 7.0 s
+ * (row `-87`), 13.6 vs 13.5 (`-1537`), 13.4 vs 13.4 (`-4150`) and **10.8 vs
+ * 13.3** (`-6787`, i.e. a 2.5 s shift) — AC5.1's "the option opens where the card
+ * opens" clause failing on three of four rows. The dive moment is ROW provenance
+ * (`windowAnchorTs` / `acceptAnchorTs` / `driftSec`) only. */
+export function recenteredCutAnchorTs(
+  row: Pick<HighlightRecord, "localizedTs"> & { trigger?: { timestamp?: number } }
+): number | null {
+  return acceptAnchorOf(row);
+}
+
+/** The cut the option runs: the card's own window, on the card's own anchor. */
+export function recenteredCutSpec(
+  row: Pick<HighlightRecord, "start" | "end" | "clipPlacementReason" | "localizedTs"> & {
+    trigger?: { timestamp?: number };
+  }
+): RecenteredCutSpec {
+  const anchorTs = recenteredCutAnchorTs(row);
+  const fallback = anchorTs ?? 0;
+  return {
+    start: Number.isFinite(row.start) ? row.start : fallback,
+    end: Number.isFinite(row.end) ? row.end : fallback,
+    cueTail: row.clipPlacementReason === "celebration_tail",
+    anchorTs,
+  };
+}
+
 /** The narrow store seam option delivery reads/writes. Deliberately has NO
  * `patchHighlight`: the card's clip is structurally unwritable from this path. */
 export interface RecenteredDeliveryDeps {
@@ -181,6 +236,9 @@ export interface RecenteredDeliveryDeps {
  *    window, its lane, verdict and score attestation are all untouched;
  *  - the option is a `highlight_alternatives` row with `eventType:
  *    "recentered"`, `windowAnchorTs` = the dive moment, and the dive provenance;
+ *  - the option's FILE is the card's own window, cut again on the card's own
+ *    accept anchor ({@link recenteredCutSpec}), so it opens on the same footage
+ *    instant as the card and the dive moment stays row provenance;
  *  - the slot is reserved (one per row) and is NOT the celebration/replay cap;
  *  - a failed cut stores no playable option (empty `clipUri` is never claimed).
  */
@@ -189,8 +247,9 @@ export async function deliverRecenteredOption(input: {
   jobId: string;
   highlightId: string;
   dive: { ts: number; confidence?: number };
-  /** Cut the option's OWN file from the rail that owns the footage. */
-  cut: () => Promise<{ clipUri: string; start: number; end: number; bytes?: number; offsetSec?: number | null; clipError?: string }>;
+  /** Cut the option's OWN file from the rail that owns the footage, using the
+   *  spec THIS seam derived from the card (window + accept anchor). */
+  cut: (spec: RecenteredCutSpec) => Promise<{ clipUri: string; bytes?: number; offsetSec?: number | null; clipError?: string }>;
 }): Promise<HighlightAlternative | null> {
   const { deps, jobId, highlightId, dive } = input;
   const log = deps.log ?? (() => {});
@@ -200,7 +259,10 @@ export async function deliverRecenteredOption(input: {
     log(`[live-dive-option:${jobId}] ${highlightId} re-centered option already delivered (reserved slot taken) — no second cut`);
     return null;
   }
-  const out = await input.cut();
+  // ADAAAA-8906: placement is decided HERE (card window, card accept anchor) so
+  // no rail can re-centre the option's file on the dive moment again.
+  const spec = recenteredCutSpec(row);
+  const out = await input.cut(spec);
   if (!out.clipUri) {
     log(
       `[live-dive-option:${jobId}] ${highlightId} re-centered option cut produced no file ` +
@@ -217,7 +279,7 @@ export async function deliverRecenteredOption(input: {
     momentConfidence: dive.confidence,
     acceptAnchorTs: acceptTs,
     clipUri: out.clipUri,
-    clipWindow: { start: out.start, end: out.end },
+    clipWindow: { start: spec.start, end: spec.end },
     clipBytes: out.bytes,
     momentDeliveredOffsetSec: out.offsetSec,
     clipError: out.clipError,
@@ -228,8 +290,9 @@ export async function deliverRecenteredOption(input: {
   log(
     `[live-dive-option:${jobId}] ${highlightId} kept its accept-anchor clip ${row.clipUri} ` +
       `(sha unchanged); added re-centered option ${record.id} at ${dive.ts.toFixed(3)}s ` +
-      `(drift ${drift}s, ${out.bytes == null ? "?" : out.bytes} B, window [${out.start.toFixed(3)}, ${out.end.toFixed(3)}], ` +
-      `moment at ${out.offsetSec == null ? "?" : out.offsetSec.toFixed(3)}s of the option)`
+      `(drift ${drift}s, ${out.bytes == null ? "?" : out.bytes} B, window [${spec.start.toFixed(3)}, ${spec.end.toFixed(3)}], ` +
+      `placed on the card's accept anchor ${spec.anchorTs == null ? "?" : spec.anchorTs.toFixed(3)}s, ` +
+      `anchor at ${out.offsetSec == null ? "?" : out.offsetSec.toFixed(3)}s of the option)`
   );
   return record;
 }

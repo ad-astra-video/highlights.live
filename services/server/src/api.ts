@@ -118,7 +118,10 @@ import { clipChoiceFor, servedClipUri } from "./clip-choice";
 // (`highlight_alternatives` row, `eventType: "recentered"`), never as a
 // replacement of the card's accept-anchor clip. Both rails go through this one
 // builder so live and VOD cannot diverge.
-import { deliverRecenteredOption as deliverRecenteredOptionInStore } from "./recentered-alternative";
+import {
+  deliverRecenteredOption as deliverRecenteredOptionInStore,
+  type RecenteredCutSpec,
+} from "./recentered-alternative";
 // ADAAAA-8854: the ONE served highlight / notable row shape, shared by the
 // composite detail read and the incremental sections-delta stream.
 import { servedHighlightRow, servedNotableRow, type ServedRowContext } from "./served-highlight-rows";
@@ -2000,17 +2003,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               jobId,
               highlightId,
               dive,
-              cut: async () => {
+              cut: async (spec) => {
                 const opt = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw, {
                   requireFullWindow: true,
-                  anchorTs: dive.ts,
+                  ...(spec.anchorTs != null ? { anchorTs: spec.anchorTs } : {}),
                   nameSuffix: RECENTERED_CLIP_SUFFIX,
                 });
                 return {
                   clipUri: opt.uri,
-                  start: opt.placement.cutStart,
-                  end: opt.placement.cutStart + opt.placement.dur,
                   bytes: opt.bytes,
+                  offsetSec: opt.placement.deliveredOffsetSec,
                 };
               },
             }).catch((e: any) =>
@@ -2139,8 +2141,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     jobId: string;
     highlightId: string;
     dive: { ts: number; confidence?: number };
-    /** Cut the option's OWN file from the rail that owns the footage. */
-    cut: () => Promise<{ clipUri: string; start: number; end: number; bytes?: number; clipError?: string }>;
+    /** Cut the option's OWN file from the rail that owns the footage. The spec
+     *  is the CARD's window + ACCEPT anchor (ADAAAA-8906), never the dive. */
+    cut: (spec: RecenteredCutSpec) => Promise<{ clipUri: string; bytes?: number; offsetSec?: number | null; clipError?: string }>;
   }): Promise<HighlightAlternative | null> {
     return deliverRecenteredOptionInStore({
       deps: {
@@ -2243,25 +2246,21 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobId,
         highlightId,
         dive,
-        cut: async () => {
+        cut: async (spec) => {
           const rec = await cutBrowserHighlightClip(jobId, cur as any, recPath, cw, {
             requireFullWindow: true,
-            anchorTs: dive.ts,
+            ...(spec.anchorTs != null ? { anchorTs: spec.anchorTs } : {}),
             nameSuffix: RECENTERED_CLIP_SUFFIX,
           });
           console.log(
-            `[live-dive-option:${jobId}] ${highlightId} option cut on the dive moment ${dive.ts.toFixed(3)}s ` +
+            `[live-dive-option:${jobId}] ${highlightId} option cut on the card's accept anchor ` +
+              `${spec.anchorTs == null ? "?" : spec.anchorTs.toFixed(3)}s (dive ${dive.ts.toFixed(3)}s is row provenance) ` +
               `(method ${rec.placement.method}, delivered ${rec.deliveredSec == null ? "?" : rec.deliveredSec.toFixed(3)}s, ` +
-              `goal at ${rec.placement.deliveredOffsetSec == null ? "?" : rec.placement.deliveredOffsetSec.toFixed(3)}s)`
+              `anchor at ${rec.placement.deliveredOffsetSec == null ? "?" : rec.placement.deliveredOffsetSec.toFixed(3)}s ` +
+              `of ${rec.placement.dur.toFixed(3)}s)`
           );
           return {
             clipUri: rec.uri,
-            // ADAAAA-8906: BOTH rails state the OWNER's window on the option row
-            // (the spec's "same span as the card"); the option's own footage
-            // placement is carried by `offsetSec` instead, so a grader can see
-            // where the dive moment actually landed without re-probing pixels.
-            start: Number.isFinite(cur.start) ? cur.start : rec.placement.cutStart,
-            end: Number.isFinite(cur.end) ? cur.end : rec.placement.cutStart + rec.placement.dur,
             bytes: rec.bytes,
             offsetSec: rec.placement.deliveredOffsetSec,
           };
@@ -2331,31 +2330,24 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         : Number(row.trigger?.timestamp);
       if (!Number.isFinite(ts)) return;
       // D5: the OWNER row is read-only here. The option is cut to its own
-      // `-recentered` file from the row's OWN delivered window (a celebration-tail
-      // row still ends on the cue); only the instant inside it that is centered
-      // moves, and it moves in the OPTION, not in the card.
+      // `-recentered` file from the ROW's own window and on the ROW's own accept
+      // anchor (ADAAAA-8906 — the seam hands the spec down, so a celebration-tail
+      // row still ends on the cue and the dive moment stays row provenance).
       const cur = store.getHighlight(highlightId);
       if (!cur || !cur.clipUri) return;
-      const win = {
-        start: Number.isFinite(row.start) ? row.start : ts,
-        end: Number.isFinite(row.end) ? row.end : ts,
-        cueTail: row.clipPlacementReason === "celebration_tail",
-      };
       const alt = await deliverRecenteredOption({
         jobId,
         highlightId,
         dive,
-        cut: async () => {
+        cut: async (spec) => {
           const rec = await ingest.cut(ts, {
             requireFullWindow: true,
-            window: win,
-            anchorTs: dive.ts,
+            window: { start: spec.start, end: spec.end, cueTail: spec.cueTail },
+            ...(spec.anchorTs != null ? { anchorTs: spec.anchorTs } : {}),
             outSuffix: RECENTERED_CLIP_SUFFIX,
           });
           return {
             clipUri: rec.clipUri,
-            start: win.start,
-            end: win.end,
             bytes: await clipBytesForUri(rec.clipUri),
             offsetSec: rec.clipAudit?.clipAnchorDeliveredOffsetSec,
           };
@@ -2443,21 +2435,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           jobId,
           highlightId,
           dive,
-          cut: async () => {
+          cut: async (spec) => {
             const opt = await ingest.cut(ts, {
               requireFullWindow: true,
-              window: {
-                start: Number.isFinite(cur.start) ? cur.start : ts,
-                end: Number.isFinite(cur.end) ? cur.end : ts,
-                cueTail: cur.clipPlacementReason === "celebration_tail",
-              },
-              anchorTs: dive.ts,
+              window: { start: spec.start, end: spec.end, cueTail: spec.cueTail },
+              ...(spec.anchorTs != null ? { anchorTs: spec.anchorTs } : {}),
               outSuffix: RECENTERED_CLIP_SUFFIX,
             });
             return {
               clipUri: opt.clipUri,
-              start: Number.isFinite(cur.start) ? cur.start : ts,
-              end: Number.isFinite(cur.end) ? cur.end : ts,
               bytes: await clipBytesForUri(opt.clipUri),
               offsetSec: opt.clipAudit?.clipAnchorDeliveredOffsetSec,
             };
@@ -2540,21 +2526,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
             jobId,
             highlightId: h.id,
             dive,
-            cut: async () => {
+            cut: async (spec) => {
               const opt = await ingest.cut(ts, {
                 requireFullWindow: false,
-                ...(Number.isFinite(h.start) && Number.isFinite(h.end)
-                  ? { window: { start: h.start, end: h.end, cueTail: h.clipPlacementReason === "celebration_tail" } }
-                  : {}),
-                anchorTs: dive.ts,
+                window: { start: spec.start, end: spec.end, cueTail: spec.cueTail },
+                ...(spec.anchorTs != null ? { anchorTs: spec.anchorTs } : {}),
                 outSuffix: RECENTERED_CLIP_SUFFIX,
               });
-              const start = Number.isFinite(h.start) ? h.start : ts;
-              const end = Number.isFinite(h.end) ? h.end : ts;
               return {
                 clipUri: opt.clipUri,
-                start,
-                end,
                 bytes: await clipBytesForUri(opt.clipUri),
                 offsetSec: opt.clipAudit?.clipAnchorDeliveredOffsetSec,
               };
@@ -2765,15 +2745,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
               jobId,
               highlightId: h.id,
               dive,
-              cut: async () => {
+              cut: async (spec) => {
                 const opt = await cutBrowserHighlightClip(jobId, h, recPath, cw, {
-                  anchorTs: dive.ts,
+                  ...(spec.anchorTs != null ? { anchorTs: spec.anchorTs } : {}),
                   nameSuffix: RECENTERED_CLIP_SUFFIX,
                 });
                 return {
                   clipUri: opt.uri,
-                  start: Number.isFinite(h.start) ? h.start : opt.placement.cutStart,
-                  end: Number.isFinite(h.end) ? h.end : opt.placement.cutStart + opt.placement.dur,
                   bytes: opt.bytes,
                   offsetSec: opt.placement.deliveredOffsetSec,
                 };
