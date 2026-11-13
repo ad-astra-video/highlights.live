@@ -2731,12 +2731,22 @@ _SOCCER_KIT_PRIORS: dict[str, tuple[str, Optional[str]]] = {
     #   job 796e202d (kids95_8483.mp4, burst @15s, 60 frames): away BLUE 22/30
     #     readings (73%), stable rgb [98.9, 102.1, 181.8]
     #   job a0e60cc2 (kids300_goals_7992b.mp4, burst @10s, 60 frames): away BLUE
-    #     18/24 (75%), stable rgb [103.3, 105.9, 166.9]
-    #   job 493b55ff (kids300_7935.mp4, burst @30s): away BLUE 4/17, mean
-    #     rgb [97.8, 101.5, 195.4]; the served `/app/analyze` replay of this job's
-    #     own frames reads away [93.9, 98.0, 195.7]
-    #   => away BLUE in 53 of 121 readings over 6 bursts / 3 stored jobs / 3
-    #      distinct broadcast clips; `name_color` returns "blue" on every one.
+    #     18/25 (72%), stable rgb [103.3, 105.9, 166.9]
+    #   job 493b55ff (kids300_7935.mp4, burst @30s, 60 frames): away BLUE 4/22,
+    #     mean rgb [97.8, 101.5, 195.4]; the served `/app/analyze` replay of this
+    #     job's own frames reads away [93.9, 98.0, 195.7]
+    #   => away BLUE in 53 of 111 away-half readings over 6 bursts (@10s/@15s/
+    #      @30s/@60s/@70s/@150s) on 3 stored jobs across 3 distinct broadcast
+    #      clips; `name_color` returns "blue" on every one, and blue is the modal
+    #      away name in 4 of the 6 bursts.
+    #
+    # BOUND: the washed-out end of that population (stable rgb
+    # [103.3, 105.9, 166.9], job a0e60cc2) sits at chromaticity distance 0.357
+    # from the `blue` reference — just outside the 0.35 bar, because the named
+    # reference is a fully-saturated blue and a real plate is washed out. A frame
+    # whose plate reads that pale could therefore demote a GENUINE surface, and
+    # the served replay of 493b55ff's own frames reads 0.2823 (inside). That
+    # margin is a measurement for QA on natural traffic, not a value changed here.
     #
     # PRIMARY only. `Real Madrid` (home side of 8 stored jobs) is deliberately
     # NOT curated: its plate could not be measured. The home half was stable on
