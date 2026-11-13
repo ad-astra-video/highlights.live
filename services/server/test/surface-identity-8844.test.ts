@@ -107,6 +107,19 @@ describe("surface identity normalisation (stored shape)", () => {
     expect(identity.namesMatched).toEqual(["Real Madrid"]);
   });
 
+  it("keeps the kit REFERENCE provenance and never invents one", () => {
+    // ADAAAA-8908: the distance may be measured against a curated prior when the
+    // job carries no observed kit colour. The stored record says which it was, so
+    // the board can tell a reference from a measurement.
+    expect(normalizeSurfaceIdentity({ ...CONTRADICTED, kitReference: "prior" })?.kitReference).toBe("prior");
+    expect(normalizeSurfaceIdentity({ ...CONTRADICTED, kitReference: "observed" })?.kitReference).toBe("observed");
+    // Unrecognised / absent provenance is omitted, not guessed.
+    expect(normalizeSurfaceIdentity({ ...CONTRADICTED, kitReference: "guessed" })).not.toHaveProperty(
+      "kitReference"
+    );
+    expect(normalizeSurfaceIdentity(CONTRADICTED)).not.toHaveProperty("kitReference");
+  });
+
   it("only a contradicted surface withholds attestation (absent keeps today)", () => {
     expect(scoreboardSurfaceAttests(undefined)).toBe(true);
     expect(scoreboardSurfaceAttests({ ...declaredScoreboardSurface([0, 0, 1, 0.2]), identity: { verdict: "absent" } })).toBe(true);

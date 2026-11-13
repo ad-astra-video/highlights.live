@@ -2727,6 +2727,43 @@ _KIT_PRIORS: dict[str, dict[str, tuple[str, Optional[str]]]] = {
 }
 
 
+def kit_prior_table(sport: Optional[str]) -> dict[str, tuple[str, Optional[str]]]:
+    """The curated per-team kit prior for a sport (empty: the channel is OFF).
+
+    ADAAAA-8908: exposed so the surface-identity pass can use the SAME curated
+    table as a REFERENCE, not a second copy that could drift from the resolver's.
+    """
+    return dict(_KIT_PRIORS.get(str(sport or "").strip().lower()) or {})
+
+
+def kit_prior_primary(
+    name: Optional[str], table: Optional[Mapping[str, tuple[str, Optional[str]]]] = None
+) -> Optional[str]:
+    """The curated PRIMARY kit colour for a team name — a REFERENCE, never a reading.
+
+    Used by the surface-identity pass (ADAAAA-8908) when a delivered team carries
+    a name but no observed kit colour: the crop swatch is compared against this
+    colour so `kits_differ` is reachable. It is NEVER published as an observation
+    (`kitColors`, a caption, or a swatch reading) — the resolver's own
+    attribution path is the only publisher of a kit colour.
+
+    The lookup normalises case/punctuation because every name the resolver
+    publishes went through ``resolve_token``. It never matches a NEAR name: a
+    wrong team's colour would demote a genuine surface, which is the failure this
+    increment must not cause. The prior SECONDARY is deliberately ignored (trim
+    colour is not the shirt colour), mirroring ``_prior_match_rank``.
+    """
+    key = _norm(str(name or ""))
+    if not key:
+        return None
+    for team, entry in (table or {}).items():
+        if _norm(team) != key:
+            continue
+        primary = entry[0] if entry else None
+        return str(primary) if primary else None
+    return None
+
+
 def _prior_match_rank(primary: str, cluster: KitCluster) -> Optional[int]:
     """0 = prior primary equals the cluster's name, 2 = same family, None = no.
 

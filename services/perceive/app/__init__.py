@@ -69,6 +69,7 @@ from .scoreboard import (
 from .match_context import (
     SPORT_UNKNOWN,
     _dominant_swatch,
+    kit_prior_table,
     printed_name_pair,
     sample_scorebug_swatches,
     sample_track_colors,
@@ -492,7 +493,15 @@ def _surface_identity_pass(state, rgb, roi, lines, seq=None):
     if int(getattr(state, "surface_identity_passes", 0) or 0) >= SURFACE_IDENTITY_MAX_PASSES:
         return None
     reading = surface_reading(rgb, roi, lines)
-    identity = derive_surface_identity(reading, teams)
+    identity = derive_surface_identity(
+        reading,
+        teams,
+        # ADAAAA-8908: the curated prior is a REFERENCE for a team that has a name
+        # but no observed kit colour (the served jobs' `kitColors: []` shape), so
+        # the kit channel can disagree and `contradicted` is reachable at all. A
+        # sport without a curated table keeps this channel exactly as it was.
+        kit_priors=kit_prior_table(sport_key(getattr(state, "game_hint", "") or "")),
+    )
     state.surface_identity = identity
     state.surface_identity_sig = sig
     if sig is not None:

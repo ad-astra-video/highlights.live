@@ -11,7 +11,12 @@ Two channels, read off data that is ALREADY paid for:
 - **kit swatches** — the plate colours the bug prints beside each team. The
   scoreboard crop perceive already took is sampled per half by
   ``sample_scorebug_swatches`` (CPU, no GPU). A side is compared with its own
-  team's ``kitColors`` names from the job's match context.
+  team's ``kitColors`` names from the job's match context, or — when the job
+  carries a name but no observed kit colour (ADAAAA-8908: the served jobs' shape,
+  `kitColors: []`) — with the curated PRIMARY for that team's name
+  (``match_context._SOCCER_KIT_PRIORS``, ADAAAA-7866). The curated value is a
+  REFERENCE only: it feeds the distance and is never published as a kit colour
+  observation, and ``kitReference`` on the verdict records which source was used.
 - **printed names** — the team tokens the bug prints next to the score. They come
   from the same ``<OCR>`` lines the score parser already read, so no read is
   added for this channel either.
@@ -27,8 +32,12 @@ Verdicts:
 - ``consistent`` — at least one channel positively matches this match (names, or
   a kit swatch inside the bar). A score change on this surface may attest.
 - ``contradicted`` — the kits sit outside the bar AND printed names do not
-  match. A score change here is a CLAIM: it must not attest a goal, and the
-  window rests on decide's own verdict (AC2.3, both decide paths).
+  match. When the reference came from the CURATED prior rather than an observed
+  kit colour, the printed names must also have been READ (unmatched, not
+  unreadable), because a curated colour is not a measurement of this match's
+  kit: a surface whose text cannot be read stays ``absent`` (ADAAAA-8908). A
+  score change here is a CLAIM: it must not attest a goal, and the window rests
+  on decide's own verdict (AC2.3, both decide paths).
 - ``absent`` — nothing usable was read (unattributed kits, unreadable names).
   Absence is not contradiction: today's behaviour is kept, because demoting an
   unreadable surface would cost recall on what we simply cannot see.
@@ -39,9 +48,13 @@ per session (AC2.4), and it is the only thing gated on a counter at all.
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
-from .match_context import _COLOR_BUCKETS, sample_scorebug_swatches
+from .match_context import (
+    _COLOR_BUCKETS,
+    kit_prior_primary,
+    sample_scorebug_swatches,
+)
 
 # ADAAAA-8844 AC2.5. Measured on the labelled crop truth set (ADAAAA-8577 crops
 # / ADAAAA-8578 truth, 62 crops carrying a surface reading) by
@@ -224,31 +237,68 @@ def _kits_from_crop(rgb: Any, roi: Any) -> dict[str, list[float]]:
     return kits
 
 
-def _side_kit_distance(
-    sides: dict[str, list[float]], teams: Optional[Sequence[dict[str, Any]]]
-) -> tuple[Optional[float], bool]:
-    """Best (side -> team kit) chromaticity distance and whether ANY side is inside.
+def _reference_kit_names(
+    team: Optional[dict[str, Any]], kit_priors: Optional[Mapping[str, Any]] = None
+) -> tuple[list[str], Optional[str]]:
+    """The kit colours this team's side may be compared against, and their source.
 
-    ``False`` for the second value means "no side could be compared" (no kit
-    names on the job, or no swatch on the bug) — which is absence, not
-    contradiction.
+    ``observed`` — the job's own ``kitColors`` (a measurement).
+    ``prior``    — the curated primary for the team's NAME (ADAAAA-8908): a
+                   REFERENCE only, used when the kit sampler produced nothing.
+                   It is never returned to the caller for publication; only the
+                   distance is.
+
+    An observed colour always wins over the prior, so a measurement is never
+    overridden by the curated value.
+    """
+    kits = (team or {}).get("kitColors") or []
+    names = [str(k.get("primary") or "") for k in kits if isinstance(k, Mapping)]
+    names += [str(k.get("secondary") or "") for k in kits if isinstance(k, Mapping)]
+    names = [n for n in names if n]
+    if names:
+        return names, "observed"
+    prior = kit_prior_primary(str((team or {}).get("name") or ""), kit_priors)
+    if prior:
+        return [prior], "prior"
+    return [], None
+
+
+def _side_kit_distance(
+    sides: dict[str, list[float]],
+    teams: Optional[Sequence[dict[str, Any]]],
+    kit_priors: Optional[Mapping[str, Any]] = None,
+) -> tuple[Optional[float], bool, Optional[str], bool]:
+    """Best (side -> team kit) chromaticity distance, whether ANY side is inside,
+    which reference source produced the best distance, and whether any side was
+    compared against an OBSERVED (measured) kit colour.
+
+    ``None`` for the distance means "no side could be compared" (no kit colour on
+    the job AND no curated prior for its name, or no swatch on the bug) — which is
+    absence, not contradiction.
     """
     best: Optional[float] = None
+    best_source: Optional[str] = None
     any_inside = False
+    observed_used = False
     by_side = {str((t or {}).get("side") or ""): t for t in teams or []}
     for side, colour in sides.items():
         team = by_side.get(side)
-        names = [str(k.get("primary") or "") for k in ((team or {}).get("kitColors") or [])]
-        names += [str(k.get("secondary") or "") for k in ((team or {}).get("kitColors") or [])]
+        names, source = _reference_kit_names(team, kit_priors)
         refs = [r for r in (name_reference_rgb(n) for n in names if n) if r]
         if not refs:
             continue
+        if source == "observed":
+            observed_used = True
         distances = [chroma_distance(colour, ref) for ref in refs]
         d = min(distances)
-        best = d if best is None else min(best, d)
+        if best is None or d < best:
+            best = d
+            best_source = source
         if d <= SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD:
             any_inside = True
-    return best, any_inside
+    return best, any_inside, best_source, observed_used
+
+
 
 
 def surface_reading(
@@ -267,21 +317,35 @@ def derive_surface_identity(
     teams: Optional[Sequence[dict[str, Any]]],
     *,
     threshold: float = SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD,
+    kit_priors: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """Fold one surface reading + the job's teams into a verdict (AC2.3's input).
 
     ``contradicted`` needs BOTH channels to disagree: kits outside the measured
     bar AND no printed name matching. Everything else that cannot be shown to be
     this match stays ``absent`` (today's behaviour).
+
+    ``kit_priors`` (ADAAAA-8908) is the curated per-team kit table. It supplies a
+    REFERENCE colour for a team that has a name but no observed ``kitColors``
+    (the served-jobs shape), so the kit channel is measurable when the Stage-3
+    sampler read nothing. It never becomes an observation: ``kits`` below is
+    always the swatches the crop printed, and ``kitReference`` records which
+    source the reported distance came from.
     """
     kits = dict(reading.get("kits") or {})
     names = list(reading.get("names") or [])
     matched = match_printed_names(names, teams)
-    distance, any_inside = _side_kit_distance(kits, teams)
+    distance, any_inside, reference, observed_used = _side_kit_distance(kits, teams, kit_priors)
     kits_present = bool(kits) and distance is not None
     kits_differ = bool(kits_present) and not any_inside
     names_match = bool(matched)
-    if kits_differ and not names_match:
+    # ADAAAA-8908: a CURATED reference (no observed kit colour on the job) is not a
+    # measurement of this match's kit, so the kit channel alone may not contradict.
+    # When every compared side used the prior, the printed names must have been
+    # READ and unmatched — absence of a reading stays `absent` (the shipped rule's
+    # "absence is not contradiction"), and no new recall path is created.
+    names_unread_on_prior = reference == "prior" and not observed_used and not names
+    if kits_differ and not names_match and not names_unread_on_prior:
         verdict = "contradicted"
     elif any_inside or names_match:
         verdict = "consistent"
@@ -293,6 +357,7 @@ def derive_surface_identity(
         "kitDistance": None if distance is None else round(float(distance), 4),
         "kitsPresent": bool(kits),
         "kitsDiffer": bool(kits_differ),
+        "kitReference": reference,
         "namesMatch": bool(names_match),
         "namesMatched": matched,
         "names": names[:_MAX_TOKENS],
