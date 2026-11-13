@@ -16,8 +16,11 @@
 //       accept the row as attested;
 //   (2) a noisy `scoreBoardChanged` (a banner/non-goal-step read) does NOT
 //       suppress the dive;
-//   (3) a genuinely measured single-goal delta still skips it (cost bound kept);
-//   (4) the VOD rail keeps its legacy flag read (unchanged by this fix);
+//   (3) a genuinely measured single-goal delta is STILL DIVED (ADAAAA-8894/D4
+//       deleted the measured-attestation skip, so the cost bound moved from
+//       population to ADMISSION: the live 48-dives/stream-hour density guard);
+//   (4) the VOD rail dives it too — D4 gave both rails the SAME trigger, because
+//       they had diverged twice (VOD read `hasIndependentAttestation`);
 //   (5) AC4 — a DROPPED dive stamps a terminal verdict field on the provisional
 //       row and clears its descriptor, so no finished job keeps
 //       `status:"provisional"` with nothing to read.
@@ -128,10 +131,14 @@ describe("ADAAAA-8506 AC3 — the dive skip is the row-level gate's own predicat
         scoreBoardDelta: candidate.scoreBoardDelta,
         scoreReads: candidate.scoreReads,
       });
-      // The candidate-level skip must agree with the row gate it feeds.
+      // ADAAAA-8506: the candidate-level predicate still agrees with the row gate
+      // it feeds — the polarity bug this file exists for cannot come back.
       expect(candidateHasMeasuredAttestation(candidate)).toBe(rowGate);
-      // An accepted goal-shaped window dives iff the row gate would NOT attest it.
-      expect(shouldRunConfirm(cfg, candidate, ACCEPTED_GOAL)).toBe(!rowGate);
+      // ADAAAA-8894 (D4): the trigger no longer reads that gate at all. An
+      // ACCEPTED row dives whatever its goal shape and whatever it measured, so
+      // "attested" can no longer suppress the dive that checks the attestation.
+      // Coverage is bounded by admission (the density guard), not by the gate.
+      expect(shouldRunConfirm(cfg, candidate, ACCEPTED_GOAL)).toBe(true);
     }
   });
 
@@ -144,15 +151,16 @@ describe("ADAAAA-8506 AC3 — the dive skip is the row-level gate's own predicat
     expect(shouldRunConfirm(cfg, EQUAL_SCORE_DELTA, ACCEPTED_GOAL)).toBe(true);
   });
 
-  it("still skips the dive for a measured, legible single-goal attestation (cost bound)", () => {
+  it("dives a measured, legible single-goal attestation too (D4 coverage, Ruling B)", () => {
     const cfg = liveCfg();
+    // The row gate still attests it — that is what decides the LANE (`measured`),
+    // and the D4 precision guard keeps the lane through the dive.
     expect(liveGoalHasMeasuredEvidence(ATTESTED)).toBe(true);
-    expect(shouldRunConfirm(cfg, ATTESTED, ACCEPTED_GOAL)).toBe(false);
-    // goal-line / ball-outcome channels remain independent attestations.
-    expect(shouldRunConfirm(cfg, GOAL_LINE, ACCEPTED_GOAL)).toBe(false);
-    expect(shouldRunConfirm(cfg, BALL_OUTCOME, ACCEPTED_GOAL)).toBe(false);
-    // A flag with no score reads at all keeps the legacy hint path.
-    expect(shouldRunConfirm(cfg, LEGACY_FLAG_ONLY, ACCEPTED_GOAL)).toBe(false);
+    // ...but it no longer decides whether the dive runs.
+    expect(shouldRunConfirm(cfg, ATTESTED, ACCEPTED_GOAL)).toBe(true);
+    expect(shouldRunConfirm(cfg, GOAL_LINE, ACCEPTED_GOAL)).toBe(true);
+    expect(shouldRunConfirm(cfg, BALL_OUTCOME, ACCEPTED_GOAL)).toBe(true);
+    expect(shouldRunConfirm(cfg, LEGACY_FLAG_ONLY, ACCEPTED_GOAL)).toBe(true);
   });
 
   it("lands the dive on the delayed-corroboration population too", () => {
@@ -161,11 +169,14 @@ describe("ADAAAA-8506 AC3 — the dive skip is the row-level gate's own predicat
     expect(shouldRunConfirm(cfg, NOISY_FLAG_ONLY, bareGoal)).toBe(true);
   });
 
-  it("leaves the VOD rail on the legacy flag read (fix is scoped to live)", () => {
+  it("dives the VOD rail too — one trigger for both rails (D4 parity, AC4.6)", () => {
     const vod = { ...liveCfg(), liveObserveLoop: false, decideWindowN: 24 } as any;
-    // VOD's promotion gate is the inline dive verdict, not liveGoalHasMeasuredEvidence,
-    // so the historical flag read is deliberately unchanged there.
-    expect(shouldRunConfirm(vod, NOISY_FLAG_ONLY, ACCEPTED_GOAL)).toBe(false);
+    // ADAAAA-8894 (D4): the VOD arm used to read its own predicate
+    // (`hasIndependentAttestation`), which is how the rails diverged twice. Both
+    // rails now call this one trigger, so a VOD row that measured its goal gets
+    // the same dive moment and the same skip-reason vocabulary.
+    expect(shouldRunConfirm(vod, NOISY_FLAG_ONLY, ACCEPTED_GOAL)).toBe(true);
+    expect(shouldRunConfirm(vod, ATTESTED, ACCEPTED_GOAL)).toBe(true);
   });
 });
 
