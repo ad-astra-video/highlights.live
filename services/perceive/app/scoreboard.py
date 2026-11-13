@@ -90,10 +90,14 @@ _CHROME_TOKEN_RE = re.compile(
     r"(?:laliga|stanley|spotify|whitebit|lauga|culers|nike\.com)", re.IGNORECASE
 )
 # ADAAAA-8507: a `mm:ss` clock that OCR'd with the score's dash separator
-# (`05-40`, `09-40`, `08-10`). The leading zero on a two-digit group is the
+# (`05-40`, `09-40`, `08-10`). A leading zero on a two-digit group is the
 # discriminator: a real double-digit score (`45-42`) has none.
 _CLOCK_MMSS_LEFT_RE = re.compile(r"0\d")
 _CLOCK_MMSS_RIGHT_RE = re.compile(r"\d{2}")
+# ADAAAA-8841: the sports whose score plate cannot reach two digits. Mirrors
+# `SINGLE_DIGIT_SCORE_SPORTS` in `services/server/src/analyzer.ts`.
+_SINGLE_DIGIT_SCORE_SPORTS = frozenset({"soccer", "football", "association football"})
+_ZERO_PADDED_GROUP_RE = re.compile(r"0\d+")
 _CLOCK_GLUE_BEFORE_RE = re.compile(r"\d{1,2}:$")
 _CLOCK_GLUE_AFTER_RE = re.compile(r":\d{1,2}")
 
@@ -624,6 +628,7 @@ def _pair_is_noise(
     index: int,
     length: int,
     adjacent: Tuple[bool, bool],
+    sport: Optional[str] = None,
 ) -> bool:
     """Whether this dash pair is a clock / chrome fragment, not a score plate.
 
@@ -640,29 +645,84 @@ def _pair_is_noise(
 
     1. CLOCK GLUE — the pair sits right after a ``H:`` / ``HH:`` clock
        (``02:28-1``, ``04:53-1``, ``03:29-1``), or right before a ``:MM`` one;
-    2. CLOCK SHAPE — a ``mm:ss`` clock that OCR'd with a dash (``05-40``,
-       ``09-40``, ``08-10``). A leading zero on the left group is the
-       discriminator; ``45-42`` (pinned by the suite) stays a score;
+    2. CLOCK SHAPE — the pair has the shape of a ``mm:ss`` clock that OCR'd with
+       the score's dash. Three keys (ADAAAA-8841):
+         (a) a ZERO-PADDED group (``05``, ``019``, ``034``) is never a score
+             plate: plates do not render leading zeros, and every measured
+             clock-dash family zero-pads its seconds field;
+         (b) ``M-mm`` where ``mm`` is a seconds field (2-3 digits, <= 59) and
+             ``M`` is a plausible clock minute — refused ONLY for a sport whose
+             plate cannot reach two digits (football), so ``45-42`` (pinned by
+             the suite) stays a score;
+         (c) the pair equals the ``mm:ss`` split of the clock the SAME line
+             carries (:func:`parse_match_clock_line`, GT-2). Sport-independent:
+             the line itself names the clock;
     3. CHROME LINE — the line carries a broadcast/sponsor token and the pair is
        not sandwiched between the two team tokens (``…LALIGA RMA 1-1 BAR…``
        still parses, its pair IS sandwiched).
+
+    ADAAAA-8841 (the live Sky Sports share ``1ee3c97d``): keying (a) on a leading
+    zero in the LEFT group only was fitted to an early-match sample, so a
+    ``mm:ss`` clock at minute >= 10 (``24-35``) and a minute-0 clock whose
+    seconds field reached the pair as ``0-019`` / ``0-034`` both passed the gate
+    and became the window's score reading — which attested phantom transitions
+    that were pure clock ticks (``0-19 -> 0-20``, ``0-33 -> 0-34``).
     """
     if _CLOCK_GLUE_BEFORE_RE.search(text[:index]):
         return True
     if _CLOCK_GLUE_AFTER_RE.match(text[index + length:]):
         return True
-    if (
-        _CLOCK_MMSS_LEFT_RE.fullmatch(raw_left)
-        and _CLOCK_MMSS_RIGHT_RE.fullmatch(raw_right)
-        and int(raw_right) <= 59
-    ):
+    # (a) a zero-padded group is never a score plate (ADAAAA-8841).
+    if _ZERO_PADDED_GROUP_RE.fullmatch(raw_left) or _ZERO_PADDED_GROUP_RE.fullmatch(raw_right):
+        return True
+    # (b) sport-scoped ceiling: a plate that cannot reach two digits refuses
+    # any pair with a two-digit side (a `mm:ss` clock at minute >= 10).
+    if _sport_scores_are_single_digit(sport):
+        if int(raw_left) > 9 or int(raw_right) > 9:
+            return True
+    # (c) the pair IS the clock the same line carries (GT-2).
+    if _pair_equals_line_clock(text, raw_left, raw_right):
         return True
     if _CHROME_TOKEN_RE.search(text) and not (adjacent[0] and adjacent[1]):
         return True
     return False
 
 
-def _score_pair_in_line(text: str) -> Optional[Tuple[int, int]]:
+def _sport_scores_are_single_digit(sport: Optional[str]) -> bool:
+    """Does this sport cap a score at a single digit?
+
+    ADAAAA-8841: basketball (``45-42``) and American football (``24-17``)
+    legitimately print two-digit plates, so the dash-clock shape must never
+    refuse those, and an ``unknown`` sport stays lenient — byte-identical to the
+    pre-8841 gate. Mirrors ``ocrSportScoresAreSingleDigit`` in the server.
+    """
+    key = str(sport or "").strip().lower()
+    return key in _SINGLE_DIGIT_SCORE_SPORTS
+
+
+def _pair_equals_line_clock(text: str, raw_left: str, raw_right: str) -> bool:
+    """Is this dash pair the ``mm:ss`` split of the clock the SAME line carries?
+
+    ADAAAA-8841, mirroring ``ocrPairEqualsLineClock`` in the server. The seconds
+    field must be rendered as two digits exactly as the clock renders it, so a
+    genuine ``1-1`` plate next to a ``1:01`` clock is NOT refused.
+    """
+    if len(raw_right) != 2:
+        return False
+    clock = parse_match_clock_line(text)
+    if not clock or clock.get("seconds") is None:
+        return False
+    try:
+        seconds = int(clock["seconds"])
+        a, b = int(raw_left), int(raw_right)
+    except (TypeError, ValueError):
+        return False
+    if a * 60 + b == seconds:
+        return True
+    return a == seconds // 60 and b == seconds % 60
+
+
+def _score_pair_in_line(text: str, sport: Optional[str] = None) -> Optional[Tuple[int, int]]:
     """The one score pair a single OCR line carries, or ``None``.
 
     Ordered by how score-shaped the pair looks, NOT by position (ADAAAA-8134):
@@ -681,7 +741,7 @@ def _score_pair_in_line(text: str) -> Optional[Tuple[int, int]]:
         # ADAAAA-8507: a clock / sponsor-chrome fragment is not a score plate.
         if _pair_is_noise(
             text, m.group("a"), m.group("b"), m.start(), len(m.group(0)),
-            (adj_left, adj_right),
+            (adj_left, adj_right), sport,
         ):
             continue
         if adj_left and left is None:
@@ -704,6 +764,7 @@ def parse_ocr_score(
     frame_ocr,
     roi: Optional[ScoreboardRoi] = None,
     ocr_boxes: Optional[Sequence[Optional[Sequence[float]]]] = None,
+    sport: Optional[str] = None,
 ) -> Optional[Tuple[int, int]]:
     """Extract a (home, away) score tuple from OCR text lines, or ``None``.
 
@@ -734,7 +795,7 @@ def parse_ocr_score(
         box = ocr_boxes[i] if ocr_boxes is not None and i < len(ocr_boxes) else None
         if not _line_in_roi(roi, box):
             continue
-        pair = _score_pair_in_line(text)
+        pair = _score_pair_in_line(text, sport)
         if pair is not None:
             return pair
     return None

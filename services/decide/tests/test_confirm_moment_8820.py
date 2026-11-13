@@ -109,6 +109,57 @@ def test_parse_moment_clamps_confidence_and_nulls_a_missing_moment():
     assert parse_moment(None, GRID) == (None, 0.0)
 
 
+# --- the prose fallback (real replies name the instant in the reason) -------
+
+
+def test_a_confirmed_goal_recovers_the_instant_it_names_in_prose():
+    # the shape the live corpus actually produced (ADAAAA-8829 pre-gate rows):
+    # "…entering the net at t=182.0s (dense frame 180.25s)…"
+    parsed = {
+        "goalConfirmed": "confirmed_goal",
+        "momentConfidence": 0.66,
+        "reason": "The ball is seen entering the net at t=41.55s (dense frame 41.5s), keeper beaten low.",
+    }
+    assert parse_moment(parsed, GRID) == (41.5, pytest.approx(0.66))
+
+
+def test_the_structured_field_wins_over_the_prose():
+    parsed = {"goalConfirmed": "confirmed_goal", "momentTs": 41.6, "momentConfidence": 0.8,
+              "reason": "ball in net at t=40.0s"}
+    ts, conf = parse_moment(parsed, GRID)
+    assert ts == 41.5
+    assert conf == pytest.approx(0.8)
+
+
+def test_a_refutation_never_takes_a_moment_from_its_prose():
+    # a near miss / not_goal has no moment to cut on, even if its reason names a time
+    for goal in ("near_miss", "not_goal"):
+        parsed = {"goalConfirmed": goal, "reason": "the keeper saves it at t=41.5s"}
+        assert parse_moment(parsed, GRID) == (None, 0.0)
+
+
+def test_prose_instant_off_the_grid_is_refused():
+    parsed = {"goalConfirmed": "confirmed_goal", "reason": "the ball enters the net at t=52.0s"}
+    assert parse_moment(parsed, GRID) == (None, 0.0)
+
+
+def test_prose_without_a_grid_names_nothing():
+    parsed = {"goalConfirmed": "confirmed_goal", "reason": "the ball enters the net at t=41.5s"}
+    assert parse_moment(parsed, []) == (None, 0.0)
+
+
+def test_an_unrelated_number_in_the_reason_is_not_a_moment():
+    # scorelines / frame counts must never be read as a content instant
+    for reason in (
+        "the scoreboard changes from 2-1 to 2-2 in the frames",
+        "the ball is in the net; 12 frames reviewed",
+        "the shot at 41.5 (no unit, no t= prefix)",
+    ):
+        parsed = {"goalConfirmed": "confirmed_goal", "reason": reason}
+        assert parse_moment(parsed, GRID) == (None, 0.0)
+
+
+
 # --- the prompt -------------------------------------------------------------
 
 
@@ -199,3 +250,56 @@ def test_run_pass_with_unlabelled_frames_never_invents_a_moment(monkeypatch):
     )
     assert resp["goalConfirmed"] == "confirmed_goal"
     assert resp["momentTs"] is None, "no grid was sent, so no instant may be claimed"
+
+
+# --- the WIRE contract (ADAAAA-8838) ----------------------------------------
+# A pass that builds the moment is not enough. The route answers with
+# ``ConfirmDecision(**result)``, and that model is ``extra="ignore"`` — a field
+# the pass produced but the model never DECLARED is silently dropped at the HTTP
+# boundary. That is exactly how the served build read ``momentTs: null`` on every
+# live confirm while the dict-level tests above passed: the moment existed inside
+# the process and never reached the server.
+
+
+def test_response_model_declares_the_moment():
+    assert "momentTs" in cf.ConfirmDecision.model_fields
+    assert "momentConfidence" in cf.ConfirmDecision.model_fields
+
+
+def test_response_model_carries_a_numeric_moment_to_the_wire():
+    wire = cf.ConfirmDecision(
+        **{
+            "enabled": True,
+            "goalConfirmed": "confirmed_goal",
+            "momentTs": 41.5,
+            "momentConfidence": 0.82,
+        }
+    ).model_dump()
+    assert wire["momentTs"] == 41.5
+    assert wire["momentConfidence"] == pytest.approx(0.82)
+
+
+def test_response_model_keeps_an_unnamed_moment_null_on_the_wire():
+    wire = cf.ConfirmDecision(**{"enabled": True, "goalConfirmed": "near_miss"}).model_dump()
+    assert "momentTs" in wire and wire["momentTs"] is None
+    assert "momentConfidence" in wire and wire["momentConfidence"] is None
+
+
+def test_route_construction_carries_the_run_pass_moment(monkeypatch):
+    """The exact construction the /confirm route performs: pass dict -> model."""
+    monkeypatch.setenv("DECIDE_CONFIRM_ENABLED", "1")
+    monkeypatch.setenv("AUDIO_CONTEXT", "0")
+    monkeypatch.setattr(cf, "_call_gemma", lambda *a, **k: _reply(momentTs=41.6, momentConfidence=0.82))
+    result = run_confirmation_pass({"stage1": _stage1(), "eventType": "GOAL", "frames": _frames()})
+    wire = cf.ConfirmDecision(**result).model_dump()
+    assert wire["goalConfirmed"] == "confirmed_goal"
+    assert wire["momentTs"] == 41.5, "the snapped moment must survive the response model"
+    assert wire["momentConfidence"] == pytest.approx(0.82)
+
+
+def test_route_construction_keeps_the_passthrough_nullable(monkeypatch):
+    monkeypatch.delenv("DECIDE_CONFIRM_ENABLED", raising=False)
+    result = run_confirmation_pass({"stage1": _stage1(), "eventType": "GOAL", "frames": _frames()})
+    wire = cf.ConfirmDecision(**result).model_dump()
+    assert wire["goalConfirmed"] is None
+    assert "momentTs" in wire and wire["momentTs"] is None

@@ -168,13 +168,20 @@ describe("AC10 — role nouns are attestation claims", () => {
     expect(gateSummaryDetail(body, ev).gate).toBe("accepted");
   });
 
-  it("drops a clause whose role noun sits as an object instead of rewriting it", () => {
+  it("rewrites a role noun that sits as an object, keeping the sentence (ADAAAA-8831)", () => {
+    // ADAAAA-8831 supersedes the delete-the-sentence rule this case pinned:
+    // measured on live leg `27bd816f`, deleting the object-position sentence took
+    // row `a4827973` from 29 words / 2 sentences to 13 / 1 and refused the body
+    // whose other sentence carried the attested score line. The object phrase is
+    // now rewritten to a neutral noun, so the facts the sentence carries survive.
     const ev = live();
     const body = "The equaliser levels it at 2-2 in the second half. A low drive beats the keeper at the near post.";
     const neutralised = neutraliseRoleNouns(body, ev);
-    expect(neutralised.neutralised).toEqual([]);
-    expect(neutralised.droppedSentences).toBe(1);
-    expect(neutralised.text).toBe("The equaliser levels it at 2-2 in the second half.");
+    expect(neutralised.droppedSentences).toBe(0);
+    expect(neutralised.neutralised.map((c) => c.canonical)).toEqual(["goalkeeper"]);
+    expect(neutralised.text).toBe(
+      "The equaliser levels it at 2-2 in the second half. A low drive beats the player at the near post."
+    );
   });
 
   it("reads role nouns only with a determiner (an adverb 'forward' is not a claim)", () => {

@@ -8872,12 +8872,19 @@ export interface LiveAnalyzerConfigDeps {
 export function buildLiveFrameReread(deps: {
   cfg: ServerConfig;
   jobId: string;
-  store: Pick<Store, "observationsForJob">;
+  store: Pick<Store, "observationsForJob"> & Partial<Pick<Store, "getJob">>;
   sessionId?: string;
 }): AnalyzerConfig["liveFrameReread"] {
   const ocrBase = deps.cfg.perceiveUrl ?? deps.cfg.perceiveRunnerUrl;
   if (!deps.cfg.liveFrameReread || !ocrBase) return undefined;
+  // ADAAAA-8841: the re-read pass parses a re-OCR'd frame through the SAME score
+  // parser the rail uses, so it carries the job's persisted sport too. Without
+  // it a `mm:ss` clock read back here would re-enter the ledger as a score.
+  const ctxSport = (deps.store.getJob?.(deps.jobId) as { matchContext?: { sport?: unknown } } | undefined)
+    ?.matchContext?.sport;
+  const sport = typeof ctxSport === "string" ? ctxSport.trim().toLowerCase() : undefined;
   return {
+    ...(sport ? { sport } : {}),
     io: {
       framesInSpan: (lo: number, hi: number) =>
         (deps.store.observationsForJob(deps.jobId) ?? [])

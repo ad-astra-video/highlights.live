@@ -19,10 +19,16 @@ import {
   attestationDetailCopy,
   captionAssertsUnattestedAction,
   captionSourceText,
+  captionSourceViolation,
+  carriesAuditMarker,
+  carriesProvenanceClock,
   groundCaption,
   quietStoredCopy,
+  storedCardSurface,
+  storedReasonViolations,
   stripInternalTokens,
 } from "../src/caption-grounding.js";
+import { projectAnnouncerCaption } from "../src/post-title.js";
 import {
   buildSummaryPrompt,
   captionRestatesSummary,
@@ -210,5 +216,251 @@ describe("ADAAAA-8806 — the prompt names the attested actors", () => {
     });
     expect(prompt).toContain("previous draft was fact-poor");
     expect(prompt).toContain("NAME Barcelona");
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * ADAAAA-8830 — the SCORING-LANE sentence is never a caption source.
+ *
+ * Live leg `27bd816f` (build `fedc717f`) served the model's own audit sentence
+ * as the card caption on 2 of 2 rows, with its window-relative marker and its
+ * channel citation intact (both strings below are verbatim from
+ * `highlights.record`):
+ *
+ *   row `8d521507` caption/postTitle `Midfielder scores`
+ *   row `a4827973` caption/postTitle `Defender scores`
+ *
+ * Two independent holes, one gate family: the marker test required the trailing
+ * unit (`at t=0.0` slipped it), and the CARD gate never applied the store-time
+ * post-condition, so a corroborated card's caption became `reason` and the
+ * post-condition never ran on that row. The bar: neither string may be stored
+ * as copy, and a row already stored that way must not serve it at read time.
+ * ------------------------------------------------------------------------- */
+
+/** Row `8d521507` — the unit-less marker form (`at t=0.0`, no `s`). */
+const ROW_8830_A = "The scoreboard changes to 2-1 at t=0.0 and ASR confirms a goal.";
+/** Row `a4827973` — the unit form, no `at`, plus the evidence tag. */
+const ROW_8830_B =
+  "Ball enters net at t=-1.0s, scoreboard changes to 2-2, and crowd erupts.; scoreboard score change confirmed";
+
+/** The arm that reproduces both stored rows byte-for-byte (lane-1 attested). */
+const GROUNDING_8830 = {
+  verdict: "scoring_play",
+  corroborated: true,
+  place: "",
+  promptText: null as string | null,
+  attestedBallAction: false,
+};
+
+describe("ADAAAA-8830 — the audit marker is never served copy", () => {
+  it("refuses both SERVED strings QA graded (the exact captions)", () => {
+    expect(captionSourceViolation(ROW_8830_A)).toBe("audit-marker");
+    expect(captionSourceViolation("Ball enters net at t=-1.0s, scoreboard changes to 2-2, and crowd erupts.")).toBe(
+      "audit-marker"
+    );
+    // The store-time post-condition agrees on every path, not only the card's.
+    expect(storedReasonViolations(ROW_8830_A, [ROW_8830_A])).toContain("audit-marker");
+    expect(storedReasonViolations(captionSourceText(ROW_8830_B), [ROW_8830_B])).toContain("audit-marker");
+  });
+
+  it("matches the marker with or without the unit and with or without `at`", () => {
+    for (const marker of ["at t=0.0", "at t=-1.0s", "t=0.0", "t = -2.5s", "at t=-3.3s to 0.0s"]) {
+      expect(carriesAuditMarker(`Scoreboard changes to 2-1 ${marker}.`)).toBe(true);
+    }
+    // … and a plain ledger line is untouched.
+    expect(carriesAuditMarker("Scoreboard changes to 2-1.")).toBe(false);
+  });
+
+  it("closes the card bypass: an accepted card cannot carry the marker into `reason`", () => {
+    // The card gate is where `storedReason = card.caption` comes from, so it
+    // applies the same source bar the letter's post-condition does.
+    for (const raw of [ROW_8830_A, ROW_8830_B]) {
+      const card = storedCardSurface({
+        gated: raw,
+        raw,
+        quiet: false,
+        corroborated: GROUNDING_8830.corroborated,
+        verdict: GROUNDING_8830.verdict,
+      });
+      expect(card.caption).toBe("");
+      expect(card.cardTitles).toEqual([]);
+    }
+  });
+
+  it("serves the row's own attested fact instead (the 8411 deletion lane)", () => {
+    // The marker and the ASR citation are deleted, the measured scoreline stays:
+    // no model call, no word invented, and the string is not the audit sentence.
+    expect(attestationDetailCopy(ROW_8830_A, { verdict: "scoring_play", eventType: "GOAL" })).toBe(
+      "The scoreboard changes to 2-1."
+    );
+    expect(attestationDetailCopy(ROW_8830_B, { verdict: "scoring_play", eventType: "GOAL" })).toBe(
+      "Scoreboard changes to 2-2."
+    );
+  });
+
+  it("refuses the same shapes at the quiet seam (no copy is owed a machine sentence)", () => {
+    expect(quietStoredCopy(ROW_8830_A, GROUNDING_8830)).toBe("");
+    expect(quietStoredCopy(ROW_8830_B, GROUNDING_8830)).toBe("");
+  });
+
+  it("stops a row ALREADY STORED that way from serving it (legacy read gate)", () => {
+    // The graded leg is already persisted, so the read projection mirrors the
+    // write gate; the row keeps an attested fact line, never `reason_raw` prose.
+    const legacy = {
+      id: "8d521507",
+      caption: ROW_8830_A,
+      reason: ROW_8830_A,
+      reasonRaw: ROW_8830_A,
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      postTitle: "Midfielder scores",
+      localizedTs: 102.595,
+    };
+    const served = projectAnnouncerCaption(legacy as never, "Midfielder scores");
+    expect(served).not.toBe(ROW_8830_A);
+    expect(carriesAuditMarker(served)).toBe(false);
+    expect(served.toLowerCase()).not.toContain("asr");
+    expect(served).toBe("The scoreboard changes to 2-1.");
+  });
+
+  it("keeps ADAAAA-8209's sanctioned trailing attribution (the bar reads the LEAD)", () => {
+    // A real beat with a provenance TAIL stays stored byte-identically — this
+    // ticket narrows nothing that 8209 pinned.
+    const line = "Scoreboard changes to 2-1 and commentary confirms the shot on the left.";
+    expect(captionSourceViolation(line)).toBe("");
+    expect(storedReasonViolations(line, [line])).toEqual([]);
+    // A line whose LEAD is the citation is provenance, not copy.
+    expect(captionSourceViolation("ASR confirms a goal.")).toBe("attestation-cite");
+  });
+
+  it("matches and DELETES the match-clock marker form (`t=22:13`)", () => {
+    // 20 stored rows on the 10-day corpus carry the model's match clock rather
+    // than a window-relative second (`t=22:13`, `t=3:30`, `t=0:41`). Detection
+    // already fired on the old pattern (`t=22` + a word boundary), but DELETION
+    // stopped at the colon and served the residue INSIDE the scoreline —
+    // `The scoreboard changes to 2-1:13.` — so the marker source has to read the
+    // whole clock.
+    for (const marker of ["at t=22:13", "at t=3:30", "t=0:41", "at t = 09:49"]) {
+      expect(carriesAuditMarker(`Scoreboard changes to 2-1 ${marker}.`)).toBe(true);
+    }
+    expect(
+      attestationDetailCopy("The scoreboard changes to 2-1 at t=22:13.", {
+        verdict: "scoring_play",
+        eventType: "GOAL",
+      })
+    ).toBe("The scoreboard changes to 2-1.");
+    // The same clock on a non-ledger beat: the beat survives, the clock does not.
+    expect(
+      attestationDetailCopy("The keeper is beaten at t=0:41 and the crowd erupts.", {
+        verdict: "scoring_play",
+        eventType: "GOAL",
+      })
+    ).toBe("The crowd erupts.");
+  });
+
+  it("matches the BARE settler form (`at 18:12`, `at 19s`) detection AND deletion share", () => {
+    // The deletion path already treated a bare `at 18:12` / `at 19s` as
+    // provenance; detection did not, so a row whose whole sentence was the
+    // evidence read served it unchanged (row `8faa641b`, job `2c4124fe`).
+    for (const marker of ["at 18:12", "at 19s", "at 19.5s", "at 3:30"]) {
+      expect(carriesProvenanceClock(`Scoreboard changes to 2-1 ${marker}.`)).toBe(true);
+      expect(captionSourceViolation(`Scoreboard changes to 2-1 ${marker}.`)).toBe("provenance-clock");
+    }
+    // A place or a spelled-out duration is not a clock.
+    expect(carriesProvenanceClock("The ball is cleared at the far post.")).toBe(false);
+    expect(carriesProvenanceClock("The keeper reacts at 30 seconds of the clip.")).toBe(false);
+    // The `t=` forms stay `audit-marker` (the caption surfaces report both).
+    expect(carriesAuditMarker("Scoreboard changes to 2-1 at t=0.0.")).toBe(true);
+    expect(captionSourceViolation("Scoreboard changes to 2-1 at t=0.0.")).toBe("audit-marker");
+    // The settler clock is a CAPTION-surface form only: a depth-lane body may
+    // open on a clock anchor (ADAAAA-8665 AC7), so `carriesAuditMarker` and the
+    // summary bar must not start refusing it.
+    expect(carriesAuditMarker("Scoreboard changes to 2-1 at 18:12.")).toBe(false);
+  });
+
+  it("never serves a stored `reason` that carries the caption-only diagnostic tail", () => {
+    // Rows `1f965fea` / `ccab232a` (job `bc2d3460`): the legacy row stores the
+    // `| live scoring lane:` refusal paragraph ON its `reason` (ADAAAA-8139 keeps
+    // the marker on the audit value), and the read projection served it verbatim
+    // as the card's announcer line — the whole evidence paragraph as copy.
+    const LIVE_LANE =
+      " | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=2 preSamples=2 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score — delivered as a celebration, not a GOAL";
+    const laneRow = {
+      id: "1f965fea",
+      caption: null,
+      reason: `A driven cross is turned in at the far post.${LIVE_LANE}`,
+      reasonRaw: null,
+      outcome: "big_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 42.2,
+    };
+    const laneServed = projectAnnouncerCaption(laneRow as never, "Big play · 0:42");
+    expect(laneServed).toBe("A driven cross is turned in at the far post.");
+    expect(laneServed).not.toContain("|");
+    expect(laneServed.toLowerCase()).not.toContain("live scoring lane");
+
+    // Rows `61e9439a` / `74deffd0`: the `| provisional shot:` tail reached the
+    // served card the same way.
+    const shotRow = {
+      id: "61e9439a",
+      caption: null,
+      reason:
+        "confirms shot by Manuel Ordoñez at 19s; scoreboard shows 2-1; players celebrate. | provisional shot: frame_celebration in the judged window, no measured scoreboard change yet in midfield.",
+      reasonRaw:
+        "ASR confirms goal by Manuel Ordoñez at 19s; scoreboard shows 2-1; players celebrate. | provisional goal: frame_celebration in the judged window, no measured scoreboard change yet.",
+      outcome: "big_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 19.3,
+    };
+    const shotServed = projectAnnouncerCaption(shotRow as never, "Near miss · 0:19");
+    expect(shotServed).not.toContain("|");
+    expect(shotServed).not.toContain("provisional");
+    // The model line carries the settler clock inline (`at 19s`), so the whole
+    // sentence is provenance now; the row falls to its DERIVED fact line. That
+    // deterministic shape (`<label> at <m:ss>.`) is composed by the projection
+    // itself, not model copy: the bar reads model-authored sources only.
+    expect(shotServed).toBe("Big play at 0:19.");
+    expect(captionSourceViolation("confirms shot by Manuel Ordoñez at 19s; scoreboard shows 2-1.")).toBe(
+      "provenance-clock"
+    );
+  });
+
+  it("never serves a stored caption/reason that IS the row's own `reason_raw`", () => {
+    // Row `8faa641b` (job `2c4124fe`, file-sim): `caption == reason == reason_raw
+    // == "Scoreboard changes to 2-1 and ASR confirms goal at 18:12."` — the model's
+    // evidence sentence stored as UI copy, the AC13 shape verbatim. The bare clock
+    // brings it inside the bar, so the read seam falls to the deletion lane and
+    // serves the measured scoreline the sentence already carried.
+    const echoRow = {
+      id: "8faa641b",
+      caption: "Scoreboard changes to 2-1 and ASR confirms goal at 18:12.",
+      reason: "Scoreboard changes to 2-1 and ASR confirms goal at 18:12.",
+      reasonRaw: "Scoreboard changes to 2-1 and ASR confirms goal at 18:12",
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 1092.4,
+    };
+    const served = projectAnnouncerCaption(echoRow as never, "Goal · 18:12");
+    expect(served).toBe("Scoreboard changes to 2-1.");
+    expect(served.toLowerCase()).not.toContain("asr");
+  });
+
+  it("keeps a clean stored caption byte-identical (the strip only fires on a tail)", () => {
+    const clean =
+      "Scoreboard changes to 2-1 and commentary confirms the shot on the left.";
+    const row = {
+      id: "8209-clean",
+      caption: clean,
+      reason: clean,
+      reasonRaw: null,
+      outcome: "scoring_play",
+      eventType: "GOAL",
+      postTitle: null,
+      localizedTs: 100,
+    };
+    expect(projectAnnouncerCaption(row as never, "Midfielder scores")).toBe(clean);
   });
 });
