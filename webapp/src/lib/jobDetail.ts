@@ -595,6 +595,17 @@ export interface JobDetail {
       source: "explicit" | "discovery" | "default_top_band";
       seqFirstSeen: number;
       verified: boolean;
+      // ADAAAA-8844 (Inc 2): the surface-identity verdict, carried on the served
+      // block for live AND VOD jobs. ADAAAA-8886 draws it on the live stage.
+      identity?: {
+        verdict: "consistent" | "contradicted" | "absent";
+        kitDistance?: number | null;
+        threshold?: number;
+        namesMatched?: string[];
+        names?: string[];
+      };
+      /** ADAAAA-8844: why a score change on this surface was ignored. */
+      demotion?: string;
     };
     framesAnalyzed?: number;
     candidatesTriggered?: number;
