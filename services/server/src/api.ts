@@ -76,7 +76,6 @@ import { resolvePerceiveCalibration } from "./perceive-calibration";
 import { trailDecisionFromEvent } from "./jobTrail";
 import { buildAnalyzeFrames } from "./livepeer-adapter";
 import { cutClip, extractAudioWindow, extractBurstFrames, extractFrames, probeFlushedDuration, probeHasAudio, centerClipOnEvidence, locateScoreboardFlip, cutCenteredOnInstant } from "./ffmpeg";
-import { cutMomentAnchoredClip, isMomentAnchor } from "./clip-anchor";
 import type { ScoreFlipProbe } from "./ffmpeg";
 import { extractFramesForDataset, writeTrainValManifests } from "./dataset";
 import { probeDuration } from "./ffmpeg";
@@ -1594,19 +1593,17 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // flip must not re-centre the card (that ships `[goal - 7, goal + 8]` and
     // pushes the reaction off the end). The evidence picture stays the anchor.
     const cueTail = h.clipPlacementReason === "celebration_tail";
-    // ADAAAA-8820 (D2): the deferred cut anchors on the instant the Stage-2 dive
-    // named when it has one (and the row was not placed as a celebration tail —
-    // the same guard the flip probe uses, since re-centring would push the cue off
-    // the end). Everything downstream (frame match -> score flip -> content
-    // clock) then reads that instant instead of the accept's.
-    const diveTs = !cueTail && Number.isFinite(opts.anchorTs as number) ? Number(opts.anchorTs) : null;
+    // ADAAAA-8820 (D2) / ADAAAA-8893 (D5): a deferred cut anchors on the instant
+    // its caller names, and every option cut site now passes the CARD's accept
+    // anchor (`recenteredCutSpec`), never the dive moment. The callers that
+    // still omit `anchorTs` keep the row's own accept anchor below.
+    // ADAAAA-8906 (cleanup): the moment-anchor placement path was measured wrong
+    // on the real D5 population (0.3-2.5 s shift per row) and was removed, so
+    // this chain (frame match -> score flip -> content clock) is the only one —
+    // see the note above `anchorCutOnEvidence` in `clip-anchor.ts`.
+    const anchorTs = !cueTail && Number.isFinite(opts.anchorTs as number) ? Number(opts.anchorTs) : null;
     const acceptTs = Number.isFinite(h.localizedTs as number) ? Number(h.localizedTs) : span.start;
-    const evidenceTs = diveTs ?? acceptTs;
-    // ADAAAA-8906: a dive moment is NOT an accept anchor. The option cut places
-    // the moment on its own picture at `moment - window.start`; the score-flip
-    // substitution below would slide the window to the flip (earlier) and land
-    // the moment 1.0-1.2 s late in the file. Same rule as the ingest rail.
-    const momentAnchor = diveTs != null && isMomentAnchor(diveTs, acceptTs);
+    const evidenceTs = anchorTs ?? acceptTs;
     const before = Math.max(0, Math.min(dur, evidenceTs - span.start));
     const framePath = browserEvidenceFramePath(jobId, evidenceTs);
     // The recording's own length — the FOOTAGE THAT HAS BEEN FLUSHED to disk,
@@ -1621,27 +1618,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // evidence frame is missing/unmatched — and the row says which path ran.
     let placement: ClipPlacement;
     let cut;
-    if (momentAnchor) {
-      // The option's ONE placement path (shared with the ingest rail): the dive
-      // moment's own picture at `moment - window.start`.
-      const shared = await cutMomentAnchoredClip({
-        ffmpegPath: cfg.ffmpegPath,
-        source: recPath,
-        outPath: out,
-        contentStart: span.start,
-        dur,
-        momentTs: evidenceTs,
-        evidenceFramePath: framePath,
-        tag: `browser:${jobId}`,
-      });
-      placement = shared.placement;
-      cut = shared.cut;
-      console.log(
-        `[browser:${jobId}] option ${name}.mp4 placed on the dive moment ${evidenceTs.toFixed(3)}s ` +
-          `(method ${placement.method}, cut [${placement.cutStart.toFixed(3)}, ${(placement.cutStart + dur).toFixed(3)}], ` +
-          `moment at ${placement.deliveredOffsetSec == null ? "?" : placement.deliveredOffsetSec.toFixed(3)}s of ${dur}s)`
-      );
-    } else if (framePath) {
+    if (framePath) {
       const centered = await centerClipOnEvidence(cfg.ffmpegPath, recPath, out, framePath, before, dur, {
         searchStartS: Math.max(0, span.start - 2),
         searchDurS: dur + 6,
