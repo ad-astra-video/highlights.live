@@ -181,7 +181,14 @@ export type SummaryDropReason =
   /** AC8 (rev 3): the body's opening run repeated another served body in the
    *  same job, and the ONE regeneration repeated too. The card still serves on
    *  its headline. */
-  | "repeat";
+  | "repeat"
+  /** ADAAAA-8914 (AC14.5): the gate deleted the body's unattested filler clauses
+   *  (atmosphere / reaction / competition / a sentence with no attested fact),
+   *  the remaining facts fell under the band floor, and the one regeneration did
+   *  not rebuild it. Named separately from `gate` because the refusal is a
+   *  FILLER-depth refusal: §15.4's `summaryViolations` + `summaryWordCount` beside
+   *  `summaryFloorWords` say exactly how much the clause repair took away. */
+  | "filler";
 
 export const SUMMARY_DROP_REASONS: readonly SummaryDropReason[] = [
   "pool_busy",
@@ -190,6 +197,7 @@ export const SUMMARY_DROP_REASONS: readonly SummaryDropReason[] = [
   "parse",
   "gate",
   "repeat",
+  "filler",
 ];
 
 /** Resolve the per-call fee: `override` when finite and positive, otherwise the
@@ -787,7 +795,23 @@ export type SummaryViolation =
   | "unattested-venue"
   /** ADAAAA-8910: a direction claim ("Real Madrid takes the lead") on a row that
    *  attests the score DIGITS and the sides' names, never which side scored. */
-  | "unattested-side";
+  | "unattested-side"
+  /** ADAAAA-8914 (AC14.1): a sentence asserts nothing the row attests. The gate
+   *  DELETES such a clause before judging (`dropFillerSentences`), so this is the
+   *  backstop for a clause that survived the repair. */
+  | "unattested-sentence"
+  /** ADAAAA-8914 (AC14.2): an atmosphere / reaction / value clause
+   *  ("the crowd erupts", "the atmosphere is electric", "this intense
+   *  competition"). Same repair-then-backstop shape as above. */
+  | "unattested-atmosphere"
+  /** ADAAAA-8914 (AC14.3): two sentences inside one body repeat each other at
+   *  >= `SUMMARY_SENTENCE_REPEAT_THRESHOLD`. The cross-ROW repeat is the lane's
+   *  (job-scoped) bar, because a body cannot see the other cards. */
+  | "repeat-sentence"
+  /** ADAAAA-8914 (AC14.4): a match-time frame on a clock token that is not the
+   *  row's attested `matchClock.token`. ADAAAA-8910's repair renames the frame
+   *  first, so this fires only on a shape the repair cannot reach. */
+  | "match-clock-frame";
 
 /**
  * ADAAAA-8773 / spec §13.2 (rev 7): the refusals a SECOND sample cannot repair.
@@ -798,6 +822,13 @@ export type SummaryViolation =
  * buying `$0.0049986` to reach the identical `too-few-facts` refusal on both VOD
  * rows of job `70400b1d`. The lane keeps the retry slot for the AC8 repeat path
  * only, where a different opening is plausible by construction.
+ *
+ * ADAAAA-8914 (AC14.5) is deliberately NOT on this list: a filler refusal is
+ * repairable by construction. The gate has already DELETED the offending clause,
+ * the prompt states the fact-per-sentence rule, and the retry names the clause it
+ * deleted — so the ONE regeneration the contract allows is the cheapest path back
+ * to a served body. The lane names that drop `filler` when the second sample still
+ * falls under the floor.
  */
 export const SUMMARY_DETERMINISTIC_REFUSALS: readonly SummaryViolation[] = [
   "too-few-facts",
@@ -867,6 +898,19 @@ export interface SummaryEvidence {
     ballOutcome?: string | null;
     goalCrossed?: boolean | null;
     scoreBoardChanged?: boolean | null;
+  } | null;
+  /**
+   * ADAAAA-8914 (AC14.4): the row's own persisted scorebug reading. The body's
+   * clock clause must serve THIS token when it frames a stamp as match time, and
+   * a census reports `clockToken(body)` beside it per served row. Additive and
+   * optional: a row with no legible reading carries none, and every existing bar
+   * keeps today's behaviour (`matchClockFrameClaims` returns nothing to compare).
+   */
+  matchClock?: {
+    token?: string | null;
+    seconds?: number | null;
+    period?: string | null;
+    legible?: boolean | null;
   } | null;
 }
 
@@ -1413,6 +1457,326 @@ export function unattestedSideClaims(text: string, evidence: SummaryEvidence): s
   return [...new Set(out)];
 }
 
+// --- ADAAAA-8914 (AC14): filler depth ---------------------------------------
+//
+// The rev-7 build cleared every standing bar and still read as filler. Measured
+// off the served bytes of live job `9bed3bd7` (3 bodies) and VOD job `796e202d`
+// (2 bodies):
+//
+//   * AC8 compares only the FIRST FOUR WORDS of each body, so the per-job
+//     sentence template (`This pivotal moment occurs at the 1:42 mark of the
+//     match.`) repeated on all three live bodies at 0.965-0.982 similarity and
+//     was never seen — ~11 of each body's 30-32 words.
+//   * The depth bars are BODY bars: two attested fact kinds lift a 46-word body
+//     that carries one fact, so `The crowd erupts in celebration`, `the
+//     atmosphere in the stadium is electric` and `secures a vital point` served
+//     unmeasured.
+//   * A clock clause is only reconciled against the CLIP anchor (ADAAAA-8773),
+//     so an offset framed as a mark of the match passed while the row's own
+//     `matchClock.token` said something else entirely (ADAAAA-8910 owns that
+//     frame on the live rail; AC14 extends the rule to the VOD rail).
+//
+// AC14 is a TIGHTENING, not a trade: the bars below are all sentence-level, and
+// the deterministic repair DELETES the offending clause (never rewrites it), so
+// a body can lose its filler and still serve when it keeps its facts in band.
+
+/** Sentences as the gate counts them: runs closed by `.`, `!`, `?` or `…`.
+ *  Same split as `summarySentenceCount`, exposed so every reader (gate, lane,
+ *  replay tool) cuts a body the same way. */
+export function summarySentencesOf(text: string): string[] {
+  const body = (text ?? "").trim();
+  if (!body) return [];
+  return body
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?…])\s+(?=[A-ZÀ-Ý0-9"'“(])/u)
+    .map((s) => s.trim())
+    .filter((s) => /[A-Za-z0-9À-ÿ]/.test(s));
+}
+
+/** The UNATTESTED clause vocabulary AC14 bans. Nothing the row persists measures
+ *  any of it: `matchContext` carries teams/players (and a competition only when
+ *  a resolver read one), the attestation carries the score transition and the
+ *  ball outcome, the transcript carries speech, and `reason`/`caption` are
+ *  GENERATED copy (ADAAAA-8735 forbids reading them as attestation). The crowd,
+ *  the atmosphere and a player's emotional reaction are exactly what a body
+ *  reaches for when it has nothing to say. */
+const ATMOSPHERE_CLAIM_RE =
+  /\b(?:atmospheres?|the\s+crowd|crowd|spectators?|supporters?|the\s+fans|fans|the\s+stands|the\s+terraces|electric|deafening|jubilant|celebrations?|celebrating|celebrates?|erupts?|erupted|cheers?|cheered|applause|jubilation|delirium)\b/i;
+
+/** A player/bench REACTION as a sentence's subject. A reaction is not an
+ *  attested actor action (`ACTION_RE` / `SUSTAINED_ACTION_RE` never credit it). */
+const REACTION_CLAIM_RE =
+  /\b(?:players?\s+react(?:s|ed|ing)?|react(?:s|ed|ing)?\s+to|the\s+bench|the\s+coach|the\s+dugout|the\s+sideline)\b/i;
+
+/** VALUE-ONLY filler: a clause that asserts significance instead of a fact. The
+ *  measured set is the rev-7 trailing sentences — `in this high-stakes
+ *  competition`, `in this intense competition`, `in this high-stakes match`,
+ *  `battle for control`, `shift in momentum`, `secures a vital point`, `against
+ *  their opponent to secure the tie`, `dramatic turn of events`, `pivotal
+ *  moment`, `maintains their momentum`. None of it is a score line, an actor's
+ *  action, the match clock, or a competition the match context carries. */
+const VALUE_FILLER_RE =
+  /\b(?:momentum|high[- ]stakes|intensit(?:y|ies)|intense|battle\s+for\s+(?:control|possession)|turning\s+point|pivotal\s+moment|dramatic|vital\s+point|crucial|dominance|dominant|against\s+their\s+opponent|secure\s+the\s+tie|shift\s+in\s+(?:momentum|the\s+game)|game[- ]changing|world[- ]class|at\s+its\s+peak)\b/i;
+
+/** Every unattested atmosphere / reaction / value clause in `text`. Matched per
+ *  CLAUSE (sentence) so a body can be repaired by deleting exactly the sentence
+ *  that carries it. */
+export function unattestedAtmosphereClaims(text: string): string[] {
+  const body = text ?? "";
+  const hits: string[] = [];
+  for (const re of [ATMOSPHERE_CLAIM_RE, REACTION_CLAIM_RE, VALUE_FILLER_RE]) {
+    const found = body.match(re);
+    if (found) hits.push(found[0].toLowerCase());
+  }
+  return [...new Set(hits)];
+}
+
+/** True when the row's own evidence attests a competition/venue, i.e. the only
+ *  case a competition clause is a fact rather than an invention (ADAAAA-8910
+ *  defect 3 already gates the whole body; AC14 reads it per sentence). */
+export function competitionAttested(evidence: SummaryEvidence): boolean {
+  return matchContextVenueText(evidence.matchContext).length > 0;
+}
+
+/** The row's attested MATCH clock token (`18:13`), when it carries a legible
+ *  one. Read from `matchClock`, the scorebug reading the row persists — never
+ *  from the generated `reason`. */
+export function attestedMatchClockToken(evidence: SummaryEvidence): string | null {
+  const mc = evidence.matchClock;
+  if (!mc || typeof mc !== "object") return null;
+  if (mc.legible === false) return null;
+  const token = typeof mc.token === "string" ? mc.token.trim() : "";
+  return token.length > 0 ? token : null;
+}
+
+/** Every clock token the body prints (`1:42`, `18:13`). */
+export function clockTokensOf(text: string): string[] {
+  return [...new Set((text ?? "").match(CLOCK_TOKEN_RE) ?? [])];
+}
+
+/** AC14.4: the clock report a census can read per served row.
+ *
+ *  `servesMatchClock` is `null` on a row with no attested match clock (nothing
+ *  to compare), `true` when the body's only clock token IS the attested token,
+ *  and `false` when the body prints a different stamp — which is legal ONLY as a
+ *  clip offset (the frame repair, ADAAAA-8910, renames it to "of the clip"). */
+export interface SummaryClockReport {
+  tokens: string[];
+  matchClockToken: string | null;
+  frames: string[];
+  servesMatchClock: boolean | null;
+}
+
+export function summaryClockReport(text: string, evidence: SummaryEvidence): SummaryClockReport {
+  const tokens = clockTokensOf(text);
+  const matchClockToken = attestedMatchClockToken(evidence);
+  const frames = clockFrameClaims(text);
+  return {
+    tokens,
+    matchClockToken,
+    frames,
+    servesMatchClock: matchClockToken === null ? null : tokens.includes(matchClockToken),
+  };
+}
+
+/** AC14.4: a match-time FRAME whose adjacent clock token is not the row's
+ *  attested `matchClock.token`. ADAAAA-8910's deterministic repair renames the
+ *  frame before the gate judges, so this fires only for a shape that repair
+ *  cannot reach — it is the bar behind the repair, and the one a replay tool
+ *  reports on the RAW stored bytes. */
+export function matchClockFrameClaims(text: string, evidence: SummaryEvidence): string[] {
+  const claims = clockFrameClaims(text);
+  if (claims.length === 0) return [];
+  const token = attestedMatchClockToken(evidence);
+  const tokens = clockTokensOf(text);
+  if (token !== null && tokens.includes(token)) {
+    // The body serves the attested stamp; a frame on it is honest.
+    const other = tokens.filter((t) => t !== token);
+    return other.length > 0 ? claims : [];
+  }
+  return claims;
+}
+
+/** The fact kinds ONE sentence carries, credited under the same rules the body
+ *  bar uses (`attestedSummaryFactKinds`): a score line the row's transition
+ *  grounds, the row's own match clock (or the clip offset the window anchors), an
+ *  action that NAMES an attested actor, and a competition only when the match
+ *  context carries one. */
+export function sentenceFactKinds(sentence: string, evidence: SummaryEvidence): SummaryFactKind[] {
+  const available = new Set(attestedFactKinds(evidence));
+  const out = new Set<SummaryFactKind>();
+  const matchClockToken = attestedMatchClockToken(evidence);
+  for (const fact of summaryFacts(sentence)) {
+    if (!available.has(fact.kind)) continue;
+    if (fact.kind === "score" && !scoreFactGrounded(fact.text, evidence)) continue;
+    if (fact.kind === "venue" && !venueFactGrounded(fact.text, evidence)) continue;
+    if (fact.kind === "clock" && !clockFactGrounded(fact.text, evidence) && fact.text !== matchClockToken) continue;
+    if (fact.kind === "action" && !bodyNamesAttestedActor(sentence, evidence)) continue;
+    out.add(fact.kind);
+  }
+  return [...out];
+}
+
+/** AC14.1: the per-sentence report. `facts` is what the row ATTESTED in that
+ *  sentence, so an empty list is an unattested sentence (the filler the depth
+ *  bars never saw); `claims` names the atmosphere / reaction / value clause and
+ *  `venueClaims` the competition/venue claim ADAAAA-8910's own bar owns. */
+export interface SummarySentenceReport {
+  sentence: string;
+  facts: SummaryFactKind[];
+  claims: string[];
+  venueClaims: string[];
+  words: number;
+}
+
+export function summarySentenceFacts(text: string, evidence: SummaryEvidence): SummarySentenceReport[] {
+  return summarySentencesOf(text).map((sentence) => ({
+    sentence,
+    facts: sentenceFactKinds(sentence, evidence),
+    claims: unattestedAtmosphereClaims(sentence),
+    venueClaims: unattestedVenueClaims(sentence, evidence),
+    words: summaryWordCount(sentence),
+  }));
+}
+
+/** AC14.1/AC14.2: every sentence that asserts nothing the row attests, or that
+ *  carries an unattested atmosphere / reaction clause. A sentence whose only
+ *  defect is a competition/venue claim is DELIBERATELY not listed: ADAAAA-8910's
+ *  `unattested-venue` bar owns that claim (this ticket must not double-fix it),
+ *  so the gate reports the 8910 token and leaves the rule where it landed. */
+export function unattestedSentences(text: string, evidence: SummaryEvidence): SummarySentenceReport[] {
+  return summarySentenceFacts(text, evidence).filter(
+    (s) => s.claims.length > 0 || (s.facts.length === 0 && s.venueClaims.length === 0)
+  );
+}
+
+/** AC14.5: the deterministic repair — DELETE the offending clause, never rewrite
+ *  it. Extractive like `clampSummaryDepth`, so a sentence that survives keeps its
+ *  bytes and a fact survives the repair. A body whose remaining sentences fall
+ *  under the band floor is then refused by the depth bars (and the lane names the
+ *  drop `filler`). A sentence that carries a competition/venue claim is left to
+ *  ADAAAA-8910's `unattested-venue` bar rather than deleted here. */
+export interface SummaryFillerDrop {
+  text: string;
+  dropped: string[];
+  claims: string[];
+}
+
+export function dropFillerSentences(text: string, evidence: SummaryEvidence): SummaryFillerDrop {
+  const reports = summarySentenceFacts(text, evidence);
+  const dropped: string[] = [];
+  const claims: string[] = [];
+  const kept: string[] = [];
+  for (const report of reports) {
+    const unattested = report.facts.length === 0 && report.venueClaims.length === 0;
+    if (report.claims.length > 0 || unattested) {
+      dropped.push(report.sentence);
+      for (const claim of report.claims) if (!claims.includes(claim)) claims.push(claim);
+      continue;
+    }
+    kept.push(report.sentence);
+  }
+  if (dropped.length === 0) return { text: (text ?? "").trim(), dropped: [], claims: [] };
+  return { text: kept.join(" ").trim(), dropped, claims };
+}
+
+/** AC14.3: normalized sentence tokens. Unlike `normalizeSummaryTokens` (the
+ *  opening-run reader) this KEEPS digits and every function word: the defect is
+ *  a sentence template that differs only in its clock, so dropping the clock
+ *  would score every template pair 1.0 and dropping function words would score it
+ *  below the bar. `1:42` stays one token; `2-1` splits on its hyphen. */
+export function sentenceTokens(text: string): string[] {
+  return (
+    (text ?? "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .match(/[a-z0-9]+(?:[':][a-z0-9]+)*/g) ?? []
+  );
+}
+
+/** The bar: two served bodies in one job may not share a sentence at this
+ *  normalized similarity (AC14.3). */
+export const SUMMARY_SENTENCE_REPEAT_THRESHOLD = 0.8;
+
+export interface SummarySentenceRepeat {
+  a: string;
+  b: string;
+  similarity: number;
+}
+
+/** Normalized similarity of two sentences: Jaccard over token SETS. The measured
+ *  rev-7 template (`This pivotal moment occurs at the 1:42 mark of the match.` on
+ *  three rows, clock differing) scores 0.818 — above the 0.80 bar, while two
+ *  honest score lines (`… moves to 2-1` / `… moves to 2-2`) score 0.667 and stay
+ *  clear, so the bar separates a template from a fact that differs by its own
+ *  digits. */
+export function sentenceSimilarity(a: string, b: string): number {
+  const left = new Set(sentenceTokens(a));
+  const right = new Set(sentenceTokens(b));
+  if (left.size === 0 || right.size === 0) return 0;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared++;
+  return shared / (left.size + right.size - shared);
+}
+
+/** Every sentence of `body` that repeats one of the already-SERVED sentences in
+ *  this job at or above the bar. The lane feeds it the job's served sentences
+ *  (cross-row, the AC14.3 defect); the gate feeds it the body's own sentences
+ *  (`internalSentenceRepeats`) so one body cannot recite itself. */
+export function repeatedSentences(
+  body: string,
+  served: readonly string[],
+  threshold: number = SUMMARY_SENTENCE_REPEAT_THRESHOLD
+): SummarySentenceRepeat[] {
+  const out: SummarySentenceRepeat[] = [];
+  for (const sentence of summarySentencesOf(body)) {
+    for (const other of served) {
+      const similarity = sentenceSimilarity(sentence, other);
+      if (similarity >= threshold) out.push({ a: sentence, b: other, similarity });
+    }
+  }
+  return out;
+}
+
+/** Sentences repeated INSIDE one body (a body that recites its own template). */
+export function internalSentenceRepeats(
+  body: string,
+  threshold: number = SUMMARY_SENTENCE_REPEAT_THRESHOLD
+): SummarySentenceRepeat[] {
+  const sentences = summarySentencesOf(body);
+  const out: SummarySentenceRepeat[] = [];
+  for (let i = 0; i < sentences.length; i++) {
+    for (let j = i + 1; j < sentences.length; j++) {
+      const similarity = sentenceSimilarity(sentences[i], sentences[j]);
+      if (similarity >= threshold) out.push({ a: sentences[i], b: sentences[j], similarity });
+    }
+  }
+  return out;
+}
+
+/** AC14.3: the CLOSEST pair across a set of bodies, reported whether it passes
+ *  the bar or not — the census must print the number even on a clean job, so a
+ *  pass is evidence rather than an absence. `null` only when fewer than two
+ *  sentences exist. */
+export function closestSentencePair(
+  bodies: readonly string[],
+  threshold: number = SUMMARY_SENTENCE_REPEAT_THRESHOLD
+): (SummarySentenceRepeat & { passes: boolean }) | null {
+  let best: (SummarySentenceRepeat & { passes: boolean }) | null = null;
+  const sentences: string[] = [];
+  for (const body of bodies) for (const s of summarySentencesOf(body)) sentences.push(s);
+  for (let i = 0; i < sentences.length; i++) {
+    for (let j = i + 1; j < sentences.length; j++) {
+      const similarity = sentenceSimilarity(sentences[i], sentences[j]);
+      if (!best || similarity > best.similarity) {
+        best = { a: sentences[i], b: sentences[j], similarity, passes: similarity < threshold };
+      }
+    }
+  }
+  return best;
+}
+
 /** AC9 read: the DISTINCT fact types the body relays that the row attests. */
 export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence): SummaryFactKind[] {
   const available = new Set(attestedFactKinds(evidence));
@@ -1562,6 +1926,14 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   if (unattestedVenueClaims(body, evidence).length > 0) out.push("unattested-venue");
   if (unattestedSideClaims(body, evidence).length > 0) out.push("unattested-side");
   if (attestedSummaryFactKinds(body, evidence).length < SUMMARY_MIN_FACT_KINDS) out.push("too-few-facts");
+  // ADAAAA-8914 (AC14). The clause repair runs BEFORE this function is reached
+  // (`gateSummaryDetail` -> `dropFillerSentences`), so the two bars below are the
+  // backstop for a clause that survived it; the shared helpers are exported so a
+  // $0 replay reads a stored body with the SAME rules the live gate applies.
+  if (unattestedSentences(body, evidence).length > 0) out.push("unattested-sentence");
+  if (unattestedAtmosphereClaims(body).length > 0) out.push("unattested-atmosphere");
+  if (internalSentenceRepeats(body).length > 0) out.push("repeat-sentence");
+  if (matchClockFrameClaims(body, evidence).length > 0) out.push("match-clock-frame");
   return out;
 }
 
@@ -1584,6 +1956,21 @@ export interface SummaryGateDecision {
    *  phrase could not be rewritten in place. A refusal carrying this > 0 is the
    *  neutraliser, not the writer, having taken the body under the band. */
   droppedSentences: number;
+  /** ADAAAA-8914 (AC14.5): the FILLER clauses the gate deleted before judging —
+   *  sentences that asserted nothing the row attests, or that carried an
+   *  unattested atmosphere / reaction / competition clause. Extractive like the
+   *  clamp, so a surviving sentence keeps its bytes. A refusal carrying this > 0
+   *  is the clause repair, not the writer, having taken the body under the floor:
+   *  the lane names that drop `filler` instead of the generic `gate`. */
+  droppedClauses: string[];
+  /** The unattested clause vocabulary that caused those deletions
+   *  (`crowd`, `momentum`, `pivotal moment`, …), for the drop log and §15.4. */
+  clauseClaims: string[];
+  /** ADAAAA-8914 (AC14.5): words left in the body AFTER the clause repair (0 when
+   *  the repair left nothing, and the judged word count when it deleted nothing).
+   *  This is the number the floor check reads, so a `dropped:filler` row shows the
+   *  writer's count, the surviving count and the band's floor side by side. */
+  repairedWords: number;
   /** ADAAAA-8687: the model's own reply, after the internal-token strip and the
    *  clock-prefix strip — i.e. exactly the text that was judged. The write seam
    *  persists it as `summaryRaw` on a refusal so the next QA can quote what the
@@ -1606,7 +1993,7 @@ export interface SummaryGateDecision {
 export function gateSummaryDetail(raw: string | null | undefined, evidence: SummaryEvidence): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
-  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, raw: "", captionOverlap: 0 };
+  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], repairedWords: 0, raw: "", captionOverlap: 0 };
   const clamped = clampSummaryDepth(stripped, evidence.rail);
   const candidates: { text: string; trimmed: boolean }[] =
     clamped && clamped !== stripped ? [{ text: stripped, trimmed: false }, { text: clamped, trimmed: true }] : [{ text: stripped, trimmed: false }];
@@ -1616,6 +2003,11 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
    *  reply it never judged. */
   let lastJudged = "";
   let droppedSentences = 0;
+  /** ADAAAA-8914 (AC14.5): the filler clauses the LAST candidate lost. */
+  let droppedClauses: string[] = [];
+  let clauseClaims: string[] = [];
+  /** Words left after the clause repair — the number AC14.5's floor check reads. */
+  let repairedWords = 0;
   for (const candidate of candidates) {
     if (!candidate.text) continue;
     // AC10 (rev 3): an unattested role noun is removed BEFORE judging, so a body
@@ -1627,29 +2019,66 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     // the reference frame was wrong ("at the 1:42 mark of the match" -> "… of the
     // clip" on a row whose attested match clock is 18:13).
     const clockFrame = neutraliseMatchClockFrame(neutralised.text);
-    const judged = clockFrame.text;
-    if (!judged) continue;
-    lastJudged = judged;
-    droppedSentences = neutralised.droppedSentences;
-    const violations = summaryViolations(judged, evidence);
-    if (violations.length === 0) {
-      return {
-        summary: judged,
-        gate:
-          neutralised.neutralised.length > 0 || clockFrame.neutralised.length > 0
-            ? "neutralised"
-            : candidate.trimmed
-              ? "trimmed"
-              : "accepted",
-        violations: [],
-        words: summaryWordCount(judged),
-        sentences: summarySentenceCount(judged),
-        droppedSentences,
-        raw: stripped,
-        captionOverlap: captionTokenOverlap(judged, evidence.caption),
-      };
+    // ADAAAA-8914 (AC14.1/AC14.2/AC14.5): the FILLER clause is deleted BEFORE
+    // judging, extractively and on the first sample — the one cheap repair the
+    // contract allows. A body that keeps its facts in band still serves; one that
+    // does not is judged as the WRITER wrote it, so the refusal names the bars the
+    // writer failed instead of the ones a shortened body trips.
+    const filler = dropFillerSentences(clockFrame.text, evidence);
+    const repaired = filler.text && filler.text !== clockFrame.text ? filler.text : "";
+    const judgedCandidates = repaired ? [repaired, clockFrame.text] : [clockFrame.text];
+    let candidateRefused: SummaryViolation[] | null = null;
+    for (const judged of judgedCandidates) {
+      if (!judged) continue;
+      const violations = summaryViolations(judged, evidence);
+      if (violations.length === 0) {
+        lastJudged = judged;
+        droppedSentences = neutralised.droppedSentences;
+        droppedClauses = filler.dropped;
+        clauseClaims = filler.claims;
+        repairedWords = repaired ? summaryWordCount(repaired) : summaryWordCount(judged);
+        return {
+          summary: judged,
+          gate:
+            neutralised.neutralised.length > 0 || clockFrame.neutralised.length > 0 || filler.dropped.length > 0
+              ? "neutralised"
+              : candidate.trimmed
+                ? "trimmed"
+                : "accepted",
+          violations: [],
+          words: summaryWordCount(judged),
+          sentences: summarySentenceCount(judged),
+          droppedSentences,
+          droppedClauses,
+          clauseClaims,
+          repairedWords,
+          raw: stripped,
+          captionOverlap: captionTokenOverlap(judged, evidence.caption),
+        };
+      }
+      // The LAST judged candidate is the writer's own body, so the refusal below
+      // reports the bars it earns rather than a shortened body's.
+      candidateRefused = violations;
     }
-    for (const v of violations) if (!refused.includes(v)) refused.push(v);
+    // The repair was applied and did not stand on its own: report the refusal the
+    // writer's own body earns, and keep the repair numbers as evidence.
+    const refusedHere = candidateRefused ?? [];
+    lastJudged = clockFrame.text;
+    droppedSentences = neutralised.droppedSentences;
+    droppedClauses = filler.dropped;
+    clauseClaims = filler.claims;
+    repairedWords = filler.dropped.length > 0 ? (repaired ? summaryWordCount(repaired) : 0) : summaryWordCount(clockFrame.text);
+    if (repaired) {
+      // A repaired body that fell under the floor is AC14.5's case: the DROP is
+      // measured on the repaired text, so only the depth bars it earns are added
+      // (every other bar is a property of the writer's own body, judged above —
+      // adding them here would attribute a shortened body's novelty to the writer).
+      for (const v of summaryViolations(repaired, evidence)) {
+        if (v !== "too-few-words" && v !== "too-few-sentences") continue;
+        if (!refused.includes(v)) refused.push(v);
+      }
+    }
+    for (const v of refusedHere) if (!refused.includes(v)) refused.push(v);
   }
   void band;
   const measured = lastJudged || stripped;
@@ -1660,6 +2089,9 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     words: summaryWordCount(measured),
     sentences: summarySentenceCount(measured),
     droppedSentences,
+    droppedClauses,
+    clauseClaims,
+    repairedWords,
     raw: stripped,
     captionOverlap: captionTokenOverlap(stripped, evidence.caption),
   };
@@ -1688,6 +2120,13 @@ export interface SummaryRefusalDetail {
   floorWords: number;
   targetMinWords: number;
   droppedSentences: number;
+  /** ADAAAA-8914 (AC14.5): filler clauses the repair deleted, the vocabulary that
+   *  caused it, and the word count that survived — the §15.4 evidence for a
+   *  `dropped:filler` row (`repairedWords` beside `floorWords` is the AC14.5
+   *  floor check). */
+  droppedClauses: number;
+  clauseClaims: string[];
+  repairedWords: number;
 }
 
 export function summaryRefusalDetail(decision: SummaryGateDecision, rail: SummaryRail): SummaryRefusalDetail {
@@ -1699,6 +2138,9 @@ export function summaryRefusalDetail(decision: SummaryGateDecision, rail: Summar
     floorWords: band.floorWords,
     targetMinWords: band.targetMinWords,
     droppedSentences: decision.droppedSentences,
+    droppedClauses: decision.droppedClauses.length,
+    clauseClaims: [...decision.clauseClaims],
+    repairedWords: decision.repairedWords,
   };
 }
 
@@ -1731,6 +2173,13 @@ export interface SummaryPromptInput extends SummaryEvidence {
    *  for a different opening instead of relying on the gate to reject a repeat —
    *  prompt first, gate as the backstop. */
   avoidOpenings?: string[];
+  /** ADAAAA-8914 (AC14.3): the SENTENCES already served in this job. AC8 only
+   *  guards the first four words, so the rev-7 live bodies repeated a whole
+   *  sentence template at 0.965-0.982 similarity in sentence 2 and every body
+   *  passed. The prompt shows the served sentences and asks for a sentence that
+   *  is not one of them; the lane is the backstop, because only it can see the
+   *  job's other bodies. */
+  avoidSentences?: string[];
   /** ADAAAA-8803: present only on the RETRY call — the measured shape of the
    *  draft the gate refused. Absent on the first pass, so the first prompt stays
    *  the snapshot-pinned one.
@@ -1855,6 +2304,13 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, ${attestsVenue ? "the competition or venue, " : ""}or a named attested actor's action — rather than padding.`,
     ...retryLines,
     `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
+    // ADAAAA-8914 (AC14.1/AC14.2): the depth bars were BODY bars, so a 46-word
+    // body with one fact and three scene-setting sentences cleared them. Every
+    // sentence is now a fact sentence, and the gate DELETES any sentence that is
+    // not — a body that loses sentences falls under the floor and is dropped.
+    "- Every sentence must carry at least one fact from the evidence: a score line, the clock, the attested match clock, an attested actor's action, or the competition/venue when the match context carries one. A sentence that only sets the scene adds no depth and is deleted.",
+    "- Never describe the atmosphere, the crowd, the fans, a celebration, a reaction, momentum, intensity, a 'pivotal moment', a 'turning point', a 'battle for control' or a 'vital point': the evidence measures none of those, so the gate deletes every sentence that does.",
+    "- Do not reuse a sentence shape from another card in this job. Two cards must never carry the same sentence: no template such as 'This pivotal moment occurs at the … mark'.",
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
     "- The clock fact is the `Window:` label only: it is an offset into THIS clip. A time quoted anywhere else in the evidence (a match clock in the reason or transcript, a scorebug stamp) is not this clip's offset — never restate one as the body's clock.",
     // ADAAAA-8910 (defect 2): the offset's own FRAME. The rev-7 live bodies said
@@ -1862,6 +2318,15 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     // passed the anchor bar while the sentence named a match time 16-19 minutes
     // away from the attested stamp (`matchClock.token` 18:13).
     "- Never call the `Window:` offset a time of the match: no 'mark of the match', 'of the match', 'match clock', 'match time' or 'minute of the match'. If you name it, frame it as the clip ('1:42 into the clip', 'in this clip at 1:42') — the match clock is not in this evidence.",
+    // ADAAAA-8914 (AC14.4): when the row's own scorebug reading IS attested, the
+    // match clock is legal copy — but only THAT token. A body that prints another
+    // stamp as match time is refused (`match-clock-frame`), and a clock clause has
+    // to serve `matchClock.token` or stay a clip offset.
+    ...(attestedMatchClockToken(input)
+      ? [
+          `- The row's attested MATCH clock is ${attestedMatchClockToken(input)}. If you quote a match clock it must be exactly that token ('at ${attestedMatchClockToken(input)} of the match'); never invent or round another match stamp.`,
+        ]
+      : []),
     // ADAAAA-8910 (defect 3): a competition/venue the match context carries is a
     // fact; one it does not carry is an invention.
     ...(attestsVenue
@@ -1885,7 +2350,14 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       : []),
     ...(ballActionAttested === false
       ? [
-          "- No ball outcome was measured in this window: do NOT say the ball was shot, headed, struck, fired, saved, blocked, cleared or went wide/in/near, and do not describe the ball entering the net. Describe the move, the reaction, the crowd or the team's play instead.",
+          "- No ball outcome was measured in this window: do NOT say the ball was shot, headed, struck, fired, saved, blocked, cleared or went wide/in/near, and do not describe the ball entering the net.",
+          // ADAAAA-8914 (AC14.2): this line used to offer "the reaction, the
+          // crowd" as substitute material, and that is exactly what the served VOD
+          // bodies then wrote ("The crowd erupts in celebration", "the atmosphere
+          // in the stadium is electric") — nothing in the row measures a crowd or
+          // a reaction. The legal substitute is an ATTESTED actor's sustained
+          // play, which is what AC9 can credit.
+          "- Describe the team's sustained play instead — possession, pressing, working the ball forward — and NAME an attested team or player when the evidence attests one. Do not describe the crowd, the atmosphere, a celebration or a player's reaction: the evidence measures none of them.",
         ]
       : []),
     attestsScoring
@@ -1898,6 +2370,14 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- Do not open with the same words as another card in this job: vary your first four words.",
     ...(input.avoidOpenings && input.avoidOpenings.length > 0
       ? [`- Do not open with any of these already-served runs: ${input.avoidOpenings.slice(0, 8).map((o) => `'${o}'`).join(", ")}.`]
+      : []),
+    ...(input.avoidSentences && input.avoidSentences.length > 0
+      ? [
+          `- Do not reuse a sentence already served on another card in this job: ${input.avoidSentences
+            .slice(0, 6)
+            .map((s) => `'${s.length > 90 ? `${s.slice(0, 87)}…` : s}'`)
+            .join(", ")}. Write a different sentence with a different fact in it.`,
+        ]
       : []),
     ...(() => {
       // ADAAAA-8806: a retry whose draft was FACT-POOR gets an explicit repair
@@ -1946,6 +2426,24 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       if (violations.includes("unattested-side")) {
         lines.push(
           "- The previous draft said which side scored or took the lead. Restate the scoreboard line only ('the scoreboard moves to 2-1') and name the attested team for its play (pressing, possession), never as the scorer."
+        );
+      }
+      // ADAAAA-8914 (AC14): the retry is told which sentence the gate DELETED and
+      // which one repeated another card, so the one cheap regeneration repairs the
+      // clause instead of re-landing the same filler.
+      if (violations.includes("unattested-atmosphere") || violations.includes("unattested-sentence")) {
+        lines.push(
+          "- The previous draft spent sentences on atmosphere, a crowd, a reaction or significance instead of a fact; the gate deleted them. Replace each one with a sentence that carries a fact from the evidence: the score line, the clock or match clock, or a NAMED attested actor's action."
+        );
+      }
+      if (violations.includes("repeat-sentence")) {
+        lines.push(
+          "- The previous draft repeated a sentence another card in this job already carries. Write a different sentence with a different fact in it — do not reuse the same sentence shape with only the clock changed."
+        );
+      }
+      if (violations.includes("too-few-words") || violations.includes("too-few-sentences")) {
+        lines.push(
+          "- The previous draft fell under the depth floor after the gate deleted its scene-setting sentences. Rebuild it from facts only: every sentence must carry a score line, the clock, or a named attested actor's action."
         );
       }
       return lines;

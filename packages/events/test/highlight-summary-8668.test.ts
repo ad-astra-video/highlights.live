@@ -187,8 +187,12 @@ describe("caption overlap bar", () => {
 
 describe("gateSummaryDetail", () => {
   it("accepts an in-band, grounded, non-restating summary", () => {
+    // ADAAAA-8914 (AC14.1): the second sentence used to be "A low drive from the
+    // edge of the box finds the far corner." — a ball description with no
+    // attested fact in it, which the clause repair now deletes. A served body
+    // carries a fact in every sentence, so the fixture does too.
     const decision = gateSummaryDetail(
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.",
+      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38.",
       live()
     );
     expect(decision.summary).toContain("2-2");
@@ -199,8 +203,8 @@ describe("gateSummaryDetail", () => {
 
   it("clamps an over-long reply and reports `trimmed`", () => {
     const long =
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner. " +
-      "The crowd is up and the bench is on its feet. Northbridge restart from the centre.";
+      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38. " +
+      "Riverside presses high to force a turnover. The scoreboard reads 2-2 at 2:41 into the clip.";
     const decision = gateSummaryDetail(long, live());
     expect(decision.gate).toBe("trimmed");
     expect(decision.sentences).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.maxSentences);
@@ -271,7 +275,7 @@ describe("gateSummaryDetail", () => {
       caption: "Shot saved at the near post.",
     });
     const decision = gateSummaryDetail(
-      "The move develops at 2:40 in the second half of the Champions League tie. The crowd keeps its shape through the next few passes.",
+      "The move develops at 2:40 in the second half of the Champions League tie. The clock still reads 2:40 through the next few passes.",
       ev
     );
     expect(decision.summary).not.toBeNull();
@@ -280,14 +284,17 @@ describe("gateSummaryDetail", () => {
 
   it("enforces the VOD band (3-5 sentences / 120-word, 700-char hard ceiling)", () => {
     const vod: SummaryEvidence = { ...live({ caption: "Shot saved." }), rail: "vod" };
+    // ADAAAA-8914 (AC14.1): every sentence carries a fact, because the clause
+    // repair deletes one that does not (the old fixtures' "A low drive … finds
+    // the far corner" / "Both sides settle into shape" are exactly that filler).
     const twoSentences =
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.";
+      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession at 2:38 into the clip.";
     // Two sentences pass the LIVE band (2-3) and fail the VOD band (3-5).
     expect(gateSummaryDetail(twoSentences, live()).summary).not.toBeNull();
     expect(gateSummaryDetail(twoSentences, vod).violations).toContain("too-few-sentences");
     const three =
-      "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner. " +
-      "The visitors restart from the centre with the clock running down. Both sides settle into shape as the closing minutes wear on.";
+      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession at 2:38 into the clip and work the ball toward the wing. " +
+      "Riverside presses high to force a turnover near the touchline. The scoreboard reads 2-2 as Northbridge recycle the ball through midfield.";
     expect(gateSummaryDetail(three, vod).summary).not.toBeNull();
   });
 });
@@ -405,7 +412,12 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       }),
       body:
         "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
-        "The near post is beaten low and the crowd behind the net is up before the restart.",
+        // ADAAAA-8914: the old second sentence ("The near post is beaten low and
+        // the crowd behind the net is up before the restart.") was an atmosphere
+        // clause — the exact copy AC14 refuses. This row attests no actor (no
+        // matchContext, no transcript), so the fact that keeps its depth is the
+        // scoreboard line itself.
+        "The scoreboard holds at 2-2 as the clip runs on.",
     },
   ];
 
@@ -469,9 +481,10 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
       "The audio feed carries a loud call near 1:42 and the crowd answers it at once. " +
         "Both benches are up and the near touchline fills with movement. " +
         "No scoreboard read inside the window backs the moment up, so the clip stays a celebration.",
-      "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
-        "The near post is beaten low and the crowd behind the net rises before the restart. " +
-        "The closing stages open up as both sides press forward again.",
+      "The scoreboard flips from 2-1 to 2-2 at 2:40 into the clip. " +
+        "The scoreline reads 2-2 as the passage of play continues toward the edge of the box. " +
+        "The clock runs past 2:41 with the score still level at 2-2. " +
+        "The clip closes on the same 2-2 scoreline with the clock near 2:38.",
     ];
     shipped.forEach((row, i) => {
       // AC9: a row attesting only the clock cannot carry a compliant VOD body either.

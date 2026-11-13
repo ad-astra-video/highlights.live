@@ -205,13 +205,17 @@ describe("ADAAAA-8910 defect 2 — the offset's frame is the CLIP, never the mat
   });
 
   it("serves the repaired body: the row keeps its copy, the false frame is gone", () => {
+    // (ADAAAA-8914: this fixture's old second sentence, "The crowd noise builds
+    // as the sides reset.", is an atmosphere clause AC14 deletes — an unattested
+    // clause is not part of THIS bar's evidence, so the fixture now carries an
+    // attested actor's play instead.)
     const draft =
-      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the match. The crowd noise builds as the sides reset.";
+      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the match. Real Madrid keeps possession as the sides reset.";
     const decision = gateSummaryDetail(draft, ROW_AED6);
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("neutralised");
     expect(decision.summary).toBe(
-      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the clip. The crowd noise builds as the sides reset."
+      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the clip. Real Madrid keeps possession as the sides reset."
     );
     // The served copy can no longer assert a match stamp the row does not carry.
     expect(clockFrameClaims(decision.summary ?? "")).toEqual([]);
@@ -242,9 +246,14 @@ describe("ADAAAA-8910 defect 3 — a competition the match context does not carr
   it("refuses a body whose only defect is the venue filler", () => {
     const draft =
       "The crowd noise builds in this intense competition as the scoreboard moves to 2-1 at 1:42 into the clip. Real Madrid holds possession near the touchline.";
+    // ADAAAA-8914 (AC14.2): the sentence is ALSO an atmosphere clause ("the crowd
+    // noise"), so the one cheap clause repair deletes it before the venue bar can
+    // judge it — the body is refused either way, and the raw bar still owns the
+    // venue token (asserted below). The repair is not a second venue rule.
     const decision = gateSummaryDetail(draft, ROW_AED6);
     expect(decision.summary).toBeFalsy();
-    expect(decision.violations).toEqual(["unattested-venue"]);
+    expect(decision.droppedClauses).toHaveLength(1);
+    expect(summaryViolations(draft, ROW_AED6)).toContain("unattested-venue");
   });
 
   it("tells the retry which clause to delete", () => {
@@ -327,8 +336,11 @@ describe("ADAAAA-8910 defect 4 — a direction claim is not attested by the digi
     expect(prompt).toContain("The previous draft said which side scored or took the lead.");
     expect(prompt).toContain("the scoreboard moves to 2-1");
     // The restated body — scoreboard line + the attested team's play — serves.
+    // (ADAAAA-8914 replaced its old second sentence, "The crowd answers as the
+    // sides reset.", which was itself an atmosphere clause: a fixture of the
+    // filler defect, not of this bar.)
     const restated =
-      "The scoreboard moves to 2-1 as Real Madrid works the ball forward at 1:42 into the clip. The crowd answers as the sides reset.";
+      "The scoreboard moves to 2-1 as Real Madrid works the ball forward at 1:42 into the clip. Barcelona presses high to force a turnover.";
     expect(summaryViolations(restated, ROW_AED6)).toEqual([]);
     expect(gateSummaryDetail(restated, ROW_AED6).summary).toBe(restated);
   });

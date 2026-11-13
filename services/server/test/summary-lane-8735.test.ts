@@ -37,13 +37,18 @@ const teamContext = (extra: Partial<SummaryEvidence> = {}): SummaryEvidence =>
 
 /** Two bodies, identical prose, differing ONLY by the leading clock — the
  *  decisive pair from `9891ff33` (`be041aaf` / `8b444000`, Jaccard 0.9091). */
+// ADAAAA-8914 (AC14.1): the second sentence used to be "This action occurs during
+// the match as the play develops toward the wing." — a sentence with no attested
+// fact, deleted by the clause repair (which took the body under the live floor
+// before the opening guard could run). The opening collision under test is
+// unchanged: both bodies still start "northbridge shoot on".
 const CLOCK_A =
-  "At 3:23, Northbridge shoot on the right side of the field. This action occurs during the match as the play develops toward the wing.";
+  "At 3:23, Northbridge shoot on the right side of the field. Northbridge keeps possession as the play develops toward the wing.";
 const CLOCK_B =
-  "At 3:57, Northbridge shoot on the right side of the field. This action occurs during the match as the play develops toward the wing.";
+  "At 3:57, Northbridge shoot on the right side of the field. Northbridge keeps possession as the play develops toward the wing.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT =
-  "A low drive from Northbridge is blocked at 3:30 at the edge of the box. The crowd answers it before the restart.";
+  "A low drive from Northbridge is blocked at 3:30 at the edge of the box. Northbridge recycles the ball and switches play to the left.";
 /** The rev-3 served body the ticket names: clock plus a bare verb, no actor. */
 const BARE_VERB =
   "At 2:53, the ball shoots on the left side of the field. This action occurs during the match as the play develops toward the wing.";
@@ -161,8 +166,11 @@ describe("AC9 rev 4 — action needs a named attested actor at the lane seam", (
 
   it("stores the same body when it NAMES the attested team", async () => {
     const { store, patches } = stubStore();
+    // ADAAAA-8914: the second sentence now carries the team's play (the old one,
+    // "This action occurs during the match as the play develops toward the wing.",
+    // asserts nothing and is deleted by the clause repair).
     const body =
-      "At 3:23, Northbridge shoot on the right side of the field. This action occurs during the match as the play develops toward the wing.";
+      "At 3:23, Northbridge shoot on the right side of the field. Northbridge keeps possession as the play develops toward the wing.";
     const f = stubFetch([ok(body)]);
     const run = cfg({ fetchImpl: f.fn });
     const result = await runSummaryForRow(

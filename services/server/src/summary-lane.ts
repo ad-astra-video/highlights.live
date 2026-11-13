@@ -30,14 +30,19 @@ import {
   SUMMARY_MAX_CALLS_PER_ROW,
   SUMMARY_MIN_FACT_KINDS,
   attestedFactKinds,
+  attestedMatchClockToken,
   bodyNamesAttestedActor,
+  clockTokensOf,
   summaryRefusalDetail,
   summaryRefusalIsRepairable,
   SUMMARY_RAW_MAX_CHARS,
   buildSummaryPrompt,
   gateSummaryDetail,
   resolveSummaryFee,
+  repeatedSentences,
+  summaryBand,
   summaryOpeningRun,
+  summarySentencesOf,
   type SummaryDropReason,
   type SummaryEvidence,
   type SummaryRail,
@@ -65,6 +70,10 @@ export interface SummaryLaneStore {
       summaryFloorWords?: number;
       summaryTargetMinWords?: number;
       summaryDroppedSentences?: number;
+      /** ADAAAA-8914 (AC14.5): what the filler clause repair deleted. */
+      summaryDroppedClauses?: number;
+      summaryClauseClaims?: string[];
+      summaryRepairedWords?: number;
     }
   ): Promise<unknown>;
 }
@@ -88,10 +97,16 @@ export interface SummaryRowDescriptor {
  */
 export interface SummaryJobState {
   servedOpenings: Set<string>;
+  /** ADAAAA-8914 (AC14.3): every SENTENCE already served in this job. AC8 only
+   *  compares the first four words, so the rev-7 live bodies repeated a whole
+   *  sentence template in sentence 2 (0.965-0.982 pairwise similarity) and all
+   *  three served. The job is the scope for the same reason it is the scope for
+   *  openings: the defect is two CARDS on one video. */
+  servedSentences: string[];
 }
 
 export function newSummaryJobState(): SummaryJobState {
-  return { servedOpenings: new Set<string>() };
+  return { servedOpenings: new Set<string>(), servedSentences: [] };
 }
 
 export interface SummaryLaneConfig {
@@ -220,10 +235,13 @@ export async function runSummaryForRow(
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
     // AC8 prompt-first: the regeneration (and any retry) is asked to avoid the
     // openings already served in this job, so the gate is a backstop, not the
-    // only defence.
+    // only defence. ADAAAA-8914 (AC14.3) extends the same prompt-first rule to the
+    // whole SENTENCE: the job's served sentences are shown and the copy is asked to
+    // differ from them, because only the lane can see the other cards.
     const prompt = buildSummaryPrompt({
       ...evidence,
       ...(servedOpenings && servedOpenings.size > 0 ? { avoidOpenings: [...servedOpenings] } : {}),
+      ...(state && state.servedSentences.length > 0 ? { avoidSentences: [...state.servedSentences] } : {}),
       // ADAAAA-8803/8806: the retry directive carries the refused draft's
       // measured shape AND its violations, so the repair line can name both the
       // shortfall and the missing fact.
@@ -246,7 +264,19 @@ export async function runSummaryForRow(
     const decision = gateSummaryDetail(reply.text, evidence);
     if (!decision.summary) {
       lastGate = decision;
-      lastReason = "gate";
+      // ADAAAA-8914 (AC14.5): when the clause repair is what took the body under
+      // the band floor, the drop is a FILLER drop, not a compliance drop — name it
+      // so a census can tell "the writer had nothing to say" from "the writer
+      // invented something". A refusal that is ALSO deterministic (the row's fact
+      // menu cannot nourish two kinds, an invented name, an internal token) keeps
+      // the `gate` name: that row was never repairable by a second sample, so the
+      // clause repair is not what sank it.
+      const deterministicRefusal = decision.violations.some((v) => !summaryRefusalIsRepairable(v, evidence));
+      const fillerDrop =
+        !deterministicRefusal &&
+        decision.droppedClauses.length > 0 &&
+        decision.repairedWords < summaryBand(evidence.rail).floorWords;
+      lastReason = fillerDrop ? "filler" : "gate";
       // ADAAAA-8773 / spec §13.2 (rev 7): a DETERMINISTIC refusal ends the row on
       // ONE call. The row's fact menu is fixed and the same prompt cannot repair a
       // clock anchor, an invented name or an enum-shaped token; the served VOD job
@@ -305,7 +335,30 @@ export async function runSummaryForRow(
       );
       break;
     }
+    // ADAAAA-8914 (AC14.3): a SENTENCE this job already served on another card is
+    // the same defect one level down — the rev-7 live bodies all carried "This
+    // pivotal moment occurs at the … mark of the match" at 0.965-0.982 similarity
+    // while the first-four-words bar passed. Regenerate once with the offending
+    // sentence named, then drop `repeat`: two cards may not recite each other.
+    const sentenceRepeats = state ? repeatedSentences(decision.summary, state.servedSentences) : [];
+    if (sentenceRepeats.length > 0) {
+      const closest = sentenceRepeats.reduce((a, b) => (b.similarity > a.similarity ? b : a));
+      if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
+        retry = { words: decision.words, sentences: decision.sentences, violations: ["repeat-sentence"] };
+        log(
+          `[summary:${descriptor.jobId}] repeat-sentence highlight=${descriptor.highlightId} similarity=${closest.similarity.toFixed(3)} sentence=${JSON.stringify(closest.a.slice(0, 120))} — regenerating once`
+        );
+        continue;
+      }
+      lastGate = decision;
+      lastReason = "repeat";
+      log(
+        `[summary:${descriptor.jobId}] repeat-sentence highlight=${descriptor.highlightId} similarity=${closest.similarity.toFixed(3)} sentence=${JSON.stringify(closest.a.slice(0, 120))} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+      );
+      break;
+    }
     servedOpenings?.add(opening);
+    for (const sentence of summarySentencesOf(decision.summary)) state?.servedSentences.push(sentence);
     const latencyMs = Math.max(0, Math.round(now() - started));
     await store.patchHighlightSummary(descriptor.highlightId, {
       summary: decision.summary,
@@ -316,7 +369,7 @@ export async function runSummaryForRow(
       summaryP95Ms: latencyMs,
     });
     log(
-      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${decision.words} sentences=${decision.sentences} gate=${decision.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)}`
+      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${decision.words} sentences=${decision.sentences} gate=${decision.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)} clockToken=${JSON.stringify(clockTokensOf(decision.summary))} matchClockToken=${JSON.stringify(attestedMatchClockToken(evidence))}`
     );
     return { outcome: "stored", gate: decision.gate, calls, latencyMs };
   }
@@ -342,6 +395,9 @@ export async function runSummaryForRow(
           summaryFloorWords: detail.floorWords,
           summaryTargetMinWords: detail.targetMinWords,
           summaryDroppedSentences: detail.droppedSentences,
+          summaryDroppedClauses: detail.droppedClauses,
+          summaryRepairedWords: detail.repairedWords,
+          ...(detail.clauseClaims.length > 0 ? { summaryClauseClaims: detail.clauseClaims } : {}),
         }
       : {}),
     summaryCalls: calls,
@@ -568,6 +624,14 @@ export function summaryEvidenceForRow(row: {
   trigger?: { timestamp?: number; durationS?: number } | null;
   start?: number;
   end?: number;
+  /** ADAAAA-8914 (AC14.4): the row's own persisted scorebug reading, so a clock
+   *  clause that frames a stamp as match time can be checked against it. */
+  matchClock?: {
+    token?: string | null;
+    seconds?: number | null;
+    period?: string | null;
+    legible?: boolean | null;
+  } | null;
   deferredAttestation?: {
     scoreboardDelta?: { from?: string | null; to?: string | null } | null;
     pre?: readonly number[] | null;
@@ -608,6 +672,15 @@ export function summaryEvidenceForRow(row: {
     windowDurationS: duration ?? null,
     scoreTransition: scoreTransitionForRow(row),
     matchContext: row.matchContext ?? null,
+    // ADAAAA-8914 (AC14.4): the row's attested match clock, when one was read.
+    matchClock: row.matchClock
+      ? {
+          token: row.matchClock.token ?? null,
+          seconds: row.matchClock.seconds ?? null,
+          period: row.matchClock.period ?? null,
+          legible: row.matchClock.legible ?? null,
+        }
+      : null,
     transcript: row.asrTranscript ?? null,
     adjacentScoreCue: adjacentScoreCue ?? null,
     attestation: row.attestationUsed

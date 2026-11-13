@@ -174,8 +174,13 @@ describe("AC9 — action is credited only off an attested actor (rev 4)", () => 
 
   it("credits action when the body NAMES a matchContext team", () => {
     const evidence = teamContext();
+    // ADAAAA-8914 (AC14.1): the second sentence used to be "This action occurs
+    // during the match as the play develops toward the wing." — a sentence that
+    // asserts nothing the row attests, which the clause repair deletes. The
+    // fixture names the team in both sentences, which is what the bar under test
+    // is about.
     const body =
-      "At 3:23, Northbridge shoot on the right side of the field. This action occurs during the match as the play develops toward the wing.";
+      "At 3:23, Northbridge shoot on the right side of the field. Northbridge work the ball toward the wing as the move develops.";
     expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
     expect(attestedSummaryFactKinds(body, evidence)).toEqual(["clock", "action"]);
     expect(gateSummaryDetail(body, evidence).summary).toBe(body);

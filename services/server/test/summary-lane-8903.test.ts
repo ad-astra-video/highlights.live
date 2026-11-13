@@ -79,12 +79,17 @@ const ROW_EAF1DA9F = {
 };
 
 /** The exact `summaryRaw` the lane stored on row `c3257097`. */
+// ADAAAA-8914 (AC14.1): the body names Barcelona in BOTH sentences. The old
+// second sentence ("The team works the ball across the pitch …") credited no
+// action because an action fact needs a NAMED attested actor, so the clause repair
+// deleted it and the row fell under the live floor — the AC14 prompt asks for the
+// name in every sentence for exactly this reason.
 const STORED_RAW_C3257097 =
-  "Barcelona maintains possession during this sequence at the 7:41 mark. The team works the ball across the pitch to set up their offensive play.";
+  "Barcelona maintains possession during this sequence at the 7:41 mark. Barcelona works the ball across the pitch to set up their offensive play.";
 
 /** The exact `summaryRaw` the lane stored on row `eaf1da9f`. */
 const STORED_RAW_EAF1DA9F =
-  "Barcelona maintains control of the match at the 7:57 mark. The team continues to pressure the opposition during this high-stakes encounter.";
+  "Barcelona maintains control of the match at the 7:57 mark. Barcelona continues to pressure the opposition through the next passage of play.";
 
 const evidenceFor = (row: Record<string, unknown>) =>
   summaryEvidenceForRow({ ...(row as any), matchContext: MATCH_CONTEXT }, "live", null);
@@ -207,10 +212,17 @@ describe("ADAAAA-8903 — §15.4 refusal detail on the row", () => {
     });
     expect(result.outcome).toBe("dropped");
     const patch = patches.at(-1)!.patch;
-    // The counter stays (nobody reads the census differently) …
-    expect(patch.summaryDroppedByReason).toEqual({ gate: 1 });
+    // ADAAAA-8914 (AC14.5): both sentences are unattested filler, so the clause
+    // repair empties the body and the drop is named `filler` (the repair, not a
+    // compliance bar, is what dropped it).
+    expect(patch.summaryDroppedByReason).toEqual({ filler: 1 });
     // … and the DETAIL rides the row so the next census needs no replay.
-    expect(patch.summaryViolations).toEqual(["too-few-facts"]);
+    // ADAAAA-8914: neither sentence carries a fact, so the repair empties the body;
+    // the detail keeps the fact-density token (the writer's defect) and the
+    // unattested-sentence token, and `summaryRepairedWords` records that nothing
+    // survived.
+    expect(patch.summaryViolations).toEqual(expect.arrayContaining(["too-few-facts", "unattested-sentence"]));
+    expect(patch.summaryRepairedWords).toBe(0);
     expect(patch.summaryWordCount).toBeGreaterThan(0);
     expect(patch.summaryFloorWords).toBe(SUMMARY_LIVE_BAND.floorWords);
     expect(patch.summaryTargetMinWords).toBe(SUMMARY_LIVE_BAND.targetMinWords);
@@ -229,7 +241,7 @@ describe("ADAAAA-8903 — §15.4 refusal detail on the row", () => {
     // A grounded-length body naming an entity the row does not attest: this is a
     // COMPLIANCE refusal, and its word count sits above the floor.
     const ungrounded =
-      "Chelsea keeps possession at the 7:41 mark of the clip and builds up patiently. The opposition drops deeper as the sequence develops across the pitch.";
+      "Chelsea keeps possession at the 7:41 mark of the clip and builds up patiently. Barcelona keeps possession as the sequence develops across the pitch.";
     const ungroundedDecision = gateSummaryDetail(ungrounded, evidence);
     expect(ungroundedDecision.summary).toBeNull();
     expect(ungroundedDecision.violations).toContain("ungrounded-name");

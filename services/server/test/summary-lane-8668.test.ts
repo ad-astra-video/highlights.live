@@ -22,8 +22,12 @@ import {
   summaryCallsForRows,
 } from "../src/job-settlement.js";
 
+// ADAAAA-8914 (AC14.1): a served body carries a fact in EVERY sentence, so the
+// fixture's second sentence is an attested actor's play instead of the old
+// "A low drive from the edge of the box finds the far corner." (no attested fact,
+// deleted by the clause repair, which took the body under the live floor).
 const GOOD_SUMMARY =
-  "The equaliser levels it at 2-2 in the second half. A low drive from the edge of the box finds the far corner.";
+  "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38.";
 
 const evidence = () => ({
   rail: "live" as const,
@@ -216,13 +220,14 @@ describe("runSummaryForRow — the promoted row's copy", () => {
           "The crowd erupts as the ball shoots through midfield in the opening exchanges. " +
           "A burst of noise near 2:38 marks the move that breaks forward again.",
         outcome: "dropped",
-        reason: "gate",
+        // ADAAAA-8914: the body is filler, not just short — its repair empties it.
+        reason: "filler",
       },
       {
         caption: "Scoreboard changes to 2-2.",
         body:
           "The scoreboard flips from 2-1 to 2-2 at 2:40 off a strike from the edge of the box. " +
-          "The near post is beaten low and the crowd behind the net is up before the restart.",
+          "The scoreboard holds at 2-2 as the clip runs on.",
         outcome: "stored",
         // The shipped row's own measured transition (2-1 -> 2-2); the lane's
         // default fixture transition is 1-2 -> 2-2, which this body does not assert.
@@ -290,12 +295,14 @@ describe("runSummaryForRow — the promoted row's copy", () => {
       evidence: evidence(),
     });
     expect(result.outcome).toBe("dropped");
-    expect(result.reason).toBe("gate");
+    // ADAAAA-8914: the second reply asserts nothing the row attests, so the clause
+    // repair empties it and the drop is named `filler`.
+    expect(result.reason).toBe("filler");
     expect(result.calls).toBe(2);
     expect(patches.length).toBe(1);
     expect(patches[0].patch.summary).toBeUndefined();
     expect(patches[0].patch.summaryRaw).toBe(second);
-    expect(patches[0].patch.summaryDroppedByReason).toEqual({ gate: 1 });
+    expect(patches[0].patch.summaryDroppedByReason).toEqual({ filler: 1 });
   });
 
   it("drops `pool_busy` when no decide service is configured (never fabricates)", async () => {

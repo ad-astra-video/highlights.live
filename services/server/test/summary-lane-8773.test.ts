@@ -163,7 +163,14 @@ describe("ADAAAA-8773 — deterministic refusal ends the row on ONE call", () =>
 
   it("still accepts a body written on the clip offset (one call, copy stored)", async () => {
     const { store, patches } = stubStore();
-    const body = CLOCK_ANCHORED_MATCH_CLOCK.replace("at the 18:02 mark", "at the 0:24 mark");
+    // ADAAAA-8914 (AC14.1): the stored reply's celebration sentence is filler the
+    // clause repair deletes, so the AC-compliant version of the same row (clock +
+    // attested action, one fact per sentence, VOD floor 40) is what serves.
+    const body =
+      "Manuel Ordoñez finds the back of the net for Real Madrid at the 0:24 mark of this clip. " +
+      "Real Madrid keeps possession as the move is worked toward the box. " +
+      "Real Madrid recycles the ball and switches play to the left wing. " +
+      "Real Madrid keeps the pressure on as the clip runs past 0:24.";
     const f = stubFetch([ok(body)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
       jobId: "70400b1d",

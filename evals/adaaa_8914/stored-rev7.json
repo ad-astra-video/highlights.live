@@ -1,0 +1,462 @@
+{
+ "jobId": "9bed3bd7-0741-4e6a-bb32-63955f158096",
+ "matchContext": {
+  "sport": "soccer",
+  "teams": [
+   {
+    "name": "Barcelona",
+    "side": "away",
+    "kitColors": [],
+    "confidence": 0.5,
+    "evidence": [
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:17 RMA2-2 BAR"
+     }
+    ]
+   }
+  ],
+  "inferredAt": "2026-11-13T06:12:29.808402Z",
+  "resolverVersion": 1,
+  "ambiguous": true,
+  "trail": [
+   {
+    "at": "2026-11-13T06:08:30.057600Z",
+    "progressPct": 0,
+    "names": [
+     {
+      "side": "away",
+      "name": "Barcelona",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "no change"
+    ]
+   },
+   {
+    "at": "2026-11-13T06:09:32.884876Z",
+    "progressPct": 25,
+    "names": [
+     {
+      "side": "home",
+      "name": "Real Madrid",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "no change"
+    ]
+   },
+   {
+    "at": "2026-11-13T06:10:33.172470Z",
+    "progressPct": 50,
+    "names": [],
+    "action": [
+     "no evidence"
+    ]
+   },
+   {
+    "at": "2026-11-13T06:12:29.808362Z",
+    "progressPct": 100,
+    "names": [
+     {
+      "side": "away",
+      "name": "Barcelona",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "flipped unknown -> Barcelona at away"
+    ]
+   }
+  ]
+ },
+ "rows": [
+  {
+   "id": "aed6c4a4-22da-494b-8402-857853866b9e",
+   "rail": "live",
+   "body": "Real Madrid takes the lead to make the score 2-1. This pivotal moment occurs at the 1:42 mark of the match. The team continues to press for dominance in this high-stakes competition.",
+   "reason": "ASR confirms goal at t=0.0s and scoreboard changes to 2-1; scoreboard score change confirmed",
+   "caption": "Scoreboard changes to 2-1.",
+   "postTitle": null,
+   "windowTs": 102.67000007629395,
+   "windowDurationS": null,
+   "scoreTransition": {
+    "from": "1-1",
+    "to": "2-1"
+   },
+   "matchClock": {
+    "seconds": 1093,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:13",
+    "ts": 102.67000007629395
+   },
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 32
+  },
+  {
+   "id": "dc96ed06-f9c4-4ab8-8272-dc55e5a2838a",
+   "rail": "live",
+   "body": "Real Madrid levels the score to 2-2. This pivotal moment occurs at the 2:46 mark of the match. The team maintains their momentum against their opponent to secure the tie.",
+   "reason": "Scoreboard changes from 2-1 to 2-2 at t=-4.9s; scoreboard score change confirmed",
+   "caption": "Scoreboard changes to 2-2.",
+   "postTitle": null,
+   "windowTs": 166.93600010871887,
+   "windowDurationS": null,
+   "scoreTransition": {
+    "from": "2-1",
+    "to": "2-2"
+   },
+   "matchClock": {
+    "seconds": 1339,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "22:19",
+    "ts": 162.00300002098083
+   },
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 30
+  },
+  {
+   "id": "7574cba1-642b-4a2b-a7e9-ff9bff37554a",
+   "rail": "live",
+   "body": "Barcelona takes the lead as the scoreboard updates to 2-1. This pivotal moment occurs at the 6:42 mark of the match. The team maintains their momentum in this intense competition.",
+   "reason": "Scoreboard changes from 1-1 to 2-1 at t=-0.4s; scoreboard score change confirmed",
+   "caption": "Scoreboard changes to 2-1.",
+   "postTitle": null,
+   "windowTs": 402.9360001087189,
+   "windowDurationS": null,
+   "scoreTransition": {
+    "from": "1-1",
+    "to": "2-1"
+   },
+   "matchClock": {
+    "seconds": 1093,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:13",
+    "ts": 402.5699999332428
+   },
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 30
+  },
+  {
+   "id": "1a5878b2-d4ac-4a08-8419-19cd93b6b707",
+   "rail": "vod",
+   "body": "Real Madrid takes the lead as the scoreboard changes from 1-1 to 2-1 at the 0:27 mark. Barcelona players react to the sudden shift in momentum during this high-stakes match. The score transition confirms a pivotal moment in the game as the teams battle for control.",
+   "reason": "The scoreboard changes from 1-1 to 2-1 at 18:06, and the ASR confirms 'Acaba de marcar el Real Madrid' while the frames show the ball in the net and players celebrating.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": null,
+   "windowTs": 27,
+   "windowDurationS": null,
+   "scoreTransition": {
+    "from": "1-1",
+    "to": "2-1"
+   },
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 46,
+   "jobMatchContext": {
+    "sport": "soccer",
+    "teams": [
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "evidence": [
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:05 RMA 2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:06 RMA2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:06 RMA 2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:06 RMA-2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:07 RMA-2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:07 IRMA 2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:07 RMA 2:1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:08 |RMA2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:17 |RMA 2-2 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:17 |RMA2-2 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:18 |RMA2-2 BAR"
+       },
+       {
+        "source": "asr",
+        "snippet": "El remate, coleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a."
+       }
+      ],
+      "kitColors": [],
+      "confidence": 0.85
+     }
+    ],
+    "trail": [
+     {
+      "at": "2026-11-13T06:42:06.213966Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 0
+     },
+     {
+      "at": "2026-11-13T06:42:34.101067Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 25
+     },
+     {
+      "at": "2026-11-13T06:43:23.072500Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 50
+     },
+     {
+      "at": "2026-11-13T06:44:33.515099Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 90
+     }
+    ],
+    "ambiguous": false,
+    "inferredAt": "2026-11-13T06:44:33.515125Z",
+    "resolverVersion": 1
+   }
+  },
+  {
+   "id": "532204a9-a1c3-4d73-8caa-df4cd14d6b4c",
+   "rail": "vod",
+   "body": "Barcelona finds the equalizer to level the score at 2-2. The crowd erupts in celebration as the team secures a vital point in this intense match. This scoring play shifts the momentum during the game. The atmosphere in the stadium is electric following this dramatic turn of events.",
+   "reason": "The ball clearly enters the net at t=22:10, confirmed by the scoreboard update to 2-2 at t=22:13 and the crowd/commentary eruption.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": null,
+   "windowTs": 84,
+   "windowDurationS": null,
+   "scoreTransition": {
+    "from": "2-1",
+    "to": "2-2"
+   },
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 48,
+   "jobMatchContext": {
+    "sport": "soccer",
+    "teams": [
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "evidence": [
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:05 RMA 2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:06 RMA2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:06 RMA 2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:06 RMA-2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:07 RMA-2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:07 IRMA 2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:07 RMA 2:1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:08 |RMA2-1 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:17 |RMA 2-2 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:17 |RMA2-2 BAR"
+       },
+       {
+        "source": "scorebug_ocr",
+        "snippet": "22:18 |RMA2-2 BAR"
+       },
+       {
+        "source": "asr",
+        "snippet": "El remate, coleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a."
+       }
+      ],
+      "kitColors": [],
+      "confidence": 0.85
+     }
+    ],
+    "trail": [
+     {
+      "at": "2026-11-13T06:42:06.213966Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 0
+     },
+     {
+      "at": "2026-11-13T06:42:34.101067Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 25
+     },
+     {
+      "at": "2026-11-13T06:43:23.072500Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 50
+     },
+     {
+      "at": "2026-11-13T06:44:33.515099Z",
+      "names": [
+       {
+        "name": "Barcelona",
+        "side": "away",
+        "confidence": 0.85
+       }
+      ],
+      "action": [
+       "no change"
+      ],
+      "progressPct": 90
+     }
+    ],
+    "ambiguous": false,
+    "inferredAt": "2026-11-13T06:44:33.515125Z",
+    "resolverVersion": 1
+   }
+  }
+ ]
+}

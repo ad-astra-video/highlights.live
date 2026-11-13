@@ -73,8 +73,17 @@ const ROW_995CD9B5: SummaryEvidence = {
 const STORED_RAW_5F32F6F4 =
   "Manuel Ordoñez finds the back of the net for Real Madrid to secure the scoring play. The goal occurs at the 18:02 mark following a cross into the box. After the ball enters the net, the player in the blue kit celebrates the successful strike. This sequence follows a move by Carlos Javier down the left wing.";
 
-/** The same body with the CLIP offset the prompt actually shows (0:24). */
-const CLIP_ANCHORED_5F32F6F4 = STORED_RAW_5F32F6F4.replace("at the 18:02 mark", "at the 0:24 mark");
+/** The same row's copy rebuilt so the CLIP offset is a fact the row can earn.
+ *  ADAAAA-8914 (AC14.1): the stored body's other sentences are filler — the
+ *  celebration sentence (`the player in the blue kit celebrates …`) is deleted by
+ *  the clause repair and `This sequence follows a move by …` asserts nothing — so
+ *  a body that keeps its depth has to carry a fact in every sentence. The row is
+ *  VOD (`rail: "vod"`, 40-word floor), hence 3-5 fact sentences. */
+const CLIP_ANCHORED_5F32F6F4 =
+  "Barcelona works the ball down the left at the 0:24 mark of this clip. " +
+  "Carlos Javier drives the ball forward and the cross comes in from the wing. " +
+  "Barcelona keeps possession as the ball is worked inside the box. " +
+  "Barcelona recycles the ball to the left as the clip runs past 0:24.";
 
 /** The stored `summaryRaw` of `995cd9b5` — also refused `too-few-facts`. The
  *  fourth sentence carries the clip offset (ADAAAA-8791: the VOD floor is the
@@ -82,7 +91,14 @@ const CLIP_ANCHORED_5F32F6F4 = STORED_RAW_5F32F6F4.replace("at the 18:02 mark", 
 const STORED_RAW_995CD9B5 =
   "Real Madrid takes the lead after a successful scoring play. The scoreboard updates from 1-1 to 2-1 at the 18:06 mark. Players from the white-shirted team are seen celebrating the goal during the match against Barcelona. The scoreboard holds at 2-1 as the match restarts around the 18:06 mark.";
 
-const CLIP_ANCHORED_995CD9B5 = STORED_RAW_995CD9B5.replace("at the 18:06 mark", "at the 0:27 mark");
+/** The scoreboard row's copy on the clip offset. ADAAAA-8914 (AC14.1): the stored
+ *  body's celebration sentence is filler the clause repair deletes, so this is the
+ *  same facts (score + clock, no name) written one-fact-per-sentence. */
+const CLIP_ANCHORED_995CD9B5 =
+  "The scoreboard updates from 1-1 to 2-1 at the 0:27 mark of the clip. " +
+  "The scoreline holds at 2-1 as the passage of play continues. " +
+  "The clock runs past 0:27 with the score still 2-1. " +
+  "The clip closes on the same 2-1 scoreline at 0:29.";
 
 /** Every `m:ss` the prompt hands the model. */
 const promptClocks = (prompt: string): string[] => prompt.match(/\b\d{1,3}:\d{2}\b/g) ?? [];
@@ -195,7 +211,7 @@ describe("gate — the clock is what starved the row (replayed on the stored bod
     // from matchContext.teams) serves". The team is the only entity the VOD rail
     // attests on row 5f32f6f4 besides the ASR names, so it must carry the copy.
     const body =
-      "Barcelona work the ball down the left at the 0:24 mark of this clip. A low cross is cut out at the near post and cleared away. The loose ball is recycled back into the box under pressure. Barcelona keep their shape through the restart.";
+      "Barcelona work the ball down the left at the 0:24 mark of this clip. Barcelona cuts out the low cross at the near post and clears it away. Barcelona recycles the ball back into the box under pressure. Barcelona keep their shape through the restart.";
     const decision = gateSummaryDetail(body, ROW_5F32F6F4);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(body);

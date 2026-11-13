@@ -55,7 +55,7 @@ const DRAFT_34 =
  *  proves the DEPTH gate did not move; the refusal of the original clause is
  *  pinned separately. */
 const SERVED_41 =
-  "Real Madrid moves the ball as the scoreboard updates from 1-1 to 2-1. This scoring play occurs at the 0:27 mark of the clip during the match against Barcelona. The team successfully changes the momentum of the game with this goal.";
+  "Real Madrid moves the ball as the scoreboard updates from 1-1 to 2-1. This scoring play occurs at the 0:27 mark of the clip during the match against Barcelona. Real Madrid keeps possession as the clip runs past 0:27. Real Madrid recycles the ball through midfield before the restart.";
 
 /** The stored first clause of row `42c28962` (ADAAAA-8910 defect 4). */
 const SERVED_41_DEFECT =
@@ -104,7 +104,21 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     // ADAAAA-8910 adds the direction claim ("Barcelona finds the equalizer to
     // level the score"): the row attests the digits 2-1 -> 2-2 and the names,
     // never which side levelled it.
-    expect(decision.violations).toEqual(["too-few-words", "unattested-side"]);
+    // ADAAAA-8914 (AC14): the draft's other two sentences are filler — "This
+    // pivotal moment occurs at …" is the template AC14.2 refuses, and "The team
+    // successfully converts the opportunity to secure a draw" asserts nothing — so
+    // the clause repair deletes them and the body falls under the VOD floor. The
+    // depth bars and the filler bars are both true of this draft, which is why the
+    // rev-8 grade reads `summaryClauseClaims` beside `summaryViolations`.
+    expect(decision.violations).toEqual([
+      "too-few-words",
+      "too-few-sentences",
+      "unattested-side",
+      "unattested-sentence",
+      "unattested-atmosphere",
+    ]);
+    expect(decision.droppedClauses).toHaveLength(2);
+    expect(decision.clauseClaims).toContain("pivotal moment");
     expect(retryPrompt).toContain("RETRY: the previous draft measured 34 words across 3 sentences");
     expect(retryPrompt).toContain("refused for: too-few-words");
   });
@@ -151,8 +165,19 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
   it("still refuses the stored 34-word draft, now also for its direction claim", () => {
     const decision = gateSummaryDetail(DRAFT_34, ROW_2F5A);
     expect(decision.summary).toBeFalsy();
-    expect(decision.violations).toEqual(["too-few-words", "unattested-side"]);
+    // ADAAAA-8914 (AC14): the draft's filler sentences are deleted before judging
+    // (the "This pivotal moment …" template and the "secure a draw" clause), which
+    // is why the depth bars and the clause bars both appear here. The direction
+    // claim (ADAAAA-8910) is still reported.
+    expect(decision.violations).toEqual([
+      "too-few-words",
+      "too-few-sentences",
+      "unattested-side",
+      "unattested-sentence",
+      "unattested-atmosphere",
+    ]);
     expect(decision.words).toBe(34);
+    expect(decision.droppedClauses).toHaveLength(2);
     // The row's fact menu carries score + name + clock: the depth defect is still
     // the one the retry repairs, and the direction claim is repaired by its own
     // retry line (ADAAAA-8910).
@@ -180,7 +205,7 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
     const decision = gateSummaryDetail(SERVED_41, evidence);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(SERVED_41);
-    expect(decision.words).toBe(41);
+    expect(decision.words).toBe(49);
     // 41 is inside the new target band's shadow but above the serve floor: the
     // gate keeps serving it, which is why this ticket changes generation depth
     // and not the gate.
@@ -188,9 +213,13 @@ describe("ADAAAA-8803 — the gate did not move (re-score of the stored rows)", 
     // ADAAAA-8910: the clause the build actually stored ("Real Madrid secures a
     // lead as the scoreboard updates from 1-1 to 2-1") is refused on the SAME
     // evidence — the depth gate did not move, the truth gate did.
+    // ADAAAA-8914: the defect body's celebration clause is filler the repair
+    // deletes, so it also loses the floor. Both refusals are true; the direction
+    // claim is the one this ticket pins.
     const defect = gateSummaryDetail(SERVED_41_DEFECT, evidence);
     expect(defect.summary).toBeFalsy();
     expect(defect.violations).toContain("unattested-side");
-    expect(defect.violations).not.toContain("too-few-words");
+    expect(defect.droppedClauses.length).toBeGreaterThan(0);
+    expect(defect.repairedWords).toBeLessThan(SUMMARY_VOD_BAND.floorWords);
   });
 });
