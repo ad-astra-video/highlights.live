@@ -121,7 +121,12 @@ export function servedSiblingClips(m: NotableMomentCluster, ctx: ServedRowContex
 export function servedNotableRow(
   m: NotableMomentCluster,
   confirmation: HighlightConfirmation | undefined,
-  ctx: ServedRowContext
+  ctx: ServedRowContext,
+  /** ADAAAA-8893 (D5): the notable card's OWN alternatives — a dive's
+   *  re-centered option of a `dive_held`/`big_play` moment lives here, and the
+   *  notable lane used to serve none, so the option was invisible on exactly the
+   *  rows the dive most often re-centers. */
+  extras?: { alternatives?: HighlightAlternative[] }
 ) {
   const served = servedRowClip(m.owner);
   const siblingClips = servedSiblingClips(m, ctx);
@@ -132,6 +137,7 @@ export function servedNotableRow(
     exportUri: ctx.exportUriFor(served),
     ...(confirmation ? { confirmation } : {}),
     siblingCount: m.memberCount,
+    ...(extras?.alternatives?.length ? { alternatives: extras.alternatives } : {}),
     ...(siblingClips.length ? { siblingClips } : {}),
   };
 }

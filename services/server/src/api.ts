@@ -7122,7 +7122,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // same confirmation lane. ADAAAA-8422 (N1): its sibling windows ride along as
     // clip options. All of it from the shared notable builder.
     const notableHighlights = postable.notableMoments.moments.map((m) =>
-      servedNotableRow(m, confirmationFor(m.owner), servedCtx)
+      servedNotableRow(m, confirmationFor(m.owner), servedCtx, {
+        // ADAAAA-8893 (D5): a notable moment's own re-centered option must ride
+        // ITS card, or the option the row carries is invisible on the lane the
+        // dive most often re-centers (`dive_held` goals are `big_play` rows).
+        alternatives: alternativesByOwner.get(m.owner.id),
+      })
     );
 
     // ADAAAA-7623: the summary ladder (match summary -> chapters -> window
@@ -7158,8 +7163,12 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           ...countsFromPostable(postable),
           // ADAAAA-7984: delivered celebration alternatives for this job (NOT
           // highlights — `highlightsFound`/`postableHighlights` are unchanged).
+          // ADAAAA-8893 (D5): the re-centered option is NOT a celebration/replay
+          // alternative — counting it here would inflate a delivered-celebration
+          // claim the option never makes ("no claim change", ADAAAA-8879).
           alternativeClipsDelivered: alternativesByOwner.size
-            ? [...alternativesByOwner.values()].reduce((n, list) => n + list.length, 0)
+            ? [...alternativesByOwner.values()]
+                .reduce((n, list) => n + list.filter((a) => a.eventType !== "recentered").length, 0)
             : 0,
         },
         highlights: postableHighlights,
@@ -7299,7 +7308,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // ADAAAA-8178 / ADAAAA-8422 (N1): the same notable cards, export URLs,
       // confirmation lanes and one-card-per-moment grouping as the composite.
       const notableHighlights = postable.notableMoments.moments.map((m) =>
-        servedNotableRow(m, deltaConfirmationFor(m.owner), deltaServedCtx)
+        servedNotableRow(m, deltaConfirmationFor(m.owner), deltaServedCtx, {
+          alternatives: alternativesByOwner.get(m.owner.id),
+        })
       );
       const summaryLadder = buildSummaryLadder({
         summaryLog: job.summaryLog,
