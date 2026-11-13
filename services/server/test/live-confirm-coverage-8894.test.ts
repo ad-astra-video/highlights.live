@@ -12,10 +12,16 @@
 //       "scoring_play"` gate was the live arm of the same skip, and a trigger
 //       that fires without a descriptor is still no dive.
 //   (2) PRECISION GUARD (must not regress D1 AC1.4): on a measured row the dive
-//       may add the moment and nothing else. It may not refute the measurement,
-//       may not promote it, and may not move the served lane off `measured`
-//       (AC4.2: 0 lane diffs). The guard is enforced at the two writers (the
-//       inline reconcile and `confirmDiveAdoption`) and read at the two readers
+//       may add the moment and nothing else. It may not REFUTE the measurement,
+//       may not move the served lane off `measured` (AC4.2: 0 lane diffs), and
+//       may not withhold a GOAL the measurement itself licenses. The guard
+//       therefore sits AFTER the promote arm: a row that measured its transition
+//       still promotes in place (D1 AC1.4), and a row whose measurement the dive
+//       cannot corroborate stays exactly as served. Both directions are pinned
+//       here, because a guard placed before the promote arm turns every measured
+//       row `unchanged` — the AC1.4 regression the clause forbids in reverse.
+//       The guard is enforced at the two writers (the inline reconcile and
+//       `confirmDiveAdoption`) and read at the two readers
 //       (`confirmationForHighlightRow`, `hasRefutingDiveAttestation`) — every one
 //       of them is asserted here, because a guard only at the writer still serves
 //       a demoted card.
@@ -46,6 +52,7 @@ import {
   confirmDiveAdoption,
   confirmDiveEvidenceTier,
   runDueConfirmDives,
+  type DegradedSignal,
   type PendingConfirmDive,
 } from "../src/live-confirm-async";
 import { confirmationForHighlightRow } from "../src/confirmation-lane";
@@ -249,7 +256,7 @@ describe("D4 precision guard — a measured row cannot be refuted or re-laned (A
     expect(out.confirmAttestation).toMatchObject({ laneKeptByMeasurement: true, goalConfirmed: "confirmed_goal" });
     // The served card derives the MEASURED lane, not `dive`.
     const card = confirmationForHighlightRow(
-      { status: "accepted", trigger: { kind: "goal_line", timestamp: 40, goalCrossed: true }, confirmAttestation: out.confirmAttestation as any },
+      { status: "accepted", trigger: { eventType: "GOAL", kind: "goal_line", timestamp: 40, goalCrossed: true }, confirmAttestation: out.confirmAttestation as any },
       { status: "accepted", trigger: MEASURED_CANDIDATE as any, analysis: MEASURED_GOAL.analysis } as any,
       { confirmEnabled: true }
     );
@@ -272,7 +279,7 @@ describe("D4 precision guard — a measured row cannot be refuted or re-laned (A
       evidence: { ballInNet: true },
       stage1Disagreed: false,
       corroborated: true,
-      corroborationSource: "frame_attestation",
+      corroborationSource: "frame_attestation" as const,
       decision: MEASURED_GOAL,
     });
     // A promoted, goal-shaped, NON-measured read at the same goal instant.
@@ -296,7 +303,7 @@ describe("D4 precision guard — a measured row cannot be refuted or re-laned (A
     expect(second.decision.outcome).toBe("scoring_play");
   });
 
-  it("live writer: refuses BOTH a refutation and a promotion on a measured row", () => {
+  it("live writer: a trigger-only measured row is never refuted, and the 8239 bar still withholds its GOAL", () => {
     const measuredRow = {
       id: "hl-d4",
       jobId: "job-d4-live",
@@ -311,7 +318,7 @@ describe("D4 precision guard — a measured row cannot be refuted or re-laned (A
       trigger: { timestamp: 40, scoreBoardChanged: true },
       createdAt: "2026-11-13T00:00:00.000Z",
     };
-    const meta = { diveAt: "2026-11-13T00:00:10.000Z", diveLatencyMs: 800, contextDegraded: [] as string[] };
+    const meta = { diveAt: "2026-11-13T00:00:10.000Z", diveLatencyMs: 800, contextDegraded: [] as DegradedSignal[] };
 
     const refute = confirmDiveAdoption(measuredRow as any, REFUTING as any, meta);
     expect(refute.kind).toBe("unchanged");
@@ -338,6 +345,65 @@ describe("D4 precision guard — a measured row cannot be refuted or re-laned (A
     expect((promote.patch as any).confirmAttestation.laneKeptByMeasurement).toBe(true);
     // ...while the MOMENT it named is still recorded — the one thing it may add.
     expect((promote.patch as any).confirmAttestation.momentTs).toBe(41.2);
+  });
+
+  it("live writer: a row that MEASURED its transition still promotes in place, lane `measured` before and after", () => {
+    // D1 AC1.4 and AC4.2 together. The measurement — not the dive — is what
+    // licenses the GOAL here, so the guard must NOT withhold it: same row,
+    // `promoted`, and the served lane is `measured` on both sides of the move.
+    // (A guard placed before the promote arm returned `unchanged` for this row,
+    // which broke AC1.4; the promote arm must stay upstream of the guard.)
+    const promotingRow = {
+      id: "hl-d4-promote",
+      jobId: "job-d4-live",
+      clipUri: "/clips/hl-d4-promote.mp4",
+      start: 30,
+      end: 45,
+      status: "accepted",
+      score: 88,
+      outcome: "big_play",
+      eventType: "BIG_PLAY",
+      reason: "the players celebrate with arms raised | provisional goal: asr_goal_call",
+      provisionalGoal: { status: "provisional", cues: ["asr_goal_call"], declaredTs: 40 },
+      // The accept itself measured the transition (two legible post samples).
+      attestationUsed: { scoreBoardChanged: true, postSamples: 2, need: 2 },
+      trigger: { timestamp: 40, scoreBoardChanged: true },
+      createdAt: "2026-11-13T00:00:00.000Z",
+    };
+    const adoption = confirmDiveAdoption(
+      promotingRow as any,
+      {
+        goalConfirmed: "confirmed_goal",
+        corroborated: true,
+        corroborationSource: "frame_attestation",
+        stage1Disagreed: false,
+        momentTs: 41.2,
+        momentConfidence: 0.7,
+      } as any,
+      { diveAt: "2026-11-13T00:00:10.000Z", diveLatencyMs: 800, contextDegraded: [], frameRefs: [{ seq: 41, ts: 41.2 }] }
+    );
+    expect(adoption.kind).toBe("promoted");
+    expect(adoption.patch.outcome).toBe("scoring_play");
+    expect(adoption.patch.eventType).toBe("GOAL");
+    // Never an insert: the move is in place on the same row.
+    expect(adoption.patch.id).toBeUndefined();
+    expect(adoption.patch.jobId).toBeUndefined();
+    // The dive's moment lands, and the read side is told the lane did not move.
+    expect((adoption.patch as any).confirmAttestation.momentTs).toBe(41.2);
+    expect((adoption.patch as any).confirmAttestation.laneKeptByMeasurement).toBe(true);
+    const card = confirmationForHighlightRow(
+      {
+        status: "accepted",
+        outcome: "scoring_play",
+        eventType: "GOAL",
+        trigger: { kind: "goal_line", timestamp: 40, goalCrossed: true },
+        confirmAttestation: (adoption.patch as any).confirmAttestation,
+      } as any,
+      { status: "accepted", trigger: MEASURED_CANDIDATE as any, analysis: MEASURED_GOAL.analysis } as any,
+      { confirmEnabled: true }
+    );
+    expect(card?.lane).toBe("measured");
+    expect(hasRefutingDiveAttestation({ ...(adoption.patch as any), outcome: "scoring_play" } as any)).toBe(false);
   });
 
   it("live writer: a NON-measured row keeps its D1/D3 behaviour (no regression)", () => {
