@@ -29,6 +29,8 @@ from .gemma import (  # noqa: F401
     apply_ball_outcome_gate,
     apply_contract_guard,
     apply_goal_attestation_gate,
+    clear_decision_accept,
+    decision_accepts_highlight,
     decide_group_with_gemma,
     decide_with_gemma,
     finalize_goal_acceptance,
@@ -648,8 +650,8 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
         gate_ok, gate_reason = True, None
     else:
         gate_ok, gate_reason = apply_ball_outcome_gate(evidence)
-    if not gate_ok and decision.get("isHighlight"):
-        decision["isHighlight"] = False
+    if not gate_ok and decision_accepts_highlight(decision):
+        clear_decision_accept(decision)
         decision["reason"] = (
             (decision.get("reason") or "") + "; " + (gate_reason or "")
         ).strip("; ")
@@ -677,12 +679,12 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
             (decision.get("reason") or "") + "; scoreboard score change confirmed"
         ).strip("; ")
     att_ok, att_reason = apply_goal_attestation_gate(decision, evidence, event_type)
-    if not att_ok and decision.get("isHighlight"):
-        decision["isHighlight"] = False
+    if not att_ok and decision_accepts_highlight(decision):
+        clear_decision_accept(decision)
         decision["reason"] = (
             (decision.get("reason") or "") + "; " + (att_reason or "")
         ).strip("; ")
-    if decision.get("isHighlight"):
+    if decision_accepts_highlight(decision):
         ok, rejects = apply_gate(
             score=float(decision.get("score") or 0.0),
             event_type=decision.get("eventType") or event_type,
@@ -694,7 +696,7 @@ def _postprocess_gemma_verdict(decision: dict, evidence: dict, event_type: str, 
             surface_identity=evidence.get("scoreboardSurfaceIdentity"),
         )
         if not ok:
-            decision["isHighlight"] = False
+            clear_decision_accept(decision)
             decision["reason"] = (
                 (decision.get("reason") or "")
                 + "; rejected by notable-only bar: "

@@ -877,13 +877,39 @@ def is_bare_templated_reason(reason: Optional[str]) -> bool:
     return net and reaction
 
 
+def decision_accepts_highlight(decision: dict) -> bool:
+    """Whether a decide verdict ACCEPTS a highlight, under either key spelling.
+
+    ADAAAA-8880: every demotion in the post-processing chain is keyed on the
+    accept ("only an accepted verdict is demoted"). The served producer emits
+    camelCase ``isHighlight``, but a verdict dict that reaches a guard with
+    snake_case ``is_highlight`` read as *not accepted* through
+    ``decision.get("isHighlight")`` — so the guard was skipped entirely and a
+    contradicted score surface shipped ``is_highlight: True`` (QA reproduced 3/3).
+    Read BOTH spellings here so the guard keys on the accept, not on the key name.
+    """
+    return bool(decision.get("isHighlight") or decision.get("is_highlight"))
+
+
+def clear_decision_accept(decision: dict) -> None:
+    """Demote an accepted verdict in BOTH spellings.
+
+    A demotion written only to the camelCase key leaves a snake_case
+    ``is_highlight: True`` behind, and any consumer reading that spelling sees
+    the accept the guard just refused (ADAAAA-8880).
+    """
+    decision["isHighlight"] = False
+    if "is_highlight" in decision:
+        decision["is_highlight"] = False
+
+
 def is_goal_accept(decision: dict, event_type: Optional[str] = None) -> bool:
     """Whether the decision is an ACCEPTED goal: the model surfaced it
     (isHighlight true) for a goal event, or — when the candidate carries no
     event type at all — for a scoring_play outcome. The gate is scoped to goal
     events so a scoring_play outcome in another sport (a DUNK scoring play) is
     never caught by goal verification."""
-    if not decision.get("isHighlight"):
+    if not decision_accepts_highlight(decision):
         return False
     evt = str(event_type or "").upper().strip()
     if evt in ("GOAL", "GOL"):
