@@ -8,7 +8,7 @@
 // one slide while the row carried an alternative. This pins the shared builder
 // (composite AND delta both call it).
 import { describe, expect, it } from "vitest";
-import { HighlightAlternativeSchema, HighlightRecordSchema } from "@highlights/events";
+import { HighlightAlternativeSchema, HighlightRecordSchema, JobDetailSchema } from "@highlights/events";
 import { servedNotableRow } from "../src/served-highlight-rows";
 
 const owner = HighlightRecordSchema.parse({
@@ -58,6 +58,20 @@ describe("the notable card serves its own re-centered option", () => {
     expect(row.alternatives?.map((a) => a.eventType)).toEqual(["recentered"]);
     expect(row.alternatives?.[0].clipUri).toBe("/clips/job-8893-1587-recentered.mp4");
     expect(row.alternatives?.[0].driftSec).toBe(4);
+  });
+
+  it("survives the payload parse (JobDetailSchema must keep notable alternatives)", () => {
+    // The detail route parses through JobDetailSchema. A notable row shape that
+    // has no `alternatives` field strips it silently — the option then exists in
+    // the DB and in the builder's output but reaches no slide.
+    const row = servedNotableRow(cluster, undefined, ctx, { alternatives: [recentered] });
+    const parsed = JobDetailSchema.parse({
+      job: { id: "job-8893", ownerId: "owner", source: "file-sim", status: "done", createdAt: "2026-11-13T06:47:00.000Z" },
+      highlights: [],
+      notableHighlights: [row],
+      maxTraces: 3,
+    });
+    expect(parsed.notableHighlights[0].alternatives?.map((a) => a.id)).toEqual(["alt-recentered-8893"]);
   });
 
   it("stays byte-identical when the card has no alternative", () => {

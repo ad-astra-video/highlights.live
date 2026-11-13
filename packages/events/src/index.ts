@@ -2657,6 +2657,11 @@ export const NotableMomentSchema = HighlightRecordSchema.extend({
    *  postable rows and the decide note use). Absent when nothing could be
    *  derived — the card then reads UNCONFIRMED, never a guessed lane. */
   confirmation: HighlightConfirmationSchema.optional(),
+  /** ADAAAA-8893 (D5): the moment's OWN delivered alternatives (a dive's
+   *  re-centered option). Additive: absent on every card that has none. Without
+   *  this the notable lane's payload was stripped by `JobDetailSchema.parse`,
+   *  so the option the row carried reached no slide. */
+  alternatives: z.array(HighlightAlternativeSchema).optional(),
 });
 export type NotableMoment = z.infer<typeof NotableMomentSchema>;
 
