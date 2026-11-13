@@ -504,3 +504,99 @@ describe("AC4.2 — box edges inside the rendered <img> content rect", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// ADAAAA-8962 — the one gap the degrade contract above left open: an object URL
+// created by a poll that resolved AFTER its stage went away was never rendered,
+// so the committed-src cleanup could never revoke it. Unmount must leave no blob.
+// ---------------------------------------------------------------------------
+
+function withRevocationCounter(fn: (revoked: string[]) => Promise<void>) {
+  return async () => {
+    const revoked: string[] = [];
+    const holder = URL as unknown as { revokeObjectURL?: (u: string) => void };
+    const original = holder.revokeObjectURL;
+    holder.revokeObjectURL = (u: string) => revoked.push(u);
+    try {
+      await fn(revoked);
+    } finally {
+      holder.revokeObjectURL = original;
+    }
+  };
+}
+
+describe("ADAAAA-8962 AC3 — no object URL outlives its stage", () => {
+  it(
+    "dispose() revokes the cached still exactly once (unmount leaves no leak)",
+    withRevocationCounter(async (revoked) => {
+      const { transport } = fakeTransport([listOf([{ seq: 4, timestamp: 9 }])]);
+      const source = createLiveStillSource(transport);
+      await source.poll("job-1");
+      source.dispose();
+      expect(revoked).toEqual(["blob:/jobs/job-1/frames/4"]);
+      // A second unmount pass is a no-op (the cached URL is already gone).
+      source.dispose();
+      expect(revoked).toHaveLength(1);
+    }),
+  );
+
+  it(
+    "a JPEG that resolves after reset() is dropped AND revoked",
+    withRevocationCounter(async (revoked) => {
+      let release!: (url: string) => void;
+      const gate = new Promise<string>((resolve) => {
+        release = resolve;
+      });
+      let started!: () => void;
+      const fetchStarted = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const source = new LiveStillSource({
+        async listFrames() {
+          return listOf([{ seq: 8, timestamp: 12 }]);
+        },
+        fetchImage() {
+          started();
+          return gate;
+        },
+      });
+      const pending = source.poll("job-1");
+      await fetchStarted; // the JPEG request is genuinely in flight
+      source.reset(); // the stage left no-preview (or the page unmounted)
+      release("blob:orphan");
+      const snap = await pending;
+      expect(snap.url).toBeNull();
+      expect(snap.frame).toBeNull();
+      expect(snap.state).toBe("waiting");
+      expect(revoked).toEqual(["blob:orphan"]);
+    }),
+  );
+
+  it(
+    "a frame list that resolves after reset() publishes nothing",
+    withRevocationCounter(async (revoked) => {
+      let release!: (value: unknown) => void;
+      const gate = new Promise<unknown>((resolve) => {
+        release = resolve;
+      });
+      let images = 0;
+      const source = new LiveStillSource({
+        listFrames() {
+          return gate;
+        },
+        async fetchImage(uri: string) {
+          images += 1;
+          return `blob:${uri}`;
+        },
+      });
+      const pending = source.poll("job-1");
+      source.reset();
+      release(listOf([{ seq: 2, timestamp: 4 }]));
+      const snap = await pending;
+      expect(snap).toMatchObject({ state: "waiting", frame: null, url: null, error: null });
+      // The dropped poll never reached the image route.
+      expect(images).toBe(0);
+      expect(revoked).toEqual([]);
+    }),
+  );
+});

@@ -70,6 +70,13 @@ export function useLiveFrameStill(
     });
   }
 
+  // Unmount: revoke the still nobody will render. A poll that lands after this
+  // drops its own object URL at the source (generation guard, ADAAAA-8962).
+  useEffect(() => {
+    const source = sourceRef.current!;
+    return () => source.dispose();
+  }, []);
+
   useEffect(() => {
     const source = sourceRef.current!;
     // A different job on the same page: drop the previous job's seq/URL/refusal.
@@ -88,7 +95,12 @@ export function useLiveFrameStill(
     source
       .poll(jobId)
       .then((snap) => {
-        if (!live) return;
+        if (!live) {
+          // The stage left no-preview, or the page unmounted, while this fetch
+          // was in flight: nobody will render this URL, so release it here.
+          revoke(snap.url);
+          return;
+        }
         setState({
           state: snap.state,
           frame: snap.frame,
@@ -110,8 +122,14 @@ export function useLiveFrameStill(
   const imgSrc = state.imgSrc;
   useEffect(() => {
     if (!imgSrc) return;
-    return () => URL.revokeObjectURL(imgSrc);
+    return () => revoke(imgSrc);
   }, [imgSrc]);
 
   return state;
+}
+
+/** Node has no `URL.revokeObjectURL`; guard so a server render is a no-op. */
+function revoke(url: string | null): void {
+  if (!url) return;
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") URL.revokeObjectURL(url);
 }
