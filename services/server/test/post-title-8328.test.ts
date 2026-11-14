@@ -98,8 +98,11 @@ describe("write seam — a title refusal never touches the copy fields", () => {
     expect(surface.reason).toBe("Ordoñez scores the opener.");
     expect(surface.caption).toBe("Ordoñez scores the opener.");
     expect(surface.cardTitles).toEqual(["Ordoñez scores the opener."]);
-    // The title is the ONLY surface this row is missing.
-    expect(surface.postTitle).toBeUndefined();
+    // ADAAAA-8969: the row is no longer missing a title — with no candidate the
+    // seam stores the row's own non-asserting label, which asserts nothing the
+    // caption does not already say.
+    expect(surface.postTitle).toBe("GOAL");
+    expect(surface.postTitleGate).toBe("label:empty");
   });
 
   it("keeps the copy byte-for-byte when the title is REFUSED by the shape bar", () => {

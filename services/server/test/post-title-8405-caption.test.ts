@@ -98,6 +98,8 @@ describe("ADAAAA-8405 AC4 — a refused card still serves announcer detail", () 
       row("The No. 9 finishes low into the corner."),
       undefined
     );
-    expect(surface).toEqual({ reason: "The No. 9 finishes low into the corner." });
+    // ADAAAA-8969: the VOD seam still stores no gated caption, and now stores the
+    // row's own non-asserting label (the same string the read projection serves).
+    expect(surface).toEqual({ reason: "The No. 9 finishes low into the corner.", postTitle: "GOAL" });
   });
 });

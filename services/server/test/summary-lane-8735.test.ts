@@ -42,13 +42,16 @@ const teamContext = (extra: Partial<SummaryEvidence> = {}): SummaryEvidence =>
 // fact, deleted by the clause repair (which took the body under the live floor
 // before the opening guard could run). The opening collision under test is
 // unchanged: both bodies still start "northbridge shoot on".
+// ADAAAA-8934/8941: the second sentence is a BOUNDED act by a named attested
+// actor — a possession tail is a sustained STATE the served gate refuses, so the
+// clause repair would rewrite the served text before the opening guard ran.
 const CLOCK_A =
-  "At 3:23, Northbridge shoot on the right side of the field. Northbridge keeps possession as the play develops toward the wing.";
+  "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing.";
 const CLOCK_B =
-  "At 3:57, Northbridge shoot on the right side of the field. Northbridge keeps possession as the play develops toward the wing.";
+  "At 3:57, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT =
-  "A low drive from Northbridge is blocked at 3:30 at the edge of the box. Northbridge recycles the ball and switches play to the left.";
+  "A low drive from Northbridge is blocked at 3:30 at the edge of the box. Northbridge recovers the ball and counters down the left.";
 /** The rev-3 served body the ticket names: clock plus a bare verb, no actor. */
 const BARE_VERB =
   "At 2:53, the ball shoots on the left side of the field. This action occurs during the match as the play develops toward the wing.";
@@ -126,16 +129,34 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
     expect(f.seen[2].prompt).toContain("'northbridge shoot on the'");
   });
 
-  it("serves a regeneration that lands on a different opening", async () => {
+  it("regenerates once on a DIFFERENT window, then serves the distinct body (AC8 has no instant exception)", async () => {
+    // ADAAAA-8941 (integration repair): the scoped key briefly served a different
+    // window whatever the opening run was. AC8 grades the served copy within one
+    // job, so the repeat spends the one regeneration and the distinct body serves;
+    // the instant is census evidence, not a suppression.
     const { store, patches } = stubStore();
     const f = stubFetch([ok(CLOCK_A), ok(CLOCK_B), ok(DISTINCT)]);
     const run = cfg({ fetchImpl: f.fn });
     const state = newSummaryJobState();
-    await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: teamContext() }, state);
-    const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: teamContext() }, state);
+    await runSummaryForRow(store, run, { jobId: "j1", highlightId: "be041aaf", evidence: teamContext() }, state);
+    const second = await runSummaryForRow(
+      store,
+      run,
+      {
+        jobId: "j1",
+        highlightId: "8b444000",
+        evidence: teamContext({
+          windowTs: 240,
+          windowDurationS: 8,
+          matchClock: { token: "3:57", seconds: 237, period: null, legible: true },
+        }),
+      },
+      state
+    );
     expect(second.outcome).toBe("stored");
     expect(second.calls).toBe(2);
     expect(patches[1].patch.summary).toBe(DISTINCT);
+    expect(summaryOpeningRun(String(patches[1].patch.summary))).toBe("a low drive from");
     expect(patches[1].patch.summaryGate).toBe("accepted");
     expect([...state.servedOpenings].sort()).toEqual(["a low drive from", "northbridge shoot on the"]);
   });
@@ -170,7 +191,7 @@ describe("AC9 rev 4 — action needs a named attested actor at the lane seam", (
     // "This action occurs during the match as the play develops toward the wing.",
     // asserts nothing and is deleted by the clause repair).
     const body =
-      "At 3:23, Northbridge shoot on the right side of the field. Northbridge keeps possession as the play develops toward the wing.";
+      "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing.";
     const f = stubFetch([ok(body)]);
     const run = cfg({ fetchImpl: f.fn });
     const result = await runSummaryForRow(

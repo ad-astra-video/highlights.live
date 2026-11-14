@@ -105,10 +105,13 @@ describe("storedSurfaceFor — postTitleGate names accept/refuse (PO constraint 
     expect(surface.postTitleGate).toBe("trimmed");
   });
 
-  it("records `absent` when the reply carried no title (a PROMPT miss, not a gate refusal)", () => {
+  it("records `label:empty` when the reply carried no title", () => {
+    // ADAAAA-8969: `absent` was unattributable once the label degrade landed —
+    // the seam has the row's own verdict, so it serves the non-asserting label
+    // and names the cause instead of storing nothing.
     const surface = storedSurfaceFor(decision({ postTitle: undefined }), ctx("big_play"));
-    expect(surface.postTitle).toBeUndefined();
-    expect(surface.postTitleGate).toBe("absent");
+    expect(surface.postTitle).toBe("GOAL");
+    expect(surface.postTitleGate).toBe("label:empty");
   });
 
   it("stores no token when the seam has no grounding (the VOD rail stays byte-identical)", () => {

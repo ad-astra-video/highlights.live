@@ -52,17 +52,21 @@ const evidence = (extra: Partial<SummaryEvidence> = {}): SummaryEvidence => ({
 // ADAAAA-8914 (AC14.1): the second sentence used to be "The crowd answers it
 // before the restart." — an atmosphere clause the clause repair deletes, which
 // took each body under the live floor before the opening guard could even run.
+// ADAAAA-8934 (served) / ADAAAA-8941 (inc 2): the second sentence is a BOUNDED
+// act by a named attested actor. The rev-8 possession tail ("keeps possession …")
+// is a sustained STATE, which the served gate refuses, so the clause repair would
+// delete it and change the served text before the opening guard could run.
 const SAME_OPENING_A =
-  "The midfielder drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge keeps possession as the move builds on the left.";
+  "The midfielder drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge intercepts the ball as the move builds on the left.";
 const SAME_OPENING_B =
-  "The midfielder drives forward for Northbridge at 0:12 and the move opens up on the left. Northbridge keeps possession as the move opens up.";
+  "The midfielder drives forward for Northbridge at 0:12 and the move opens up on the left. Northbridge recovers the ball as the move opens up.";
 /** The SERVED form of `SAME_OPENING_A`: AC10 neutralises the unattested
  *  "the midfielder" subject, and the repeat guard compares served openings. */
 const NEUTRALISED_A =
-  "The move drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge keeps possession as the move builds on the left.";
+  "The move drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge intercepts the ball as the move builds on the left.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT_OPENING =
-  "A low shot from the edge of the box is blocked by Northbridge at 0:12. Northbridge recycles the ball and switches play to the left.";
+  "A low shot from the edge of the box is blocked by Northbridge at 0:12. Northbridge recovers the ball and counters down the left.";
 
 function stubStore() {
   const patches: { id: string; patch: Record<string, unknown> }[] = [];
@@ -139,19 +143,45 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
     expect(f.seen[2].prompt).toContain("'the move drives forward'");
   });
 
-  it("serves a regeneration that lands on a different opening", async () => {
+  it("keeps AC8 on a DIFFERENT instant: a shared opening is regenerated once, then the distinct body serves", async () => {
+    // ADAAAA-8941 (integration repair): AC8 is graded on the served COPY within
+    // one job, with no instant exception — two cards that open the same way read
+    // the same however far apart their windows are. So the shared opening spends
+    // the one regeneration (the prompt names it) and the distinct body serves.
+    const { store, patches } = stubStore();
+    const state = newSummaryJobState();
+    const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B), ok(DISTINCT_OPENING)]);
+    const run = cfg({ fetchImpl: f.fn });
+    await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: evidence() }, state);
+    const second = await runSummaryForRow(
+      store,
+      run,
+      { jobId: "j1", highlightId: "h2", evidence: evidence({ windowTs: 40, windowDurationS: 8 }) },
+      state
+    );
+    expect(second.outcome).toBe("stored");
+    expect(second.calls).toBe(2);
+    // The regenerated body is the one that served, not the repeated opening.
+    expect(patches[1].patch.summary).toBe(DISTINCT_OPENING);
+    expect(summaryOpeningRun(String(patches[1].patch.summary))).toBe("a low shot from");
+    // The prompt asked the regeneration not to reuse the served opening.
+    expect(f.seen[2].prompt).toContain("'the move drives forward'");
+    // The job holds both served openings; neither repeats.
+    expect([...state.servedOpenings].sort()).toEqual(["a low shot from", "the move drives forward"]);
+  });
+
+  it("serves a regeneration that lands on a different opening (same instant)", async () => {
     const { store, patches } = stubStore();
     const state = newSummaryJobState();
     const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B), ok(DISTINCT_OPENING)]);
     const run = cfg({ fetchImpl: f.fn });
     await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: evidence() }, state);
     const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: evidence() }, state);
+    // AC8: the shared opening spends the one regeneration; the distinct body then
+    // serves. The instant plays no part — the bars are on the served copy.
     expect(second.outcome).toBe("stored");
     expect(second.calls).toBe(2);
     expect(patches[1].patch.summary).toBe(DISTINCT_OPENING);
-    expect(patches[1].patch.summaryGate).toBe("accepted");
-    // Both openings now held by the job.
-    expect([...state.servedOpenings].sort()).toEqual(["a low shot from", "the move drives forward"]);
   });
 
   it("is JOB-scoped: a different job may reuse the same opening", async () => {
