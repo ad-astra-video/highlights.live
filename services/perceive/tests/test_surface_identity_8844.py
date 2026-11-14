@@ -89,6 +89,23 @@ class ScriptedDet:
         return {"regions": []}
 
 
+class ScriptedOcr:
+    """The SECOND Florence copy (the OCR lane), scripted like ``ScriptedDet``.
+
+    ADAAAA-9021: the served image runs `PERCEIVE_DUAL_FLORENCE=1`, so the
+    scoreboard `<OCR>` read behind `_run` comes from `get_ocr_detector()` — a
+    second, REAL Florence copy. Patching only `get_detector` leaves the name
+    channel to that real model, which reads nothing on a synthetic frame, and
+    also pays a real model build + a real GPU inference inside pytest.
+    """
+
+    def __init__(self, lines):
+        self.lines = list(lines)
+
+    def ocr(self, rgb, roi=None):
+        return list(self.lines)
+
+
 @pytest.fixture()
 def client():
     return TestClient(app)
@@ -96,10 +113,14 @@ def client():
 
 def _run(client, det, monkeypatch, frames, frame_b64, teams=None, roi=None, hint="soccer"):
     sid = f"sess-surface-{uuid.uuid4().hex[:8]}"
+    lane = ScriptedOcr(frames[0][1])
     monkeypatch.setattr(_app, "get_detector", lambda lora_ref=None: det)
+    monkeypatch.setattr(_app, "dual_florence_enabled", lambda: True)
+    monkeypatch.setattr(_app, "get_ocr_detector", lambda: lane)
     out = []
     for seq, (ts, lines) in enumerate(frames):
         det.crop_lines = list(lines)
+        lane.lines = list(lines)
         body = {
             "seq": seq,
             "timestamp": ts,
@@ -227,6 +248,11 @@ def test_identity_pass_is_bounded_and_costs_no_extra_reads(client, monkeypatch):
     # fold an identity onto a box the SAME observation reports.
     assert all("scoreboardRoi" in o for o in published)
     assert state.surface_identity["verdict"] == "consistent"
+    # ADAAAA-9021 guard: the pass must have READ the fixture's printed names. On
+    # the served image the `<OCR>` read comes from the SECOND Florence copy, so an
+    # unscripted lane yields `names=[]` and drifts into the `absent` branch. This
+    # fails HERE, naming the read, instead of depending on the environment.
+    assert state.surface_identity["names"] == ["RMA", "BAR"], state.surface_identity["names"]
     # The clean match still attests its real score change.
     assert any(o.get("scoreBoardChanged") for o in obs)
     assert not any(o.get("scoreboardSurfaceDemoted") for o in obs)
@@ -499,6 +525,12 @@ def test_ac2_1_pip_repro_foreign_bug_cannot_attest_and_primary_goal_still_does(c
     det = PipDet(["RMA 1-0 BAR"])
     sid = f"sess-pip8844-{uuid.uuid4().hex[:8]}"
     monkeypatch.setattr(_app, "get_detector", lambda lora_ref=None: det)
+    # ADAAAA-9021: script the second Florence copy too. The served image runs
+    # `PERCEIVE_DUAL_FLORENCE=1`, so the scoreboard `<OCR>` read comes from
+    # `get_ocr_detector()`; `PipDet` already answers `ocr()` per ROI, which is
+    # exactly the two-bug geometry this repro needs in BOTH environments.
+    monkeypatch.setattr(_app, "dual_florence_enabled", lambda: True)
+    monkeypatch.setattr(_app, "get_ocr_detector", lambda: det)
 
     obs = []
 
