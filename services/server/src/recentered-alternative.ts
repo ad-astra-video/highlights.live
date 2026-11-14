@@ -102,9 +102,14 @@ export function buildRecenteredAlternative(input: {
   clipUri: string;
   clipWindow: { start: number; end: number };
   clipBytes?: number;
-  /** ADAAAA-8906: the measured position of the dive moment inside the option
-   *  file (seconds from its first frame). Absent when nothing was measured. */
+  /** AC5.1: the dive moment's offset inside the option's window —
+   *  `moment - window.start`, computed by {@link momentDeliveredOffsetSecOf}.
+   *  Never a measured anchor placement (that is
+   *  {@link clipAnchorDeliveredOffsetSec}). */
   momentDeliveredOffsetSec?: number | null;
+  /** ADAAAA-9004: where the card's accept anchor actually landed in the option
+   *  file (the ADAAAA-8906 measurement), kept beside the moment stamp. */
+  clipAnchorDeliveredOffsetSec?: number | null;
   clipError?: string;
   createdAt?: string;
 }): HighlightAlternative {
@@ -141,12 +146,34 @@ export function buildRecenteredAlternative(input: {
     ...(Number.isFinite(input.momentDeliveredOffsetSec as number)
       ? { momentDeliveredOffsetSec: Number(input.momentDeliveredOffsetSec) }
       : {}),
+    ...(Number.isFinite(input.clipAnchorDeliveredOffsetSec as number)
+      ? { clipAnchorDeliveredOffsetSec: Number(input.clipAnchorDeliveredOffsetSec) }
+      : {}),
     createdAt: input.createdAt ?? new Date().toISOString(),
   });
 }
 
 function clamps01(v: number): number {
   return Math.min(1, Math.max(0, v));
+}
+
+/** AC5.1: `momentDeliveredOffsetSec` = `moment - window.start` — the dive
+ * moment's offset in the option's OWN window, which is the card's window.
+ *
+ * This is arithmetic on the row's provenance, deliberately NOT the delivered
+ * anchor offset the cut measured: the option's file is cut on the CARD's accept
+ * anchor (ADAAAA-8906), so a measured anchor offset is `acceptAnchorTs - start`
+ * and equals this value only when the dive names the accept instant. The D5
+ * grade read a drift-1 row stamped `7` where the moment sits at `6.000`
+ * (ADAAAA-9004), and the AC5.1 population is exactly the |drift| >= 1 rows.
+ * Values are rounded to milliseconds so the stored stamp is a clean number
+ * without moving off the AC's ±0.001 tolerance. */
+export function momentDeliveredOffsetSecOf(
+  momentTs: number,
+  windowStart: number
+): number | null {
+  if (!Number.isFinite(momentTs) || !Number.isFinite(windowStart)) return null;
+  return Number((momentTs - windowStart).toFixed(3));
 }
 
 /** The content instant a row was accepted on (`localizedTs`, else its trigger) —
@@ -271,6 +298,11 @@ export async function deliverRecenteredOption(input: {
     return null;
   }
   const acceptTs = acceptAnchorOf(row);
+  // AC5.1 / ADAAAA-9004: the moment stamp is the option's OWN window arithmetic
+  // (`moment - start`). The cut measures the card's accept anchor inside the
+  // option file (it is cut on that anchor, ADAAAA-8906), which is a different
+  // number on every |drift| >= 1 row — so it gets its own field.
+  const momentOffset = momentDeliveredOffsetSecOf(dive.ts, spec.start);
   const alt = buildRecenteredAlternative({
     jobId,
     ownerId: row.ownerId,
@@ -281,7 +313,8 @@ export async function deliverRecenteredOption(input: {
     clipUri: out.clipUri,
     clipWindow: { start: spec.start, end: spec.end },
     clipBytes: out.bytes,
-    momentDeliveredOffsetSec: out.offsetSec,
+    momentDeliveredOffsetSec: momentOffset,
+    clipAnchorDeliveredOffsetSec: out.offsetSec,
     clipError: out.clipError,
   });
   const { record, created } = await deps.addAlternative(alt);
@@ -292,7 +325,8 @@ export async function deliverRecenteredOption(input: {
       `(sha unchanged); added re-centered option ${record.id} at ${dive.ts.toFixed(3)}s ` +
       `(drift ${drift}s, ${out.bytes == null ? "?" : out.bytes} B, window [${spec.start.toFixed(3)}, ${spec.end.toFixed(3)}], ` +
       `placed on the card's accept anchor ${spec.anchorTs == null ? "?" : spec.anchorTs.toFixed(3)}s, ` +
-      `anchor at ${out.offsetSec == null ? "?" : out.offsetSec.toFixed(3)}s of the option)`
+      `moment at ${momentOffset == null ? "?" : momentOffset.toFixed(3)}s of the option, ` +
+      `anchor at ${out.offsetSec == null ? "?" : out.offsetSec.toFixed(3)}s)`
   );
   return record;
 }

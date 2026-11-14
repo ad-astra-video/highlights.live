@@ -2631,14 +2631,21 @@ export const HighlightAlternativeSchema = z.object({
   /** ADAAAA-8893 (D5): the option clip's own bytes, so the extra storage per
    *  re-anchored row is reportable (p50/p95) without a second file probe. */
   clipBytes: z.number().int().min(0).optional(),
-  /** ADAAAA-8906: where the dive moment ACTUALLY landed inside the option file,
-   *  measured from its first frame (seconds) — the delivered truth, not the
-   *  number the placement asked for. QA's D5 grade found the row fields right
-   *  while the file opened 1.0-1.2 s early; this field makes that class of
-   *  defect readable from the row instead of only from footage. Absent on a
+  /** ADAAAA-9004 (fix for the D5 grade): the dive moment's offset inside the
+   *  option's own window — **`moment - window.start`**, exactly the AC5.1
+   *  contract value, arithmetic on the row's own fields and independent of what
+   *  any rail measured. It was wired from the cut's delivered anchor offset
+   *  (ADAAAA-8906) until the grade read 7 where the moment sits at 6.000 of a
+   *  dive 1 s earlier than the accept anchor: on a drift-0 row the two coincide,
+   *  and the AC5.1 population (|drift| >= 1) is exactly where they diverge. */
+  momentDeliveredOffsetSec: z.number().optional(),
+  /** ADAAAA-9004: the measured placement of the card's ACCEPT anchor inside the
+   *  option's own file (seconds from its first frame) — the delivered truth
+   *  ADAAAA-8906 added, kept as its own field so a mis-placed cut stays readable
+   *  from the row without overloading the contract's moment stamp. Absent on a
    *  content-clock fallback (nothing was measured) and on every non-recentered
    *  alternative. */
-  momentDeliveredOffsetSec: z.number().optional(),
+  clipAnchorDeliveredOffsetSec: z.number().optional(),
   /** Delivered clip window + the cut media path. */
   start: z.number(),
   end: z.number(),
