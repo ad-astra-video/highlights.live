@@ -1,0 +1,34 @@
+{
+  "_note": "ADAAAA-8971 (increment 2 of ADAAAA-8934) — the stored LIVE-rail row that pins the ADAAAA-8914 filler shape. Source: rev-8 live leg, job e4c2fe29-68fe-472c-91da-b96d1dd8ca93 (file-sim kids300_7935.mp4), served build HEAD 0149022 (ADAAAA-8914). Row values and the served body are the deck's own bytes (deck8924.jsonl); `matchContext` is the job's persisted context; no value here is generated. The VOD lane already carried a filler fixture (packages/events/test/filler-depth-8914.test.ts) — this row is the live rail's, and it is the row the rev-8 grade read as AC14 FAIL (`unattested atmosphere 6/6`, clock clause 3/3 mismatch) while `summaryGate` still said `accepted`.",
+  "rail": "live",
+  "jobId": "e4c2fe29-68fe-472c-91da-b96d1dd8ca93",
+  "rowId": "23f9b28e-7ddc-4694-909f-4fa51d937ee2",
+  "eventType": "BIG_PLAY",
+  "verdict": "scoring_play",
+  "caption": "Scoreboard changes to RMA 2-1.",
+  "postTitle": null,
+  "postTitleGate": "absent",
+  "trigger": { "timestamp": 101, "durationS": 15 },
+  "matchClock": { "token": "18:12", "seconds": 1092, "shape": "mm:ss", "period": null, "legible": true, "ts": 101 },
+  "attestationUsed": { "scoreBoardChanged": true, "goalCrossed": false, "ballOutcome": null },
+  "reason": "Scoreboard changes to RMA 2-1; scoreboard score change confirmed",
+  "matchContext": {
+    "sport": "soccer",
+    "teams": [{ "name": "Barcelona", "side": "away", "kitColors": [], "confidence": 0.5 }],
+    "inferredAt": "2026-11-13T12:20:29.808402Z",
+    "resolverVersion": 1,
+    "ambiguous": true,
+    "trail": [
+      { "at": "2026-11-13T12:18:30.057Z", "names": [{ "side": "away", "name": "Barcelona", "confidence": 0.5 }] },
+      { "at": "2026-11-13T12:19:32.884Z", "names": [{ "side": "home", "name": "Real Madrid", "confidence": 0.5 }] }
+    ]
+  },
+  "rev8Summary": "Barcelona maintains possession and works the ball forward during this sequence. At 1:42 into the clip, the team continues their sustained play.",
+  "rev8SummaryGate": "accepted",
+  "rev8WordCount": 22,
+  "rev8Ac14Violations": [
+    "clock-clause: body ['1:42'] != matchClock 18:12",
+    "unattested-atmosphere: possession/ball-forward/sustained-play with no measured event",
+    "fact-per-sentence: 0 attested facts in sentence 1 (team name only)"
+  ]
+}
