@@ -114,12 +114,26 @@ describe("ADAAAA-8971 AC5 — a refusal a second sample cannot repair ends on on
     expect(summaryRefusalIsRepairable("unattested-sentence", ROW_23F9)).toBe(true);
   });
 
-  it("keeps `too-few-facts` deterministic on a one-kind row and repairable on a two-kind row", () => {
+  it("keeps `too-few-facts` deterministic on a one-kind row and on a row whose missing kind cannot be relayed", () => {
     const oneKind = row({ matchContext: null, transcript: null }); // clock only
     expect(attestedFactKinds(oneKind)).toEqual(["clock"]);
     expect(summaryRefusalIsRepairable("too-few-facts", oneKind)).toBe(false);
-    // clock + action (a named attested actor).
+    // clock + action (a named attested actor) but NO measured ball outcome: the
+    // `action` kind can only be relayed by an act nothing measured. ADAAAA-9032
+    // measured 12 of 12 second samples on job `771f42de` re-landing the identical
+    // refusal on exactly this row shape, so the row ends on ONE call.
     expect(attestedFactKinds(ROW_23F9)).toEqual(["clock", "action"]);
-    expect(summaryRefusalIsRepairable("too-few-facts", ROW_23F9)).toBe(true);
+    expect(summaryRefusalIsRepairable("too-few-facts", ROW_23F9)).toBe(false);
+  });
+
+  it("keeps the retry slot when the missing kind CAN be relayed from the evidence", () => {
+    // A measured transition: the score line is a fact copy can restate.
+    expect(summaryRefusalIsRepairable("too-few-facts", ROW_WITH_SCORE)).toBe(true);
+    // A measured ball outcome makes the `action` kind relayable.
+    const withOutcome = row({
+      attestation: { ballOutcome: "shot_on_target", goalCrossed: false, scoreBoardChanged: false },
+    });
+    expect(attestedFactKinds(withOutcome)).toEqual(["clock", "action"]);
+    expect(summaryRefusalIsRepairable("too-few-facts", withOutcome)).toBe(true);
   });
 });

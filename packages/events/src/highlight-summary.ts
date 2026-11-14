@@ -981,7 +981,29 @@ export function summaryRefusalIsRepairable(
     return true;
   }
   if (violation === "too-few-facts") {
-    return attestedFactKinds(evidence).length >= SUMMARY_MIN_FACT_KINDS;
+    const kinds = attestedFactKinds(evidence);
+    if (kinds.length < SUMMARY_MIN_FACT_KINDS) return false;
+    // ADAAAA-9032 (rev-10 natural job `771f42de`, 14 promoted rows): 12 of the 14
+    // rows billed a second call and **12 of 12 re-landed the identical refusal** —
+    // a `too-few-facts` refusal whose body used the clock and whose only missing
+    // kind was `action` on a row whose attestation recorded NO measured outcome
+    // (`ballOutcome: null, goalCrossed: false, scoreBoardChanged: false`,
+    // `refusalReason: no_measured_authority`). On that row `action` is a menu entry
+    // the copy cannot RELAY without asserting an act nothing measured — the writer's
+    // only paths back to the kind are the possession lexicon AC14 deletes or a
+    // discrete act the box never saw. So the second sample is futile by
+    // construction, exactly the class §13.2 forbids paying for.
+    //
+    // The retry stays for the kinds a body CAN relay from the row's own evidence:
+    // `score` (restating the measured pair) and `venue` (restating the context's
+    // competition), plus `action` when the row measured a ball outcome. That keeps
+    // ADAAAA-8806's case (a thin reply on a row that DOES attest an outcome) and
+    // drops the measured-dead one.
+    const relayable =
+      kinds.includes("score") ||
+      kinds.includes("venue") ||
+      (kinds.includes("action") && summaryBallActionAttested(evidence) !== false);
+    return relayable;
   }
   return false;
 }
