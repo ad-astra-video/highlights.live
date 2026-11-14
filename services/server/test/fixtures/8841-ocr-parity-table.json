@@ -1,5 +1,5 @@
 {
-  "note": "ADAAAA-8841: the shared score-OCR table both layers must agree on. ADAAAA-9037 adds the letter-O plate family (a zero the OCR rendered as letter O) plus its precision refusals. Read by services/server/test/score-ocr-clock-dash-8841.test.ts and services/perceive/tests/test_score_dash_clock_8841.py, so a divergence between parseOcrScoreLine and _score_pair_in_line fails one of the two suites. Strings are the measured census strings (live job 1ee3c97d, Sky Sports share) plus the 8507 garbage family and the pinned controls, not invented ones.",
+  "note": "ADAAAA-8841: the shared score-OCR table both layers must agree on. ADAAAA-9037 adds the letter-O plate family (a zero the OCR rendered as letter O) plus its precision refusals; ADAAAA-9039 adds the plate-glued-to-its-own-clock family (`0-139:21` => `0-1` at clock `39:21`) plus its sport-scoped and ambiguity refusals. Read by services/server/test/score-ocr-clock-dash-8841.test.ts and services/perceive/tests/test_score_dash_clock_8841.py, so a divergence between parseOcrScoreLine and _score_pair_in_line fails one of the two suites. Strings are the measured census strings (live jobs 1ee3c97d and 771f42de, Sky Sports shares) plus the 8507 garbage family and the pinned controls, not invented ones.",
   "cases": [
     { "line": "24-35", "sport": "soccer", "expected": null, "why": "ticket headline: mm:ss clock at minute >= 10, colon OCR'd as a dash" },
     { "line": "36-54", "sport": "soccer", "expected": null, "why": "same family, later minute" },
@@ -53,6 +53,17 @@
     { "line": "RMA O-O BAR 38:55", "sport": "soccer", "expected": null, "why": "9037 precision: sandwiched pair stays a name even with a clock on the line" },
     { "line": "O-O betway main event 36:09", "sport": "soccer", "expected": null, "why": "9037 precision: clock 20 chars out => an ad board, not a plate" },
     { "line": "LALIGA|LALIGA O-O 09-40", "sport": "soccer", "expected": null, "why": "9037 precision: sponsor-chrome line, pair not sandwiched => refused by the inherited gate" },
-    { "line": "OALsky sportsmain eventL", "sport": "soccer", "expected": null, "why": "9037 precision: the measured letter-O plate with NO separator and NO clock stays unreadable" }
+    { "line": "OALsky sportsmain eventL", "sport": "soccer", "expected": null, "why": "9037 precision: the measured letter-O plate with NO separator and NO clock stays unreadable" },
+    { "line": "sky sports0-139:21", "sport": "soccer", "expected": [0, 1], "why": "9039: MEASURED (job 771f42de, window g84 that owns the first goal boundary) — the POST plate 0-1 glued to its own clock 39:21" },
+    { "line": "0-142:31PENDERSSKIN30", "sport": "soccer", "expected": [0, 1], "why": "9039: measured — the same POST plate 0-1 glued to clock 42:31" },
+    { "line": "sky sports1-149:36PREDAT", "sport": "soccer", "expected": [1, 1], "why": "9039: measured — a legible 1-1 plate glued to clock 49:36" },
+    { "line": "0-139", "sport": "soccer", "expected": null, "why": "9039 precision: no clock on the line, so the run is not normalised (the pair alone stays refused)" },
+    { "line": "0-038:37", "sport": "soccer", "expected": null, "why": "9039 precision: zero-run 038 — B=0 is indistinguishable from the clock's own leading zero" },
+    { "line": "rea1-50:22", "sport": "soccer", "expected": null, "why": "9039 precision: one-digit-minute run — measured as plate 1- + clock 50:22, NOT 1-5 at 0:22 (it flaps against the true 1-1 plate)" },
+    { "line": "1-71:57G Google GerminGe", "sport": "soccer", "expected": null, "why": "9039 precision: same ambiguity at minute 71 — plate 1- + clock 71:57" },
+    { "line": "1-1-148:51-3 MINSLIVE", "sport": "soccer", "expected": [1, 1], "why": "9039 precision: the legible plate in front of an ad clock is untouched (A may not follow a dash)" },
+    { "line": "sky sports0-139:21", "sport": "basketball", "expected": null, "why": "9039: SPORT-SCOPED — a two-digit plate sport keeps today's verdict (no normalisation)" },
+    { "line": "sky sports0-139:21", "sport": "american football", "expected": null, "why": "9039: SPORT-SCOPED — American football keeps today's verdict too" },
+    { "line": "sky sports0-139:21", "sport": null, "expected": null, "why": "9039: unknown sport stays lenient/byte-identical (the rule is scoped, never global)" }
   ]
 }

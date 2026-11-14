@@ -1715,6 +1715,70 @@ export function ocrLetterOScorePair(text: string, sport?: string): [number, numb
   return undefined;
 }
 
+/**
+ * ADAAAA-9039: the score plate GLUED to its own clock — the plate's away digit
+ * and the clock's minute field reached the OCR as ONE digit run.
+ *
+ * Measured on the natural live Sky Sports share `771f42de`: the window that
+ * owns the FIRST goal boundary (`g84`) carries `sky sports0-139:21`, i.e. the
+ * plate `0-1` immediately followed by its clock `39:21`. `OCR_SCORE_PAIR_RE`
+ * reads the whole run as one pair `(0,139)`, which {@link parseOcrScoreLine}
+ * refuses on the per-side `<= 99` bar, so the boundary window carried ZERO
+ * score reads and the derive lane had no POST side at all.
+ *
+ * Mirrors `_GLUED_CLOCK_PAIR_RE` in `services/perceive/app/scoreboard.py`.
+ */
+const OCR_GLUED_CLOCK_PAIR_RE =
+  /(?<![\d\-–—])(\d)(\s*[-–—]\s*)([1-9])(\d{2}):([0-5]\d)(?!\d)/g;
+
+/**
+ * ADAAAA-9039: the plate-and-clock normalisation of a glued `A-Bmm:ss` line, or
+ * `undefined`.
+ *
+ * The shape is `A-B` where `B` is the plate's away digit and the digits after it
+ * are the clock's minute field (`0-139:21` => plate `(0,1)`, clock `39:21`).
+ * Four keys keep it narrow, and every one is fail-closed:
+ *
+ *  1. SPORT-SCOPED — only a sport whose plate cannot reach two digits
+ *     ({@link ocrSportScoresAreSingleDigit}) has an unambiguous single-digit
+ *     away side, so `0-139` stays refused for basketball / american football
+ *     and the pinned `45-42` / `24-17` pairs keep parsing exactly as today.
+ *  2. NOT MID-RUN — `A` may not itself follow a digit or a dash, so the
+ *     `1-1-148:51` family (a legible plate in front of an ad clock) can never be
+ *     re-sliced into `(1,4)`.
+ *  3. TWO-DIGIT MINUTE — the digits after `B` are the clock's minute field and
+ *     must be EXACTLY two of them, and `B` may not be `0`. That is the measured
+ *     split (`0-139:21`: run `139` = `B=1` + minute `39`). It refuses both the
+ *     zero-padded run (`0-019:57`, `0-038:37`, where `B=0` is indistinguishable
+ *     from the clock's own leading zero) and the ONE-digit-minute run, where the
+ *     same three characters are a lost plate digit plus a plausible clock
+ *     (`rea1-50:22` at 14:26 is plate `1-` + clock `50:22`, NOT `1-5` at `0:22`;
+ *     it flaps against the true `1-1` plate, so it stays refused). A minute
+ *     above 99 is not a match clock either, so `(?!\d)` keeps a longer run out.
+ *  4. THE SAME GATE — the recovered pair is then judged by
+ *     {@link ocrScorePairIsNoise} with the digit strings, so the chrome refusal,
+ *     the clock-glue refusal, the zero-padding rule and the sport ceiling all
+ *     keep their verdicts. This can never lift a refusal the digit lane applies
+ *     to the same glyphs.
+ *
+ * The result is used at LOWEST precedence in {@link parseOcrScoreLine} (after
+ * every digit pick, including a bare team-less axis pair), so a legible digit
+ * plate on any line still wins and the rule can only ADD a reading.
+ */
+export function ocrGluedClockScorePair(text: string, sport?: string): [number, number] | undefined {
+  if (!ocrSportScoresAreSingleDigit(sport)) return undefined;
+  const re = new RegExp(OCR_GLUED_CLOCK_PAIR_RE.source, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    // `A-B` only: the minute run belongs to the clock, not to the pair.
+    const pairLen = m[1].length + m[2].length + m[3].length;
+    const adj = ocrPairTeamAdjacent(text, m.index, pairLen);
+    if (ocrScorePairIsNoise(text, m[1], m[3], m.index, pairLen, adj, sport)) continue;
+    return [Number(m[1]), Number(m[3])];
+  }
+  return undefined;
+}
+
 /** ADAAAA-8071: parse the clean two-integer score line out of one timeline
  * record's OCR lines, or `null`. The pair pattern mirrors perceive's
  * `_SCORE_LINE_RE` (`(\d{1,3})\s*[-–—]\s*(\d{1,3})`, ints <= 99) so a clock
@@ -1757,6 +1821,7 @@ export function parseOcrScoreLine(
   let rightPick: [number, number] | undefined;
   let gluedPick: [number, number] | undefined;
   let anyPick: [number, number] | undefined;
+  let gluedClockPick: [number, number] | undefined;
   let letterOPick: [number, number] | undefined;
   for (const raw of lines ?? []) {
     const text = typeof raw === "string" ? raw.trim() : "";
@@ -1796,8 +1861,13 @@ export function parseOcrScoreLine(
     // it can only add a reading where the digit lane found none — it can never
     // outrank a legible plate on any line.
     if (!linePicked && !letterOPick) letterOPick = ocrLetterOScorePair(text, sport);
+    // ADAAAA-9039: the same fallback shape for the plate GLUED to its own clock
+    // (`sky sports0-139:21` => `0-1`). It ranks ABOVE the letter-O term (real
+    // digits outrank a glyph) and BELOW every digit pick, so it can only add a
+    // reading where no line yielded a legible plate.
+    if (!linePicked && !gluedClockPick) gluedClockPick = ocrGluedClockScorePair(text, sport);
   }
-  return leftPick ?? rightPick ?? gluedPick ?? anyPick ?? letterOPick ?? null;
+  return leftPick ?? rightPick ?? gluedPick ?? anyPick ?? gluedClockPick ?? letterOPick ?? null;
 }
 
 /** ADAAAA-8071: every parseable score reading in a window's perceive timeline,

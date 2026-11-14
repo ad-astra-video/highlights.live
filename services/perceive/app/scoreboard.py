@@ -111,6 +111,15 @@ _LETTER_O_PAIR_RE = re.compile(r"[Oo]\s*[-\u2013\u2014]\s*[Oo]")
 # separated by the channel chrome the same crop carries
 # (`O-Osky Sports36.09main e`, gap 11). A pair further away is not judged here.
 _LETTER_O_CLOCK_MAX_GAP = 16
+# ADAAAA-9039: the score plate GLUED to its own clock — the plate's away digit
+# and the clock's minute field reached the OCR as ONE digit run. Measured on the
+# natural live Sky Sports share `771f42de`: `sky sports0-139:21` is the plate
+# `0-1` followed by its clock `39:21`, and the digit lane reads the whole run as
+# `(0,139)`, which it refuses (>99 per side). Mirrors `OCR_GLUED_CLOCK_PAIR_RE`
+# in `services/server/src/analyzer.ts`.
+_GLUED_CLOCK_PAIR_RE = re.compile(
+    r"(?<![\d\-\u2013\u2014])(\d)(\s*[-\u2013\u2014]\s*)([1-9])(\d{2}):([0-5]\d)(?!\d)"
+)
 _CLOCK_GLUE_BEFORE_RE = re.compile(r"\d{1,2}:$")
 _CLOCK_GLUE_AFTER_RE = re.compile(r":\d{1,2}")
 
@@ -823,6 +832,54 @@ def _letter_o_score_pair(text: str, sport: Optional[str] = None) -> Optional[Tup
     return None
 
 
+def _glued_clock_score_pair(
+    text: str, sport: Optional[str] = None
+) -> Optional[Tuple[int, int]]:
+    """The plate-and-clock normalisation of a glued ``A-Bmm:ss`` line, or ``None``.
+
+    ADAAAA-9039, mirroring ``ocrGluedClockScorePair`` in the server analyzer.
+    Measured on the natural live Sky Sports share ``771f42de``: the window that
+    owns the FIRST goal boundary (``g84``) carries ``sky sports0-139:21`` — the
+    plate ``0-1`` immediately followed by its clock ``39:21`` — so the digit
+    lane read one pair ``(0, 139)``, refused it on the per-side ``<= 99`` bar and
+    left the boundary with no POST side at all.
+
+    Four keys keep it narrow, every one fail-closed:
+
+    1. SPORT-SCOPED — only a sport whose plate cannot reach two digits
+       (:func:`_sport_scores_are_single_digit`) has an unambiguous single-digit
+       away side, so ``0-139`` stays refused for basketball / American football
+       and the pinned ``45-42`` / ``24-17`` pairs parse exactly as today;
+    2. NOT MID-RUN — ``A`` may not itself follow a digit or a dash, so the
+       ``1-1-148:51`` family (a legible plate in front of an ad clock) can never
+       be re-sliced into ``(1, 4)``;
+    3. TWO-DIGIT MINUTE — the digits after ``B`` are the clock's minute field and
+       must be EXACTLY two of them, and ``B`` may not be ``0`` (the measured
+       split: ``0-139:21`` is run ``139`` = ``B=1`` + minute ``39``). This
+       refuses the zero-padded run (``0-019:57``) and the one-digit-minute run
+       (``rea1-50:22`` is plate ``1-`` + clock ``50:22``, not ``1-5`` at
+       ``0:22`` — it flaps against the true ``1-1`` plate);
+    4. THE SAME GATE — the recovered pair is judged by :func:`_pair_is_noise`
+       with the digit strings, so the chrome / clock-glue / zero-pad /
+       sport-ceiling verdicts are inherited, never lifted.
+
+    :func:`parse_ocr_score` uses the result only AFTER every line has failed to
+    yield a digit pair, so a legible plate always outranks it.
+    """
+    if not _sport_scores_are_single_digit(sport):
+        return None
+    for m in _GLUED_CLOCK_PAIR_RE.finditer(text):
+        # `A-B` only: the minute run belongs to the clock, not to the pair.
+        pair_len = len(m.group(1)) + len(m.group(2)) + len(m.group(3))
+        adjacent = _pair_team_adjacent(text, m.start(), pair_len)
+        if _pair_is_noise(
+            text, m.group(1), m.group(3), m.start(), pair_len, adjacent, sport
+        ):
+            continue
+        return (int(m.group(1)), int(m.group(3)))
+    return None
+
+
 def parse_ocr_score(
     frame_ocr,
     roi: Optional[ScoreboardRoi] = None,
@@ -851,6 +908,7 @@ def parse_ocr_score(
     """
     if not frame_ocr:
         return None
+    glued_clock_pair: Optional[Tuple[int, int]] = None
     letter_o_pair: Optional[Tuple[int, int]] = None
     for i, line in enumerate(frame_ocr):
         text = str(line).strip()
@@ -862,12 +920,16 @@ def parse_ocr_score(
         pair = _score_pair_in_line(text, sport)
         if pair is not None:
             return pair
+        # ADAAAA-9039: the glued plate-and-clock falls back BELOW every digit
+        # pick and ABOVE the letter-O glyph lane.
+        if glued_clock_pair is None:
+            glued_clock_pair = _glued_clock_score_pair(text, sport)
         # ADAAAA-9037: the letter-O plate is a FALLBACK, so a legible plate on
         # any later line still wins — the same precedence the server's
         # `parseOcrScoreLine` applies (`letterOPick` is its last term).
         if letter_o_pair is None:
             letter_o_pair = _letter_o_score_pair(text, sport)
-    return letter_o_pair
+    return glued_clock_pair if glued_clock_pair is not None else letter_o_pair
 
 
 def score_changed(prev: Optional[Tuple[int, int]], curr: Optional[Tuple[int, int]]) -> bool:

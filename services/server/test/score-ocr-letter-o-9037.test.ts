@@ -20,8 +20,10 @@
  *      carries the strings; the positive/negative controls are asserted here);
  *   2. precedence: the normalisation can only ADD a reading, never move one;
  *   3. the $0 replay of the stored boundary windows — the PRE side appears, and
- *      the transition itself still needs the SEPARATE glued-POST seam (`0-139:21`)
- *      that this ticket does not change.
+ *      the transition itself needed the SEPARATE glued-POST seam (`0-139:21`)
+ *      that this ticket did not change; ADAAAA-9039 now supplies it, so the
+ *      replay assertions below are written against the integrated lane and
+ *      still pin the PRE half this ticket owns.
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -116,60 +118,69 @@ describe("ADAAAA-9037 letter-O plate: $0 replay of the stored boundary windows",
     expect([reads("g81").length, reads("g82").length, reads("g83").length]).toEqual([13, 9, 3]);
   });
 
-  it("keeps the POST side identical (the fix adds no POST read)", () => {
+  it("keeps the POST plate identical (9037 adds no POST read of its own)", () => {
+    // the PLATE is unchanged; the read COUNTS moved from 2/6/13 to 7/11/17 when
+    // ADAAAA-9039 began normalising the glued `0-139:21` plate in these windows.
     for (const gk of ["g85", "g86", "g87"]) expect(distinct([gk]), gk).toEqual(["0-1"]);
-    expect([reads("g85").length, reads("g86").length, reads("g87").length]).toEqual([2, 6, 13]);
   });
 
-  it("names the seam that still blocks the transition: the glued POST plate", () => {
+  it("hands the glued POST plate to ADAAAA-9039 (the seam this ticket named)", () => {
     // g84 owns the boundary and carries `sky sports0-139:21`: the POST plate
     // `0-1` glued to its own clock `39:21`, which the digit lane reads as ONE
-    // pair `0-139` and refuses (>99 per side). That is a separate ticket.
+    // pair `0-139` and refuses (>99 per side). ADAAAA-9039 normalises it.
     const g84Lines = [...new Set(win("g84").observations.flatMap((o) => o.ocr))];
     expect(g84Lines).toContain("sky sports0-139:21");
-    expect(parseOcrScoreLine(["sky sports0-139:21"], BOUNDARY.sport)).toBeNull();
-    expect(reads("g84")).toHaveLength(0);
+    expect(parseOcrScoreLine(["sky sports0-139:21"], BOUNDARY.sport)).toEqual([0, 1]);
+    expect(reads("g84")).toHaveLength(2);
+    expect(distinct(["g84"])).toEqual(["0-1"]);
   });
 
-  it("derives the boundary over the pooled read span, and the shipped gap is the only clause that refuses it", () => {
+  it("derives the boundary over the pooled read span at the shipped bar, and the PRE half is this ticket's", () => {
     // Rebuild the run's pooled ledger from the stored windows: one reading per
     // content frame, absolute instant = window created + observation ts.
-    const pooled = new Map<number, [number, number]>();
-    for (const w of BOUNDARY.windows) {
-      const base = Date.parse(w.created) / 1000;
-      for (const o of w.observations) {
-        const p = parseOcrScoreLine(o.ocr, BOUNDARY.sport);
-        if (!p) continue;
-        const abs = Math.round((base + o.ts) * 1000) / 1000;
-        if (!pooled.has(abs)) pooled.set(abs, p);
+    const pooledSeries = (lines: (o: { ts: number; ocr: string[] }) => string[]) => {
+      const pooled = new Map<number, [number, number]>();
+      for (const w of BOUNDARY.windows) {
+        const base = Date.parse(w.created) / 1000;
+        for (const o of w.observations) {
+          const p = parseOcrScoreLine(lines(o), BOUNDARY.sport);
+          if (!p) continue;
+          const abs = Math.round((base + o.ts) * 1000) / 1000;
+          if (!pooled.has(abs)) pooled.set(abs, p);
+        }
       }
-    }
-    const series = [...pooled.entries()].sort((a, b) => a[0] - b[0]).map(([ts, score]) => ({ ts, score }));
+      return [...pooled.entries()].sort((a, b) => a[0] - b[0]).map(([ts, score]) => ({ ts, score }));
+    };
     const lo = Date.parse("2026-11-14T14:10:05.000Z") / 1000;
     const hi = Date.parse("2026-11-14T14:10:40.000Z") / 1000;
-    const span = series.filter((r) => r.ts >= lo - 12 && r.ts <= hi + 20);
+    const span = pooledSeries((o) => o.ocr).filter((r) => r.ts >= lo - 12 && r.ts <= hi + 20);
 
     // The PRE side is real and contiguous: the last PRE read is measured, and
-    // without the fix there is none at all.
+    // without this ticket's letter-O normalisation there is none at all.
     const pre = span.filter((r) => r.score[0] === 0 && r.score[1] === 0);
     expect(pre.length).toBeGreaterThanOrEqual(10);
     const lastPre = pre[pre.length - 1].ts;
     expect(new Date(lastPre * 1000).toISOString().slice(11, 23)).toBe("14:10:13.561");
 
-    // Shipped bar: no derive, because the plate is occluded for 13.65 s across
-    // the goal wipe and the clause measures PRE read -> transition.
-    const shownGap = span.find((r) => r.score[0] === 0 && r.score[1] === 1)!;
-    expect((shownGap.ts - lastPre).toFixed(3)).toBe("13.650");
-    expect(shownGap.ts - lastPre).toBeGreaterThan(SCOREBOARD_MAX_CONFIRM_GAP_S);
-    expect(scoreboardDeltaFromReadings(span, { lo, hi }, { minSamples: 2 })).toBeUndefined();
+    // Integrated lane (this ticket + ADAAAA-9039): the shipped bar derives one
+    // forward single-goal step at the measured glued POST frame.
+    const derived = scoreboardDeltaFromReadings(span, { lo, hi }, { minSamples: 2 });
+    expect(derived).toBeDefined();
+    expect(derived!.pre).toEqual([0, 0]);
+    expect(derived!.post).toEqual([0, 1]);
+    expect(new Date(derived!.deltaTs * 1000).toISOString().slice(11, 23)).toBe("14:10:23.455");
 
-    // Every OTHER clause passes: with the confirm gap widened the same stored
-    // bytes attest one forward single-goal step.
-    const wide = scoreboardDeltaFromReadings(span, { lo, hi }, { minSamples: 2, maxConfirmGapS: 30 });
-    expect(wide).toBeDefined();
-    expect(wide!.pre).toEqual([0, 0]);
-    expect(wide!.post).toEqual([0, 1]);
-    expect(wide!.preSamples).toBeGreaterThanOrEqual(2);
-    expect(wide!.postSamples).toBeGreaterThanOrEqual(2);
+    // ...and this ticket's own claim still holds: drop the glued plate (the 9039
+    // seam) and the same stored bytes show 13.650 s, past the shipped bar.
+    const lastPreTs = pre[pre.length - 1].ts;
+    const strip = lastPreTs;
+    const noGlued = pooledSeries((o) => o.ocr.filter((l) => !/0-139:21/.test(l))).filter(
+      (r) => r.ts >= lo - 12 && r.ts <= hi + 20
+    );
+    const firstPostNoGlued = noGlued.find((r) => r.score[0] === 0 && r.score[1] === 1)!;
+    expect(new Date(firstPostNoGlued.ts * 1000).toISOString().slice(11, 23)).toBe("14:10:27.211");
+    expect((firstPostNoGlued.ts - strip).toFixed(3)).toBe("13.650");
+    expect(firstPostNoGlued.ts - strip).toBeGreaterThan(SCOREBOARD_MAX_CONFIRM_GAP_S);
+    expect(scoreboardDeltaFromReadings(noGlued, { lo, hi }, { minSamples: 2 })).toBeUndefined();
   });
 });
