@@ -1,0 +1,15 @@
+{
+  "job": "771f42de-82eb-4357-8e0b-2121865f4608",
+  "source": "stored jobs.record.matchContextEvidence.channelOutcomes.scorebug_ocr.rawLines (5 lines, the frame the SERVED record folded)",
+  "served_published": [
+    {"name": "Liverpool", "side": "home", "confidence": 0.5},
+    {"name": "Chelsea", "side": "away", "confidence": 0.5}
+  ],
+  "lines": [
+    "FULL MATCH : Liverpool 7-6 Chelsea (1080p)0-0sky sports35:09",
+    "O-Osky Sports36.09main event",
+    "0-0sky sports36.09main eventSAVE ON OUR BIGGEST EVER ADIDAS SALESAVE On OUR BIGGGEST EVERADIDAS SALEEIN",
+    "sky sports37:11",
+    "sky sportsmain eventLIVE"
+  ]
+}

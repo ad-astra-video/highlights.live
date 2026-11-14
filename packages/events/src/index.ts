@@ -1300,6 +1300,29 @@ export const MatchContextEvidenceSchema = z
     sources: z.array(z.string()).optional(),
     /** Candidates folded below the usable threshold (never attributed). */
     suppressedCandidates: z.array(z.string()).optional(),
+    /** ADAAAA-9041: WHY a candidate did not reach the published pair, bounded
+     * (<= 4 per pass). At equal confidence the loser's `observations` against
+     * `beatenByObservations` IS the tie that decided the slot, so a record that
+     * dropped a real team for a noisy ad-board name is diagnosable from the
+     * stored evidence alone. */
+    suppressedCandidateDetail: z
+      .array(
+        z.object({
+          name: z.string(),
+          side: z.string(),
+          confidence: z.number(),
+          observations: z.number().int().min(0),
+          sources: z.array(z.string()),
+          /** `tie_break_fewer_observations` | `tie_break_source_weight` |
+           * `tie_break_name` | `lower_confidence` | `no_concrete_side` |
+           * `below_usable_floor` */
+          reason: z.string(),
+          beatenBy: z.string().optional(),
+          beatenByConfidence: z.number().optional(),
+          beatenByObservations: z.number().int().min(0).optional(),
+        })
+      )
+      .optional(),
     /** Kit clusters the resolver actually observed (colour names). */
     kitClusterColors: z.array(z.string()).optional(),
     /** Sides with a team but no linking evidence for a kit colour. */

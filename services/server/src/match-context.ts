@@ -537,6 +537,16 @@ export function mergeMatchContextEvidence(
     const value = unionStrings(previous[key] as string[] | undefined, incoming[key] as string[] | undefined);
     if (value) out[key] = value;
   }
+  // ADAAAA-9041: the tie-break's per-candidate reasons are provenance like the
+  // suppressed names — a pass's own dropped candidates stay true statements
+  // about the job, so the resumed record keeps the union (deduped, capped).
+  const suppressedDetail = unionObjects<any>(
+    (previous as Record<string, any>).suppressedCandidateDetail,
+    (incoming as Record<string, any>).suppressedCandidateDetail,
+    (entry: any) => `${entry?.name}|${entry?.reason}`,
+    EVIDENCE_ARRAY_CAP
+  );
+  if (suppressedDetail) (out as Record<string, unknown>).suppressedCandidateDetail = suppressedDetail;
   const channels = mergeChannelOutcomes(previous.channelOutcomes, incoming.channelOutcomes);
   if (channels) out.channelOutcomes = channels;
   // The live-session fields and the per-pass reason describe THIS pass only.

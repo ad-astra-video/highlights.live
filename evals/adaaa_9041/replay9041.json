@@ -1,0 +1,468 @@
+{
+  "baseline": {
+    "corpus": {
+      "distinct_reads": 849,
+      "note": "prompt-rendered OCR truncated at ~40 chars: LOSSY vs the session's own reads",
+      "ocr_per_observation": 1,
+      "reads": 12481
+    },
+    "job": "771f42de-82eb-4357-8e0b-2121865f4608",
+    "label": "baseline",
+    "lenses": {
+      "served_frame_plus_corpus": {
+        "candidates": [
+          {
+            "confidence": 0.5,
+            "name": "Chelsea",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Italy",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Japan",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "observations": null,
+            "side": "home",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.375,
+            "name": "Iran",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.375
+          },
+          {
+            "confidence": 0.375,
+            "name": "Scotland",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.375
+          }
+        ],
+        "fold": {
+          "away": {
+            "confidence": 0.5,
+            "name": "Chelsea",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          "home": {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          "singleSourceCap": 0.55,
+          "usableConfidence": 0.6
+        },
+        "frames": 12482,
+        "published": [
+          {
+            "confidence": 0.5,
+            "name": "Chelsea",
+            "side": "away"
+          },
+          {
+            "confidence": 0.5,
+            "name": "Italy",
+            "side": "away"
+          }
+        ],
+        "suppressedCandidateDetail": [],
+        "suppressedCandidates": [
+          "Japan",
+          "Liverpool",
+          "Iran",
+          "Scotland"
+        ]
+      },
+      "stored_corpus": {
+        "candidates": [
+          {
+            "confidence": 0.5,
+            "name": "Italy",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Japan",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.375,
+            "name": "Iran",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.375
+          },
+          {
+            "confidence": 0.375,
+            "name": "Scotland",
+            "observations": null,
+            "side": "away",
+            "sourceWeight": 0.375
+          }
+        ],
+        "fold": {
+          "away": {
+            "confidence": 0.5,
+            "name": "Italy",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          "home": null,
+          "singleSourceCap": 0.55,
+          "usableConfidence": 0.6
+        },
+        "frames": 12481,
+        "published": [
+          {
+            "confidence": 0.5,
+            "name": "Italy",
+            "side": "away"
+          },
+          {
+            "confidence": 0.5,
+            "name": "Japan",
+            "side": "away"
+          }
+        ],
+        "suppressedCandidateDetail": [],
+        "suppressedCandidates": [
+          "Liverpool",
+          "Iran",
+          "Scotland"
+        ]
+      }
+    },
+    "policy": {
+      "SINGLE_SOURCE_CAP": 0.55,
+      "USABLE_CONFIDENCE": 0.6
+    },
+    "served_frame_lines": [
+      "FULL MATCH : Liverpool 7-6 Chelsea (1080p)0-0sky sports35:09",
+      "O-Osky Sports36.09main event",
+      "0-0sky sports36.09main eventSAVE ON OUR BIGGEST EVER ADIDAS SALESAVE On OUR BIGGGEST EVERADIDAS SALEEIN",
+      "sky sports37:11",
+      "sky sportsmain eventLIVE"
+    ],
+    "spend_usd": 0
+  },
+  "patched": {
+    "corpus": {
+      "distinct_reads": 849,
+      "note": "prompt-rendered OCR truncated at ~40 chars: LOSSY vs the session's own reads",
+      "ocr_per_observation": 1,
+      "reads": 12481
+    },
+    "job": "771f42de-82eb-4357-8e0b-2121865f4608",
+    "label": "patched",
+    "lenses": {
+      "served_frame_plus_corpus": {
+        "candidates": [
+          {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "observations": 219,
+            "side": "home",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Japan",
+            "observations": 22,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Italy",
+            "observations": 15,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Chelsea",
+            "observations": 1,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.375,
+            "name": "Iran",
+            "observations": 19,
+            "side": "away",
+            "sourceWeight": 0.375
+          },
+          {
+            "confidence": 0.375,
+            "name": "Scotland",
+            "observations": 5,
+            "side": "away",
+            "sourceWeight": 0.375
+          }
+        ],
+        "fold": {
+          "away": {
+            "confidence": 0.5,
+            "name": "Japan",
+            "observations": 22,
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          "home": {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "observations": 219,
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          "singleSourceCap": 0.55,
+          "tieBreak": [
+            "confidence",
+            "agreeingObservations",
+            "sourceWeight",
+            "name"
+          ],
+          "usableConfidence": 0.6
+        },
+        "frames": 12482,
+        "published": [
+          {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "side": "home"
+          },
+          {
+            "confidence": 0.5,
+            "name": "Japan",
+            "side": "away"
+          }
+        ],
+        "suppressedCandidateDetail": [
+          {
+            "beatenBy": "Japan",
+            "beatenByConfidence": 0.5,
+            "beatenByObservations": 22,
+            "confidence": 0.5,
+            "name": "Italy",
+            "observations": 15,
+            "reason": "tie_break_fewer_observations",
+            "side": "away",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          {
+            "beatenBy": "Japan",
+            "beatenByConfidence": 0.5,
+            "beatenByObservations": 22,
+            "confidence": 0.5,
+            "name": "Chelsea",
+            "observations": 1,
+            "reason": "tie_break_fewer_observations",
+            "side": "away",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          {
+            "beatenBy": "Japan",
+            "beatenByConfidence": 0.5,
+            "beatenByObservations": 22,
+            "confidence": 0.375,
+            "name": "Iran",
+            "observations": 19,
+            "reason": "lower_confidence",
+            "side": "away",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          {
+            "beatenBy": "Japan",
+            "beatenByConfidence": 0.5,
+            "beatenByObservations": 22,
+            "confidence": 0.375,
+            "name": "Scotland",
+            "observations": 5,
+            "reason": "lower_confidence",
+            "side": "away",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          }
+        ],
+        "suppressedCandidates": [
+          "Italy",
+          "Chelsea",
+          "Iran",
+          "Scotland"
+        ]
+      },
+      "stored_corpus": {
+        "candidates": [
+          {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "observations": 218,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Japan",
+            "observations": 22,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.5,
+            "name": "Italy",
+            "observations": 15,
+            "side": "away",
+            "sourceWeight": 0.5
+          },
+          {
+            "confidence": 0.375,
+            "name": "Iran",
+            "observations": 19,
+            "side": "away",
+            "sourceWeight": 0.375
+          },
+          {
+            "confidence": 0.375,
+            "name": "Scotland",
+            "observations": 5,
+            "side": "away",
+            "sourceWeight": 0.375
+          }
+        ],
+        "fold": {
+          "away": {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "observations": 218,
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          "home": null,
+          "singleSourceCap": 0.55,
+          "tieBreak": [
+            "confidence",
+            "agreeingObservations",
+            "sourceWeight",
+            "name"
+          ],
+          "usableConfidence": 0.6
+        },
+        "frames": 12481,
+        "published": [
+          {
+            "confidence": 0.5,
+            "name": "Japan",
+            "side": "away"
+          },
+          {
+            "confidence": 0.5,
+            "name": "Liverpool",
+            "side": "away"
+          }
+        ],
+        "suppressedCandidateDetail": [
+          {
+            "beatenBy": "Liverpool",
+            "beatenByConfidence": 0.5,
+            "beatenByObservations": 218,
+            "confidence": 0.5,
+            "name": "Italy",
+            "observations": 15,
+            "reason": "tie_break_fewer_observations",
+            "side": "away",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          {
+            "beatenBy": "Liverpool",
+            "beatenByConfidence": 0.5,
+            "beatenByObservations": 218,
+            "confidence": 0.375,
+            "name": "Iran",
+            "observations": 19,
+            "reason": "lower_confidence",
+            "side": "away",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          },
+          {
+            "beatenBy": "Liverpool",
+            "beatenByConfidence": 0.5,
+            "beatenByObservations": 218,
+            "confidence": 0.375,
+            "name": "Scotland",
+            "observations": 5,
+            "reason": "lower_confidence",
+            "side": "away",
+            "sources": [
+              "scorebug_ocr"
+            ]
+          }
+        ],
+        "suppressedCandidates": [
+          "Italy",
+          "Iran",
+          "Scotland"
+        ]
+      }
+    },
+    "policy": {
+      "SINGLE_SOURCE_CAP": 0.55,
+      "USABLE_CONFIDENCE": 0.6
+    },
+    "served_frame_lines": [
+      "FULL MATCH : Liverpool 7-6 Chelsea (1080p)0-0sky sports35:09",
+      "O-Osky Sports36.09main event",
+      "0-0sky sports36.09main eventSAVE ON OUR BIGGEST EVER ADIDAS SALESAVE On OUR BIGGGEST EVERADIDAS SALEEIN",
+      "sky sports37:11",
+      "sky sportsmain eventLIVE"
+    ],
+    "spend_usd": 0
+  },
+  "spend_usd": 0,
+  "ticket": "ADAAAA-9041"
+}

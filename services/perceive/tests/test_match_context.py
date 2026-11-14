@@ -785,6 +785,147 @@ def test_fold_confidence_fuzzy_only_source_is_discounted():
     assert all(c.confidence < 0.5 for c in cands)
 
 
+# Tie-break on equal confidence (ADAAAA-9041) ------------------------------
+
+
+def _frames(*line_groups):
+    return [{"lines": lines} for lines in line_groups]
+
+
+def test_equal_confidence_pair_carried_by_more_frames_outranks_one_read_noise():
+    """A pair the corpus repeated on 4 frames beats two ad-board names at 0.50.
+
+    Before ADAAAA-9041 the fold sorted by ``(-confidence, name)``, so the two
+    surviving slots at the single-source weight were ``Italy`` and ``Japan`` —
+    names that appear in ONE ad-board read each — and the repeated pair was
+    dropped. This is the tie the ticket measured on job 771f42de.
+    """
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=_frames(
+            ["POR 1 - 0"],
+            ["POR 1 - 0"],
+            ["POR 1 - 0"],
+            ["POR 1 - 0"],
+            ["0 - 1 ESP"],
+            ["0 - 1 ESP"],
+            ["0 - 1 ESP"],
+            ["0 - 1 ESP"],
+            ["1-1sky SPORTS65:30JAPAN"],
+            ["1-1sky SPORTSSS01italian"],
+        ),
+    )
+    teams = out["matchContext"]["teams"]
+    assert {t["name"] for t in teams} == {"Portugal", "Spain"}
+    assert {t["side"] for t in teams} == {"home", "away"}
+    # Below the floor, so nothing was promoted by the tie-break: this is a
+    # tie-break, not a bar (both thresholds unchanged).
+    assert all(t["confidence"] == 0.5 for t in teams)
+    fold = out["evidenceStatus"]["channelOutcomes"]["fold"]
+    assert fold["usableConfidence"] == USABLE_CONFIDENCE == 0.6
+    assert fold["singleSourceCap"] == SINGLE_SOURCE_CAP == 0.55
+    assert fold["tieBreak"] == ["confidence", "agreeingObservations", "sourceWeight", "name"]
+    assert fold["home"]["observations"] == 4
+    assert fold["away"]["observations"] == 4
+
+
+def test_equal_confidence_tie_is_named_in_the_suppressed_detail():
+    """The dropped candidate's record names the tie with both observation counts."""
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=_frames(
+            ["POR 1 - 0"],
+            ["POR 1 - 0"],
+            ["POR 1 - 0"],
+            ["0 - 1 ESP"],
+            ["0 - 1 ESP"],
+            ["0 - 1 ESP"],
+            ["1-1sky SPORTS65:30JAPAN"],
+        ),
+    )
+    status = out["evidenceStatus"]
+    assert "Japan" in status["suppressedCandidates"]
+    detail = {d["name"]: d for d in status["suppressedCandidateDetail"]}
+    japan = detail["Japan"]
+    assert japan["confidence"] == 0.5
+    assert japan["observations"] == 1
+    assert japan["reason"] == "tie_break_fewer_observations"
+    # The claim it contested is the AWAY slot, so the rival is Spain.
+    assert japan["beatenBy"] == "Spain"
+    assert japan["beatenByObservations"] == 3
+    assert japan["beatenByConfidence"] == 0.5
+
+
+def test_equal_confidence_noise_with_more_frames_wins_the_tie():
+    """The reverse: the rule is EVIDENCE order, not a preference for real names.
+
+    A name the corpus genuinely repeats 5 times outranks a name printed twice at
+    the same confidence — which is the honest reading of "prefer the candidate
+    carried by more agreeing observations". Alphabetical order is what the change
+    removes; it is not replaced by a "real pair" heuristic.
+    """
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=_frames(
+            ["1-1sky SPORTS65:30JAPAN"],
+            ["1-1sky SPORTS65:30JAPAN"],
+            ["1-1sky SPORTS65:30JAPAN"],
+            ["1-1sky SPORTS65:30JAPAN"],
+            ["1-1sky SPORTS65:30JAPAN"],
+            ["POR 1 - 0"],
+            ["POR 1 - 0"],
+            ["0 - 1 ESP"],
+            ["0 - 1 ESP"],
+        ),
+    )
+    teams = {t["name"] for t in out["matchContext"]["teams"]}
+    assert "Japan" in teams
+    assert "Spain" not in teams  # 2 agreeing reads, tied at 0.5, lost the tie
+    detail = {d["name"]: d for d in out["evidenceStatus"]["suppressedCandidateDetail"]}
+    assert detail["Spain"]["observations"] == 2
+    assert detail["Spain"]["reason"] == "tie_break_fewer_observations"
+    assert detail["Spain"]["beatenBy"] == "Japan"
+
+
+def test_single_noise_read_never_displaces_a_repeated_pair():
+    """The success condition, stated directly: 1 noise read vs N agreeing frames."""
+    out = resolve_match_context(
+        game_hint="soccer",
+        ocr_frames=_frames(
+            ["POR 1 - 0"],
+            ["POR 1 - 0"],
+            ["0 - 1 ESP"],
+            ["0 - 1 ESP"],
+            ["1-1sky SPORTS65:30JAPAN"],
+        ),
+    )
+    teams = out["matchContext"]["teams"]
+    assert {t["name"] for t in teams} == {"Portugal", "Spain"}
+    assert out["evidenceStatus"]["suppressedCandidates"] == ["Japan"]
+
+
+def test_fold_merges_unknown_side_reads_instead_of_dropping_them():
+    """A name plate and a score line for the same team are ONE candidate.
+
+    The 172 listing-row reads of ``Liverpool`` used to be discarded when the
+    fold kept the concrete-side record; the tie-break then ranked the team by a
+    single read. The merge keeps every agreeing observation.
+    """
+    # Separate FRAMES: each frame's own parse keeps one record per name, so the
+    # listing row arrives as an `unknown`-side mention and the score line as the
+    # away-side one. The fold is where they meet.
+    scorebug = parse_ocr_teams(["FULL MATCH : Liverpool 7"], "soccer")
+    scorebug += parse_ocr_teams(["sky SPORTS36:19|0-0sky SLOOTES36:19& LIV"], "soccer")
+    assert {t.side for t in scorebug} == {"unknown", "away"}
+    cands = fold_confidence(scorebug, [], [])
+    liverpool = [c for c in cands if c.name == "Liverpool"]
+    assert len(liverpool) == 1
+    # 1 listing row + 1 score line = 2 observations, and the concrete side wins.
+    assert liverpool[0].side == "away"
+    assert liverpool[0].observation_count == 2
+    assert liverpool[0].confidence == 0.5
+
+
 # Monotonic guard (AC4) ---------------------------------------------------
 
 

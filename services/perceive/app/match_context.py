@@ -138,6 +138,9 @@ MAX_TRAIL = 12
 MAX_STATUS_OCR_LINES = 5
 MAX_STATUS_TEAMS = 8
 MAX_STATUS_MENTIONS = 12
+# ADAAAA-9041: bound the tie-break's "why was this candidate dropped" records so
+# a noisy corpus cannot grow the persisted evidence block.
+MAX_SUPPRESSED_DETAIL = 4
 
 # --- tracked-box plausibility (kit sampling) --------------------------------
 # The tracking pass emits BOTH real player boxes and SAM3 seeds that propagate
@@ -3223,14 +3226,60 @@ class Candidate:
     # sides of a corroborated pair carry a non-zero value; the fold counts each
     # agreeing observation, capped by ``PAIRED_PLATE_CONFIDENCE``.
     paired_frames: int = 0
+    # ADAAAA-9041: how many agreeing observations (frames/reads) carried each
+    # distinct snippet. ``sources`` stays the bounded deduped record the contract
+    # persists; this counter is the tie-break's evidence strength, so a name the
+    # corpus repeated across 200 frames outranks one seen in 15. Internal only:
+    # never persisted, and it is not a threshold.
+    observations: dict[str, dict[str, int]] = field(default_factory=dict)
 
-    def add(self, source: str, snippet: str, fuzzy: bool = False) -> None:
+    def add(self, source: str, snippet: str, fuzzy: bool = False, occurrences: int = 1) -> None:
         entry: dict[str, Any] = {"source": source, "snippet": snippet}
         if fuzzy:
             entry["fuzzy"] = True
         bucket = self.sources.setdefault(source, [])
+        counted = self.observations.setdefault(source, {})
+        counted[snippet] = counted.get(snippet, 0) + max(1, int(occurrences))
         if not any(e["snippet"] == snippet for e in bucket):
             bucket.append(entry)
+
+    @property
+    def observation_count(self) -> int:
+        """Agreeing observations that carried this team (distinct snippets x frames)."""
+        return sum(sum(counts.values()) for counts in self.observations.values())
+
+    @property
+    def source_weight_total(self) -> float:
+        """Summed source weight BEFORE the single-source cap and the paired-plate
+        multiplier: the tie-break's second key (corroboration breadth)."""
+        total = 0.0
+        for source, entries in self.sources.items():
+            weight = SOURCE_WEIGHTS.get(source, 0.0)
+            if weight <= 0:
+                continue
+            factor = FUZZY_EVIDENCE_FACTOR if entries and all(e.get("fuzzy") for e in entries) else 1.0
+            total += weight * factor
+        return round(total, 4)
+
+    def absorb(self, other: "Candidate") -> None:
+        """Fold another record of the SAME team into this one (ADAAAA-9041).
+
+        A name can arrive twice from the scorebug — once on a concrete side and
+        once as an ``unknown``-side name plate. The fold used to keep one record
+        and DISCARD the other's observations, which erased the agreeing reads a
+        below-floor team was actually carried by (measured on job 771f42de:
+        ``Liverpool``'s 172 listing-row reads were thrown away in favour of 1
+        name plate of the same team). Confidence stays on the surviving record:
+        merging source SETS here could silently promote a single-source name to
+        usable, which would be a bar change, not a tie-break.
+        """
+        for source, counts in other.observations.items():
+            fuzzy_by_snippet = {
+                str(e.get("snippet")): bool(e.get("fuzzy")) for e in other.sources.get(source, [])
+            }
+            for snippet, occurrences in counts.items():
+                self.add(source, snippet, fuzzy_by_snippet.get(snippet, False), occurrences)
+        self.paired_frames = max(self.paired_frames, other.paired_frames)
 
     @property
     def confidence(self) -> float:
@@ -3322,15 +3371,36 @@ def fold_confidence(
         by_key[(unknown[0].name, unknown[0].side)] = unknown[0]
         by_key.pop((unknown[0].name, "unknown"), None)
         cands = list(by_key.values())
-    # Deduplicate by name: keep the strongest candidate per team.
+    # Deduplicate by name: one record per team, but never drop its observations.
     best: dict[str, Candidate] = {}
     for c in cands:
         cur = best.get(c.name)
-        if cur is None or c.confidence > cur.confidence:
+        if cur is None:
             best[c.name] = c
-        elif c.confidence == cur.confidence and cur.side == "unknown" and c.side != "unknown":
-            best[c.name] = c
-    return sorted(best.values(), key=lambda c: (-c.confidence, c.name))
+            continue
+        if cur is c:
+            continue
+        # Prefer the record carrying a concrete side (a name plate does not
+        # contradict a score line), then the stronger confidence; the loser's
+        # agreeing observations are merged in either way (ADAAAA-9041) so the
+        # tie-break ranks the team by everything the corpus said about it.
+        winner, loser = cur, c
+        if c.side != "unknown" and cur.side == "unknown":
+            winner, loser = c, cur
+        elif c.confidence > cur.confidence:
+            winner, loser = c, cur
+        winner.absorb(loser)
+        best[c.name] = winner
+    # ADAAAA-9041: equal-confidence candidates are ranked by how much agreeing
+    # evidence carries them, then by source weight, and only then by name. The
+    # old `(-confidence, name)` order let one ad-board OCR name at 0.50 displace
+    # a name the corpus actually repeated, which changed the persisted `teams`
+    # below the usable floor. This is a TIE-BREAK, not a bar: confidence, the
+    # single-source cap and USABLE_CONFIDENCE are untouched.
+    return sorted(
+        best.values(),
+        key=lambda c: (-c.confidence, -c.observation_count, -c.source_weight_total, c.name),
+    )
 
 
 def corroborate_paired_plates(
@@ -3641,6 +3711,35 @@ def _unknown_reason(
     return "; ".join(parts)
 
 
+def _suppression_record(
+    cand: Candidate,
+    rival: Optional[Candidate],
+    reason: str,
+) -> dict[str, Any]:
+    """Why one candidate did not reach the published pair (ADAAAA-9041).
+
+    ``rival`` is the published candidate it contested (the same-side claim when
+    there is one, else the last published slot). At equal confidence the loser's
+    ``observations`` against the rival's is the whole answer ("the tie"), so both
+    counts travel in the record: a reader can see that a name one ad-board read
+    carried lost to a name 40 frames agreed on, instead of reading a bare name in
+    ``suppressedCandidates``.
+    """
+    record: dict[str, Any] = {
+        "name": cand.name,
+        "side": cand.side,
+        "confidence": cand.confidence,
+        "observations": cand.observation_count,
+        "sources": sorted(cand.sources),
+        "reason": reason,
+    }
+    if rival is not None:
+        record["beatenBy"] = rival.name
+        record["beatenByConfidence"] = rival.confidence
+        record["beatenByObservations"] = rival.observation_count
+    return record
+
+
 def resolve_match_context(
     *,
     sport_hint: Optional[str] = None,
@@ -3759,6 +3858,9 @@ def resolve_match_context(
                 "name": best.name,
                 "confidence": best.confidence,
                 "sources": sorted(best.sources),
+                # ADAAAA-9041: the tie-break input, so a reader can see why the
+                # side's claim outranked (or lost to) another at equal confidence.
+                "observations": best.observation_count,
             }
         )
     status["channelOutcomes"] = {
@@ -3798,6 +3900,10 @@ def resolve_match_context(
         "fold": {
             "usableConfidence": USABLE_CONFIDENCE,
             "singleSourceCap": SINGLE_SOURCE_CAP,
+            # ADAAAA-9041: the published order is confidence, then agreeing
+            # observations, then source weight, then name — a tie-break, not a
+            # bar (no threshold moved).
+            "tieBreak": ["confidence", "agreeingObservations", "sourceWeight", "name"],
             "home": folded_sides["home"],
             "away": folded_sides["away"],
         },
@@ -3813,14 +3919,45 @@ def resolve_match_context(
     concrete = [c for c in candidates if c.side in ("home", "away")]
     extras = [c for c in candidates if c.side not in ("home", "away")]
     suppressed: list[str] = []
+    suppressed_detail: list[dict[str, Any]] = []
     if len(concrete) >= 2:
+        published_pair = concrete[:2]
         suppressed = [c.name for c in extras] + [c.name for c in concrete[2:]]
-        candidates = concrete[:2]
+        candidates = published_pair
+        # ADAAAA-9041: name WHY each dropped candidate lost, so a record that
+        # dropped a real team for an ad-board name is diagnosable from
+        # `GET /jobs/:id` alone. At equal confidence the reason IS the tie.
+        for c in extras[:MAX_SUPPRESSED_DETAIL]:
+            suppressed_detail.append(_suppression_record(c, None, "no_concrete_side"))
+        for c in concrete[2:][:MAX_SUPPRESSED_DETAIL]:
+            # The rival that decided the slot is the published candidate ON THE
+            # SAME SIDE when there is one (that is the claim it contested); the
+            # last published slot otherwise.
+            rival = next((p for p in published_pair if p.side == c.side), published_pair[-1])
+            # A candidate below slot 2 can never carry MORE observations than
+            # slot 2 (the sort would have placed it there), so an equal count
+            # means the source weight or the name decided the slot.
+            if c.confidence != rival.confidence:
+                reason = "lower_confidence"
+            elif c.observation_count < rival.observation_count:
+                reason = "tie_break_fewer_observations"
+            elif c.source_weight_total < rival.source_weight_total:
+                reason = "tie_break_source_weight"
+            else:
+                reason = "tie_break_name"
+            suppressed_detail.append(_suppression_record(c, rival, reason))
     else:
         suppressed = [c.name for c in extras if c.confidence < USABLE_CONFIDENCE]
         candidates = concrete + [c for c in extras if c.confidence >= USABLE_CONFIDENCE]
+        for c in extras:
+            if c.confidence < USABLE_CONFIDENCE:
+                suppressed_detail.append(_suppression_record(c, None, "below_usable_floor"))
+                if len(suppressed_detail) >= MAX_SUPPRESSED_DETAIL:
+                    break
     if suppressed:
         status["suppressedCandidates"] = suppressed
+    if suppressed_detail:
+        status["suppressedCandidateDetail"] = suppressed_detail[:MAX_SUPPRESSED_DETAIL]
 
     clusters = cluster_kit_colors(list(kit_samples or []))
     # Inspectability (ADAAAA-7859): name WHAT the colour pass saw. A job where

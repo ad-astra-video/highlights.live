@@ -270,6 +270,44 @@ describe("mergeMatchContextEvidence", () => {
     expect(merged.sessionId).toBe("sess-after-recreate");
   });
 
+  it("keeps the tie-break's dropped-candidate reasons across a resumed pass (ADAAAA-9041)", () => {
+    const previous = {
+      suppressedCandidates: ["Italy"],
+      suppressedCandidateDetail: [
+        {
+          name: "Italy",
+          side: "away",
+          confidence: 0.5,
+          observations: 15,
+          sources: ["scorebug_ocr"],
+          reason: "tie_break_fewer_observations",
+          beatenBy: "Liverpool",
+          beatenByConfidence: 0.5,
+          beatenByObservations: 218,
+        },
+      ],
+    } as unknown as MatchContextEvidence;
+    const incoming = {
+      suppressedCandidates: ["Scotland"],
+      suppressedCandidateDetail: [
+        {
+          name: "Scotland",
+          side: "away",
+          confidence: 0.375,
+          observations: 5,
+          sources: ["scorebug_ocr"],
+          reason: "lower_confidence",
+        },
+      ],
+    } as unknown as MatchContextEvidence;
+    const merged = mergeMatchContextEvidence(previous, incoming);
+    // Both passes' records are true statements about the job: the union keeps
+    // the tie the earlier pass named, and the resumed pass's own reason.
+    expect(merged.suppressedCandidateDetail?.map((d: any) => d.name)).toEqual(["Italy", "Scotland"]);
+    expect((merged.suppressedCandidateDetail?.[0] as any).beatenByObservations).toBe(218);
+    expect(merged.suppressedCandidates).toEqual(["Italy", "Scotland"]);
+  });
+
   it("returns the incoming status unchanged when the record has none", () => {
     expect(mergeMatchContextEvidence(undefined, RESUMED_TAIL_EVIDENCE as MatchContextEvidence)).toBe(
       RESUMED_TAIL_EVIDENCE
