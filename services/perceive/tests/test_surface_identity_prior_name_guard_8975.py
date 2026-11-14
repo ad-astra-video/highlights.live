@@ -345,25 +345,54 @@ class ScriptedDet:
         return {"regions": []}
 
 
+class ScriptedOcr:
+    """The SECOND Florence copy (the OCR lane), scripted like ``ScriptedDet``."""
+
+    def __init__(self, lines):
+        self.lines = list(lines)
+
+    def ocr(self, rgb, roi=None):
+        return list(self.lines)
+
+
 @pytest.fixture()
 def client():
     return TestClient(app)
 
 
-def _run_served(client, monkeypatch, frames, frame_b64, teams):
+def _run_served(client, monkeypatch, frames, frame_b64, teams, *, ocr_reads=None):
     """Post ``frames`` through the served route and return the recorded state.
 
     The served identity pass runs on the frames the reader actually parses, so the
     fixture moves a score across the burst (`LALIGA 1-0 AL1` -> `LALIGA 2-0 AL1`),
     exactly as the ADAAAA-8919 served suite does. Without a score change there is
     no corroborated window to demote and the end-to-end clause is not exercised.
+
+    ADAAAA-9015: script the OCR lane too, not only the detector. The served image
+    runs `PERCEIVE_DUAL_FLORENCE=1`, so the scoreboard `<OCR>` read comes from
+    `get_ocr_detector()` — a SECOND, REAL Florence copy. Patching only
+    `get_detector` left the name channel to the real model, which reads nothing on
+    a synthetic frame: `names=[]` and the window took ADAAAA-8908's documented
+    `absent` branch, while the same tree passes on a CPU host where the lane is
+    off and the primary (scripted) detector supplies the lines (measured 62/63
+    in-container vs 63/63 on the host). Forcing the lane on and scripting it makes
+    both environments run the production path AND read the fixture's printed
+    name, so the verdict is a property of the rule, not of which copy of the OCR
+    the box happens to have loaded. `ocr_reads` scripts what the lane reads:
+    `None` follows ``frames`` (the refusal arm), `[]` reads nothing (the absence
+    arm).
     """
     sid = f"sess-prior-guard-8975-{uuid.uuid4().hex[:8]}"
     det = ScriptedDet(frames[0][1])
+    lane = ScriptedOcr(frames[0][1] if ocr_reads is None else ocr_reads)
     monkeypatch.setattr(_app, "get_detector", lambda lora_ref=None: det)
+    monkeypatch.setattr(_app, "dual_florence_enabled", lambda: True)
+    monkeypatch.setattr(_app, "get_ocr_detector", lambda: lane)
     obs = []
     for seq, (ts, lines) in enumerate(frames):
         det.crop_lines = list(lines)
+        if ocr_reads is None:
+            lane.lines = list(lines)
         r = client.post(
             "/app/analyze",
             json={"seq": seq, "timestamp": ts, "image": frame_b64,
@@ -390,6 +419,11 @@ def test_the_served_analyze_path_refuses_an_orange_fill_on_a_red_prior(client, m
     assert identity is not None
     assert identity["kitReference"] == "prior"
     assert identity["kitNameRefused"] is True
+    # ADAAAA-9015 guard: the pass must have READ the fixture's printed name. If a
+    # future OCR lane bypasses the scripting again, this fails here (naming the
+    # read) instead of drifting into the environment-appropriate `absent` branch.
+    # (`printed_team_tokens` keeps `LALIGA` and drops the digit-bearing `1-0`/`AL1`.)
+    assert identity["names"] == ["LALIGA"], identity["names"]
     assert identity["verdict"] == "contradicted"
     assert identity["kitFillColor"] == "orange"
     # The bar did NOT move: the fill is INSIDE the red bar, so the refusal is the
@@ -401,3 +435,33 @@ def test_the_served_analyze_path_refuses_an_orange_fill_on_a_red_prior(client, m
     assert any("orange" in d for d in demotions), demotions
     assert not any("Δ=" in d and ">" in d.split("Δ=")[1] for d in demotions), demotions
     assert not any(o.get("scoreBoardChanged") for o in obs), "a refused surface must not attest"
+
+
+def test_the_served_path_stays_absent_when_the_ocr_lane_reads_nothing(client, monkeypatch):
+    """ADAAAA-8908 is not widened, and the refusal is not hardcoded.
+
+    The same frame + teams, with the OCR lane reading NOTHING: no printed name, so
+    the rule takes the documented `absent` branch and publishes no demotion. This
+    is the branch the served GPU image took before the fixture scripted the lane
+    (ADAAAA-9015), asserted here on purpose so the two arms are both pinned and
+    the difference is the READ, not the environment.
+    """
+    frames = [(float(i), [FOREIGN_LINE] if i < 3 else ["LALIGA 2-0 AL1"]) for i in range(6)]
+    obs, state = _run_served(
+        client,
+        monkeypatch,
+        frames,
+        _plate_frame([240.0, 240.0, 240.0], ORANGE_FILL),
+        RED_PRIOR_TEAMS,
+        ocr_reads=[],
+    )
+    identity = getattr(state, "surface_identity", None)
+    assert identity is not None
+    assert identity["kitReference"] == "prior"
+    assert identity["kitNameRefused"] is True
+    assert identity["names"] == []
+    assert identity["kitsDiffer"] is False
+    assert identity["verdict"] == "absent"
+    assert demotion_note(identity) == ""
+    assert not any(o.get("scoreboardSurfaceDemoted") for o in obs)
+    assert not any(o.get("scoreBoardChanged") for o in obs)
