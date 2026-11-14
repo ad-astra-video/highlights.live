@@ -78,6 +78,6 @@ and `services/server/test/match-context-resume.test.ts` (the evidence merge).
   real name, so the second slot stays `Japan` in the model lens. This corpus
   therefore **cannot** measure post-change supply (the session's own, untruncated
   reads resolve both clubs); it measures the tie-break's ordering only.
-- The residual ("raw read count beats read quality") is filed as a follow-up:
+- The residual ("raw read count beats read quality") is filed as [ADAAAA-9043](/ADAAAA/issues/ADAAAA-9043):
   ranking by plate co-occurrence would need a new signal, which this ticket
   explicitly scoped out (tie-break only, no new threshold).
