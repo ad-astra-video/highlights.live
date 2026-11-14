@@ -741,6 +741,12 @@ def _incumbent_surface_kept(state, rgb, roi, seq=None) -> bool:
     if current is None:
         return False
     distance = chroma_distance(current["rgb"], plate["rgb"])
+    # ADAAAA-8952: this stays ONE bar. The per-family table
+    # (`surface_identity.SURFACE_IDENTITY_KIT_DISTANCE_BARS`) is a plate-vs-kit-
+    # REFERENCE measurement; this check compares two plates of the SAME surface
+    # across boxes and quits only when the frames say they are the same bug's, so
+    # it keeps the documented default (0.44). Pinned in
+    # `tests/test_surface_identity_kit_bars_8952.py`.
     if distance <= SURFACE_IDENTITY_KIT_DISTANCE_THRESHOLD:
         return False
     _set_scoreboard_roi(state, ScoreboardRoi(*proven), "incumbent_surface_kept", seq)
