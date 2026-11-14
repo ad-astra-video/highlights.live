@@ -1639,6 +1639,82 @@ export function ocrScorePairIsNoise(
   return false;
 }
 
+/**
+ * ADAAAA-9037: the score plate whose ZEROS the OCR rendered as letter `O`
+ * (`O-O38:55`, `O-Osky Sports36.09main e`, `sky sportsALO-O38:40`). Measured on
+ * the natural live Sky Sports share `771f42de`: 354 of 11849 timeline records
+ * (3.0 %, 48 windows) carry this plate, every one of them unparseable, so the
+ * windows straddling the first goal boundary carry 0 score reads and the derive
+ * lane has no PRE side for the transition at all.
+ *
+ * Mirrors `_LETTER_O_PAIR_RE` in `services/perceive/app/scoreboard.py`.
+ */
+const OCR_LETTER_O_PAIR_RE = /[Oo]\s*[-–—]\s*[Oo]/g;
+
+/** ADAAAA-9037: how far (characters) the line's clock may sit from the letter-O
+ * pair and still make it plate-shaped. The scorebug renders the plate and the
+ * clock in one crop, so the clock is glued (`O-O38:55`, gap 0) or separated by
+ * the channel chrome the crop also carries (`O-Osky Sports36.09main e`, gap
+ * 11). Measured on job `771f42de`: every accepted line is <= 11. A pair further
+ * than this from any clock is not judged by this rule (fail closed). */
+export const OCR_LETTER_O_CLOCK_MAX_GAP = 16;
+
+/**
+ * ADAAAA-9037: the score pair when the line's zeros reached the OCR prompt as
+ * letter `O`, or `undefined`.
+ *
+ * A letter is not evidence: `parseOcrScoreLine` refuses `O-O` as it refuses any
+ * non-numeric pair, and it must keep doing so for a line where the `O` can be a
+ * NAME (`RMA O-O BAR`) or where the pair is prose. This is the narrow
+ * normalisation the census supports — a letter-O pair that is otherwise
+ * PLATE-SHAPED normalises to `(0,0)`:
+ *
+ *  1. the line carries a match clock ({@link parseOcrMatchClockLine}) within
+ *     {@link OCR_LETTER_O_CLOCK_MAX_GAP} of the pair — a score plate and its
+ *     clock are one crop, an ad board is not;
+ *  2. the pair is NOT sandwiched between two team tokens, which is exactly the
+ *     shape that would make `O` a name rather than a zero (`RMA O-O BAR`);
+ *  3. the pair normalised to `0-0` then passes the SAME gate every digit pair
+ *     passes ({@link ocrScorePairIsNoise}): the sponsor-chrome refusal, the
+ *     clock-glue refusal, the zero-padding rule and the sport ceiling all keep
+ *     their verdicts, so this can add a reading for a legible plate but can
+ *     never lift a refusal the digit lane applies to the same glyphs.
+ *
+ * The result is used at LOWEST precedence in {@link parseOcrScoreLine} — only
+ * where no digit pair on any line parsed — so a line that already yields a
+ * legible plate is untouched (`O-Osky SPORTS35:36|0-0sky sports35:36` still
+ * reads its `0-0`, and `O-O39.05` next to a `0-1` line still reads `0-1`).
+ *
+ * Pure + deterministic, so the parse, the delta derivation and the replay all
+ * read one verdict.
+ */
+export function ocrLetterOScorePair(text: string, sport?: string): [number, number] | undefined {
+  const clock = parseOcrMatchClockLine(text);
+  if (!clock || typeof clock.token !== "string" || !clock.token) return undefined;
+  const clockStart = text.indexOf(clock.token);
+  if (clockStart < 0) return undefined;
+  const clockEnd = clockStart + clock.token.length;
+  const re = new RegExp(OCR_LETTER_O_PAIR_RE.source, "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const pairEnd = m.index + m[0].length;
+    const gap =
+      m.index >= clockEnd
+        ? m.index - clockEnd
+        : clockStart >= pairEnd
+          ? clockStart - pairEnd
+          : -1;
+    if (gap < 0 || gap > OCR_LETTER_O_CLOCK_MAX_GAP) continue;
+    const adj = ocrPairTeamAdjacent(text, m.index, m[0].length);
+    // (2) between two team tokens => the O's are a name, not zeros.
+    if (adj.left && adj.right) continue;
+    // (3) the plate's digits, judged by the gate the digit lane uses.
+    if (ocrScorePairIsNoise(text, "0", "0", m.index, m[0].length, adj, sport)) continue;
+    return [0, 0];
+  }
+  return undefined;
+}
+
 /** ADAAAA-8071: parse the clean two-integer score line out of one timeline
  * record's OCR lines, or `null`. The pair pattern mirrors perceive's
  * `_SCORE_LINE_RE` (`(\d{1,3})\s*[-–—]\s*(\d{1,3})`, ints <= 99) so a clock
@@ -1681,9 +1757,11 @@ export function parseOcrScoreLine(
   let rightPick: [number, number] | undefined;
   let gluedPick: [number, number] | undefined;
   let anyPick: [number, number] | undefined;
+  let letterOPick: [number, number] | undefined;
   for (const raw of lines ?? []) {
     const text = typeof raw === "string" ? raw.trim() : "";
     if (!text) continue;
+    let linePicked = false;
     const re = new RegExp(OCR_SCORE_PAIR_RE.source, "g");
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
@@ -1695,13 +1773,31 @@ export function parseOcrScoreLine(
       // ADAAAA-8841: the verdict is sport-aware (a football plate cannot reach
       // two digits, a basketball one can) and reads the line's own clock.
       if (ocrScorePairIsNoise(text, m[1], m[2], m.index, m[0].length, adj, sport)) continue;
-      if (adj.left && !leftPick) leftPick = [a, b];
-      else if (adj.right && !rightPick) rightPick = [a, b];
-      else if (!adj.left && !adj.right && !anyPick) anyPick = [a, b];
+      if (adj.left && !leftPick) {
+        leftPick = [a, b];
+        linePicked = true;
+      } else if (adj.right && !rightPick) {
+        rightPick = [a, b];
+        linePicked = true;
+      } else if (!adj.left && !adj.right && !anyPick) {
+        anyPick = [a, b];
+        linePicked = true;
+      }
     }
-    if (!gluedPick) gluedPick = ocrGluedScorePair(text);
+    if (!gluedPick) {
+      const glued = ocrGluedScorePair(text);
+      if (glued) {
+        gluedPick = glued;
+        linePicked = true;
+      }
+    }
+    // ADAAAA-9037: a line with no DIGIT pair at all falls back to the letter-O
+    // plate (`O-O38:55`). The fallback is the LAST term of the return below, so
+    // it can only add a reading where the digit lane found none — it can never
+    // outrank a legible plate on any line.
+    if (!linePicked && !letterOPick) letterOPick = ocrLetterOScorePair(text, sport);
   }
-  return leftPick ?? rightPick ?? gluedPick ?? anyPick ?? null;
+  return leftPick ?? rightPick ?? gluedPick ?? anyPick ?? letterOPick ?? null;
 }
 
 /** ADAAAA-8071: every parseable score reading in a window's perceive timeline,

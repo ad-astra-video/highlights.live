@@ -1,5 +1,5 @@
 {
-  "note": "ADAAAA-8841: the shared score-OCR table both layers must agree on. Read by services/server/test/score-ocr-clock-dash-8841.test.ts and services/perceive/tests/test_score_dash_clock_8841.py, so a divergence between parseOcrScoreLine and _score_pair_in_line fails one of the two suites. Strings are the measured census strings (live job 1ee3c97d, Sky Sports share) plus the 8507 garbage family and the pinned controls, not invented ones.",
+  "note": "ADAAAA-8841: the shared score-OCR table both layers must agree on. ADAAAA-9037 adds the letter-O plate family (a zero the OCR rendered as letter O) plus its precision refusals. Read by services/server/test/score-ocr-clock-dash-8841.test.ts and services/perceive/tests/test_score_dash_clock_8841.py, so a divergence between parseOcrScoreLine and _score_pair_in_line fails one of the two suites. Strings are the measured census strings (live job 1ee3c97d, Sky Sports share) plus the 8507 garbage family and the pinned controls, not invented ones.",
   "cases": [
     { "line": "24-35", "sport": "soccer", "expected": null, "why": "ticket headline: mm:ss clock at minute >= 10, colon OCR'd as a dash" },
     { "line": "36-54", "sport": "soccer", "expected": null, "why": "same family, later minute" },
@@ -40,6 +40,19 @@
     { "line": "LALIGA|LALIGA09-40-1GIMODGIMOOG", "sport": "soccer", "expected": null, "why": "8507 measured chrome line" },
     { "line": "LALIGAMootballnike.com/f|LALIGA02:28-1om", "sport": "soccer", "expected": null, "why": "8507 measured clock-glued chrome line" },
     { "line": "GER 4 1 SCO86:35FOXEURO2", "sport": "soccer", "expected": [4, 1], "why": "space-glued plate between the team tokens" },
-    { "line": "0-2 Q2 03:41", "sport": "basketball", "expected": [0, 2], "why": "basketball plate + quarter clock" }
+    { "line": "0-2 Q2 03:41", "sport": "basketball", "expected": [0, 2], "why": "basketball plate + quarter clock" },
+    { "line": "O-O38:55", "sport": "soccer", "expected": [0, 0], "why": "9037: measured letter-O plate glued to its clock (job 771f42de)" },
+    { "line": "O-O39.02", "sport": "soccer", "expected": [0, 0], "why": "9037: measured letter-O plate glued to a dot clock" },
+    { "line": "O-Osky Sports36.09main e", "sport": "soccer", "expected": [0, 0], "why": "9037: measured letter-O plate, clock 10 chars out behind the channel name" },
+    { "line": "O-Osky SPORTS37:51", "sport": "soccer", "expected": [0, 0], "why": "9037: measured letter-O plate, clock 10 chars out" },
+    { "line": "sky sportsALO-O38:40", "sport": "soccer", "expected": [0, 0], "why": "9037: measured letter-O plate glued to the channel name on its left" },
+    { "line": "O-O-OPY SPORTS36:15|0-0O-OJAY SPORTS36:15BER", "sport": "soccer", "expected": [0, 0], "why": "9037: measured line carrying two letter-O plates next to its digit plate" },
+    { "line": "O-Osky SPORTS35:36|0-0sky sports35:36EXCUE ", "sport": "soccer", "expected": [0, 0], "why": "9037: the digit plate on the same line still reads (0,0)" },
+    { "line": "O-O", "sport": "soccer", "expected": null, "why": "9037 precision: no clock on the line => not plate-shaped" },
+    { "line": "RMA O-O BAR", "sport": "soccer", "expected": null, "why": "9037 precision: pair between two team tokens is a name, not zeros" },
+    { "line": "RMA O-O BAR 38:55", "sport": "soccer", "expected": null, "why": "9037 precision: sandwiched pair stays a name even with a clock on the line" },
+    { "line": "O-O betway main event 36:09", "sport": "soccer", "expected": null, "why": "9037 precision: clock 20 chars out => an ad board, not a plate" },
+    { "line": "LALIGA|LALIGA O-O 09-40", "sport": "soccer", "expected": null, "why": "9037 precision: sponsor-chrome line, pair not sandwiched => refused by the inherited gate" },
+    { "line": "OALsky sportsmain eventL", "sport": "soccer", "expected": null, "why": "9037 precision: the measured letter-O plate with NO separator and NO clock stays unreadable" }
   ]
 }

@@ -98,6 +98,19 @@ _CLOCK_MMSS_RIGHT_RE = re.compile(r"\d{2}")
 # `SINGLE_DIGIT_SCORE_SPORTS` in `services/server/src/analyzer.ts`.
 _SINGLE_DIGIT_SCORE_SPORTS = frozenset({"soccer", "football", "association football"})
 _ZERO_PADDED_GROUP_RE = re.compile(r"0\d+")
+
+# ADAAAA-9037: the score plate whose ZEROS the OCR rendered as letter `O`
+# (`O-O38:55`, `O-Osky Sports36.09main e`, `sky sportsALO-O38:40`). Mirrors
+# `OCR_LETTER_O_PAIR_RE` in the server analyzer. Measured on the natural live
+# Sky Sports share `771f42de`: 354 of 11849 timeline records (3.0 %, 48 windows)
+# carry this plate and every one is unparseable, which is why the windows
+# straddling the first goal boundary carried no PRE side.
+_LETTER_O_PAIR_RE = re.compile(r"[Oo]\s*[-\u2013\u2014]\s*[Oo]")
+# How far (characters) the line's clock may sit from the letter-O pair and still
+# make it plate-shaped: the plate is glued to its clock (`O-O38:55`, gap 0) or
+# separated by the channel chrome the same crop carries
+# (`O-Osky Sports36.09main e`, gap 11). A pair further away is not judged here.
+_LETTER_O_CLOCK_MAX_GAP = 16
 _CLOCK_GLUE_BEFORE_RE = re.compile(r"\d{1,2}:$")
 _CLOCK_GLUE_AFTER_RE = re.compile(r":\d{1,2}")
 
@@ -760,6 +773,56 @@ def _score_pair_in_line(text: str, sport: Optional[str] = None) -> Optional[Tupl
     return any_pair
 
 
+def _letter_o_score_pair(text: str, sport: Optional[str] = None) -> Optional[Tuple[int, int]]:
+    """The score pair when the line's zeros reached the OCR prompt as letter ``O``.
+
+    ADAAAA-9037, mirroring ``ocrLetterOScorePair`` in the server analyzer. The
+    measured natural live Sky Sports share (``771f42de``) renders the plate as
+    ``O-O38:55`` / ``O-Osky Sports36.09main e`` on 354 of 11849 timeline records
+    (48 windows) — every one unparseable, so the windows spanning the first goal
+    boundary carried no PRE side at all.
+
+    A letter is not evidence, so this is deliberately narrow: a letter-O pair
+    normalises to ``(0, 0)`` only when it is otherwise PLATE-SHAPED —
+
+    1. the line carries a match clock within ``_LETTER_O_CLOCK_MAX_GAP`` chars of
+       the pair (a plate and its clock are one crop; an ad board is not);
+    2. the pair is NOT sandwiched between two team tokens (that is the shape
+       that makes ``O`` a name — ``RMA O-O BAR``);
+    3. the pair normalised to ``0-0`` passes the SAME gate every digit pair
+       passes (:func:`_pair_is_noise`), so the chrome / clock-glue / zero-pad /
+       sport-ceiling verdicts are inherited, never lifted.
+
+    :func:`parse_ocr_score` uses the result only AFTER every line has failed to
+    yield a digit pair, so a legible plate always outranks it.
+    """
+    clock = parse_match_clock_line(text)
+    token = str((clock or {}).get("token") or "")
+    if not token:
+        return None
+    clock_start = text.find(token)
+    if clock_start < 0:
+        return None
+    clock_end = clock_start + len(token)
+    for m in _LETTER_O_PAIR_RE.finditer(text):
+        pair_end = m.end()
+        if m.start() >= clock_end:
+            gap = m.start() - clock_end
+        elif clock_start >= pair_end:
+            gap = clock_start - pair_end
+        else:
+            gap = -1
+        if gap < 0 or gap > _LETTER_O_CLOCK_MAX_GAP:
+            continue
+        adjacent = _pair_team_adjacent(text, m.start(), len(m.group(0)))
+        if adjacent[0] and adjacent[1]:
+            continue
+        if _pair_is_noise(text, "0", "0", m.start(), len(m.group(0)), adjacent, sport):
+            continue
+        return (0, 0)
+    return None
+
+
 def parse_ocr_score(
     frame_ocr,
     roi: Optional[ScoreboardRoi] = None,
@@ -788,6 +851,7 @@ def parse_ocr_score(
     """
     if not frame_ocr:
         return None
+    letter_o_pair: Optional[Tuple[int, int]] = None
     for i, line in enumerate(frame_ocr):
         text = str(line).strip()
         if not text:
@@ -798,7 +862,12 @@ def parse_ocr_score(
         pair = _score_pair_in_line(text, sport)
         if pair is not None:
             return pair
-    return None
+        # ADAAAA-9037: the letter-O plate is a FALLBACK, so a legible plate on
+        # any later line still wins — the same precedence the server's
+        # `parseOcrScoreLine` applies (`letterOPick` is its last term).
+        if letter_o_pair is None:
+            letter_o_pair = _letter_o_score_pair(text, sport)
+    return letter_o_pair
 
 
 def score_changed(prev: Optional[Tuple[int, int]], curr: Optional[Tuple[int, int]]) -> bool:

@@ -1,0 +1,968 @@
+{
+ "note": "ADAAAA-9037: the nine stored decide windows of natural live job 771f42de that straddle its FIRST goal boundary (14:10:10.521 - 14:10:34.611), verbatim from the ADAAAA-9035 census artifact (819 windows, 11849 timeline records). Every `ocr` field is the stored string; `ts` is the observation's offset from the window's goal instant. `gk` is the stored window key.",
+ "job": "771f42de-82eb-4357-8e0b-2121865f4608",
+ "sport": "soccer",
+ "preFix": "at 5455d64 every one of the five PRE windows (g79, g79:call2, g81, g82, g83) parsed 0 score reads: their only plate lines are the letter-O form `O-O38.xx` / `O-O39.xx`.",
+ "windows": [
+  {
+   "gk": "g79",
+   "created": "2026-11-14T14:10:10.521Z",
+   "observations": [
+    {
+     "ts": -9.7,
+     "ocr": [
+      "O-O38:55"
+     ]
+    },
+    {
+     "ts": -9.0,
+     "ocr": [
+      "O-O38:55"
+     ]
+    },
+    {
+     "ts": -8.7,
+     "ocr": [
+      "O-O38:55"
+     ]
+    },
+    {
+     "ts": -8.0,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -7.6,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -6.9,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -6.2,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -5.5,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -4.1,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -3.4,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -2.7,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -2.0,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "O-O39.05"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g79:call2",
+   "created": "2026-11-14T14:10:12.129Z",
+   "observations": [
+    {
+     "ts": -9.4,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -8.7,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -8.0,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -7.0,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -5.9,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "O-O39.08"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g81",
+   "created": "2026-11-14T14:10:16.061Z",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -0.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g82",
+   "created": "2026-11-14T14:10:18.188Z",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -9.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g83",
+   "created": "2026-11-14T14:10:21.100Z",
+   "observations": [
+    {
+     "ts": -9.6,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -6.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -2.6,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -2.2,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g84",
+   "created": "2026-11-14T14:10:24.455Z",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g85",
+   "created": "2026-11-14T14:10:28.839Z",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -8.9,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g86",
+   "created": "2026-11-14T14:10:31.784Z",
+   "observations": [
+    {
+     "ts": -9.8,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g87",
+   "created": "2026-11-14T14:10:34.611Z",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    }
+   ]
+  }
+ ]
+}
