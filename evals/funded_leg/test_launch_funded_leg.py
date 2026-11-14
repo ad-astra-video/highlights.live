@@ -29,6 +29,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, Optional
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -215,6 +216,17 @@ class LauncherDetachmentTest(unittest.TestCase):
                 # The harness runs in its own session, not the launcher's group.
                 self.assertNotEqual(os.getpgid(arm["harnessPid"]), os.getpgid(0))
                 self.assertTrue(launch_funded_leg.pid_alive(arm["harnessPid"]))
+                # ADAAAA-9008: a dry run cannot commit the deadline (the stub
+                # job lives in the harness process), and it says so instead of
+                # implying a durable guard exists.
+                guard = arm["deadlineGuard"]
+                self.assertEqual(guard["kind"], "skipped_dry_run")
+                self.assertFalse(guard["durable"])
+                self.assertFalse(arm["durable"])
+                self.assertEqual(
+                    read_json(os.path.join(run_dir, "deadline_guard.json"))["kind"],
+                    "skipped_dry_run",
+                )
             finally:
                 if proc.poll() is None:
                     proc.kill()
@@ -528,6 +540,439 @@ class SupervisorStopIntegrationTest(unittest.TestCase):
                 self.assertTrue(verdict["stop"]["ok"])
                 self.assertEqual(verdict["stop"]["http"], 200)
                 self.assertIn("/jobs/stub-job-9/stop", _StopHandler.received)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+class DeadlineGuardPlanTest(unittest.TestCase):
+    """ADAAAA-9008: when the durable timer fires, and why it cannot fire early.
+
+    Both guards can die at once, so the deadline itself is committed to systemd.
+    The timer must not race the harness's own stop (deadline), nor the
+    supervisor's deadline window (deadline + hard-stop slack).
+    """
+
+    def _beat(self, **over: Any) -> Dict[str, Any]:
+        now = time.time()
+        beat = {
+            "phase": "running",
+            "jobId": "d46c3788-04c1-430d-9e28-9b9ef4232a10",
+            "pid": 2762347,
+            "beatAt": _iso(datetime.now(timezone.utc)),
+            "deadlineEpoch": now + 600,
+            "deadlineAt": _iso(datetime.now(timezone.utc) + timedelta(seconds=600)),
+            "hardStopSlackS": 10.0,
+            "authorizedDurationS": 600.0,
+        }
+        beat.update(over)
+        return beat
+
+    def test_it_fires_after_deadline_slack_and_grace(self):
+        now = time.time()
+        plan = launch_funded_leg.deadline_guard_plan(
+            self._beat(deadlineEpoch=now + 100), now=now, grace_s=5.0,
+        )
+        self.assertTrue(plan["ok"], plan)
+        self.assertAlmostEqual(plan["fireEpoch"], now + 115, places=1)
+        self.assertAlmostEqual(plan["delayS"], 115, places=1)
+        self.assertEqual(plan["slackS"], 10.0)
+        self.assertEqual(plan["graceS"], 5.0)
+
+    def test_the_unit_name_is_a_valid_transient_unit(self):
+        plan = launch_funded_leg.deadline_guard_plan(self._beat(), now=time.time())
+        unit = plan["unit"]
+        self.assertRegex(unit, r"^[A-Za-z0-9:_.-]+$")
+        self.assertLessEqual(len(unit), 64)
+        self.assertTrue(unit.startswith("funded-leg-"))
+        self.assertIn("d46c3788", unit)
+
+    def test_a_heartbeat_with_no_deadline_is_not_armed(self):
+        plan = launch_funded_leg.deadline_guard_plan(
+            self._beat(deadlineEpoch=None), now=time.time(),
+        )
+        self.assertFalse(plan["ok"])
+        self.assertIn("deadlineEpoch", plan["reason"])
+
+    def test_no_heartbeat_is_not_armed(self):
+        plan = launch_funded_leg.deadline_guard_plan(None, now=time.time())
+        self.assertFalse(plan["ok"])
+        self.assertIn("job id", plan["reason"])
+
+
+class DeadlineGuardScriptTest(unittest.TestCase):
+    """The timer's script must stop the job with no tooling tree and no guards."""
+
+    def test_the_script_posts_the_stop_and_writes_its_result(self):
+        _StopHandler.received = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _StopHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                result_path = os.path.join(tmp, "deadline_guard_result.json")
+                script_path = os.path.join(tmp, "deadline_guard_stop.py")
+                launch_funded_leg.write_deadline_guard_script(
+                    script_path,
+                    launch_funded_leg.render_deadline_guard_script(
+                        job_id="stub-job-9008",
+                        job_base=f"http://127.0.0.1:{server.server_address[1]}",
+                        result_path=result_path,
+                        unit="funded-leg-stub-9008",
+                        armed_for_epoch=time.time() - 3,
+                        token="dry-run-token",
+                    ),
+                )
+                # The script may carry a bearer token, so it is owner-only.
+                self.assertEqual(os.stat(script_path).st_mode & 0o777, 0o700)
+                proc = subprocess.run(
+                    [sys.executable, script_path],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60,
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout.decode()[-2000:])
+                self.assertIn("/jobs/stub-job-9008/stop", _StopHandler.received)
+                body = read_json(result_path)
+                self.assertTrue(body["fired"])
+                self.assertTrue(body["stop"]["ok"])
+                self.assertEqual(body["stop"]["http"], 200)
+                self.assertEqual(body["tokenSource"], "arg")
+                self.assertEqual(body["jobId"], "stub-job-9008")
+                self.assertGreaterEqual(body["lateByS"], 1.0)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_a_script_that_cannot_mint_says_so_instead_of_claiming_a_stop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result_path = os.path.join(tmp, "deadline_guard_result.json")
+            script_path = os.path.join(tmp, "deadline_guard_stop.py")
+            launch_funded_leg.write_deadline_guard_script(
+                script_path,
+                launch_funded_leg.render_deadline_guard_script(
+                    job_id="stub-job-9009",
+                    job_base="http://127.0.0.1:9",
+                    result_path=result_path,
+                    unit="funded-leg-stub-9009",
+                    armed_for_epoch=time.time(),
+                    token=None,
+                    user_id=None,
+                ),
+            )
+            proc = subprocess.run(
+                [sys.executable, script_path],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60,
+            )
+            self.assertEqual(proc.returncode, 2, proc.stdout.decode()[-2000:])
+            body = read_json(result_path)
+            self.assertFalse(body["stop"]["ok"])
+            self.assertIn("no token", body["tokenError"])
+
+
+class DeadlineGuardArmTest(unittest.TestCase):
+    """A timer that is not `active` in systemd is not an armed guard."""
+
+    def _plan(self) -> Dict[str, Any]:
+        return launch_funded_leg.deadline_guard_plan(
+            {
+                "jobId": "stub-job-9010",
+                "deadlineEpoch": time.time() + 60,
+                "deadlineAt": _iso(datetime.now(timezone.utc) + timedelta(seconds=60)),
+                "hardStopSlackS": 10.0,
+            },
+            now=time.time(),
+            grace_s=1.0,
+        )
+
+    def test_an_inactive_timer_is_reported_unarmed(self):
+        plan = self._plan()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(launch_funded_leg.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=0,
+                    stdout=b"Running timer as unit: funded-leg-stub.timer\n",
+                )
+                with mock.patch.object(
+                    launch_funded_leg, "systemctl_show",
+                    return_value={"unit": plan["unit"], "activeState": "inactive",
+                                  "nextElapse": None, "rc": 0, "error": None},
+                ):
+                    guard = launch_funded_leg.arm_deadline_guard(
+                        plan, run_dir=tmp, job_base="http://127.0.0.1:9", token="t",
+                    )
+                # The script is written before the timer is started, so a leg
+                # that cannot commit the timer still leaves the stop command on
+                # disk for an operator to run by hand.
+                script_written = os.path.exists(guard["script"])
+        self.assertFalse(guard["armed"])
+        self.assertFalse(guard["durable"])
+        self.assertIn("not active", guard["error"])
+        self.assertTrue(script_written)
+
+    def test_an_active_timer_is_armed_and_read_back(self):
+        plan = self._plan()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(launch_funded_leg.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=0,
+                    stdout=b"Running timer as unit: funded-leg-stub.timer\n",
+                )
+                with mock.patch.object(
+                    launch_funded_leg, "systemctl_show",
+                    return_value={"unit": plan["unit"], "activeState": "active",
+                                  "nextElapse": "Sat 2026-11-14 06:44:27 UTC",
+                                  "rc": 0, "error": None},
+                ):
+                    guard = launch_funded_leg.arm_deadline_guard(
+                        plan, run_dir=tmp, job_base="http://127.0.0.1:9", token="t",
+                    )
+        self.assertTrue(guard["armed"])
+        self.assertTrue(guard["durable"])
+        self.assertEqual(guard["activeState"], "active")
+        self.assertEqual(guard["systemdRunRc"], 0)
+
+    def test_a_failed_systemd_run_is_not_armed(self):
+        plan = self._plan()
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(launch_funded_leg.subprocess, "run") as run:
+                run.return_value = subprocess.CompletedProcess(
+                    args=[], returncode=1, stdout=b"Failed to connect to bus\n",
+                )
+                guard = launch_funded_leg.arm_deadline_guard(
+                    plan, run_dir=tmp, job_base="http://127.0.0.1:9", token="t",
+                )
+        self.assertFalse(guard["armed"])
+        self.assertIn("systemd-run rc=1", guard["error"])
+
+
+class SystemctlShowTest(unittest.TestCase):
+    """The read-back must label values by property, not by output position.
+
+    Measured on systemd 255: with several `--property` flags, `--value` printed
+    `NextElapseUSecMonotonic` BEFORE `ActiveState`, so a positional read labelled
+    the timer's state as its elapse time. One call per property is the fix.
+    """
+
+    def _run(self, values_by_property: Dict[str, str]):
+        def side_effect(argv, **_kwargs):
+            prop = next(a.split("=", 1)[1] for a in argv if a.startswith("--property="))
+            return subprocess.CompletedProcess(
+                args=list(argv), returncode=0,
+                stdout=(values_by_property.get(prop, "") + "\n").encode(),
+            )
+        return side_effect
+
+    def test_each_property_is_read_on_its_own(self):
+        with mock.patch.object(launch_funded_leg.subprocess, "run") as run:
+            run.side_effect = self._run({
+                "ActiveState": "active",
+                "NextElapseUSecRealtime": "",
+                "NextElapseUSecMonotonic": "18446744073709551615",
+            })
+            shown = launch_funded_leg.systemctl_show(
+                "funded-leg-x", "ActiveState",
+                "NextElapseUSecRealtime", "NextElapseUSecMonotonic",
+            )
+            self.assertEqual(run.call_count, 3)
+            for call in run.call_args_list:
+                self.assertEqual(sum(1 for a in call.args[0] if a.startswith("--property=")), 1)
+        self.assertEqual(shown["activeState"], "active")
+        self.assertIsNone(shown["nextElapse"])
+        self.assertEqual(shown["nextElapseMonotonic"], "18446744073709551615")
+        self.assertEqual(shown["values"]["NextElapseUSecRealtime"], "")
+
+    def test_a_realtime_elapse_wins_when_both_are_present(self):
+        with mock.patch.object(launch_funded_leg.subprocess, "run") as run:
+            run.side_effect = self._run({
+                "ActiveState": "active",
+                "NextElapseUSecRealtime": "Sat 2026-11-14 06:44:27 UTC",
+                "NextElapseUSecMonotonic": "18446744073709551615",
+            })
+            shown = launch_funded_leg.systemctl_show(
+                "funded-leg-y", "ActiveState",
+                "NextElapseUSecRealtime", "NextElapseUSecMonotonic",
+            )
+        self.assertEqual(shown["nextElapse"], "Sat 2026-11-14 06:44:27 UTC")
+
+
+class DeadlineGuardRefusalTest(unittest.TestCase):
+    """A real leg may not run with no layer that survives both guards.
+
+    ADAAAA-9008: the 8998 leg had `arm.json: armed` and still metered past its
+    clock because the only two guards were processes something killed together.
+    So `--deadline-guard auto` on a real leg refuses (exit 8) when the timer
+    cannot be committed, and stops the job it can name on the way out.
+    """
+
+    def _stub_harness(self, run_dir: str) -> str:
+        stub = os.path.join(run_dir, "arming_harness.py")
+        with open(stub, "w", encoding="utf-8") as fh:
+            fh.write(
+                "import argparse, json, os, time\n"
+                "p = argparse.ArgumentParser()\n"
+                "p.add_argument('--heartbeat-path')\n"
+                "p.add_argument('--evidence-out')\n"
+                "ns, _ = p.parse_known_args()\n"
+                "now = time.time()\n"
+                "json.dump({'phase': 'running', 'jobId': 'stub-job-9013',\n"
+                "           'pid': os.getpid(), 'legSeconds': 0.0,\n"
+                "           'beatAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now)),\n"
+                "           'deadlineEpoch': now + 30, 'authorizedDurationS': 30,\n"
+                "           'hardStopSlackS': 10.0, 'capUsd': 0.10},\n"
+                "          open(ns.heartbeat_path, 'w'))\n"
+                "print('[leg] arm pid=%d job=stub-job-9013' % os.getpid(), flush=True)\n"
+                "time.sleep(20)\n"
+            )
+        return stub
+
+    def test_a_leg_with_no_durable_guard_is_refused_and_stopped(self):
+        _StopHandler.received = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _StopHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as run_dir:
+                stub = self._stub_harness(run_dir)
+                unarmed = {
+                    "kind": "failed",
+                    "unit": "funded-leg-stub-9013-1",
+                    "armed": False,
+                    "durable": False,
+                    "error": "systemd-run rc=1: Failed to connect to bus",
+                }
+                with mock.patch.object(
+                    launch_funded_leg, "arm_deadline_guard", return_value=unarmed,
+                ):
+                    rc = launch_funded_leg.main([
+                        "--run-dir", run_dir, "--harness", stub,
+                        "--no-supervisor", "--quiet", "--arm-timeout-s", "15",
+                        "--token", "dry-run-token",
+                        "--job-base", f"http://127.0.0.1:{server.server_address[1]}",
+                        "--authorized-duration-s", "30", "--cap-usd", "0.10",
+                    ])
+                self.assertEqual(rc, launch_funded_leg.EXIT_ARM_FAILED)
+                arm = read_json(os.path.join(run_dir, "arm.json")) or {}
+                self.assertEqual(arm["outcome"], "arm_failed")
+                self.assertIn("no durable deadline guard", arm["reason"])
+                self.assertEqual(arm["jobId"], "stub-job-9013")
+                self.assertTrue(arm["stop"]["attempted"])
+                self.assertTrue(arm["stop"]["ok"], arm["stop"])
+                self.assertEqual(arm["stop"]["http"], 200)
+                self.assertIn("/jobs/stub-job-9013/stop", _StopHandler.received)
+                guard = read_json(os.path.join(run_dir, "deadline_guard.json")) or {}
+                self.assertEqual(guard["kind"], "failed")
+                self.assertFalse(guard["durable"])
+                # Refused before a supervisor exists: no supervised leg at all.
+                launch = read_json(os.path.join(run_dir, "launch.json")) or {}
+                self.assertIsNone(launch.get("supervisor"))
+                pid = (launch or {}).get("harnessPid")
+                if pid and launch_funded_leg.pid_alive(pid):
+                    os.kill(pid, signal.SIGKILL)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
+class SupervisorDeathTest(unittest.TestCase):
+    """ADAAAA-9008: a killed supervisor must be visible and must still stop."""
+
+    def test_sigterm_while_watching_is_recorded_and_stops_the_job(self):
+        _StopHandler.received = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _StopHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                beat_path = os.path.join(tmp, "heartbeat.json")
+                verdict_path = os.path.join(tmp, "supervisor.json")
+                funded_leg.write_json_atomic(beat_path, {
+                    "phase": "running", "jobId": "stub-job-9011", "pid": 99,
+                    "beatAt": _iso(datetime.now(timezone.utc)),
+                    "legSeconds": 12.0,
+                    "deadlineEpoch": time.time() + 600,
+                    "deadlineAt": _iso(datetime.now(timezone.utc) + timedelta(seconds=600)),
+                    "authorizedDurationS": 600, "capUsd": 1.45,
+                    "hardStopSlackS": 10.0,
+                })
+                proc = subprocess.Popen(
+                    [
+                        sys.executable, SUPERVISOR,
+                        "--heartbeat", beat_path, "--evidence-out", verdict_path,
+                        # stale-s is huge on purpose: this is the killed-guard
+                        # case, not the stale one.
+                        "--stale-s", "3600", "--poll-s", "0.1",
+                        "--arm-timeout-s", "10", "--watch-beat-s", "0.2",
+                        "--job-base", f"http://127.0.0.1:{server.server_address[1]}",
+                        "--token", "dry-run-token", "--quiet",
+                    ],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                )
+                try:
+                    watching = wait_for(
+                        lambda: (b if (b := read_json(verdict_path))
+                                 and b.get("outcome") == "watching" else None),
+                        20,
+                    )
+                    self.assertIsNotNone(watching, "no `watching` record was written")
+                    self.assertEqual(watching["jobId"], "stub-job-9011")
+                    self.assertEqual(watching["harnessPid"], 99)
+                    self.assertIsNotNone(watching["deadlineAt"])
+
+                    proc.send_signal(signal.SIGTERM)
+                    rc = proc.wait(timeout=30)
+                    self.assertEqual(rc, leg_supervisor.EXIT_KILLED)
+                    death = read_json(verdict_path)
+                    self.assertEqual(death["outcome"], "killed_while_watching")
+                    self.assertEqual(death["signal"], "SIGTERM")
+                    self.assertTrue(death["heartbeatLive"])
+                    self.assertTrue(death["stop"]["attempted"])
+                    self.assertTrue(death["stop"]["ok"])
+                    self.assertIn("/jobs/stub-job-9011/stop", _StopHandler.received)
+                    out = proc.stdout.read().decode() if proc.stdout else ""
+                    self.assertIn("start pid=", out)
+                    self.assertIn("SIGTERM while watching", out)
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait(timeout=20)
+                    if proc.stdout is not None:
+                        proc.stdout.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_a_supervisor_killed_on_a_finished_leg_does_not_stop_it(self):
+        """A torn-down supervisor must not amputate a leg that already ended."""
+        _StopHandler.received = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _StopHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                beat_path = os.path.join(tmp, "heartbeat.json")
+                verdict_path = os.path.join(tmp, "supervisor.json")
+                funded_leg.write_json_atomic(beat_path, {
+                    "phase": "finished", "jobId": "stub-job-9012", "pid": 99,
+                    "beatAt": _iso(datetime.now(timezone.utc)),
+                    "status": "done",
+                })
+                proc = subprocess.Popen(
+                    [
+                        sys.executable, SUPERVISOR,
+                        "--heartbeat", beat_path, "--evidence-out", verdict_path,
+                        "--stale-s", "3600", "--poll-s", "0.1",
+                        "--arm-timeout-s", "10", "--watch-beat-s", "0.2",
+                        "--job-base", f"http://127.0.0.1:{server.server_address[1]}",
+                        "--token", "dry-run-token", "--quiet",
+                    ],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                )
+                try:
+                    rc = proc.wait(timeout=30)
+                    self.assertEqual(rc, leg_supervisor.EXIT_OK)
+                    self.assertEqual(read_json(verdict_path)["outcome"], "finished")
+                    self.assertEqual(_StopHandler.received, [])
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait(timeout=20)
+                    if proc.stdout is not None:
+                        proc.stdout.close()
         finally:
             server.shutdown()
             server.server_close()

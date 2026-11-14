@@ -33,22 +33,40 @@ which covers "the harness died but the caller's session did not take the job
 with it". `--no-supervisor` skips it (dry runs, or a cell that forbids a second
 process).
 
+3. DURABLE DEADLINE GUARD (ADAAAA-9008). Neither process is a guarantee: on the
+   ADAAAA-8998 C2 leg the harness and the supervisor died in the same second,
+   which left the job metering 375 s past its authorized clock. So the deadline
+   is also committed to `systemd` as a transient timer
+   (`--deadline-guard auto|systemd|none`): the timer lives under PID 1, outside
+   the sessions and cgroups the guard processes share, and runs
+   `<run-dir>/deadline_guard_stop.py` (which mints its own token and stops the
+   job) even if every process this launcher started was SIGKILLed. `auto`
+   refuses a real leg that cannot commit it; `--dry-run` records
+   `skipped_dry_run` (the stub job lives inside the harness process). The
+   supervisor disarms the timer when the leg ends.
+
 Everything the launcher decides is on disk, so the next reader does not have to
 re-derive it:
 
-    <run-dir>/launch.json       what was launched, when, with which argv
-    <run-dir>/harness.log       the harness's own stdout/stderr
-    <run-dir>/heartbeat.json    the live heartbeat (harness pid/job/deadline)
-    <run-dir>/harness.pid       the harness pid
-    <run-dir>/supervisor.pid    the fallback supervisor pid
-    <run-dir>/supervisor.json   the supervisor's verdict (when it intervenes)
-    <run-dir>/arm.json          this launcher's arm verdict
-    <run-dir>/evidence.json     the harness evidence bundle
+    <run-dir>/launch.json             what was launched, when, with which argv
+    <run-dir>/harness.log             the harness's own stdout/stderr
+    <run-dir>/heartbeat.json          the live heartbeat (harness pid/job/deadline)
+    <run-dir>/harness.pid             the harness pid
+    <run-dir>/supervisor.pid          the fallback supervisor pid
+    <run-dir>/supervisor.json         the supervisor's verdict (`watching` while
+                                      it is armed, then what it decided)
+    <run-dir>/deadline_guard.json     the durable timer's unit/fire time/readback
+    <run-dir>/deadline_guard_stop.py  what the timer runs when it fires (0700)
+    <run-dir>/deadline_guard_result.json  what the timer did when it fired
+    <run-dir>/arm.json                this launcher's arm verdict
+    <run-dir>/evidence.json           the harness evidence bundle
 
 Exit codes:
-  0  armed — the harness is detached, alive, and its heartbeat names the job
-  8  arm failed — no live harness heartbeat/pid inside the arm window; the job
-     this launcher could name was stopped. No supervised leg exists.
+  0  armed — the harness is detached, alive, its heartbeat names the job, and
+     (for a real leg) the durable deadline guard is `active` in systemd
+  8  arm failed — no live harness heartbeat/pid inside the arm window, or the
+     durable deadline guard could not be committed; the job this launcher could
+     name was stopped. No supervised leg exists.
   9  refused — a live harness is already registered in that run dir
      (`--force` overrides), or the harness could not be spawned at all
 """
@@ -165,6 +183,18 @@ def split_args(argv: Sequence[str]) -> Tuple[argparse.Namespace, List[str]]:
     parser.add_argument("--supervisor-stale-s", type=float, default=45.0,
                         help="heartbeat staleness the supervisor stops on "
                              "(default 45)")
+    parser.add_argument("--deadline-guard", choices=("auto", "systemd", "none"),
+                        default="auto",
+                        help="commit the authorized deadline to systemd as a "
+                             "transient timer that fires even if every guard "
+                             "process is killed (ADAAAA-9008). `auto` requires "
+                             "it for a real leg and skips it for --dry-run "
+                             "(default auto)")
+    parser.add_argument("--deadline-guard-grace-s", type=float, default=5.0,
+                        help="seconds past deadline+hard-stop-slack before the "
+                             "durable timer fires (default 5)")
+    parser.add_argument("--deadline-guard-prefix", default="funded-leg",
+                        help="transient unit name prefix (default funded-leg)")
     parser.add_argument("--harness", default=os.path.join(HERE, "funded_leg.py"),
                         help="path to funded_leg.py (default: beside this script)")
     parser.add_argument("--supervisor-script",
@@ -234,6 +264,377 @@ def stop_job(args: argparse.Namespace, job_id: str) -> Dict[str, Any]:
     return out
 
 
+#: The durable deadline guard (ADAAAA-9008). Both guard processes can die at
+#: once (the ADAAAA-8998 C2 leg lost the harness and the supervisor in the same
+#: second, with no traceback), so the deadline itself is committed to `systemd`
+#: as a transient timer: it lives under PID 1, outside the sessions and cgroups
+#: the guard processes share, and fires even if every process this launcher
+#: started is SIGKILLed.
+DEADLINE_GUARD_PREFIX = "funded-leg"
+DEADLINE_GUARD_GRACE_S = 5.0
+DEADLINE_GUARD_SCRIPT = "deadline_guard_stop.py"
+DEADLINE_GUARD_RESULT = "deadline_guard_result.json"
+DEADLINE_GUARD_RECORD = "deadline_guard.json"
+
+
+def _iso_from_epoch(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def deadline_guard_unit(job_id: str, fire_epoch: float,
+                        prefix: str = DEADLINE_GUARD_PREFIX) -> str:
+    """A valid transient unit name for this job's deadline timer."""
+    safe = re.sub(r"[^A-Za-z0-9]", "-", str(job_id))[:8].strip("-").lower() or "job"
+    return f"{prefix}-{safe}-{int(fire_epoch)}"
+
+
+def deadline_guard_plan(
+    beat: Optional[Dict[str, Any]],
+    *,
+    now: float,
+    grace_s: float = DEADLINE_GUARD_GRACE_S,
+    prefix: str = DEADLINE_GUARD_PREFIX,
+) -> Dict[str, Any]:
+    """When the durable timer fires, and why that time.
+
+    The timer must not race the harness's own stop: it fires after the
+    heartbeat's `deadlineEpoch`, after the harness's hard-stop slack, and after
+    `grace_s` — the window in which the harness and then the supervisor are
+    supposed to have stopped the leg themselves.
+    """
+    job_id = (beat or {}).get("jobId")
+    if not job_id:
+        return {"ok": False, "reason": "no job id in the heartbeat"}
+    raw = (beat or {}).get("deadlineEpoch")
+    try:
+        deadline = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return {"ok": False, "jobId": job_id,
+                "reason": "no usable deadlineEpoch in the heartbeat"}
+    try:
+        slack = float((beat or {}).get("hardStopSlackS") or 10.0)
+    except (TypeError, ValueError):
+        slack = 10.0
+    fire_epoch = deadline + max(0.0, slack) + max(0.0, grace_s)
+    return {
+        "ok": True,
+        "jobId": job_id,
+        "unit": deadline_guard_unit(job_id, fire_epoch, prefix),
+        "deadlineEpoch": round(deadline, 3),
+        "deadlineAt": (beat or {}).get("deadlineAt") or _iso_from_epoch(deadline),
+        "slackS": slack,
+        "graceS": grace_s,
+        "fireEpoch": round(fire_epoch, 3),
+        "fireAt": _iso_from_epoch(fire_epoch),
+        "delayS": round(max(1.0, fire_epoch - now), 1),
+    }
+
+
+def render_deadline_guard_script(
+    *,
+    job_id: str,
+    job_base: str,
+    result_path: str,
+    unit: str,
+    armed_for_epoch: float,
+    token: Optional[str] = None,
+    user_id: Optional[str] = None,
+    email: Optional[str] = None,
+    mint_container: str = "highlights-server",
+) -> str:
+    """The standalone stop script the timer runs.
+
+    Standalone on purpose: it must not import this tooling tree, because the
+    tree may have moved by the time it fires. It mints its own token inside the
+    server container unless the launcher was given one, and it writes what it
+    did beside the leg's other artifacts so a killed-guard leg still has a
+    record of the stop.
+    """
+    body = '''#!/usr/bin/env python3
+"""Durable deadline stop for funded leg __JOB_ID__ (ADAAAA-9008).
+
+Armed by launch_funded_leg.py as a systemd transient timer, so it fires even if
+the harness AND the supervisor were both killed. A stop call bills nothing.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+JOB_ID = __JOB_ID__
+JOB_BASE = __JOB_BASE__
+TOKEN = __TOKEN__
+USER_ID = __USER_ID__
+EMAIL = __EMAIL__
+MINT_CONTAINER = __MINT_CONTAINER__
+RESULT_PATH = __RESULT_PATH__
+UNIT = __UNIT__
+ARMED_FOR_EPOCH = __ARMED_FOR_EPOCH__
+
+MINT_JS = (
+    "const jwt=require('jsonwebtoken');process.stdout.write(jwt.sign("
+    "{sub:process.env.U,email:process.env.E||'leg-harness@highlights.local',"
+    "role:'user'},process.env.JWT_SECRET,{expiresIn:'1h'}))"
+)
+
+
+def _iso(epoch):
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def _write(payload):
+    tmp = "%s.tmp.%d" % (RESULT_PATH, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\\n")
+    os.replace(tmp, RESULT_PATH)
+
+
+def _mint():
+    if not USER_ID:
+        raise RuntimeError("no token and no user id to mint one with")
+    cmd = [
+        "docker", "exec", "-e", "U=%s" % USER_ID,
+        "-e", "E=%s" % (EMAIL or "leg-harness@highlights.local"),
+        MINT_CONTAINER, "node", "-e", MINT_JS,
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    token = (proc.stdout or b"").decode("utf-8", "replace").strip()
+    if proc.returncode != 0 or not token:
+        raise RuntimeError(
+            "token mint rc=%s: %s"
+            % (proc.returncode, (proc.stderr or b"").decode("utf-8", "replace")[:300])
+        )
+    return token
+
+
+def _stop(token):
+    req = urllib.request.Request(
+        "%s/jobs/%s/stop" % (JOB_BASE.rstrip("/"), JOB_ID),
+        data=b"{}",
+        method="POST",
+        headers={"Authorization": "Bearer %s" % token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            return res.status, (res.read() or b"")[:300].decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, (exc.read() or b"")[:300].decode("utf-8", "replace")
+
+
+def main():
+    fired_at = time.time()
+    token = TOKEN
+    token_source = "arg" if token else "minted"
+    token_error = None
+    status = None
+    detail = None
+    error = None
+    if not token:
+        try:
+            token = _mint()
+        except Exception as exc:
+            token_error = "%s: %s" % (type(exc).__name__, exc)
+            error = token_error
+    if token:
+        try:
+            status, detail = _stop(token)
+        except Exception as exc:
+            error = "%s: %s" % (type(exc).__name__, exc)
+    ok = status in (200, 201)
+    payload = {
+        "fired": True,
+        "unit": UNIT,
+        "jobId": JOB_ID,
+        "jobBase": JOB_BASE,
+        "reason": "authorized_deadline_elapsed (durable deadline guard, ADAAAA-9008)",
+        "armedForEpoch": ARMED_FOR_EPOCH,
+        "armedForAt": _iso(ARMED_FOR_EPOCH),
+        "firedAt": _iso(fired_at),
+        "firedAtEpoch": round(fired_at, 3),
+        "lateByS": round(fired_at - ARMED_FOR_EPOCH, 1),
+        "tokenSource": token_source,
+        "tokenError": token_error,
+        "stop": {"http": status, "ok": ok, "detail": detail, "error": error},
+    }
+    _write(payload)
+    print(json.dumps(payload, sort_keys=True))
+    return 0 if ok else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+    values = {
+        "__JOB_ID__": job_id,
+        "__JOB_BASE__": job_base,
+        "__TOKEN__": token,
+        "__USER_ID__": user_id,
+        "__EMAIL__": email,
+        "__MINT_CONTAINER__": mint_container,
+        "__RESULT_PATH__": result_path,
+        "__UNIT__": unit,
+        "__ARMED_FOR_EPOCH__": round(armed_for_epoch, 3),
+    }
+    out = body
+    for key, value in values.items():
+        out = out.replace(key, repr(value))
+    return out
+
+
+def write_deadline_guard_script(path: str, script: str) -> None:
+    """Write the stop script 0700 — it may carry a bearer token (ADAAAA-9008)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o700)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(script)
+
+
+def systemctl_show(unit: str, *properties: str, timeout: float = 10.0) -> Dict[str, Any]:
+    """Read back a transient unit's state. Never raises.
+
+    One `systemctl show` call per property: with several `--property` flags,
+    `--value` does NOT print in request order (measured on systemd 255, where
+    `NextElapseUSecMonotonic` came out before `ActiveState`), so a positional
+    read mislabels the timer's state. A `--on-active` timer is monotonic, so
+    `NextElapseUSecRealtime` is legitimately empty while the monotonic property
+    carries the fire time.
+    """
+    props = list(properties or ("ActiveState",))
+    out: Dict[str, Any] = {"unit": unit, "activeState": None, "nextElapse": None,
+                           "values": {}, "rc": None, "error": None}
+    for prop in props:
+        args = ["systemctl", "show", f"{unit}.timer",
+                f"--property={prop}", "--value", "--no-pager"]
+        try:
+            proc = subprocess.run(args, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, timeout=timeout, check=False)
+        except (OSError, subprocess.SubprocessError) as exc:
+            out["error"] = f"{type(exc).__name__}: {exc}"
+            return out
+        out["rc"] = proc.returncode
+        value = (proc.stdout or b"").decode("utf-8", "replace").strip()
+        out["values"][prop] = value
+        if prop == "ActiveState":
+            out["activeState"] = value or None
+        if proc.returncode != 0 and out["error"] is None:
+            out["error"] = value[:300]
+    # `NextElapseUSecMonotonic` is boot-relative (printed as an uptime span), so
+    # it is kept apart from the human-readable realtime elapse instead of being
+    # presented as a wall-clock fire time.
+    out["nextElapse"] = out["values"].get("NextElapseUSecRealtime") or None
+    out["nextElapseMonotonic"] = out["values"].get("NextElapseUSecMonotonic") or None
+    return out
+
+
+def arm_deadline_guard(
+    plan: Dict[str, Any],
+    *,
+    run_dir: str,
+    job_base: str,
+    python: str = sys.executable,
+    token: Optional[str] = None,
+    user_id: Optional[str] = None,
+    email: Optional[str] = None,
+    mint_container: str = "highlights-server",
+    timeout: float = 30.0,
+) -> Dict[str, Any]:
+    """Commit the deadline to `systemd`; report whether it is really armed.
+
+    Exit-code-only reads are not proof (a swallowed pipeline looks identical to
+    a failure), so this writes the script, starts the transient timer, then
+    reads the timer's `ActiveState` and `NextElapseUSecRealtime` back.
+    """
+    out: Dict[str, Any] = {
+        "kind": "systemd",
+        "unit": plan.get("unit"),
+        "fireEpoch": plan.get("fireEpoch"),
+        "fireAt": plan.get("fireAt"),
+        "delayS": plan.get("delayS"),
+        "armed": False,
+        "systemdRunRc": None,
+        "stdout": "",
+        "error": None,
+    }
+    if not plan.get("ok"):
+        out["kind"] = "failed"
+        out["error"] = str(plan.get("reason"))
+        return out
+    script_path = os.path.join(run_dir, DEADLINE_GUARD_SCRIPT)
+    result_path = os.path.join(run_dir, DEADLINE_GUARD_RESULT)
+    try:
+        write_deadline_guard_script(script_path, render_deadline_guard_script(
+            job_id=plan["jobId"],
+            job_base=job_base,
+            result_path=result_path,
+            unit=str(plan["unit"]),
+            armed_for_epoch=float(plan["fireEpoch"]),
+            token=token,
+            user_id=user_id,
+            email=email,
+            mint_container=mint_container,
+        ))
+    except OSError as exc:
+        out["error"] = f"script write: {type(exc).__name__}: {exc}"
+        return out
+    out["script"] = script_path
+    out["result"] = result_path
+    cmd = [
+        "systemd-run",
+        f"--unit={plan['unit']}",
+        f"--on-active={plan['delayS']}s",
+        "--collect",
+        "--property=Description=funded-leg deadline guard (ADAAAA-9008)",
+        python, script_path,
+    ]
+    out["command"] = " ".join(shlex.quote(part) for part in cmd)
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              timeout=timeout, check=False)
+        out["systemdRunRc"] = proc.returncode
+        out["stdout"] = (proc.stdout or b"").decode("utf-8", "replace")[-600:]
+    except (OSError, subprocess.SubprocessError) as exc:
+        out["error"] = f"systemd-run: {type(exc).__name__}: {exc}"
+        return out
+    if out["systemdRunRc"] != 0:
+        out["error"] = f"systemd-run rc={out['systemdRunRc']}: {out['stdout'][-300:]}"
+        return out
+    shown = systemctl_show(str(plan["unit"]), "ActiveState",
+                           "NextElapseUSecRealtime", "NextElapseUSecMonotonic")
+    out["readback"] = shown
+    out["activeState"] = shown.get("activeState")
+    out["nextElapse"] = shown.get("nextElapse")
+    out["armed"] = shown.get("activeState") == "active"
+    out["durable"] = out["armed"]
+    out["nextElapseMonotonic"] = shown.get("nextElapseMonotonic")
+    if not out["armed"]:
+        out["error"] = (
+            f"timer not active after arming (ActiveState={shown.get('activeState')!r}): "
+            f"{shown.get('error') or shown.get('rc')}"
+        )
+    return out
+
+
+def disarm_deadline_guard(unit: Optional[str]) -> Dict[str, Any]:
+    """Cancel a timer this launcher armed (used when the arm proof fails)."""
+    if not unit:
+        return {"unit": None, "disarmed": False}
+    args = ["systemctl", "stop", f"{unit}.timer"]
+    try:
+        proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              timeout=15, check=False)
+        rc = proc.returncode
+        detail = (proc.stdout or b"").decode("utf-8", "replace")[-300:]
+    except (OSError, subprocess.SubprocessError) as exc:
+        rc, detail = None, f"{type(exc).__name__}: {exc}"
+    subprocess.run(["systemctl", "reset-failed", f"{unit}.timer", f"{unit}.service"],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    return {"unit": unit, "disarmed": rc == 0, "rc": rc, "detail": detail}
+
+
 def _spawn(
     cmd: Sequence[str],
     log_path: str,
@@ -290,6 +691,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     supervisor_pid_path = os.path.join(run_dir, "supervisor.pid")
     supervisor_log = os.path.join(run_dir, "supervisor.log")
     supervisor_evidence = os.path.join(run_dir, "supervisor.json")
+    guard_path = os.path.join(run_dir, DEADLINE_GUARD_RECORD)
 
     existing = read_pid(pid_path)
     if existing and pid_alive(existing) and not args.force:
@@ -348,7 +750,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     launch_record["harnessPid"] = proc.pid
     log(f"harness pid {proc.pid} launched detached (own session) -> {log_path}")
 
-    if not args.no_supervisor:
+    def spawn_supervisor(guard_unit: Optional[str]) -> None:
+        """Start the fallback supervisor beside the harness, in its own session.
+
+        ADAAAA-9008: spawned after the durable deadline guard is armed, so it
+        also owns disarming that timer when the leg ends. A supervisor that
+        cannot start is a named gap, not a silent one.
+        """
+        if args.no_supervisor:
+            return
         sup_cmd = [
             args.python, args.supervisor_script,
             "--run-dir", run_dir,
@@ -359,6 +769,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "--job-base", getattr(harness_ns, "job_base", "http://127.0.0.1:3000"),
             "--evidence-out", supervisor_evidence,
         ]
+        if guard_unit:
+            sup_cmd += ["--deadline-guard-unit", guard_unit]
         for flag, key in (
             ("--token", "token"), ("--user-id", "user_id"), ("--email", "email"),
             ("--mint-token-container", "mint_token_container"),
@@ -378,6 +790,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "command": " ".join(shlex.quote(part) for part in sup_cmd),
                 "staleS": args.supervisor_stale_s,
                 "evidence": supervisor_evidence,
+                "deadlineGuardUnit": guard_unit,
             }
             log(f"fallback supervisor pid {sup.pid} (stale heartbeat >= "
                 f"{args.supervisor_stale_s:.0f} s)")
@@ -391,6 +804,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     _write_json(launch_path, launch_record)
 
     if args.no_arm_check:
+        spawn_supervisor(None)
+        _write_json(launch_path, launch_record)
         _write_json(arm_path, {
             "outcome": "arm_check_skipped",
             "at": _iso_now(),
@@ -486,6 +901,96 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               file=sys.stderr)
         return EXIT_ARM_FAILED
 
+    assert armed is not None  # the arm proof above returns EXIT_ARM_FAILED otherwise
+
+    # ---- the durable deadline guard (ADAAAA-9008) -------------------------
+    # An armed harness plus an armed supervisor is still not a guarantee: on the
+    # ADAAAA-8998 C2 leg both were killed in the same second and the job metered
+    # 375 s past its clock. The deadline itself is therefore committed to
+    # systemd, which lives outside every session/cgroup the guards share.
+    dry_run = bool(getattr(harness_ns, "dry_run", False))
+    guard_plan = deadline_guard_plan(
+        beat,
+        now=time.time(),
+        grace_s=args.deadline_guard_grace_s,
+        prefix=args.deadline_guard_prefix,
+    )
+    if args.deadline_guard == "none":
+        guard: Dict[str, Any] = {
+            "kind": "disabled",
+            "armed": False,
+            "durable": False,
+            "reason": "(--deadline-guard none) — no layer survives SIGKILL of both guards",
+            "plan": guard_plan,
+        }
+    elif dry_run and args.deadline_guard == "auto":
+        guard = {
+            "kind": "skipped_dry_run",
+            "armed": False,
+            "durable": False,
+            "reason": (
+                "dry-run: the stub job lives inside the harness process, so there "
+                "is nothing an external timer could stop"
+            ),
+            "plan": guard_plan,
+        }
+    else:
+        guard = arm_deadline_guard(
+            guard_plan,
+            run_dir=run_dir,
+            job_base=getattr(harness_ns, "job_base", "http://127.0.0.1:3000"),
+            python=args.python,
+            token=getattr(harness_ns, "token", None),
+            user_id=getattr(harness_ns, "user_id", None),
+            email=getattr(harness_ns, "email", None),
+            mint_container=getattr(harness_ns, "mint_token_container", "highlights-server"),
+        )
+        guard["durable"] = bool(guard.get("armed"))
+        guard["plan"] = guard_plan
+    guard_record = {**guard, "at": _iso_now(), "dryRun": dry_run}
+    _write_json(guard_path, guard_record)
+
+    if args.deadline_guard != "none" and not dry_run and not guard.get("durable"):
+        # Do not run a metered leg with no layer that survives both guards: that
+        # is the 8998 shape. Stop the job it can name and refuse the leg.
+        disarm = disarm_deadline_guard(guard.get("unit"))
+        job_id = armed["job"]
+        stop = stop_job(harness_ns, job_id) if job_id else {
+            "jobId": job_id, "attempted": False, "ok": False, "http": None,
+            "tokenSource": None, "error": "no job id",
+        }
+        _write_json(arm_path, {
+            "outcome": "arm_failed",
+            "reason": f"no durable deadline guard: {guard.get('error') or guard.get('reason')}",
+            "at": _iso_now(),
+            "harnessPid": proc.pid,
+            "jobId": job_id,
+            "stop": stop,
+            "deadlineGuard": guard_record,
+            "deadlineGuardDisarmed": disarm,
+            "armLine": armed,
+            "heartbeat": beat,
+            "log": log_path,
+            "evidence": evidence_path,
+            "logTail": _read_text(log_path)[-2000:],
+        })
+        print(
+            "[launch] ARM FAILED: the authorized deadline could not be committed "
+            f"({guard.get('error') or guard.get('reason')})"
+            + (f" — job {job_id} stopped (HTTP {stop['http']})" if stop.get("ok")
+               else f" — job {job_id} STOP NOT CONFIRMED ({stop.get('error')})"),
+            file=sys.stderr,
+        )
+        print("[launch] no supervised leg exists; do not grade this run",
+              file=sys.stderr)
+        return EXIT_ARM_FAILED
+
+    spawn_supervisor(guard.get("unit") if guard.get("durable") else None)
+    _write_json(launch_path, launch_record)
+    durable = bool(guard.get("durable")) and bool(
+        (launch_record.get("supervisor") or {}).get("pid")
+    )
+
     _write_json(arm_path, {
         "outcome": "armed",
         "at": _iso_now(),
@@ -496,6 +1001,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "evidence": evidence_path,
         "log": log_path,
         "supervisor": launch_record.get("supervisor"),
+        "deadlineGuard": guard_record,
+        "durable": durable,
         "deadlineAt": (beat or {}).get("deadlineAt"),
         "authorizedDurationS": (beat or {}).get("authorizedDurationS"),
         "capUsd": (beat or {}).get("capUsd"),
@@ -505,6 +1012,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"stop=harness@{(beat or {}).get('deadlineAt')} "
         f"(cap ${(beat or {}).get('capUsd')})"
     )
+    if guard.get("durable"):
+        log(
+            f"deadline guard armed: unit={guard.get('unit')} fires "
+            f"{guard.get('fireAt')} ({guard.get('delayS')}s) "
+            f"state={guard.get('activeState')}"
+        )
+    else:
+        log(
+            "WARNING: no durable deadline guard "
+            f"({guard.get('kind')}: {guard.get('error') or guard.get('reason')}) — "
+            "if both guard processes die, nothing stops the job (ADAAAA-9008)"
+        )
     log(f"heartbeat {heartbeat_path}")
     log(f"evidence  {evidence_path}")
     log("the harness runs in its own session: closing this shell does not stop it")

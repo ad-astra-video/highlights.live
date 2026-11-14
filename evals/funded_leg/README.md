@@ -76,6 +76,67 @@ PASS/FAIL/UNMEASURED belongs to the offline grader on `origin/master` 123da6b
 (`services/server/src/live-leg-grade.ts`, `scripts/live-leg-grade.ts`) — and that
 grader must treat `stopSourceClass: external` as ungradable.
 
+### A guard process is not a guard (ADAAAA-9008)
+
+Source incident: ADAAAA-8998 C2 leg `d46c3788` (file-sim, 1200 s authorized,
+cap `$1.45` / abort `$1.31`). `arm.json` read `outcome: "armed"` and the
+supervisor pid was live, then **both** guard processes disappeared in the same
+second: `harness.log` froze at `t=793.8s`, `supervisor.log` was 0 bytes,
+`supervisor.json` was absent, no traceback, no `dmesg` kill. Nothing issued a
+stop, the job metered 782 s past the guard's death and 375 s past its clock, and
+an operator API stop caught it. Spend stayed inside the abort by `$0.0417`.
+
+A guard that only exists as processes is defeatable by one signal to the
+session/cgroup they share. Three layers now answer that, and each is provable
+at `$0`:
+
+| layer | what it guarantees |
+|---|---|
+| the harness's own wall-clock stop | unchanged: fires inside the leg's process. |
+| `leg_supervisor.py` (catchable death) | writes `DIR/supervisor.json` with `outcome: "watching"` as soon as it has a beat and refreshes `lastBeatAt` every `--watch-beat-s` (default 10), so "never armed" and "armed then killed" stop reading the same. It **always** logs its start and its death (`--quiet` only silences per-poll noise), catches `SIGTERM`/`SIGINT`/`SIGHUP`, records `outcome: "killed_while_watching"` with the signal, and issues the stop on the way out when the last beat still names a live phase (exit `6`). |
+| `--deadline-guard auto` (uncatchable death) | the authorized deadline is committed to `systemd` as a transient timer (`systemd-run --unit=funded-leg-<job>-<fireEpoch> --on-active=…`), which lives under PID 1 outside every session/cgroup the guards share. On fire it runs `DIR/deadline_guard_stop.py` (mode `0700`, mints its own token if none was passed) and writes `DIR/deadline_guard_result.json` with `firedAt`/`lateByS`/the stop's HTTP. Fire time is `deadlineEpoch + hardStopSlackS + --deadline-guard-grace-s` (default 5), so it never races the harness or the supervisor. The supervisor disarms the timer when the leg ends. |
+
+`--deadline-guard auto` (the default) **refuses a real leg** when the timer
+cannot be committed: it disarms, stops the job it can name, writes
+`arm.json:{outcome:"arm_failed", reason:"no durable deadline guard: …"}`, and
+exits `8`. `--dry-run` records `skipped_dry_run` instead (the stub job lives
+inside the harness process, so there is nothing external to stop);
+`--deadline-guard none` is the explicit opt-out and says so in `arm.json`.
+
+Read the arm proof as five artifacts, not one: launcher rc `0`,
+`arm.json.outcome == "armed"`, `harness.log`'s `[leg] arm pid= job=` line,
+`heartbeat.json` naming that pid+job with `deadlineEpoch`, and
+`arm.json.deadlineGuard.durable: true` with `deadlineGuard.activeState:
+"active"` (a read-back from `systemctl show`, not the `systemd-run` exit code).
+A real leg whose `deadlineGuard.durable` is false ran with no layer that
+survives both guards — treat it as ungradable.
+
+`$0` proof, in order (all of it runs in ~2 min, no box, no job):
+
+```sh
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/armproof --dry-run \
+  --stub-scenario clean --authorized-duration-s 8 --cap-usd 0.65 --quiet-window-min 0.1
+# rc=0, arm.json outcome=armed, deadlineGuard.kind=skipped_dry_run,
+# supervisor.json outcome=finished + a non-empty supervisor.log "start pid=" line,
+# evidence.json stopSourceClass=harness
+
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/extstop --dry-run \
+  --stub-scenario operator-stop-overspend --authorized-duration-s 60 \
+  --cap-usd 1.30 --quiet-window-min 0.1
+# evidence exitCode 7, outcome=stopped_outside_guard, gradable=false,
+# stopSource=operator_api / class=external, message carries the $0.1537 breach
+
+python3 -m unittest evals/funded_leg/test_launch_funded_leg.py -v
+# 37 tests: SIGTERM-while-watching stops the job and records the death,
+# a killed supervisor on a finished leg does not amputate it, an inactive
+# timer is not an armed guard, and a leg with no durable guard is refused+stopped
+```
+
+The same arm path was proved on `livepeer-ai-x99` (systemd 255) at `$0`: the
+timer read back `ActiveState=active`, fired `0.4 s` late after the arming
+process had exited, ran the generated stop script, and left no unit behind.
+
+
 ### The guard prices the unit the build bills (ADAAAA-8832)
 
 `costUsd` on this build is `decideFee x (decideCalls + confirmCalls) +
