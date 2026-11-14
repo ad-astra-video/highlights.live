@@ -143,9 +143,18 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
   it("leaves the AC8 repeat-opening retry without a depth directive", async () => {
     const { store } = stubStore();
     const state = newSummaryJobState();
-    // The job already served this body's opening run, so the AC8 path regenerates
-    // once for a DIFFERENT opening — it carries no depth directive.
+    // The job already served this body's opening run ON THE SAME WINDOW, so the
+    // scoped repeat key (ADAAAA-8969) regenerates once for a body that is a
+    // different moment or different copy — the retry carries no depth directive.
     state.servedOpenings.add(summaryOpeningRun(REPAIRED));
+    state.servedBodies.push({
+      highlightId: "served-before",
+      windowTs: EVIDENCE.windowTs ?? null,
+      windowDurationS: EVIDENCE.windowDurationS ?? null,
+      clockToken: null,
+      body: REPAIRED,
+      opening: summaryOpeningRun(REPAIRED),
+    });
     const f = stubFetch([ok(REPAIRED), ok(REPAIRED.replace("Barcelona pulls level at 2-2", "The away side pulls level at 2-2"))]);
     const result = await runSummaryForRow(
       store,
@@ -153,7 +162,11 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
       { jobId: "4e5ddf8d", highlightId: "other", evidence: EVIDENCE },
       state
     );
-    expect(result.outcome).toBe("stored");
+    // ADAAAA-8969: one instant is one card, so the regeneration cannot save this
+    // row and the retry ends in the `repeat` drop — the assertion under test is
+    // that the repeat retry carries no depth directive.
+    expect(result.outcome).toBe("dropped");
+    expect(result.reason).toBe("repeat");
     expect(result.calls).toBe(2);
     expect(f.bodies[1]).toContain("Do not open with any of these already-served runs");
     expect(f.bodies[1]).not.toContain("RETRY:");

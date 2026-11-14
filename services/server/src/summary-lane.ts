@@ -39,8 +39,8 @@ import {
   buildSummaryPrompt,
   gateSummaryDetail,
   resolveSummaryFee,
-  repeatedSentences,
   summaryBand,
+  sentenceSimilarity,
   summaryOpeningRun,
   summarySentencesOf,
   type SummaryDropReason,
@@ -101,12 +101,146 @@ export interface SummaryJobState {
    *  compares the first four words, so the rev-7 live bodies repeated a whole
    *  sentence template in sentence 2 (0.965-0.982 pairwise similarity) and all
    *  three served. The job is the scope for the same reason it is the scope for
-   *  openings: the defect is two CARDS on one video. */
+   *  openings: the defect is two CARDS on one video. Kept for the PROMPT-first
+   *  avoidance (`avoidSentences`) only — ADAAAA-8969 moved the DROP decision onto
+   *  `servedBodies` because job-wide sentence equality also refuses honest cards. */
   servedSentences: string[];
+  /** ADAAAA-8969 (increment 2, defect 3): the bodies this job actually SERVED,
+   *  with the instants that tell one promotion from another. The repeat key reads
+   *  these, so "another promotion from the same prompt template" (a shared opening
+   *  run, one shared sentence) is no longer a repeat: the measured live leg
+   *  dropped 16/19 promotions that way and could not fill a 10-card deck. */
+  servedBodies: SummaryServedBody[];
+}
+
+/** One body a job served, as the repeat key reads it. */
+export interface SummaryServedBody {
+  highlightId: string;
+  windowTs: number | null;
+  windowDurationS: number | null;
+  /** The row's attested match clock, else the first clock token its body prints. */
+  clockToken: string | null;
+  body: string;
+  opening: string | null;
+}
+
+/** ADAAAA-8969: the bars the SCOPED repeat key uses.
+ *  - a body at/above `SUMMARY_REPEAT_BODY_THRESHOLD` similarity to a served body
+ *    is the same copy regardless of instant;
+ *  - the SAME clock token with a body at/above
+ *    `SUMMARY_REPEAT_CLOCK_BODY_THRESHOLD` is the same moment told twice;
+ *  - an overlapping window is the same moment by construction.
+ *  A shared opening run or one shared sentence is a TEMPLATE and serves. */
+export const SUMMARY_REPEAT_BODY_THRESHOLD = 0.9;
+export const SUMMARY_REPEAT_CLOCK_BODY_THRESHOLD = 0.8;
+
+export type SummaryRepeatKey =
+  | "same-window"
+  | "same-clock"
+  | "near-identical-body"
+  /** neither row carries an instant, so a shared opening is the only same-moment
+   *  evidence the lane has (legacy/no-clock rows). */
+  | "indistinguishable-opening";
+
+export interface SummaryRepeatVerdict {
+  /** null => this body is a DISTINCT promotion and must serve. */
+  key: SummaryRepeatKey | null;
+  against: string | null;
+  bodySimilarity: number;
+  windowOverlapS: number | null;
+  sameClock: boolean;
+  openingRepeat: boolean;
+  sentence: { a: string; b: string; similarity: number } | null;
+}
+
+/**
+ * ADAAAA-8969 (defect 3): the repeat key, SCOPED to the same promotion.
+ *
+ * The rev-8 key was job-wide opening-run equality plus any sentence at >= 0.80
+ * similarity, which is a template test: every promotion from the one decide
+ * prompt shares an opening and a sentence shape, so 16 of 19 promotions on live
+ * leg `e4c2fe29` dropped as `repeat` and the deck served 3 bodies.
+ *
+ * A repeat now needs evidence that the two bodies are the SAME moment or the
+ * SAME copy: overlapping windows, one shared clock token with near-identical
+ * text, or a near-identical body. Two cards on different instants serve, and the
+ * prompt-first avoidance (`avoidOpenings` / `avoidSentences`) still asks the
+ * writer not to reuse a shape — so the guard is a backstop, not a gate on
+ * legitimate coverage.
+ */
+export function summaryRepeatKey(
+  body: string,
+  evidence: SummaryEvidence,
+  served: readonly SummaryServedBody[]
+): SummaryRepeatVerdict {
+  const opening = summaryOpeningRun(body);
+  const windowTs = evidence.windowTs ?? null;
+  const windowDurationS = evidence.windowDurationS ?? null;
+  const sentences = summarySentencesOf(body);
+  let best: SummaryServedBody | null = null;
+  let bodySimilarity = 0;
+  let overlapS: number | null = null;
+  let sameClock = false;
+  let sentence: SummaryRepeatVerdict["sentence"] = null;
+  for (const other of served) {
+    const similarity = sentenceSimilarity(body, other.body);
+    if (best === null || similarity > bodySimilarity) {
+      best = other;
+      bodySimilarity = similarity;
+      overlapS = windowTs !== null && other.windowTs !== null ? Math.abs(windowTs - other.windowTs) : null;
+      const token = attestedMatchClockToken(evidence) ?? clockTokensOf(body)[0] ?? null;
+      sameClock = token !== null && other.clockToken !== null && token === other.clockToken;
+    }
+    for (const a of sentences) {
+      for (const b of summarySentencesOf(other.body)) {
+        const similarity = sentenceSimilarity(a, b);
+        if (!sentence || similarity > sentence.similarity) sentence = { a, b, similarity };
+      }
+    }
+  }
+  const openingRepeat = opening !== null && served.some((s) => s.opening === opening);
+  const sameWindow =
+    overlapS !== null && overlapS < Math.max(best?.windowDurationS ?? windowDurationS ?? 15, 1);
+  // A KNOWN instant that differs is positive evidence of a DIFFERENT promotion:
+  // two non-overlapping windows, or two different attested match clocks, are two
+  // moments even when the copy behind them reads alike. That is the measured
+  // rev-8 shape — one prompt template with only the row's own digit changed — so
+  // text similarity alone must not drop it; the prompt-first avoidance is what
+  // keeps a deck from reading alike, not a refusal.
+  const ownToken = attestedMatchClockToken(evidence) ?? clockTokensOf(body)[0] ?? null;
+  const windowsDiffer = overlapS !== null && !sameWindow;
+  const clocksDiffer = ownToken !== null && best?.clockToken !== null && best?.clockToken !== undefined && ownToken !== best.clockToken;
+  // An OVERLAPPING window outranks a differing clock token: two bodies anchored on
+  // the same window are one moment even when each prints a different stamp.
+  const distinguishable = !sameWindow && (windowsDiffer || clocksDiffer);
+  // Order matters: an overlapping window and a SHARED clock token are each
+  // positive evidence of the same moment, so they outrank a differing instant
+  // (two trigger windows can straddle one match-clock reading). Only when no
+  // instant evidence names the moment does the copy itself decide.
+  const key: SummaryRepeatKey | null = sameWindow
+    ? "same-window"
+    : sameClock && bodySimilarity >= SUMMARY_REPEAT_CLOCK_BODY_THRESHOLD
+      ? "same-clock"
+      : distinguishable
+        ? null
+        : bodySimilarity >= SUMMARY_REPEAT_BODY_THRESHOLD
+          ? "near-identical-body"
+          : openingRepeat
+            ? "indistinguishable-opening"
+            : null;
+  return {
+    key,
+    against: best?.highlightId ?? null,
+    bodySimilarity,
+    windowOverlapS: overlapS,
+    sameClock,
+    openingRepeat,
+    sentence,
+  };
 }
 
 export function newSummaryJobState(): SummaryJobState {
-  return { servedOpenings: new Set<string>(), servedSentences: [] };
+  return { servedOpenings: new Set<string>(), servedSentences: [], servedBodies: [] };
 }
 
 export interface SummaryLaneConfig {
@@ -317,48 +451,46 @@ export async function runSummaryForRow(
       }
       break;
     }
-    // AC8: a repeated opening is regenerated once (prompt asks for a different
-    // one); a second repeat drops the body rather than serving two identical
-    // openings in one job.
+    // ADAAAA-8969 (increment 2, defect 3): ONE repeat key, scoped to the same
+    // promotion. The previous two tests were job-wide TEMPLATE tests — opening-run
+    // equality and any sentence at >= 0.80 similarity — and on live leg
+    // `e4c2fe29` they dropped 16 of 19 promotions as `repeat`, so a 10-card deck
+    // could not be filled (3 servable bodies). A body now drops only when it is
+    // the same MOMENT (overlapping window, or one shared clock token with
+    // near-identical text) or the same COPY (near-identical body); a shared
+    // opening or a shared sentence on a different instant is a template and
+    // serves. The prompt still asks the writer to avoid the job's openings and
+    // sentences (`avoidOpenings` / `avoidSentences`), so the guard is a backstop.
     const opening = summaryOpeningRun(decision.summary);
-    if (opening && servedOpenings?.has(opening)) {
-      if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
-        log(
-          `[summary:${descriptor.jobId}] repeat-opening highlight=${descriptor.highlightId} opening=${JSON.stringify(opening)} — regenerating once`
-        );
-        continue;
-      }
-      lastGate = decision;
-      lastReason = "repeat";
-      log(
-        `[summary:${descriptor.jobId}] repeat-opening highlight=${descriptor.highlightId} opening=${JSON.stringify(opening)} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
-      );
-      break;
-    }
-    // ADAAAA-8914 (AC14.3): a SENTENCE this job already served on another card is
-    // the same defect one level down — the rev-7 live bodies all carried "This
-    // pivotal moment occurs at the … mark of the match" at 0.965-0.982 similarity
-    // while the first-four-words bar passed. Regenerate once with the offending
-    // sentence named, then drop `repeat`: two cards may not recite each other.
-    const sentenceRepeats = state ? repeatedSentences(decision.summary, state.servedSentences) : [];
-    if (sentenceRepeats.length > 0) {
-      const closest = sentenceRepeats.reduce((a, b) => (b.similarity > a.similarity ? b : a));
+    const repeat = state ? summaryRepeatKey(decision.summary, evidence, state.servedBodies) : null;
+    if (repeat && repeat.key !== null) {
+      const inputs =
+        `key=${repeat.key} against=${JSON.stringify(repeat.against)} ` +
+        `bodySimilarity=${repeat.bodySimilarity.toFixed(3)} windowOverlapS=${repeat.windowOverlapS ?? "n/a"} ` +
+        `sameClock=${JSON.stringify(repeat.sameClock)} openingRepeat=${JSON.stringify(repeat.openingRepeat)} ` +
+        `closestSentence=${repeat.sentence ? `${repeat.sentence.similarity.toFixed(3)} ${JSON.stringify(repeat.sentence.a.slice(0, 120))}` : "none"}`;
       if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
         retry = { words: decision.words, sentences: decision.sentences, violations: ["repeat-sentence"] };
-        log(
-          `[summary:${descriptor.jobId}] repeat-sentence highlight=${descriptor.highlightId} similarity=${closest.similarity.toFixed(3)} sentence=${JSON.stringify(closest.a.slice(0, 120))} — regenerating once`
-        );
+        log(`[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — regenerating once`);
         continue;
       }
       lastGate = decision;
       lastReason = "repeat";
       log(
-        `[summary:${descriptor.jobId}] repeat-sentence highlight=${descriptor.highlightId} similarity=${closest.similarity.toFixed(3)} sentence=${JSON.stringify(closest.a.slice(0, 120))} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+        `[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
       );
       break;
     }
     servedOpenings?.add(opening);
     for (const sentence of summarySentencesOf(decision.summary)) state?.servedSentences.push(sentence);
+    state?.servedBodies.push({
+      highlightId: descriptor.highlightId,
+      windowTs: evidence.windowTs ?? null,
+      windowDurationS: evidence.windowDurationS ?? null,
+      clockToken: attestedMatchClockToken(evidence) ?? clockTokensOf(decision.summary)[0] ?? null,
+      body: decision.summary,
+      opening,
+    });
     const latencyMs = Math.max(0, Math.round(now() - started));
     await store.patchHighlightSummary(descriptor.highlightId, {
       summary: decision.summary,

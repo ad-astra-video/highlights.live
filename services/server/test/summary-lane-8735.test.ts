@@ -126,18 +126,26 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
     expect(f.seen[2].prompt).toContain("'northbridge shoot on the'");
   });
 
-  it("serves a regeneration that lands on a different opening", async () => {
+  it("keeps one card per instant: a differently-worded body on the SAME window drops", async () => {
+    // ADAAAA-8969 (increment 2, defect 3): the scoped key reads the INSTANT, so a
+    // different window serves whatever the opening run is. The same pair of bodies
+    // on one window is still one moment (the drop test above).
     const { store, patches } = stubStore();
     const f = stubFetch([ok(CLOCK_A), ok(CLOCK_B), ok(DISTINCT)]);
     const run = cfg({ fetchImpl: f.fn });
     const state = newSummaryJobState();
-    await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: teamContext() }, state);
-    const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: teamContext() }, state);
+    await runSummaryForRow(store, run, { jobId: "j1", highlightId: "be041aaf", evidence: teamContext() }, state);
+    const second = await runSummaryForRow(
+      store,
+      run,
+      { jobId: "j1", highlightId: "8b444000", evidence: teamContext({ windowTs: 40, windowDurationS: 8 }) },
+      state
+    );
     expect(second.outcome).toBe("stored");
-    expect(second.calls).toBe(2);
-    expect(patches[1].patch.summary).toBe(DISTINCT);
+    expect(second.calls).toBe(1);
+    expect(patches[1].patch.summary).toBe(CLOCK_B);
     expect(patches[1].patch.summaryGate).toBe("accepted");
-    expect([...state.servedOpenings].sort()).toEqual(["a low drive from", "northbridge shoot on the"]);
+    expect([...state.servedOpenings].sort()).toEqual(["northbridge shoot on the"]);
   });
 });
 

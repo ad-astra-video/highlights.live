@@ -481,8 +481,22 @@ export function gatePostTitleDetail(
    *  gate token names WHY (`label:<bars>`). Absent => today's refusal. */
   opts?: { label?: string | null }
 ): PostTitleGateDecision {
+  const label = (opts?.label ?? "").trim();
   const direct = cleanPostTitle(raw);
-  if (!direct) return { title: null, gate: "absent", violations: ["empty"] };
+  // ADAAAA-8969 (increment 2, defect 4): a candidate the model never emitted is
+  // NOT a row that must serve no title. The measured live leg stored
+  // `postTitle: null` 19/19 with `postTitleGate: "absent"` 19/19 while the read
+  // projection served the deterministic `LABEL · m:ss` for every one of them, so
+  // the row under-reported a title the card already had. When the caller owns
+  // the row's verdict and supplies its label, an empty candidate degrades to the
+  // same non-asserting label the claim bars degrade to, and the token names the
+  // cause (`label:empty`) instead of the unattributable `absent`. With no label
+  // supplied the old `absent` answer stands, so a caller without a verdict is
+  // unchanged.
+  if (!direct) {
+    if (label) return { title: label, gate: "label:empty", violations: ["empty"] };
+    return { title: null, gate: "absent", violations: ["empty"] };
+  }
   const trimmed = trimPostTitleShape(raw);
   const candidates: { title: string; trimmed: boolean }[] =
     trimmed && trimmed !== direct
@@ -507,9 +521,9 @@ export function gatePostTitleDetail(
     }
     for (const violation of violations) if (!refused.includes(violation)) refused.push(violation);
   }
-  const label = (opts?.label ?? "").trim();
+  const labelReasons = refused.join(",");
   if (label && refused.every((v) => LABEL_DEGRADABLE_VIOLATIONS.includes(v))) {
-    return { title: label, gate: `label:${refused.join(",")}`, violations: refused };
+    return { title: label, gate: `label:${labelReasons}`, violations: refused };
   }
   return { title: null, gate: `refused:${refused.join(",")}`, violations: refused };
 }
