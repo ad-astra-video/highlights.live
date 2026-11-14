@@ -129,9 +129,16 @@ describe("write seam — storedSurfaceFor gates the post title", () => {
     }
   });
 
-  it("stores nothing when the model produced no title (legacy / VOD rail)", () => {
-    expect(storedSurfaceFor(decision(), ctx("big_play")).postTitle).toBeUndefined();
-    expect(storedSurfaceFor(decision({ postTitle: "   " }), ctx("big_play")).postTitle).toBeUndefined();
+  it("stores the row's own non-asserting label when the model produced no title", () => {
+    // ADAAAA-8969 (increment 2, defect 4): an empty candidate used to store
+    // nothing and record `absent`, while the read projection served
+    // `BIG PLAY · m:ss` for the same row. The seam now stores the label the
+    // projection serves, so the row and the card agree.
+    for (const empty of [undefined, "   "]) {
+      const surface = storedSurfaceFor(decision({ postTitle: empty }), ctx("big_play"));
+      expect(surface.postTitle).toBe("BIG PLAY");
+      expect(surface.postTitleGate).toBe("label:empty");
+    }
   });
 });
 

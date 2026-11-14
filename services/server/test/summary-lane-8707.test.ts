@@ -139,19 +139,44 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
     expect(f.seen[2].prompt).toContain("'the move drives forward'");
   });
 
-  it("serves a regeneration that lands on a different opening", async () => {
+  it("serves a shared opening on a DIFFERENT instant (defect 3 — a template is not a repeat)", async () => {
+    // ADAAAA-8969 (increment 2, defect 3): a shared opening run is a TEMPLATE, not
+    // a repeat. Two promotions on different windows serve, and the prompt asked
+    // the second one not to reuse the opening (prompt-first), so no retry is
+    // spent: the guard is a backstop, not a gate on legitimate coverage.
+    const { store, patches } = stubStore();
+    const state = newSummaryJobState();
+    const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B), ok(DISTINCT_OPENING)]);
+    const run = cfg({ fetchImpl: f.fn });
+    await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: evidence() }, state);
+    const second = await runSummaryForRow(
+      store,
+      run,
+      { jobId: "j1", highlightId: "h2", evidence: evidence({ windowTs: 40, windowDurationS: 8 }) },
+      state
+    );
+    expect(second.outcome).toBe("stored");
+    expect(second.calls).toBe(1);
+    expect(patches[1].patch.summary).toBe(SAME_OPENING_B);
+    expect(patches[1].patch.summaryGate).toBe("accepted");
+    // The prompt still asked it to avoid the served opening.
+    expect(f.seen[1].prompt).toContain("'the move drives forward'");
+    // Both openings are held by the job.
+    expect([...state.servedOpenings].sort()).toEqual(["a low shot from", "the move drives forward"]);
+  });
+
+  it("serves a regeneration that lands on a different opening (same instant)", async () => {
     const { store, patches } = stubStore();
     const state = newSummaryJobState();
     const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B), ok(DISTINCT_OPENING)]);
     const run = cfg({ fetchImpl: f.fn });
     await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: evidence() }, state);
     const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: evidence() }, state);
-    expect(second.outcome).toBe("stored");
+    // Same window => same moment: one regeneration is allowed, but the window is
+    // already carried, so even a differently-worded body is dropped as a repeat.
+    expect(second.outcome).toBe("dropped");
+    expect(second.reason).toBe("repeat");
     expect(second.calls).toBe(2);
-    expect(patches[1].patch.summary).toBe(DISTINCT_OPENING);
-    expect(patches[1].patch.summaryGate).toBe("accepted");
-    // Both openings now held by the job.
-    expect([...state.servedOpenings].sort()).toEqual(["a low shot from", "the move drives forward"]);
   });
 
   it("is JOB-scoped: a different job may reuse the same opening", async () => {
