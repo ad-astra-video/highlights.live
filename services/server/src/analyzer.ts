@@ -12586,9 +12586,12 @@ export async function analyzeJob(
             }
           : { ts: frame.timestamp, tracks: [], objects: [], ocr: [], signal: undefined };
         observeDecider?.record(frame.timestamp, frame.imageB64, seed, frame.seq);
-        // ADAAAA-7734: the live rail's frames are on disk at the same position as
-        // `frame.seq` (ffmpeg `frame_%06d.jpg`, position == seq), so stamp it and
-        // the decided window's analysis refs resolve to the exact JPEG.
+        // ADAAAA-7734: the live rail's frames are the ffmpeg `image2` series
+        // (`frame_%06d.jpg`), so the file for this rail seq is `seq + 1` — the
+        // seq is the rail's 0-based position, not ffmpeg's 1-based name
+        // (ADAAAA-9016). `liveFrameFileBase` owns that mapping; stamping the seq
+        // here keeps the decided window's analysis refs resolvable to the exact
+        // JPEG through it.
         liveObserver?.record(frame.timestamp, frame.imageB64, seed, frame.seq);
         // ADAAAA-7658: hand every fired audio-noise trigger to the live
         // observer so its window is anchored to the onset (one analysis per

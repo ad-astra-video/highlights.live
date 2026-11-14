@@ -39,9 +39,37 @@ export const LIVE_FRAME_REREAD_MAX_FRAMES = 4;
 export const LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN = 8;
 /** Per-call OCR timeout. A slow/hung perceive can never park the frame loop. */
 export const LIVE_FRAME_REREAD_OCR_TIMEOUT_MS = 5000;
-/** Frames are `frame_%06d.jpg` with the suffix == the rail's frame seq. */
-export function liveRereadFrameFileName(seq: number): string {
-  return `frame_${String(Math.max(0, Math.floor(seq))).padStart(6, "0")}.jpg`;
+/** Frames are `frame_%06d.jpg` and the file index is `seq + fileBase` — see
+ *  {@link liveFrameFileBase}. The base is NOT optional in practice: naming a file
+ *  by the row's seq alone is only right on the media/browser rail. */
+export function liveRereadFrameFileName(seq: number, fileBase: number = 1): string {
+  return `frame_${String(Math.max(0, Math.floor(seq) + Math.max(0, Math.floor(fileBase)))).padStart(6, "0")}.jpg`;
+}
+
+/**
+ * ADAAAA-9016: the frame-file base a rail uses for the row seq `0`.
+ *
+ * Two rails write the same `frame_%06d.jpg` name with DIFFERENT bases, so one
+ * loader cannot name a file from the seq alone:
+ *
+ * - The INGEST rail (`LiveIngest.frames`, `live.ts`) is the ffmpeg `image2`
+ *   muxer writing `frame_%06d.jpg`: its first file is `frame_000001.jpg`, while
+ *   the rail's own seq is 0-based (`frames()` yields `seq = 0` for the first file
+ *   sorted, label `ts = seq * sampleSec`). So the file index is `seq + 1`. The
+ *   `1`-based names are ffmpeg's, never the rail's, so a `0`-based read opens the
+ *   picture of `seq - 1` — one sample tick early (`1/3 s` at the live 3 fps cell;
+ *   measured on job `a0e60cc2`, `-0.167 s` uniform, ADAAAA-8982).
+ * - The MEDIA/BROWSER rail (`LiveFrameWriter`, `live-frames.ts`) names every file
+ *   by the frame's GLOBAL seq (0-based, dense) and decimates old ones, so the
+ *   numeric suffix IS the seq and the position in the dir is not. File index =
+ *   `seq`.
+ *
+ * `jobFrameList` (`api.ts`) derives the same split from `job.source` for the
+ * served `/jobs/:id/frames/:seq` route, so this keeps the loader and the served
+ * picture on the same frame.
+ */
+export function liveFrameFileBase(source: string | undefined): number {
+  return source === "browser" ? 0 : 1;
 }
 
 /** The job's persisted live-frame dir (`<dataDir>/live/<jobId>/frames`). */
@@ -291,12 +319,23 @@ export async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 }
 
 /** Default disk reader for a job's frame dir. Returns null when the file is gone
- * (decimation, a finished/cleaned job) — never throws into the rail. */
-export function diskFrameLoader(dataDir: string, jobId: string): (seq: number) => Promise<string | null> {
+ * (decimation, a finished/cleaned job) — never throws into the rail.
+ *
+ * `fileBase` is the rail's frame-file base ({@link liveFrameFileBase}): `1` for
+ * the ffmpeg ingest rail (`frame_000001.jpg` is seq 0), `0` for the media/browser
+ * rail (the suffix IS the seq). It defaults to the ingest convention because that
+ * is what a job without a `source` gets in `jobFrameList` (`api.ts`) — every
+ * caller here names its rail explicitly. */
+export function diskFrameLoader(
+  dataDir: string,
+  jobId: string,
+  opts: { fileBase?: number } = {}
+): (seq: number) => Promise<string | null> {
   const dir = liveRereadFrameDir(dataDir, jobId);
+  const fileBase = Number.isFinite(opts.fileBase as number) ? (opts.fileBase as number) : 1;
   return async (seq: number) => {
     try {
-      const buf = await readFile(path.join(dir, liveRereadFrameFileName(seq)));
+      const buf = await readFile(path.join(dir, liveRereadFrameFileName(seq, fileBase)));
       return buf.length ? buf.toString("base64") : null;
     } catch {
       return null;
