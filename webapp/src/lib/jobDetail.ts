@@ -134,12 +134,19 @@ export type ConfirmationMeasurement = "goal_line" | "ball_in_net" | "score" | "b
  *  leg had spent its 48-dives/stream-hour allowance, so the dive was withheld by
  *  cost control, not by a failure. It is a bare entry (not `dropped:density_cap`)
  *  because the card should not read as a transport/busy drop. `measured_attestation`
- *  stays for rows written before D4, which still derive it honestly. */
+ *  stays for rows written before D4, which still derive it honestly.
+ *
+ *  ADAAAA-8965 (D4-live): `not_promoted` / `merged_duplicate` /
+ *  `alternative_not_highlight` name the three ways a SERVED row carries no verdict
+ *  at all, so a card with no dive verdict states why instead of reading as silence. */
 export type ConfirmationSkipReason =
   | "measured_attestation"
   | "not_goal_shaped"
   | "dive_disabled"
   | "density_cap"
+  | "not_promoted"
+  | "merged_duplicate"
+  | "alternative_not_highlight"
   | `dropped:${string}`;
 export interface ConfirmationFlags {
   scoreboardChanged: boolean | null;
@@ -1586,6 +1593,9 @@ export function confirmationSkipText(
   if (reason === "not_goal_shaped") return "No deep dive: not goal-shaped";
   if (reason === "dive_disabled") return "No deep dive: dive lane disabled";
   if (reason === "density_cap") return "No deep dive: live dive-density cap reached (48 dives/stream-hour)";
+  if (reason === "not_promoted") return "No deep dive: this window was never promoted to a highlight";
+  if (reason === "merged_duplicate") return "No card of its own: merged into another moment's footage";
+  if (reason === "alternative_not_highlight") return "No card of its own: served as its moment's alternative";
   if (reason.startsWith("dropped:")) {
     const cause = reason.slice("dropped:".length);
     const causeText: Record<string, string> = {
