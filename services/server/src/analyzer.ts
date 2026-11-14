@@ -475,6 +475,49 @@ export function liveJobSport(cfg: { getMatchContext?: () => unknown }): string |
   return toDecideMatchContext(cfg.getMatchContext?.())?.sport;
 }
 
+/**
+ * ADAAAA-9038: the per-frame scorebug OCR reads one observe window hands the live
+ * match-context fold.
+ *
+ * The fold used to read ONLY the perceive session's frame seeds, and the durable
+ * record on six natural live browser jobs shows what that yielded: `frames: 1` per
+ * job, one OCR frame for a 55-minute share. A cache miss, a resumed share or a
+ * re-provisioned session therefore left the fold with a single observation of the
+ * scorebug, so a both-sides plate read could never be corroborated and every
+ * published name sat at 0.50 (scorebug only) against the 0.60 usable floor.
+ *
+ * The window payload already carries the same reads, one record per perceived
+ * frame (`observations`, the pre-image-cap set the decide timeline uses), so
+ * forwarding them adds NO OCR, NO detector run and NO GPU work — it is the
+ * evidence the rail already paid for. Bounded twice: per window here, run-wide in
+ * the writer.
+ */
+export const LIVE_MATCH_CONTEXT_WINDOW_OCR_FRAMES = 8;
+/** Longest single OCR line forwarded to the fold (the fold's own evidence
+ *  snippets are capped at 200 chars; this keeps the request bounded). */
+export const LIVE_MATCH_CONTEXT_MAX_OCR_LINE_CHARS = 400;
+
+export function observeWindowOcrFrames(payload: {
+  observations?: ReadonlyArray<{ ts: number; ocr?: readonly string[] }>;
+  frames?: ReadonlyArray<{ ts: number }>;
+}): Array<{ ts: number; lines: string[] }> {
+  const out: Array<{ ts: number; lines: string[] }> = [];
+  const seen = new Set<number>();
+  for (const rec of payload?.observations ?? []) {
+    const ts = Number(rec?.ts);
+    if (!Number.isFinite(ts) || seen.has(ts)) continue;
+    const lines = (rec?.ocr ?? [])
+      .filter((line): line is string => typeof line === "string" && line.trim().length > 0)
+      .map((line) => line.trim().slice(0, LIVE_MATCH_CONTEXT_MAX_OCR_LINE_CHARS));
+    if (!lines.length) continue;
+    seen.add(ts);
+    out.push({ ts, lines });
+  }
+  return out.length > LIVE_MATCH_CONTEXT_WINDOW_OCR_FRAMES
+    ? out.slice(-LIVE_MATCH_CONTEXT_WINDOW_OCR_FRAMES)
+    : out;
+}
+
 /** ADAAAA-7232: deterministic highlight-instant localization from the defined
  * per-frame/per-tap signal. Prefers the highest-RMS audio tap strictly AFTER
  * the trigger within `maxLookaheadS` (peak-audio post-trigger, Acc-2/Acc-3);
@@ -4180,7 +4223,17 @@ export interface AnalyzerConfig {
    * awaited here). Wired only by the two LIVE rails; the VOD pass keeps its own
    * file-based resolver. Absent => nothing changes.
    */
-  onObserveWindowEvidence?: (input: { centerTs: number; transcript: string }) => void;
+  onObserveWindowEvidence?: (input: {
+    centerTs: number;
+    transcript: string;
+    /** ADAAAA-9038: this window's own per-frame scorebug OCR reads, already paid
+     *  for by the perceive pass (the decide payload's `observations`). The live
+     *  match-context writer accumulates them and posts them to the fold as
+     *  `ocrFrames`, so a both-sides plate read can be corroborated across frames
+     *  instead of folding the single session seed the rail happened to keep. Pure
+     *  bookkeeping: no extra OCR, no extra inference. */
+    ocrFrames?: Array<{ ts: number; lines: string[] }>;
+  }) => void;
   /** ADAAAA-7111 (Increment D): persist the updated running video summary after
    * a cadence decide, so the job-detail endpoint + web UI surface it growing.
    * Best-effort: a throwing callback is caught + logged, never a pipeline
@@ -10048,9 +10101,15 @@ export async function observeDecideOnly(
   // decide path is unchanged. A throwing hook cannot take the decide down.
   if (cfg.onObserveWindowEvidence) {
     try {
+      const windowOcrFrames = observeWindowOcrFrames(payload);
       cfg.onObserveWindowEvidence({
         centerTs: payload.centerTs,
         transcript: prefetched?.transcript ?? "",
+        // ADAAAA-9038: hand the fold the frames this window already read, so the
+        // both-sides plate gate has more than one observation to corroborate. The
+        // key is omitted when the window carried no OCR, so a payload without
+        // observations keeps the shipped hook shape exactly.
+        ...(windowOcrFrames.length ? { ocrFrames: windowOcrFrames } : {}),
       });
     } catch (e: any) {
       console.error(`[match-context:live:${cfg.jobId}] window evidence hook failed:`, String(e?.message || e));

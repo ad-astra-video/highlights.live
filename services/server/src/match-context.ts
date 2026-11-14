@@ -1007,6 +1007,16 @@ export const LIVE_MATCH_CONTEXT_FOLDS_S: readonly number[] = [0, 60, 120, 240];
  *  $0 replay used, so the measured token cost holds). */
 export const LIVE_MATCH_CONTEXT_MAX_TRANSCRIPT_CHARS = 1200;
 
+/** ADAAAA-9038: bound on the per-frame OCR reads carried into one live fold.
+ *  Each observe window contributes at most 8 (`observeWindowOcrFrames`), and the
+ *  writer keeps the most recent ``LIVE_MATCH_CONTEXT_MAX_OCR_FRAMES`` across the
+ *  run: one fold needs a handful of agreeing plates, and a multi-hour share must
+ *  never grow the request. 60 frames is ~6 windows of reads at the shipped cadence
+ *  and costs nothing (the reads are already computed). */
+export const LIVE_MATCH_CONTEXT_MAX_OCR_FRAMES = 60;
+/** Bound on the line count forwarded inside one frame. */
+export const LIVE_MATCH_CONTEXT_MAX_OCR_LINES_PER_FRAME = 12;
+
 export interface LiveMatchContextWriterDeps {
   jobId: string;
   /** Perceive fold proxy (`postMatchContext`), same contract as the VOD
@@ -1023,6 +1033,8 @@ export interface LiveMatchContextWriterDeps {
   foldsAtS?: readonly number[];
   /** Test/QA seam: override the accumulated-transcript bound. */
   maxTranscriptChars?: number;
+  /** ADAAAA-9038: test/QA seam: override the accumulated per-frame OCR bound. */
+  maxOcrFrames?: number;
 }
 
 export interface LiveMatchContextWriter {
@@ -1032,7 +1044,13 @@ export interface LiveMatchContextWriter {
    * commentary and, when the clock crosses a fold checkpoint, queues ONE fold.
    * Never awaited on the decide path.
    */
-  noteWindow(input: { centerTs: number; transcript?: string }): void;
+  noteWindow(input: {
+    centerTs: number;
+    transcript?: string;
+    /** ADAAAA-9038: the window's per-frame OCR reads (see
+     *  `observeWindowOcrFrames`); accumulated across the run, bounded. */
+    ocrFrames?: ReadonlyArray<{ ts: number; lines: readonly string[] }>;
+  }): void;
   /**
    * Await every already-fired fold. Never starts one: a fold that has not fired
    * by the last window would post at a session that may already be closed.
@@ -1085,8 +1103,14 @@ export function createLiveMatchContextWriter(deps: LiveMatchContextWriterDeps): 
   const log = deps.log ?? ((msg: string) => console.log(msg));
   const folds = deps.foldsAtS ?? LIVE_MATCH_CONTEXT_FOLDS_S;
   const maxChars = deps.maxTranscriptChars ?? LIVE_MATCH_CONTEXT_MAX_TRANSCRIPT_CHARS;
+  const maxOcrFrames = deps.maxOcrFrames ?? LIVE_MATCH_CONTEXT_MAX_OCR_FRAMES;
   const lastFoldS = folds.length ? folds[folds.length - 1] : 0;
   let transcript = "";
+  // ADAAAA-9038: the run's accumulated per-frame scorebug OCR reads. The fold
+  // needs more than one observation of the plate to corroborate it, and the
+  // session's own seed cache is not a reliable supply (measured: 1 frame per live
+  // job). Kept newest-first bounded, deduped by content ts.
+  let ocrFrames: Array<{ ts: number; lines: string[] }> = [];
   const fired = new Set<number>();
   const pending: Promise<void>[] = [];
   let inflight = 0;
@@ -1122,6 +1146,9 @@ export function createLiveMatchContextWriter(deps: LiveMatchContextWriterDeps): 
       // Perceive fills scorebug OCR / kit samples / swatches from the live
       // session when these are omitted — no extra OCR, no kit sampling here.
       transcript: transcript || undefined,
+      // ADAAAA-9038: the frames the rail already read, so the fold can corroborate
+      // a both-sides plate across frames instead of folding one session seed.
+      ...(ocrFrames.length ? { ocrFrames: ocrFrames.map((f) => ({ ts: f.ts, lines: [...f.lines] })) } : {}),
       previous,
       progressPct,
     };
@@ -1213,10 +1240,26 @@ export function createLiveMatchContextWriter(deps: LiveMatchContextWriterDeps): 
   };
 
   return {
-    noteWindow({ centerTs, transcript: windowText }) {
+    noteWindow({ centerTs, transcript: windowText, ocrFrames: windowOcrFrames }) {
       const text = typeof windowText === "string" ? windowText.trim() : "";
       if (text) {
         transcript = (transcript ? `${transcript} ${text}` : text).slice(-maxChars);
+      }
+      if (Array.isArray(windowOcrFrames) && windowOcrFrames.length) {
+        for (const frame of windowOcrFrames) {
+          const ts = Number(frame?.ts);
+          if (!Number.isFinite(ts)) continue;
+          const raw = Array.isArray(frame?.lines) ? (frame.lines as readonly unknown[]) : [];
+          const lines: string[] = raw
+            .filter((line: unknown): line is string => typeof line === "string" && line.trim().length > 0)
+            .map((line) => line.trim())
+            .slice(0, LIVE_MATCH_CONTEXT_MAX_OCR_LINES_PER_FRAME);
+          if (!lines.length) continue;
+          const at = ocrFrames.findIndex((f) => f.ts === ts);
+          if (at >= 0) ocrFrames.splice(at, 1);
+          ocrFrames.push({ ts, lines });
+        }
+        if (ocrFrames.length > maxOcrFrames) ocrFrames = ocrFrames.slice(-maxOcrFrames);
       }
       const at = Number(centerTs);
       if (!Number.isFinite(at) || at < 0) return;

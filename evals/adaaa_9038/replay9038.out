@@ -1,0 +1,39 @@
+== pass 1: today's supply (the stored OCR frame text, 1 frame) ==
+8677476e stored_frames=1 replay_frames=1
+   served  : away=Barcelona@0.5
+   patched1: away=Barcelona@0.5 paired=0 MATCH
+   patched2: away=Barcelona@0.5 paired=[]
+a72ec96d stored_frames=1 replay_frames=1
+   served  : away=Barcelona@0.5
+   patched1: away=Barcelona@0.5 paired=0 MATCH
+   patched2: away=Barcelona@0.5 paired=[]
+3740585f stored_frames=1 replay_frames=1
+   served  : away=Barcelona@0.5
+   patched1: away=Barcelona@0.5 paired=0 MATCH
+   patched2: away=Barcelona@0.5 paired=[]
+27bd816f stored_frames=1 replay_frames=1
+   served  : away=Barcelona@0.5
+   patched1: away=Barcelona@0.5 home=Real Madrid@0.5 paired=0 DIFF
+   patched2: away=Barcelona@0.7 home=Real Madrid@0.7 paired=[('Real Madrid', 'Barcelona', 2)]
+9bed3bd7 stored_frames=1 replay_frames=1
+   served  : away=Barcelona@0.5
+   patched1: away=Barcelona@0.5 home=Real Madrid@0.5 paired=0 DIFF
+   patched2: away=Barcelona@0.7 home=Real Madrid@0.7 paired=[('Real Madrid', 'Barcelona', 2)]
+771f42de stored_frames=1 replay_frames=1
+   served  : away=Chelsea@0.5 home=Liverpool@0.5
+   patched1: away=Chelsea@0.5 home=Liverpool@0.5 paired=0 MATCH
+   patched2: away=Chelsea@0.5 home=Liverpool@0.5 paired=[]
+
+== pass 2: frame-count sensitivity of the rule (same stored text x2) ==
+8677476e frames=2 usable=none paired=[]
+a72ec96d frames=2 usable=none paired=[]
+3740585f frames=2 usable=none paired=[]
+27bd816f frames=2 usable=['away=Barcelona@0.7', 'home=Real Madrid@0.7'] paired=[('Real Madrid', 'Barcelona', 2)]
+9bed3bd7 frames=2 usable=['away=Barcelona@0.7', 'home=Real Madrid@0.7'] paired=[('Real Madrid', 'Barcelona', 2)]
+771f42de frames=2 usable=none paired=[]
+
+== pass 3: real multi-frame supply (771f42de decide windows) ==
+771f42de decide windows=859 observations/window min=1 median=17 max=21; 830/849 distinct OCR strings repeat
+771f42de real_frames=11849 of 11849 reads; 86 carry a club; patched: away=Japan@0.5 paired=0
+
+wrote /tmp/paperclip-run-adaaaa-9038-d18401f8-e89-z2BIEB/replay9038.json

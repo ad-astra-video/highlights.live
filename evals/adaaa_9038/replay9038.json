@@ -1,0 +1,230 @@
+{
+  "ticket": "ADAAAA-9038",
+  "spend_usd": 0,
+  "jobs": {
+    "8677476e-f9f4-45d9-ba6f-b55528203c07": {
+      "stored_frames": 1,
+      "served": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_1frame": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_2frames": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "paired_2frames": [],
+      "served_ambiguous": true,
+      "ambiguity_note": "replay carries no kit samples/swatches, so `ambiguous` is not comparable"
+    },
+    "a72ec96d-464b-4358-b81c-350e2de33ce6": {
+      "stored_frames": 1,
+      "served": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_1frame": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_2frames": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "paired_2frames": [],
+      "served_ambiguous": true,
+      "ambiguity_note": "replay carries no kit samples/swatches, so `ambiguous` is not comparable"
+    },
+    "3740585f-8f62-41ec-b937-b582a9bdde8a": {
+      "stored_frames": 1,
+      "served": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_1frame": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_2frames": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "paired_2frames": [],
+      "served_ambiguous": true,
+      "ambiguity_note": "replay carries no kit samples/swatches, so `ambiguous` is not comparable"
+    },
+    "27bd816f-712f-40e0-a270-ccc121cdc854": {
+      "stored_frames": 1,
+      "served": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_1frame": {
+        "home": {
+          "name": "Real Madrid",
+          "confidence": 0.5
+        },
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_2frames": {
+        "home": {
+          "name": "Real Madrid",
+          "confidence": 0.7
+        },
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.7
+        }
+      },
+      "paired_2frames": [
+        {
+          "home": "Real Madrid",
+          "away": "Barcelona",
+          "frames": 2,
+          "confidence": 0.7,
+          "line": "PABLO IAGO ALVAREZ 7\"LAMINE YAMAL NASRAAUI'SREAL MADRID1-1FC BARCELONAFtSoccerFly",
+          "lifted": true
+        }
+      ],
+      "served_ambiguous": true,
+      "ambiguity_note": "replay carries no kit samples/swatches, so `ambiguous` is not comparable"
+    },
+    "9bed3bd7-0741-4e6a-bb32-63955f158096": {
+      "stored_frames": 1,
+      "served": {
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_1frame": {
+        "home": {
+          "name": "Real Madrid",
+          "confidence": 0.5
+        },
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.5
+        }
+      },
+      "patched_2frames": {
+        "home": {
+          "name": "Real Madrid",
+          "confidence": 0.7
+        },
+        "away": {
+          "name": "Barcelona",
+          "confidence": 0.7
+        }
+      },
+      "paired_2frames": [
+        {
+          "home": "Real Madrid",
+          "away": "Barcelona",
+          "frames": 2,
+          "confidence": 0.7,
+          "line": "PABLO IAGO ALVAREZ 7\"LAMINE YAMAL NASRAAUI'SREAL MADRID1-1FC BARCELONAFtSoccerFly",
+          "lifted": true
+        }
+      ],
+      "served_ambiguous": true,
+      "ambiguity_note": "replay carries no kit samples/swatches, so `ambiguous` is not comparable"
+    },
+    "771f42de-82eb-4357-8e0b-2121865f4608": {
+      "stored_frames": 1,
+      "served": {
+        "home": {
+          "name": "Liverpool",
+          "confidence": 0.5
+        },
+        "away": {
+          "name": "Chelsea",
+          "confidence": 0.5
+        }
+      },
+      "patched_1frame": {
+        "home": {
+          "name": "Liverpool",
+          "confidence": 0.5
+        },
+        "away": {
+          "name": "Chelsea",
+          "confidence": 0.5
+        }
+      },
+      "patched_2frames": {
+        "home": {
+          "name": "Liverpool",
+          "confidence": 0.5
+        },
+        "away": {
+          "name": "Chelsea",
+          "confidence": 0.5
+        }
+      },
+      "paired_2frames": [],
+      "served_ambiguous": true,
+      "ambiguity_note": "replay carries no kit samples/swatches, so `ambiguous` is not comparable"
+    }
+  },
+  "supply": {
+    "windows": 859,
+    "observations_per_window": {
+      "min": 1,
+      "median": 17,
+      "max": 21
+    },
+    "distinct_ocr_strings": 849,
+    "strings_repeated_ge_2": 830
+  },
+  "usable_after_two_frames": [
+    "27bd816f",
+    "9bed3bd7"
+  ],
+  "jobs_3": {},
+  "real_corpus": {
+    "771f42de": {
+      "frames": 11849,
+      "reads": 11849,
+      "club_reading_frames": 86,
+      "teams": {
+        "away": {
+          "name": "Japan",
+          "confidence": 0.5
+        }
+      },
+      "paired": 0,
+      "note": "prompt-rendered OCR is truncated at ~40 chars, so this corpus is lossy vs the session's own reads"
+    }
+  },
+  "policy": {
+    "USABLE_CONFIDENCE": 0.6,
+    "PAIRED_PLATE_CONFIDENCE": 0.7
+  }
+}
