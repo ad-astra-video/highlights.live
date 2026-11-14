@@ -455,6 +455,9 @@ describe("LiveStage no-preview still (ADAAAA-8949)", () => {
     expect(html).toContain('data-live-stage-frame-still-state="waiting"');
     expect(html).toContain('data-live-stage-frame-still-waiting="true"');
     expect(html).toContain("No analyzed frame yet");
+    // ADAAAA-8986: a waiting stage has no frame to age -> no markers.
+    expect(html).not.toContain("data-live-stage-frame-still-age");
+    expect(html).not.toContain("data-live-stage-frame-still-stale");
   });
 
   it("ADAAAA-8970 matrix: frame 401/403 — 0 img, 0 box, the named refusal label", () => {
@@ -476,6 +479,9 @@ describe("LiveStage no-preview still (ADAAAA-8949)", () => {
     expect(html).toContain('data-live-stage-frame-still-state="refused"');
     expect(html).toContain('data-live-stage-frame-still-refusal="auth"');
     expect(html).toContain("token was refused");
+    // ADAAAA-8986: a refused read shows no picture -> no `-age`/`-stale`.
+    expect(html).not.toContain("data-live-stage-frame-still-age");
+    expect(html).not.toContain("data-live-stage-frame-still-stale");
     expect(html).not.toContain("No analyzed frame yet");
   });
 
