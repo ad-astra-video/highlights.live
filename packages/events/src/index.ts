@@ -2686,11 +2686,28 @@ export type HighlightAlternative = z.infer<typeof HighlightAlternativeSchema>;
  * is never skipped for measuring its own goal. Rows written before D4 (and a
  * replay of their stored state) still derive it, because the property is true of
  * those rows. The new `density_cap` entry names the ONE way D4 itself can withhold
- * a dive: the Ruling-B 48-dives/stream-hour guard on the live rail. It is a bare
- * enum entry (not `dropped:density_cap`) because it is an admission bound the
- * contract owns, not a fail-closed dive drop. */
+ * a dive: the Ruling-B 48-dives/stream-hour guard on the live rail. It is
+ * a bare entry (not `dropped:density_cap`) because it is an admission bound the
+ * contract owns, not a fail-closed dive drop.
+ *
+ *  ADAAAA-8965 (D4-live, increment 1): the three ways a SERVED row can carry no
+ *  verdict at all now have names instead of silence. `not_promoted` is a row the
+ *  accept gate never promoted (so no card exists to dive for), `merged_duplicate`
+ *  is a row deduped into another moment's footage, and
+ *  `alternative_not_highlight` is a row served as an alternative of its moment
+ *  rather than as its own highlight card. The AC4.1 bar (no served card with
+ *  neither a `confirmAttestation` nor a skip reason) cannot be measured while
+ *  these three states are indistinguishable from "we forgot". */
 export const ConfirmationSkipReasonSchema = z.union([
-  z.enum(["measured_attestation", "not_goal_shaped", "dive_disabled", "density_cap"]),
+  z.enum([
+    "measured_attestation",
+    "not_goal_shaped",
+    "dive_disabled",
+    "density_cap",
+    "not_promoted",
+    "merged_duplicate",
+    "alternative_not_highlight",
+  ]),
   z.string().regex(/^dropped:[a-z0-9_]+$/),
 ]);
 export type ConfirmationSkipReason = z.infer<typeof ConfirmationSkipReasonSchema>;
@@ -3344,8 +3361,18 @@ export const JobDetailSchema = z.object({
     })
     .optional(),
   /** ADAAAA-7621: overlapping clips merged out of `highlights`, each carrying
-   * `duplicateOf` = the id of the moment that owns the footage. */
-  duplicateHighlights: z.array(HighlightRecordSchema).default([]),
+   * `duplicateOf` = the id of the moment that owns the footage.
+   * ADAAAA-8965 (D4-live): a merged duplicate is a SERVED row that carries no
+   * verdict by construction (it was deduped into another moment's footage), so it
+   * states that reason on the card instead of shipping no confirmation block —
+   * otherwise an AC4.1 census cannot tell it apart from a lost verdict. */
+  duplicateHighlights: z
+    .array(
+      HighlightRecordSchema.extend({
+        confirmation: HighlightConfirmationSchema.optional(),
+      })
+    )
+    .default([]),
   traces: z.array(JobTraceSchema).default([]),
   sections: z.array(FrameSectionSchema).default([]),
   /** Capacity budget the job ran under (3 live / 8 VOD) so the UI can show headroom. */
