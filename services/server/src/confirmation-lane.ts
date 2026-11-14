@@ -509,6 +509,10 @@ export function confirmationForHighlightRow(
       /** ADAAAA-8894 (D4): a dive ran on a row that already MEASURED its goal, so
        *  the measurement keeps the lane. */
       laneKeptByMeasurement?: boolean | null;
+      /** ADAAAA-8820 (D2): the content instant the dive named — carried on stored
+       *  rows (both writers stamp it) and read by the clip re-anchor, never by the
+       *  lane derivation. Declared so a row is typeable as what it stores. */
+      momentTs?: number | null;
     } | null;
   },
   candidate?: ConfirmationInput,
