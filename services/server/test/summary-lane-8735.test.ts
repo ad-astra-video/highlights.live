@@ -138,14 +138,24 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
     const second = await runSummaryForRow(
       store,
       run,
-      { jobId: "j1", highlightId: "8b444000", evidence: teamContext({ windowTs: 40, windowDurationS: 8 }) },
+      {
+        jobId: "j1",
+        highlightId: "8b444000",
+        // A different window AND this row's own attested clock (`3:57`), so the
+        // gate credits the body's clock and the scoped key sees a different moment.
+        evidence: teamContext({
+          windowTs: 240,
+          windowDurationS: 8,
+          matchClock: { token: "3:57", seconds: 237, period: null, legible: true },
+        }),
+      },
       state
     );
     expect(second.outcome).toBe("stored");
     expect(second.calls).toBe(1);
-    expect(patches[1].patch.summary).toBe(CLOCK_B);
+    expect(String(patches[1].patch.summary)).toContain("Northbridge shoot on the right");
     expect(patches[1].patch.summaryGate).toBe("accepted");
-    expect([...state.servedOpenings].sort()).toEqual(["northbridge shoot on the"]);
+    expect([...state.servedOpenings]).toEqual(["northbridge shoot on the"]);
   });
 });
 

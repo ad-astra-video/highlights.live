@@ -169,6 +169,9 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     expect(result.reason).toBe("repeat");
     expect(result.calls).toBe(2);
     expect(f.bodies[1]).toContain("Do not open with any of these already-served runs");
-    expect(f.bodies[1]).not.toContain("RETRY:");
+    // The repeat retry names the repeated sentence, and carries no DEPTH directive
+    // (nothing measured a shortfall on this row).
+    expect(f.bodies[1]).toContain("repeated a sentence another card in this job already carries");
+    expect(f.bodies[1]).not.toContain("fell under the depth floor");
   });
 });
