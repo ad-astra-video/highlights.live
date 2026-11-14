@@ -40,7 +40,7 @@ import type { SignalGateOptions } from "./observe-loop";
 import { audioTriggerFromCandidate, audioTriggerFromWhistle } from "./audio-trigger";
 import { MediaRailObserver } from "./media-rail";
 import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
-import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
+import { diskFrameLoader, liveFrameFileBase, perceiveScoreboardOcr } from "./live-frame-reread";
 import {
   declaredScoreboardSurface,
   nextScoreboardSurface,
@@ -3232,7 +3232,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         (store.observationsForJob(jobId) ?? [])
           .filter((o) => Number.isFinite(o.timestamp) && o.timestamp >= lo && o.timestamp <= hi)
           .map((o) => ({ seq: o.seq, ts: o.timestamp })),
-      loadFrame: diskFrameLoader(cfg.dataDir, jobId),
+      // ADAAAA-9016: name the picture from the RAIL's own convention. The dive's
+      // seqs are the row labels (`seq * sampleSec`) and the two rails write their
+      // file names with different bases — the ffmpeg ingest rail starts at
+      // `frame_000001.jpg` (base 1), the media/browser rail names files by the
+      // global seq (base 0). Reading a 1-based dir 0-based opened the `seq - 1`
+      // picture, i.e. one sample tick early on every dive/re-read frame.
+      loadFrame: diskFrameLoader(cfg.dataDir, jobId, {
+        fileBase: liveFrameFileBase(store.getJob(jobId)?.source),
+      }),
       // ADAAAA-8506 (AC2/AC6): a dive must leave the same self-describing
       // Stage-2 `decide_audit` row the inline `confirmReconcile` path writes.
       // The async lane called `client.confirm` bare, so a fired dive was
@@ -8283,7 +8291,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
    *  POSITION is no longer the seq for those jobs — the routes must parse the
    *  suffix or tile N would render frame M after decimation. */
   function jobFrameSeqIsAbsolute(jobId: string): boolean {
-    return store.getJob(jobId)?.source === "browser";
+    // ADAAAA-9016: this is the same rail split the frame LOADER uses
+    // (`liveFrameFileBase`): the browser rail names files by seq, every ffmpeg
+    // rail is a contiguous series from `frame_000001.jpg`. One helper, so the
+    // served picture and the loaded picture cannot drift apart.
+    return liveFrameFileBase(store.getJob(jobId)?.source) === 0;
   }
 
   /** ADAAAA-7734: every servable frame of a job as `{seq, file}`, ordered by seq.
@@ -9220,7 +9232,11 @@ export function buildLiveFrameReread(deps: {
         (deps.store.observationsForJob(deps.jobId) ?? [])
           .filter((o) => Number.isFinite(o.timestamp) && o.timestamp >= lo && o.timestamp <= hi)
           .map((o) => ({ seq: o.seq, ts: o.timestamp })),
-      loadFrame: diskFrameLoader(deps.cfg.dataDir, deps.jobId),
+      // ADAAAA-9016: same rail-aware base as the dive loader — this is the
+      // production re-read wiring, and the ingest rail's files are 1-based.
+      loadFrame: diskFrameLoader(deps.cfg.dataDir, deps.jobId, {
+        fileBase: liveFrameFileBase(deps.store.getJob?.(deps.jobId)?.source as string | undefined),
+      }),
       ocrFrame: perceiveScoreboardOcr(deps.cfg.perceiveUrl, deps.sessionId),
     },
   };
