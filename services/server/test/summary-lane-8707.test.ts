@@ -60,6 +60,10 @@ const SAME_OPENING_B =
  *  "the midfielder" subject, and the repeat guard compares served openings. */
 const NEUTRALISED_A =
   "The move drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge keeps possession as the move builds on the left.";
+/** The SERVED form of `SAME_OPENING_B`: same AC10 neutralisation of the
+ *  unattested "the midfielder" subject. */
+const NEUTRALISED_B =
+  "The move drives forward for Northbridge at 0:12 and the move opens up on the left. Northbridge keeps possession as the move opens up.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT_OPENING =
   "A low shot from the edge of the box is blocked by Northbridge at 0:12. Northbridge recycles the ball and switches play to the left.";
@@ -157,12 +161,15 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
     );
     expect(second.outcome).toBe("stored");
     expect(second.calls).toBe(1);
-    expect(patches[1].patch.summary).toBe(SAME_OPENING_B);
-    expect(patches[1].patch.summaryGate).toBe("accepted");
+    // The served form is the AC10-neutralised body (the unattested "the
+    // midfielder" subject is dropped before storage).
+    expect(patches[1].patch.summary).toBe(NEUTRALISED_B);
+    // AC10 neutralised the unattested subject, and the gate names that.
+    expect(patches[1].patch.summaryGate).toBe("neutralised");
     // The prompt still asked it to avoid the served opening.
     expect(f.seen[1].prompt).toContain("'the move drives forward'");
-    // Both openings are held by the job.
-    expect([...state.servedOpenings].sort()).toEqual(["a low shot from", "the move drives forward"]);
+    // The job holds the one opening both bodies used.
+    expect([...state.servedOpenings]).toEqual(["the move drives forward"]);
   });
 
   it("serves a regeneration that lands on a different opening (same instant)", async () => {
