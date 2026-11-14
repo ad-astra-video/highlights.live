@@ -530,6 +530,27 @@ export const DiveAdmissionSnapshotSchema = z.object({
   divesBilled: z.number().int().min(0),
   /** `decideFee x divesBilled` — cost is OBSERVED per stream, not capped. */
   diveCostUsd: z.number().min(0),
+  /** ADAAAA-8894 (D4, Ruling B): the LIVE density guard admission applied.
+   *
+   * The ceiling is $0.16/stream-hour, and `48 x $0.0033324 = $0.15996` is the
+   * largest whole dive count that stays inside it, so a leg may dispatch at most
+   * `floor(maxPerStreamHour x streamHours)` dives. Declared HERE because a zod
+   * object strips undeclared keys: without it the block would be computed and
+   * dropped on persist, and a graded leg could not answer "did the cap bind?".
+   * Absent on every VOD row (no stream-hour denominator) and on rows written
+   * before D4. */
+  densityCap: z
+    .object({
+      /** `48` — the ruled dives/stream-hour cap (the ceiling divided by the fee). */
+      maxPerStreamHour: z.number().min(0),
+      /** The leg's own stream clock when admission last read it (content hours). */
+      streamHours: z.number().min(0),
+      /** `floor(maxPerStreamHour x streamHours)` — the dives this leg may start. */
+      allowance: z.number().int().min(0),
+      /** Due dives settled `density_cap` because the allowance was spent. */
+      suppressed: z.number().int().min(0),
+    })
+    .optional(),
 });
 export type DiveAdmissionSnapshot = z.infer<typeof DiveAdmissionSnapshotSchema>;
 
@@ -2354,6 +2375,16 @@ export const HighlightRecordSchema = z.object({
        *  graded. */
       momentTs: z.number().min(0).optional(),
       momentConfidence: z.number().min(0).max(1).optional(),
+      /** ADAAAA-8894 (D4): the PRECISION GUARD's disclosure. D4 dives a promoted
+       *  row even when it already carries a MEASURED attestation; on such a row the
+       *  dive may add the moment but may NOT remove or contradict the measurement,
+       *  and may NOT move the served lane off `measured`. This flag is stamped by
+       *  every arm that writes an attestation on a measured row, so the read side
+       *  (`confirmationForHighlightRow`) and the postable projection
+       *  (`hasRefutingDiveAttestation`) can keep the measured lane and the GOAL card
+       *  instead of demoting them to `dive_disagreed` / notable. Absent on every
+       *  row written before D4 and on a row that measured nothing. */
+      laneKeptByMeasurement: z.boolean().optional(),
     })
     .optional(),
   deferredAttestation: z
@@ -2641,9 +2672,18 @@ export type HighlightAlternative = z.infer<typeof HighlightAlternativeSchema>;
  *
  * `dropped:<cause>` uses the closed cause list the confirm lane already stores
  * (`budget` / `pool_busy` / `descriptor_overflow` / `timeout` /
- * `transport_failure` / `no_persisted_frames` / ...), never free text. */
+ * `transport_failure` / `no_persisted_frames` / ...), never free text.
+ *
+ * ADAAAA-8894 (D4): `measured_attestation` becomes a HISTORICAL reading — D4
+ * drops the measured-attestation skip from the trigger, so a fresh promoted row
+ * is never skipped for measuring its own goal. Rows written before D4 (and a
+ * replay of their stored state) still derive it, because the property is true of
+ * those rows. The new `density_cap` entry names the ONE way D4 itself can withhold
+ * a dive: the Ruling-B 48-dives/stream-hour guard on the live rail. It is a bare
+ * enum entry (not `dropped:density_cap`) because it is an admission bound the
+ * contract owns, not a fail-closed dive drop. */
 export const ConfirmationSkipReasonSchema = z.union([
-  z.enum(["measured_attestation", "not_goal_shaped", "dive_disabled"]),
+  z.enum(["measured_attestation", "not_goal_shaped", "dive_disabled", "density_cap"]),
   z.string().regex(/^dropped:[a-z0-9_]+$/),
 ]);
 export type ConfirmationSkipReason = z.infer<typeof ConfirmationSkipReasonSchema>;

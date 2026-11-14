@@ -99,7 +99,7 @@ describe("shouldRunConfirm", () => {
     expect(shouldRunConfirm({} as any, { eventType: "GOAL" }, acceptedGoal)).toBe(false);
     expect(shouldRunConfirm({ confirmEnabled: false } as any, { eventType: "GOAL" }, acceptedGoal)).toBe(false);
   });
-  it("fires only for un-attested scoring_play accepts (goal-ness from the DECISION, ADAAAA-7185)", () => {
+  it("fires for EVERY scoring_play accept, whatever it measured (D1 coverage + D4 ADAAAA-8894)", () => {
     const cfg = { confirmEnabled: true } as any;
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, acceptedGoal)).toBe(true);
     // Observe-path regression (ADAAAA-7185): the candidate carries the perceive
@@ -107,10 +107,15 @@ describe("shouldRunConfirm", () => {
     // verdict. The gate must fire anyway.
     expect(shouldRunConfirm(cfg, { eventType: "SPORTING_EVENT" }, acceptedGoal)).toBe(true);
     expect(shouldRunConfirm(cfg, { eventType: "ASSIST" }, acceptedGoal)).toBe(true);
-    // independently attested → excluded
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL", ballOutcome: "goal" }, acceptedGoal)).toBe(false);
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, acceptedGoal)).toBe(false);
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, acceptedGoal)).toBe(false);
+    // ADAAAA-8894 (D4): an ACCEPTED row dives whatever it MEASURED. The old
+    // measured-attestation skip ("the measured lane is its own corroboration")
+    // is dropped: it was the one class of promoted card that got no dive moment
+    // and no re-centered clip option. The measurement still decides the LANE —
+    // the D4 precision guard keeps `measured` on the row and forbids the dive
+    // from refuting it — but it no longer decides whether the dive runs.
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", ballOutcome: "goal" }, acceptedGoal)).toBe(true);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, acceptedGoal)).toBe(true);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, acceptedGoal)).toBe(true);
   });
   it("still fires for a contract-guard-rejected goal accept (ADAAAA-8120 recall path)", () => {
     // The decide-side contract guard rejects a goal-type scoring_play accepted
@@ -131,10 +136,11 @@ describe("shouldRunConfirm", () => {
     } as DecisionResult;
     expect(isGateRejectedBareGoal(guardRejected)).toBe(true);
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, guardRejected)).toBe(true);
-    // ... and it is excluded the moment a measured channel attests the goal.
+    // ADAAAA-8894 (D4): a measured channel no longer suppresses the rescue dive
+    // either — the skip set is "has no card", not "already measured".
     expect(
       shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, guardRejected)
-    ).toBe(false);
+    ).toBe(true);
   });
   it("does not fire on a NON-goal-shaped Stage-1 non-accept (outcome != scoring, eventType not goal-type)", () => {
     const cfg = { confirmEnabled: true } as any;
@@ -169,8 +175,10 @@ describe("shouldRunConfirm", () => {
       nearMiss: true,
     };
     expect(shouldRunConfirm(cfg, { eventType: "GOAL" }, nearMissHighlight)).toBe(true);
-    // ... and the measured-attestation cost bound still skips the dive.
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, nearMissHighlight)).toBe(false);
+    // ADAAAA-8894 (D4): the measured-attestation cost bound no longer skips the
+    // dive — a promoted near-miss that measured a goal crossing still gets its
+    // dive moment. Admission (not population) is what bounds the cost now.
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", goalCrossed: true }, nearMissHighlight)).toBe(true);
   });
 });
 
@@ -232,10 +240,10 @@ describe("shouldRunConfirm — ADAAAA-7357 delayed-corroboration population", ()
     // The observe bias-hint label must not matter — goalness lives on the verdict.
     expect(shouldRunConfirm(cfg, { eventType: "SPORTING_EVENT" }, gateRejectedGoal)).toBe(true);
   });
-  it("still excludes an attested gate-rejected goal", () => {
+  it("dives an attested gate-rejected goal too (D4 drops the measured skip)", () => {
     const cfg = { confirmEnabled: true } as any;
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, gateRejectedGoal)).toBe(false);
-    expect(shouldRunConfirm(cfg, { eventType: "GOAL", ballOutcome: "goal" }, gateRejectedGoal)).toBe(false);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", scoreBoardChanged: true }, gateRejectedGoal)).toBe(true);
+    expect(shouldRunConfirm(cfg, { eventType: "GOAL", ballOutcome: "goal" }, gateRejectedGoal)).toBe(true);
   });
   it("stays a strict no-op when the config flag is off (even for a gate-rejected goal)", () => {
     expect(shouldRunConfirm({ confirmEnabled: false } as any, { eventType: "GOAL" }, gateRejectedGoal)).toBe(false);

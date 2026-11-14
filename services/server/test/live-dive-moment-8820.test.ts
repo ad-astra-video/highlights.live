@@ -25,6 +25,7 @@ import {
   confirmDiveAdoption,
   diveReanchorDecision,
   momentOf,
+  type DegradedSignal,
 } from "../src/live-confirm-async";
 
 /** A permissive row for the adoption writer: promoted celebration + measured
@@ -52,7 +53,7 @@ function verdict(over: Record<string, unknown> = {}) {
   };
 }
 
-const META = { diveAt: "2026-11-12T00:00:00.000Z", diveLatencyMs: 2100, contextDegraded: [] as string[] };
+const META = { diveAt: "2026-11-12T00:00:00.000Z", diveLatencyMs: 2100, contextDegraded: [] as DegradedSignal[] };
 
 // --- (1) the contract -------------------------------------------------------
 
@@ -109,13 +110,28 @@ describe("confirmDiveAdoption stamps the dive moment", () => {
   });
 
   it("keeps the moment on a refutation (the contract carries it on every verdict)", () => {
-    const adoption = confirmDiveAdoption(
+    // D2 pinned a row that measured nothing: the refutation arm still runs and
+    // the moment rides the attestation.
+    const unmeasured = confirmDiveAdoption(
+      row({ attestationUsed: {} }) as any,
+      verdict({ goalConfirmed: "near_miss", corroborated: false, momentTs: 44.0 }) as any,
+      META
+    );
+    expect(unmeasured.kind).toBe("refuted");
+    expect((unmeasured.patch.confirmAttestation as any).momentTs).toBe(44.0);
+    // ADAAAA-8894 (D4): the SAME verdict on a row whose accept MEASURED the
+    // transition may not refute it (AC4.2: 0 measured rows change lane), so the
+    // row is left exactly as served — and the moment the dive named still lands
+    // on `confirmAttestation`, because it is the one thing a D4 dive may add.
+    const measuredRow = confirmDiveAdoption(
       row() as any,
       verdict({ goalConfirmed: "near_miss", corroborated: false, momentTs: 44.0 }) as any,
       META
     );
-    expect(adoption.kind).toBe("refuted");
-    expect((adoption.patch.confirmAttestation as any).momentTs).toBe(44.0);
+    expect(measuredRow.kind).toBe("unchanged");
+    expect((measuredRow.patch.confirmAttestation as any).momentTs).toBe(44.0);
+    expect((measuredRow.patch.confirmAttestation as any).laneKeptByMeasurement).toBe(true);
+    expect((measuredRow.patch as any).provisionalGoal).toBeUndefined();
   });
 
   it("clamps a nonsense confidence instead of persisting it", () => {

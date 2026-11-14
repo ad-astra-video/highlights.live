@@ -75,6 +75,27 @@ export const LIVE_CONFIRM_TRAIL_S = 4;
  *  frame re-read lane both own the window until then. */
 export const LIVE_CONFIRM_LOOKAHEAD_S = 20;
 
+/** ADAAAA-8894 (D4, Ruling B): the LIVE dive-density cap, dives per stream-hour.
+ *
+ *  D4 drops the measured-attestation skip, so every promoted row now dives and
+ *  the worst-case cost stops depending on the measured share. The board ratified
+ *  Ruling B (ADAAAA-8898): hold the approved **$0.16/stream-hour** ceiling and
+ *  bound admission instead of raising it. `$0.16 / $0.0033324 = 48.01`, so 48 is
+ *  the largest whole dive count that stays inside:
+ *  `48 x $0.0033324 = $0.15996/stream-hour`.
+ *
+ *  The cap is a LIVE rule: it needs a stream-hour denominator, and
+ *  `liveWatchMinutes` is not written on a `file` job (VOD is priced per job, 2 ->
+ *  3 dives per job). Admission reads the leg's own content clock (the judged
+ *  window's `hi`), which on a live tap advances with the stream, so
+ *  `dispatched <= allowance ~= 48 x streamHours`.
+ *
+ *  It does NOT bind at the measured density: pooled promoted density is 30.27
+ *  rows/stream-hour (62 % of the cap), and the densest leg measured is 0.1516 h
+ *  with 5 promoted rows (`9bed3bd7`) = 33/h. A row the cap withholds is settled
+ *  `density_cap` (a named skip reason in the contract), never silently dropped. */
+export const LIVE_CONFIRM_DENSITY_CAP_PER_STREAM_HOUR = 48;
+
 /** One pending dive, persisted with the row that published it. */
 export interface PendingConfirmDive {
   /** The published row this verdict must move IN PLACE. */
@@ -238,6 +259,11 @@ export interface ConfirmAttestation {
    *  no moment (never fabricated). */
   momentTs?: number;
   momentConfidence?: number;
+  /** ADAAAA-8894 (D4): the PRECISION GUARD. The row already carried a MEASURED
+   *  attestation when D4's dive ran on it, so the measurement stands and the lane
+   *  stays `measured`. The dive contributed its moment only; this flag tells the
+   *  read side (and a grader) not to read the verdict as a lane move. */
+  laneKeptByMeasurement?: boolean;
 }
 
 /**
@@ -387,8 +413,20 @@ export interface ConfirmDiveAdmissionSnapshot {
   /** Confirm calls the stream BILLED (`billableConfirmCalls` reads the same
    *  `confirmCalls` count). */
   divesBilled: number;
-  /** `decideFee x divesBilled` — cost is observed per stream, not enforced. */
+  /** `decideFee x divesBilled` — cost is OBSERVED per stream, not enforced. */
   diveCostUsd: number;
+  /** ADAAAA-8894 (D4, Ruling B): the live density guard admission applied.
+   *  Absent on VOD (no stream-hour denominator) and when the lane never admitted. */
+  densityCap?: {
+    /** `LIVE_CONFIRM_DENSITY_CAP_PER_STREAM_HOUR` (48). */
+    maxPerStreamHour: number;
+    /** The leg's own stream clock when admission last read it (content hours). */
+    streamHours: number;
+    /** `max(1, floor(maxPerStreamHour x streamHours))` — dives this leg may start. */
+    allowance: number;
+    /** Due dives settled `density_cap` because the allowance was spent. */
+    suppressed: number;
+  };
 }
 
 /**
@@ -637,6 +675,41 @@ export function scoreLaneProducedNoSamples(row: RowMeasuredScoreEvidence): boole
   if (!used) return false;
   if (typeof used.scoreReads !== "number") return false;
   return used.scoreReads === 0 && (used.preSamples ?? 0) === 0 && (used.postSamples ?? 0) === 0;
+}
+
+/**
+ * ADAAAA-8894 (D4): does the ROW carry a MEASURED attestation of its own goal?
+ *
+ * This is the precision-guard predicate, and it must be the SAME condition the
+ * served lane derives `measured` from (`measuredMeasurement` in
+ * `confirmation-lane.ts`: the row's `trigger` flags, then the Stage-1 criteria).
+ * Three stored sources, any one of which means "this window measured its goal":
+ *
+ *   - the accept-time `attestationUsed` read a scoreboard change;
+ *   - a deferred score read recorded a REAL pre -> post transition;
+ *   - the row's `trigger` carries a goal-crossing, a `ballOutcome=goal` or a
+ *     scoreboard change (the same three flags the accept gate accepted on).
+ *
+ * D4 dives such a row anyway. What the guard buys is that the dive may not
+ * refute the measurement: the row keeps its measurement, its GOAL card and its
+ * `measured` lane, and the dive's verdict is a second opinion recorded on
+ * `confirmAttestation`, never a retraction.
+ */
+export function rowCarriesMeasuredAttestation(
+  row: RowMeasuredScoreEvidence & {
+    trigger?: {
+      ballOutcome?: string | null;
+      goalCrossed?: boolean;
+      scoreBoardChanged?: boolean;
+    } | null;
+  }
+): boolean {
+  if (rowMeasuredScoreTransition(row)) return true;
+  const trigger = row?.trigger;
+  if (!trigger) return false;
+  if (trigger.goalCrossed === true) return true;
+  if (trigger.scoreBoardChanged === true) return true;
+  return typeof trigger.ballOutcome === "string" && /^goal$/i.test(trigger.ballOutcome.trim());
 }
 
 /** One-line, gradable rendering of the row's own measurement, for the hold
@@ -906,6 +979,14 @@ export function confirmDiveAdoption(
     provisionalGoal?: Record<string, unknown>;
     start?: number;
     end?: number;
+    /** ADAAAA-8894 (D4): the row's own accept-gate measurement flags, so the
+     *  precision guard reads the same attestation the served lane derives
+     *  `measured` from. Absent on a hand-built fixture. */
+    trigger?: {
+      ballOutcome?: string | null;
+      goalCrossed?: boolean;
+      scoreBoardChanged?: boolean;
+    } | null;
   } & RowMeasuredScoreEvidence,
   verdict: ConfirmDiveVerdict | undefined,
   meta: {
@@ -929,6 +1010,13 @@ export function confirmDiveAdoption(
   // R2/R7: when the window's own lane measured the transition, that measured
   // scoreboard IS the authority the row used — whatever the dive said.
   const rowHasTransition = rowMeasuredScoreTransition(row);
+  // ADAAAA-8894 (D4): the precision guard. D4 dives a row that already measured
+  // its own goal; on such a row the dive may add the moment and (inside the
+  // existing goal rules) withhold a GOAL, but it may never refute or remove the
+  // measurement and may never move the lane off `measured`. Every arm that stamps
+  // an attestation therefore carries this flag, and the arm below refuses to
+  // refute at all.
+  const measured = rowCarriesMeasuredAttestation(row);
   // R1/R2/R7: the authority this verdict names. An uncited frame claim and a
   // commentary-only corroboration both name `none`.
   const authority: GoalAuthority = rowHasTransition
@@ -967,6 +1055,10 @@ export function confirmDiveAdoption(
     ...(goalConfirmed && momentOf(verdict) != null && Number.isFinite(verdict?.momentConfidence)
       ? { momentConfidence: Math.max(0, Math.min(1, Number(verdict!.momentConfidence))) }
       : {}),
+    // ADAAAA-8894 (D4): disclosed on EVERY arm that stamps an attestation on a
+    // measured row, so the read side can keep the `measured` lane (and the
+    // postable projection can keep the GOAL card) whatever the verdict said.
+    ...(measured ? { laneKeptByMeasurement: true } : {}),
   };
   // A row that already left the provisional lane (e.g. a later scoreboard read
   // re-attested it first) is not rewritten by a late dive: one verdict move.
@@ -1047,6 +1139,27 @@ export function confirmDiveAdoption(
           `(${describeRowMeasurement(row)}), ` +
           "so the window is promoted on the dive's frame attestation instead of being held forever"
         : `deep dive CONFIRMED the goal (corroboration=${attestation.corroborationSource ?? "none"})`,
+    };
+  }
+  // ADAAAA-8894 (D4): THE PRECISION GUARD. It sits AFTER the promote arm and
+  // BEFORE every refute/hold arm on purpose: a row that MEASURED its own goal is
+  // still promotable — the measurement, not the dive, is what licenses the GOAL,
+  // and D1 AC1.4 requires that promotion to stay in place. What the guard forbids
+  // is the opposite direction. D4 fires the dive on such a row for coverage (a
+  // dive moment and a re-centered option), and the dive's verdict lands on
+  // `confirmAttestation` as a SECOND OPINION; it may not refute the measurement,
+  // delete the GOAL, or move the lane off `measured` (`measured -> dive_disagreed`
+  // is the regression this guard exists to prevent). The moment (applied in
+  // `attestConfirmDiveHighlight`) plus the `laneKeptByMeasurement` flag above are
+  // the only things the dive may add here.
+  if (measured) {
+    return {
+      kind: "unchanged",
+      patch: { confirmAttestation: attestation, pendingConfirmDive: undefined },
+      reason:
+        `row carries a MEASURED attestation (${describeRowMeasurement(row)}) — the dive adds its moment ` +
+        `but does not refute the measurement or move the lane (goalConfirmed=${goalConfirmed ?? "none"}, ` +
+        `corroborated=${corroborated})`,
     };
   }
   // B3: refute only a row that actually carries a provisional marker. A
@@ -1187,7 +1300,11 @@ export interface ConfirmDiveResult {
     /** ADAAAA-8513 (AC4): the 16-entry pending ring evicted the descriptor. */
     | "descriptor_overflow"
     /** ADAAAA-8513 (AC5): a descriptor whose judged window is malformed. */
-    | "descriptor_invalid";
+    | "descriptor_invalid"
+    /** ADAAAA-8894 (D4, Ruling B): the live density guard withheld the dive —
+     *  the leg had dispatched its `LIVE_CONFIRM_DENSITY_CAP_PER_STREAM_HOUR`
+     *  allowance for the stream time it had consumed. */
+    | "density_cap";
   verdict?: ConfirmDiveVerdict;
   context: ConfirmDiveContext;
   latencyMs: number;
@@ -1211,6 +1328,11 @@ export const CONFIRM_DROP_REASONS = [
   "frame_unreadable",
   "descriptor_overflow",
   "descriptor_invalid",
+  // ADAAAA-8894 (D4, Ruling B): the live density guard withheld the dive because
+  // the leg had already dispatched its 48-dives/stream-hour allowance. A DROP
+  // cause rather than a queue state: the row is settled with a named verdict
+  // field, and the served card says `density_cap`.
+  "density_cap",
 ] as const;
 
 /**
@@ -1455,6 +1577,13 @@ export interface ConfirmDiveRunState {
   noteConfirmDiveDispatched?(inFlight: number, capacity: number): void;
   /** ADAAAA-8518 (AC5): count one no-slot admission. */
   noteConfirmDiveQueued?(capacity: number): void;
+  /** ADAAAA-8894 (D4, Ruling B): record the live density guard admission applied
+   *  (the cap and the leg's own stream clock), so the stored `diveAdmission`
+   *  block can publish the allowance it enforced. Optional so older fakes run. */
+  noteConfirmDiveDensitySeen?(maxPerStreamHour: number, streamHours: number): void;
+  /** ADAAAA-8894 (D4, Ruling B): count one due dive the density allowance
+   *  withheld. */
+  noteConfirmDiveDensitySuppressed?(): void;
 }
 
 /** The pump's per-tick accounting (what the tests and logs read). */
@@ -1469,6 +1598,8 @@ export interface ConfirmDivePumpOutcome {
   queued: number;
   /** ADAAAA-8513 (AC4): overflow descriptors stamped on this tick. */
   overflowDropped: number;
+  /** ADAAAA-8894 (D4, Ruling B): due dives settled `density_cap` on this tick. */
+  densitySuppressed: number;
 }
 
 /**
@@ -1508,11 +1639,25 @@ export async function runDueConfirmDives(deps: {
   queueWaitMs?: number;
   /** AC3: injectable wall clock (tests). */
   nowMs?: number;
+  /** ADAAAA-8894 (D4, Ruling B): the LIVE density guard. `streamHours` is the
+   *  leg's own content-clock hours; `maxPerStreamHour` defaults to
+   *  `LIVE_CONFIRM_DENSITY_CAP_PER_STREAM_HOUR`. Absent (VOD, and every pre-D4
+   *  caller) = no guard, byte-identical admission. */
+  densityCap?: { streamHours: number; maxPerStreamHour?: number };
   /** Persist the adoption (the promote-in-place write path). */
   adopt: (entry: PendingConfirmDive, result: ConfirmDiveResult) => Promise<ConfirmDiveAdoption["kind"] | void> | ConfirmDiveAdoption["kind"] | void;
   log?: (line: string) => void;
 }): Promise<ConfirmDivePumpOutcome> {
-  const out: ConfirmDivePumpOutcome = { dives: 0, dropped: 0, promoted: 0, refuted: 0, retries: 0, queued: 0, overflowDropped: 0 };
+  const out: ConfirmDivePumpOutcome = {
+    dives: 0,
+    dropped: 0,
+    promoted: 0,
+    refuted: 0,
+    retries: 0,
+    queued: 0,
+    overflowDropped: 0,
+    densitySuppressed: 0,
+  };
   const log = deps.log ?? ((line: string) => console.error(line));
   const tag = `[live-confirm:${deps.jobId}]`;
   const nowTs = deps.nowTs;
@@ -1536,6 +1681,20 @@ export async function runDueConfirmDives(deps: {
     attempted: deps.run.confirmDiveAttempted(),
     reuseWindowS: deps.reuseWindowS,
   });
+  // ADAAAA-8894 (D4, Ruling B): the LIVE density allowance for this leg.
+  // `max(1, floor(cap x streamHours))` — the 1-dive floor exists so a leg that has
+  // not yet consumed a whole cap interval (75 s) is never starved before its first
+  // dive; every later dive is bounded by the rate itself. `Infinity` = no guard
+  // (VOD, and any caller that did not ask for one).
+  const densityHours = Number(deps.densityCap?.streamHours);
+  const densityMax = Number.isFinite(Number(deps.densityCap?.maxPerStreamHour))
+    ? Math.max(0, Number(deps.densityCap?.maxPerStreamHour))
+    : LIVE_CONFIRM_DENSITY_CAP_PER_STREAM_HOUR;
+  const densityAllowance =
+    deps.densityCap === undefined || !Number.isFinite(densityHours)
+      ? Infinity
+      : Math.max(1, Math.floor(densityMax * Math.max(0, densityHours)));
+  if (densityAllowance !== Infinity) deps.run.noteConfirmDiveDensitySeen?.(densityMax, Math.max(0, densityHours));
   // AC2/AC3: admitted dives run CONCURRENTLY — the pump awaits them together, so
   // one stream can hold N in flight (bounded only by decide capacity). The loop
   // itself never awaits a dive, so admission is decided against the in-flight
@@ -1543,6 +1702,28 @@ export async function runDueConfirmDives(deps: {
   const running: Promise<void>[] = [];
   for (const entry of due) {
     const key = confirmDiveKey(entry);
+    // ADAAAA-8894 (D4, Ruling B): the density guard, checked BEFORE a slot is
+    // taken so a capped dive never holds capacity another window could use. The
+    // row is settled with a stamped `density_cap` verdict — the served card then
+    // answers "the dive did not run, because the leg had spent its allowance"
+    // instead of leaving a promoted card with nothing.
+    if (densityAllowance !== Infinity) {
+      const started = deps.run.confirmDiveAdmission?.()?.dispatched ?? 0;
+      if (started >= densityAllowance) {
+        deps.run.dropPendingConfirmDive(key);
+        deps.run.clearConfirmDiveQueueWait?.(key);
+        deps.run.noteConfirmDiveDropped("density_cap");
+        deps.run.noteConfirmDiveDensitySuppressed?.();
+        out.densitySuppressed++;
+        log(
+          `${tag} density cap: ${entry.highlightId} settled density_cap — ${started} dive(s) already ` +
+            `dispatched against an allowance of ${densityAllowance} for ${densityHours.toFixed(4)} stream-hour(s) ` +
+            `(${densityMax}/h)`
+        );
+        await deps.adopt(entry, droppedDiveResult("density_cap"));
+        continue;
+      }
+    }
     // AC3: capacity first. A full pool must not consume the emergency brake's
     // token — the descriptor stays PENDING and keeps its place in the queue.
     const capacity = dispatcher.capacity();
