@@ -952,7 +952,15 @@ export function summaryRefusalIsRepairable(
   violation: SummaryViolation,
   evidence: SummaryEvidence
 ): boolean {
-  if (!SUMMARY_DETERMINISTIC_REFUSALS.includes(violation)) return true;
+  if (!SUMMARY_DETERMINISTIC_REFUSALS.includes(violation)) {
+    // ADAAAA-8971 (AC5): an `unattested-*` refusal on a row whose fact menu is
+    // EMPTY is deterministic — the menu is `attestedFactKinds`, so the row attests
+    // no fact kind at all and every sample of the same prompt must assert
+    // something unattested. The retry slot cannot buy a served body here, so the
+    // row ends on ONE call instead of re-sampling a prompt it cannot satisfy.
+    if (violation.startsWith("unattested-") && summaryFactMenu(evidence).length === 0) return false;
+    return true;
+  }
   if (violation === "too-few-facts") {
     return attestedFactKinds(evidence).length >= SUMMARY_MIN_FACT_KINDS;
   }
@@ -1803,13 +1811,23 @@ export function unattestedSentences(text: string, evidence: SummaryEvidence): Su
  * letting a second sample re-read a prompt it already failed (AC14/AC5).
  */
 export function summaryFactMenu(evidence: SummaryEvidence): string[] {
-  const attestsScoring = String(evidence.verdict ?? "") === "scoring_play";
-  const attestsVenue = matchContextVenueText(evidence.matchContext).length > 0;
+  // ADAAAA-8971 (AC5): the menu lists only the facts THIS ROW attests. The rev-8
+  // retry offered `the score line` to every `scoring_play` VERDICT, including rows
+  // whose evidence carries no measured transition (their kinds are clock + a named
+  // actor), so the second sample was instructed to write a fact the gate then
+  // refuses (`scoreFactGrounded`) — a retry that cannot succeed by construction.
+  // The clock line was offered unconditionally too, including on a row with no
+  // window anchor. Both are now read off `attestedFactKinds`, which is the same
+  // set the gate credits, so an empty menu means the row has nothing to say and
+  // the lane's determinism rule (`summaryRefusalIsRepairable`) can see that.
+  const kinds = new Set(attestedFactKinds(evidence));
   return [
-    attestsScoring ? "the score line" : null,
-    "the clock or spell",
-    attestsVenue ? "the competition or venue" : null,
-    "a bounded act (an interception, a recovery, a won-back ball, a counter) by a named attested actor",
+    kinds.has("score") ? "the score line" : null,
+    kinds.has("clock") ? "the clock or spell" : null,
+    kinds.has("venue") ? "the competition or venue" : null,
+    kinds.has("action")
+      ? "a bounded act (an interception, a recovery, a won-back ball, a counter) by a named attested actor"
+      : null,
   ].filter((entry): entry is string => Boolean(entry));
 }
 
@@ -2700,13 +2718,19 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // same clauses were deleted, and the row dropped again (9 retried, 9 dropped).
   const retryDropped = (input.retry?.droppedClauses ?? []).filter((line) => line.trim()).slice(0, 4);
   const retryMenu = (input.retry?.factMenu ?? []).filter((line) => line.trim());
+  // ADAAAA-8971 (AC5): the "most words without inventing anything" clause names
+  // only the fact types the row's menu actually offers. It used to name the score
+  // line unconditionally, so a row with no measured transition was told its best
+  // expansion was a fact the gate refuses (`scoreFactGrounded`).
+  const heaviestFacts = retryMenu.filter((entry) => /^the score line$|^the clock or spell$/.test(entry));
+  const retryHeaviest = heaviestFacts.length > 0 ? heaviestFacts.join(" and ") : "the attested facts";
   const retryLines = input.retry
     ? [
         `RETRY: the previous draft measured ${input.retry.words} words${
           typeof input.retry.sentences === "number" ? ` across ${input.retry.sentences} sentences` : ""
         } and was refused${input.retry.violations && input.retry.violations.length > 0 ? ` for: ${input.retry.violations.join(", ")}` : ""}.`,
         `- Close the measured shortfall: this copy must reach at least ${retryMin} words inside ${band.minSentences}-${band.maxSentences} sentences. ${retryMin} is ${retryMin - band.floorWords} words above the ${band.floorWords}-word floor on purpose: a draft that only just clears the floor is the defect this retry exists to repair.`,
-        `- Expand with facts, not filler: add ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}. The half or spell and the score line carry the most words without inventing anything.`,
+        `- Expand with facts, not filler: add ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}. ${retryHeaviest} carry the most words without inventing anything.`,
         ...(retryDropped.length > 0
           ? [
               `- These sentences were DELETED from that draft because they carry no attested fact: ${retryDropped.map((line) => `"${line.trim()}"`).join(" ")} Never restate them and never paraphrase what they said: replace each one with a sentence built on ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}.`,
@@ -2731,7 +2755,12 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- State only what the evidence below supports.",
     `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, ${attestsVenue ? "the competition or venue, " : ""}or a named attested actor's action — rather than padding.`,
     ...retryLines,
-    `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
+    // ADAAAA-8971 (AC5): a row whose evidence attests NO fact kind has an empty
+    // menu. Asking it to "carry two facts from the list" would be an instruction
+    // it cannot follow, so the line names the row's own limit instead.
+    factMenu.length > 0
+      ? `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`
+      : "- The evidence carries no attested fact kind for this window: write only what the evidence below states, and never a scene-setting or atmosphere sentence.",
     // ADAAAA-8914 (AC14.1/AC14.2): the depth bars were BODY bars, so a 46-word
     // body with one fact and three scene-setting sentences cleared them. Every
     // sentence is now a fact sentence, and the gate DELETES any sentence that is
