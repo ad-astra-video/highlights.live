@@ -35,7 +35,7 @@ import type { ScoreboardDeltaEvidence } from "./analyzer";
 // ADAAAA-8081: the side-lane ASR prefetch (see the module docstring). The
 // observer only carries the promise + hands it to the decide fork; the decide
 // request builder is what consumes it.
-import type { AsrPrefetchResult } from "./asr-prefetch";
+import { formatAsrSkipLine, type AsrPrefetchResult } from "./asr-prefetch";
 // ADAAAA-8377 (LFR-1): the decide payload states the REAL dims of the images it
 // ships (beside `imagesPerDecide`), measured from the frame JPEG headers.
 import { jpegDimensionsFromBase64 } from "./image-dims";
@@ -956,6 +956,14 @@ export class LiveObserver {
   private readonly prefetchAsr:
     | ((payload: ObserveDecidePayload) => Promise<AsrPrefetchResult | null> | null)
     | null;
+  /** ADAAAA-9049: the job this observer decides for, so an ASR skip line can
+   *  name it (`[live-asr-skip:<job>]`). Absent (a hand-built observer in a test)
+   *  prints `?` instead of inventing an id. */
+  private readonly jobId: string | null;
+  /** ADAAAA-9049: the caller DELIBERATELY runs without the lane
+   *  (`LIVE_DECIDE_ASR_PREFETCH=0`). A skip line then says `lane-disabled`
+   *  instead of accusing the rail of never wiring it. */
+  private readonly asrLaneOff: boolean;
 
   constructor(opts: {
     cadenceS?: number;
@@ -1034,6 +1042,12 @@ export class LiveObserver {
      *  lane is unavailable (no ASR endpoint / empty clip) — the decide pass then
      *  transcribes inline, exactly as before. Live rail only. */
     prefetchAsr?: (payload: ObserveDecidePayload) => Promise<AsrPrefetchResult | null> | null;
+    /** ADAAAA-9049: the job this observer decides for — names the
+     *  `[live-asr-skip:<job>]` line. Absent = `?` (a hand-built observer). */
+    jobId?: string;
+    /** ADAAAA-9049: true when the lane is deliberately off, so the skip line
+     *  reads `lane-disabled` rather than `lane-unwired`. */
+    asrLaneOff?: boolean;
     /** ADAAAA-8102: the CONTENT consume rate, when the caller has one. The
      *  window's timed observation set resolves onto `1/observationFps`, so a
      *  post-gap credit burst cannot stack two records inside one content tick
@@ -1106,6 +1120,8 @@ export class LiveObserver {
     // ADAAAA-8081: absent on the VOD path and in tests => no side lane, decide
     // keeps its inline ASR (byte-identical pre-8081 behaviour).
     this.prefetchAsr = opts.prefetchAsr ?? null;
+    this.jobId = opts.jobId ?? null;
+    this.asrLaneOff = opts.asrLaneOff === true;
     // ADAAAA-7723: the stale horizon is the FRAME RETENTION horizon, not the
     // bare 8 s default. A trigger whose onset is still inside the retained
     // window can be judged by that window (`coverThrough`), so expiring it
@@ -1748,6 +1764,20 @@ export class LiveObserver {
       } catch {
         /* a prefetch that throws must never block the decide (inline ASR covers it) */
       }
+    } else {
+      // ADAAAA-9049: name the skip at the ONE place the lane is not started at
+      // all. The browser/media rail was built without `prefetchAsr`
+      // (ADAAAA-9049: job `771f42de`, `asrLane: "inline"` on 834/834 rows), and
+      // before this line that looked identical to an empty audio slice — the
+      // record only ever said `inline`, so the cause was unreadable from a run.
+      // One line per skipped window, same shape as the lane's own skip line.
+      console.error(
+        formatAsrSkipLine(
+          this.jobId ?? "?",
+          payload.centerTs,
+          this.asrLaneOff ? "lane-disabled" : "lane-unwired"
+        )
+      );
     }
     if (this.onDecideStaged) {
       // ADAAAA-7771: issue the decide and return immediately. The expensive

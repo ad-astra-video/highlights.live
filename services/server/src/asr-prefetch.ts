@@ -62,6 +62,44 @@ const DEFAULT_MAX_CONCURRENT = 2;
 const DEFAULT_MAX_CACHE = 64;
 
 /**
+ * ADAAAA-9049: WHY the lane refused to start for one window.
+ *
+ * `start()` returns null on exactly two conditions, and a null start leaves the
+ * job deciding with INLINE ASR (the decide service transcribes inside the
+ * call). Until now those two conditions were indistinguishable in the log: the
+ * natural browser job `771f42de` reported `asrLane: "inline"` on 834/834 rows
+ * with `ASR_URL` set and `LIVE_DECIDE_ASR_PREFETCH=1`, which is the shape an
+ * EMPTY audio slice produces — or a rail that was never handed the lane at all.
+ * One line per skip names which, so the cause is read from `docker logs`
+ * instead of inferred from a record.
+ */
+export type AsrSkipReason = "no-asr-url" | "empty-slice";
+
+/** ADAAAA-9049: every way a window can end up on the inline road. */
+export type AsrSkipSource = AsrSkipReason | "lane-unwired" | "lane-disabled";
+
+/**
+ * ADAAAA-9049: the reason `start()` cannot run for this window (`null` = it
+ * ran). Keyed off the prefetcher's own `enabled` posture, so the reported reason
+ * can never disagree with the decision `start()` just made.
+ */
+export function asrPrefetchSkipReason(opts: { enabled: boolean; clipB64: string }): AsrSkipReason | null {
+  if (!opts.enabled) return "no-asr-url";
+  if (!opts.clipB64) return "empty-slice";
+  return null;
+}
+
+/**
+ * ADAAAA-9049: the ONE line a skipped window logs. Single shape for every
+ * reason, so `grep -c '\[live-asr-skip:'` counts skipped windows and the
+ * `reason=` field says which condition fired.
+ */
+export function formatAsrSkipLine(jobId: string, centerTs: number, reason: AsrSkipSource): string {
+  const at = Number.isFinite(centerTs) ? centerTs.toFixed(2) : "?";
+  return `[live-asr-skip:${jobId}] @${at}s reason=${reason}`;
+}
+
+/**
  * Single-flight, content-addressed ASR prefetcher.
  *
  * `start(clip)` never throws and never rejects: a caller can `await` its result
