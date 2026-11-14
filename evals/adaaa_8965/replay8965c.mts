@@ -139,7 +139,19 @@ for (const r of fx.rows) {
     verdictBefore: hadVerdict,
     verdictAfter: Boolean(afterAttestation),
     guardVerdicts: guardOk,
-    laneMovedOffMeasured: measuredByRow(r) && after?.lane !== "measured",
+    // ADAAAA-8965 precision guard, verbatim from the ticket: on a measured row the
+    // dive "may add the moment only" and "may not move the lane off measured. Any
+    // lane DIFF on a measured row is a regression, not a pass." The regression
+    // test is therefore a DIFF, not an absolute lane value — a pre-D4 row whose
+    // dive already demoted it keeps reading `dive_disagreed` (D3 precedence, AC2,
+    // byte-identical for rows without `laneKeptByMeasurement`) and that lane is
+    // not this change's doing. Both fields are reported so the lens stays visible.
+    laneDiff: before?.lane !== after?.lane,
+    laneNotMeasured: measuredByRow(r) && after?.lane !== "measured",
+    newlyDivedMeasuredArm:
+      measuredByRow(r) && afterDive && !hadVerdict
+        ? after?.lane === "measured" && !(after as { skipReason?: string }).skipReason
+        : null,
   });
 }
 
@@ -176,9 +188,29 @@ const bars = [
     detail: `${out.filter((r) => r.measRow && !r.verdictAfter).length} of ${out.filter((r) => r.measRow).length} measured rows`,
   },
   {
-    name: "AC4.2 (live) measured rows whose served lane is not `measured` = 0",
-    pass: out.filter((r) => r.laneMovedOffMeasured).length === 0,
-    detail: out.filter((r) => r.laneMovedOffMeasured).map((r) => `${r.id}:${r.laneAfter}`).join(", ") || "0",
+    name: "AC4.2 (live) measured rows whose lane DIFFS before→after = 0",
+    pass: out.filter((r) => r.measRow && r.laneDiff).length === 0,
+    detail:
+      out
+        .filter((r) => r.measRow && r.laneDiff)
+        .map((r) => `${r.id}:${r.laneBefore}→${r.laneAfter}`)
+        .join(", ") || `0 of ${out.filter((r) => r.measRow).length} measured rows`,
+  },
+  {
+    name: "AC4.2 (live) every newly dived measured row keeps lane `measured` and claims no skip",
+    pass: out.filter((r) => r.newlyDivedMeasuredArm === false).length === 0,
+    detail: `${out.filter((r) => r.newlyDivedMeasuredArm !== null).length} newly dived measured rows, fails: ${
+      out.filter((r) => r.newlyDivedMeasuredArm === false).map((r) => r.id).join(",") || "0"
+    }`,
+  },
+  {
+    name: "LENS (not loosened) pre-existing measured rows already off `measured` — reported, not counted as a diff",
+    pass: true,
+    detail:
+      out
+        .filter((r) => r.laneNotMeasured)
+        .map((r) => `${r.id}:${r.laneAfter} (verdictBefore=${r.verdictBefore}, laneDiff=${r.laneDiff})`)
+        .join(", ") || "0",
   },
   {
     name: "guard invariance: every dive verdict keeps a measured lane and claims no skip",
