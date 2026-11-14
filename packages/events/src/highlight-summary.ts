@@ -952,6 +952,25 @@ export function summaryRefusalIsRepairable(
   violation: SummaryViolation,
   evidence: SummaryEvidence
 ): boolean {
+  // ADAAAA-8984 (rev-9): a CLAIM refusal is a property of the ROW, not of the
+  // sample. `unattested-action` fires only through `bodyAssertsUnattestedAction`,
+  // which is gated on `summaryBallActionAttested(evidence) === false` — the row's
+  // own attestation recorded no ball outcome. A re-sample cannot change the
+  // attestation, and the clause repair deletes FILLER clauses, so it has no slot
+  // to put an attested ball outcome into: the kept claim IS the defect. Measured
+  // on the rev-8 dump: row `3cdf3fdd` retried and re-asserted the same action
+  // (`summaryRepairedWords` 30 -> 38, still under the 40 floor), and padding its
+  // repaired body to 58 words only traded `too-few-words` for `unattested-side`
+  // — depth was never the constraint. Same shape on row `464427a8`.
+  //
+  // The consequence the lane must honour: this refusal may NEVER be named
+  // `filler` (a depth name). The lane's filler test ordered the word shortfall
+  // BEFORE the claim violations, so a short row carrying an unrepairable claim
+  // was recorded as `dropped:filler` and the census pointed the next round at
+  // depth instead of attribution (ADAAAA-8938 requirement (b)). The name is
+  // computed by `summaryDropReasonName` in the lane, and the `$0` replay calls
+  // the same function.
+  if (violation === "unattested-action") return summaryBallActionAttested(evidence) !== false;
   if (!SUMMARY_DETERMINISTIC_REFUSALS.includes(violation)) {
     // ADAAAA-8971 (AC5): an `unattested-*` refusal on a row whose fact menu is
     // EMPTY is deterministic — the menu is `attestedFactKinds`, so the row attests
