@@ -64,6 +64,19 @@ const celebrationEvidence = () => ({
   attestation: { ballOutcome: null, goalCrossed: false, scoreBoardChanged: false },
 });
 
+/** A row that DID measure a score change — two fact kinds (`clock` + `score`) the
+ *  AC14 gate credits, so a thin reply is a sampling miss and earns the retry slot.
+ *
+ *  ADAAAA-9001: `celebrationEvidence()` above can no longer play this part. Its
+ *  only second kind was `action`, credited off the attested actor alone, and the
+ *  AC14 gate refuses every action class on a row that measured no ball outcome —
+ *  so the retry it used to buy was a paid call on a prompt the row could never
+ *  satisfy. */
+const measuredEvidence = () => ({
+  ...celebrationEvidence(),
+  scoreTransition: { from: "1-0", to: "2-1" },
+});
+
 /** Clock-only filler — exactly the reply that dropped both rows. */
 const CLOCK_ONLY =
   "At 0:25, the action intensifies as the players compete for possession. This sequence captures a significant moment of play as both teams fight for control.";
@@ -85,7 +98,7 @@ describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
     const result = await runSummaryForRow(store, cfg({ fetchImpl: fn }) as any, {
       jobId: "3740585f",
       highlightId: "2d8e9521",
-      evidence: celebrationEvidence(),
+      evidence: measuredEvidence(),
     });
     expect(result.outcome).toBe("stored");
     expect(calls()).toBe(2);
@@ -112,10 +125,31 @@ describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
     expect(patches.at(-1)?.patch.summaryDroppedByReason).toEqual({ gate: 1 });
   });
 
+  it("does not buy a retry on a row whose only second kind was the refused action", async () => {
+    const { store, patches } = stubStore();
+    const { fn, calls } = stubFetch([CLOCK_ONLY, NAMED]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: fn }) as any, {
+      jobId: "3740585f",
+      highlightId: "2d8e9521",
+      evidence: celebrationEvidence(),
+    });
+    // ADAAAA-9001: the row measured no ball outcome, so its menu is the clock
+    // alone — `too-few-facts` is DETERMINISTIC and the lane must not spend a
+    // second billed call on a prompt it cannot satisfy.
+    expect(result.outcome).toBe("dropped");
+    expect(calls()).toBe(1);
+    // The reason still lands on the row (§15.4), so the drop stays auditable.
+    expect(patches.at(-1)?.patch.summaryDroppedByReason).toEqual({ gate: 1 });
+  });
+
   it("classifies the refusal by the row's own fact menu", () => {
+    const withScore = measuredEvidence() as any;
     const withEntity = celebrationEvidence() as any;
     const without = { ...celebrationEvidence(), matchContext: null } as any;
-    expect(summaryRefusalIsRepairable("too-few-facts", withEntity)).toBe(true);
+    expect(summaryRefusalIsRepairable("too-few-facts", withScore)).toBe(true);
+    // ADAAAA-9001: an attested ACTOR is not on its own a second fact kind — the
+    // AC14 gate refuses every action class on a row that measured no ball outcome.
+    expect(summaryRefusalIsRepairable("too-few-facts", withEntity)).toBe(false);
     expect(summaryRefusalIsRepairable("too-few-facts", without)).toBe(false);
     // The two hard refusals stay deterministic on every row.
     expect(summaryRefusalIsRepairable("ungrounded-name", withEntity)).toBe(false);
@@ -129,5 +163,23 @@ describe("ADAAAA-8806 — the prompt carries the row's attestation", () => {
     expect(prompt).toContain("No ball outcome was measured in this window");
     expect(prompt).toContain("Barcelona");
     expect(prompt).not.toContain("The ball shoots");
+  });
+
+  it("asks for no action prose on a row that measured no ball outcome", () => {
+    // ADAAAA-9001 (acceptance 4): no prompt line may ask for prose the AC14 gate
+    // refuses. The celebration row attests a clock and nothing else, so the menu,
+    // the per-sentence fact list and every repair directive name only that kind.
+    const prompt = buildSummaryPrompt(celebrationEvidence() as any);
+    for (const ask of [
+      "an attested action",
+      "an attested actor's action",
+      "a named attested actor's action",
+      "pressing, holding possession",
+      "the team's sustained play",
+    ]) {
+      expect(prompt).not.toContain(ask);
+    }
+    // The row's own limit is stated instead, so the writer is told why.
+    expect(prompt).toContain("this row attests no action");
   });
 });
