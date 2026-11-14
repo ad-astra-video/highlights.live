@@ -2,6 +2,7 @@
 //
 // Usage (from the repo root):
 //   ./node_modules/.bin/tsx evals/adaaa_8941/replay8941.ts evals/adaaa_8941/live-rail-e4c2fe29.json
+//   ./node_modules/.bin/tsx evals/adaaa_8941/replay8941.ts evals/adaaa_8941/live-rail-771f42de.json
 //
 // `live-rail-e4c2fe29.json` carries the 19 promoted rows of live job
 // `e4c2fe29-68fe-472c-91da-b96d1dd8ca93` (`file-sim`, `/data/clips/kids300_7935.mp4`,
@@ -9,6 +10,15 @@
 // (`0149022`) actually put on the card: the body, the row's own `matchClock`
 // reading, its `attestation`, its caption/postTitle and the clip offset. No model
 // call, no GPU, no DB write.
+//
+// `live-rail-771f42de.json` is the SECOND live reading: the 14 promoted rows of the
+// natural customer job `771f42de-82eb-4357-8e0b-2121865f4608` on the fixed tree
+// `328bb3b` (served image `sha256:0cb6fd79…`, `StartedAt` 10:08:31Z). It is the
+// corpus that proved the first clock repair incomplete — the two bodies that leg
+// served printed `4:16` / `as the clip progresses from 7:44` with no clip frame
+// AFTER the stamp, so the offset survived to the card. A served row no longer keeps
+// `summaryRaw`, so `body` is the served summary there and `servedSummary` repeats
+// it for the census.
 //
 // Increment 1 grades the two defects this ticket fixes here:
 //   Defect 1 (AC14.1/AC14.2) — no served body asserts a possession / ball-forward /
@@ -25,6 +35,7 @@ import {
   serveAttestedMatchClock,
   summaryClockReport,
   summarySentenceFacts,
+  unattestedAtmosphereClaims,
   type SummaryEvidence,
 } from "../../packages/events/src/highlight-summary.js";
 
@@ -163,11 +174,22 @@ for (const { row, decision } of servedBodies) {
   }
 }
 
-// --- Defect 1's bite: the stored filler deck must not survive as stored -------
+// --- Defect 1's bite: a stored-accepted FILLER body must not survive as stored --
+// The rev-8 corpus (`live-rail-e4c2fe29.json`) stored `accepted` on three bodies
+// whose whole substance was possession / ball-forward / sustained-play. Its lens
+// was "a stored-accepted body must not serve", which is right for that corpus and
+// wrong for a body that carries attested facts: `live-rail-771f42de.json`'s
+// `8cafc2a0` was stored `accepted` with a score line and the row's own match clock,
+// and serving it is correct. So the bar is the CLAUSE, not the stored verdict.
 for (const row of storedAccepted) {
-  const decision = gateSummaryDetail(row.body as string, evidenceOf(row));
-  if (decision.summary !== null) {
-    failures.push(`AC14.1 ${row.id}: the stored-accepted filler body still serves (${decision.gate})`);
+  const evidence = evidenceOf(row);
+  const decision = gateSummaryDetail(row.body as string, evidence);
+  if (decision.summary === null) continue;
+  const claims = unattestedAtmosphereClaims(decision.summary as string, evidence);
+  if (claims.length > 0) {
+    failures.push(
+      `AC14.1 ${row.id}: the stored-accepted body still serves with an unattested clause ${JSON.stringify(claims)}`
+    );
   }
 }
 

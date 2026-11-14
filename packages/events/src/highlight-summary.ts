@@ -1620,6 +1620,12 @@ export interface SummaryClockServing {
 const CLIP_CLOCK_FRAME_RE =
   /\b(\d{1,3}:\d{2})(\s+(?:mark\s+)?(?:into|of|in)\s+(?:the\s+|this\s+)?clip)\b/gi;
 
+/** A CLIP reference that can PRECEDE the clock rather than follow it
+ *  (`as the clip progresses from 7:44`, `in this clip at 1:42`). Renamed with the
+ *  stamp it points at, so the served sentence stops calling the recording offset a
+ *  time of the clip as well as a time of the match. */
+const CLIP_WORD_BEFORE_RE = /\b(?:the|this)\s+clip\b/gi;
+
 /** AC14.4: serve the row's own MATCH clock instead of the offset into the clip.
  *
  *  The measured defect (live job `e4c2fe29`, served image `sha256:603797d3…`): all
@@ -1627,11 +1633,18 @@ const CLIP_CLOCK_FRAME_RE =
  *  rows' own scorebug readings were `18:12`, `22:13`, `11:33`. The offset is real
  *  but the card is about the match, so the stamp is the row's attested token.
  *
- *  Two bars keep this from fabricating: the frame must NAME the clip (a bare
- *  stamp is left to the clock bars), and the offset must be anchored by the row's
- *  own `windowTs` (the same anchor `clockFactGrounded` uses, to the second). A
+ *  Two bars keep this from fabricating: the offset must be anchored by the row's
+ *  own `windowTs` (the same anchor `clockFactGrounded` uses, to the second), and a
  *  stamp the row cannot certify is reported by `attestedMatchClockToken` /
- *  `clockFrameClaims` instead of being rewritten here. */
+ *  `clockFrameClaims` instead of being rewritten here.
+ *
+ *  ADAAAA-8941 (second live reading, job `771f42de` on the served tree): the first
+ *  repair required the clip frame to FOLLOW the stamp, so the two bodies that leg
+ *  actually served kept the recording offset (`at 4:16` for a `39.24` scorebug,
+ *  `as the clip progresses from 7:44` for a `42:51` one). Both shapes are anchored
+ *  offsets, so they are served here too: a bare anchored stamp becomes the token,
+ *  and a CLIP reference that PRECEDES the stamp is renamed with it
+ *  ("as the match progresses from 42:51") rather than left pointing at the clip. */
 export function serveAttestedMatchClock(text: string, evidence: SummaryEvidence): SummaryClockServing {
   const body = text ?? "";
   const token = attestedMatchClockToken(evidence);
@@ -1640,7 +1653,7 @@ export function serveAttestedMatchClock(text: string, evidence: SummaryEvidence)
     return { token, served: [], text: body };
   }
   const served: string[] = [];
-  const out = body.replace(CLIP_CLOCK_FRAME_RE, (whole: string, stamp: string, frame: string) => {
+  const framed = body.replace(CLIP_CLOCK_FRAME_RE, (whole: string, stamp: string, frame: string) => {
     const seconds = clockSeconds(stamp);
     // Only an offset this row's own window anchors: 1:42 on a 102.7 s window is
     // the clip offset, 9:59 on the same window is a fabricated instant.
@@ -1650,6 +1663,30 @@ export function serveAttestedMatchClock(text: string, evidence: SummaryEvidence)
     const marks = /^\s+mark\b/i.test(frame);
     return `${token}${marks ? " mark" : ""} of the match`;
   });
+  // Second pass: an anchored offset with no clip frame AFTER it — the stamp stands
+  // alone ("at 4:16") or the clip reference precedes it ("as the clip progresses
+  // from 7:44"). Both serve the row's token; the preceding reference is renamed so
+  // the sentence does not keep pointing at the clip.
+  const edits: { start: number; end: number; text: string }[] = [];
+  for (const match of framed.matchAll(CLOCK_TOKEN_RE)) {
+    const stamp = match[0];
+    const start = match.index ?? 0;
+    if (stamp === token) continue;
+    const seconds = clockSeconds(stamp);
+    if (seconds === null || Math.abs(seconds - windowTs) > 1) continue;
+    if (!served.includes(stamp)) served.push(stamp);
+    edits.push({ start, end: start + stamp.length, text: token });
+    const beforeStart = Math.max(0, start - 40);
+    const clip = [...framed.slice(beforeStart, start).matchAll(CLIP_WORD_BEFORE_RE)].pop();
+    if (clip && clip.index !== undefined) {
+      const at = beforeStart + clip.index;
+      edits.push({ start: at, end: at + clip[0].length, text: clip[0].replace(/clip$/i, "match") });
+    }
+  }
+  let out = framed;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, edit.start) + edit.text + out.slice(edit.end);
+  }
   return { token, served, text: out };
 }
 
@@ -1838,9 +1875,14 @@ export function clockTokensOf(text: string): string[] {
 /** AC14.4: the clock report a census can read per served row.
  *
  *  `servesMatchClock` is `null` on a row with no attested match clock (nothing
- *  to compare), `true` when the body's only clock token IS the attested token,
- *  and `false` when the body prints a different stamp — which is legal ONLY as a
- *  clip offset (the frame repair, ADAAAA-8910, renames it to "of the clip"). */
+ *  to compare), `true` when the body serves the attested token, and `false` when
+ *  the body prints a different stamp — which is legal ONLY as a clip offset (the
+ *  frame repair, ADAAAA-8910, renames it to "of the clip").
+ *
+ *  ADAAAA-8941: a scorebug token can be DOT-shaped (`39.24` on live job
+ *  `771f42de`, an OCR read of 39:24), and `clockTokensOf` only reads `m:ss`, so
+ *  the bar is "the body prints the attested token" — substring equality — not
+ *  "the colon-shaped token list contains it". */
 export interface SummaryClockReport {
   tokens: string[];
   matchClockToken: string | null;
@@ -1852,11 +1894,12 @@ export function summaryClockReport(text: string, evidence: SummaryEvidence): Sum
   const tokens = clockTokensOf(text);
   const matchClockToken = attestedMatchClockToken(evidence);
   const frames = clockFrameClaims(text);
+  const servesToken = matchClockToken !== null && (text ?? "").includes(matchClockToken);
   return {
     tokens,
     matchClockToken,
     frames,
-    servesMatchClock: matchClockToken === null ? null : tokens.includes(matchClockToken),
+    servesMatchClock: matchClockToken === null ? null : servesToken,
   };
 }
 

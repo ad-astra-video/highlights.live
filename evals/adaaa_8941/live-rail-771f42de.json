@@ -1,0 +1,454 @@
+{
+ "jobId": "771f42de-82eb-4357-8e0b-2121865f4608",
+ "source": "browser",
+ "matchContext": {
+  "sport": "soccer",
+  "teams": [
+   "Liverpool",
+   "Chelsea"
+  ],
+  "ambiguous": true
+ },
+ "rows": [
+  {
+   "id": "01194e89-9f53-41d0-837f-b22db959b045",
+   "rail": "live",
+   "body": "Liverpool maintains their position during this sequence. At 4:09 into the clip, Chelsea attempts to move the ball forward as the two teams compete for space.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Chelsea scores a goal at t=0.0s, confirmed by scoreboard change to 0-1 | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 4:10",
+   "postTitleGate": "label:empty",
+   "windowTs": 249.55800008773804,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "39:18",
+    "seconds": 2358,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:filler",
+   "storedWords": 26,
+   "servedSummary": null
+  },
+  {
+   "id": "1ec16b32-6d5a-4d36-9064-43eeff229008",
+   "rail": "live",
+   "body": "Chelsea scores to move the scoreboard to 0-1. Liverpool is in the sequence as the scoreboard moves from 0-0 to 0-1 at 4:16.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Scoreboard changes to 0-1 at t=-4.2s and players celebrate.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 4:18",
+   "postTitleGate": "label:empty",
+   "windowTs": 256.2220001220703,
+   "windowDurationS": 15,
+   "scoreTransition": {
+    "from": "0-0",
+    "to": "0-1"
+   },
+   "matchClock": {
+    "token": "39.24",
+    "seconds": 2364,
+    "shape": "dot",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": true
+   },
+   "storedSummaryGate": "neutralised",
+   "storedWords": 0,
+   "servedSummary": "Chelsea scores to move the scoreboard to 0-1. Liverpool is in the sequence as the scoreboard moves from 0-0 to 0-1 at 4:16."
+  },
+  {
+   "id": "7a7bf87a-8520-48aa-be26-61f8bfc58bc0",
+   "rail": "live",
+   "body": "Liverpool and Chelsea are in action during this sequence. At 6:51 into the clip, Liverpool moves the ball toward the Chelsea defense. This play occurs at 41.59 of the match.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=0.0s, confirmed by crowd eruption and player celebration. | provisional goal: frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=28 preSamples=28 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 6:53",
+   "postTitleGate": "label:empty",
+   "windowTs": 411.80599999427795,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "41.59",
+    "seconds": 2519,
+    "shape": "dot",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:filler",
+   "storedWords": 30,
+   "servedSummary": null
+  },
+  {
+   "id": "d2f990f5-c1b4-4c84-b8d7-71dde9c232b8",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 8:18 into the clip. Chelsea participates in the play as the action unfolds during the match.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "OCR shows 'GOAL TIME 42:41' at t=0.0s and crowd erupts | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=22 preSamples=22 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 8:18",
+   "postTitleGate": "label:empty",
+   "windowTs": 498.2220001220703,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "43:27",
+    "seconds": 2607,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 23,
+   "servedSummary": null
+  },
+  {
+   "id": "8cafc2a0-8793-42b4-84bd-19aac3e1cac6",
+   "rail": "live",
+   "body": "The scoreboard moves to 1-1 during this sequence. Chelsea is involved in the play as the clip progresses from 7:44.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Scoreboard changes to 1-1 at t=-2.5s and player celebrates; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 7:41",
+   "postTitleGate": "label:empty",
+   "windowTs": 464.44000005722046,
+   "windowDurationS": 15,
+   "scoreTransition": {
+    "from": "0-1",
+    "to": "1-1"
+   },
+   "matchClock": {
+    "token": "42:51",
+    "seconds": 2571,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 0,
+   "servedSummary": "The scoreboard moves to 1-1 during this sequence. Chelsea is involved in the play as the clip progresses from 7:44."
+  },
+  {
+   "id": "52ad0844-6fb9-4910-b8e5-00b96cd30529",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 10:11 into the clip. Chelsea participates in the play as the action develops.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Ball enters the net at t=-0.4s, confirmed by frames and audio surge. | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=18 preSamples=18 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 10:11",
+   "postTitleGate": "label:empty",
+   "windowTs": 611.3719999790192,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": null,
+    "seconds": null,
+    "shape": null,
+    "period": null,
+    "legible": null
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 20,
+   "servedSummary": null
+  },
+  {
+   "id": "976d40d1-671b-4a52-a4d2-325e3e1eed26",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 15:24 into the clip. Chelsea participates in the play as the action develops during this sequence.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Liverpool scores a penalty goal at t=0.0s | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=23 preSamples=23 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 15:26",
+   "postTitleGate": "label:empty",
+   "windowTs": 924.9750001430511,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "45:27",
+    "seconds": 2727,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 23,
+   "servedSummary": null
+  },
+  {
+   "id": "2ff40a71-4b71-4dba-80a2-aeada756d136",
+   "rail": "live",
+   "body": "Liverpool and Chelsea are involved in this sequence at 17:40 in the clip. Chelsea moves the ball toward the goal as the play develops at 147.44 of the match.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=-0.4s; crowd and players celebrate. | provisional goal: frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=7 preSamples=7 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 17:40",
+   "postTitleGate": "label:empty",
+   "windowTs": 1060.3990001678467,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "147.44",
+    "seconds": 8864,
+    "shape": "dot",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:filler",
+   "storedWords": 29,
+   "servedSummary": null
+  },
+  {
+   "id": "8ce0fde6-6c41-4eb5-b0c5-c46d14f13676",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 21:40 into the clip. Chelsea participates in the play as the match progresses.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-0.4s, confirmed by the GOAL graphic. | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=26 preSamples=26 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 21:40",
+   "postTitleGate": "label:empty",
+   "windowTs": 1300.220999956131,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "51:42",
+    "seconds": 3102,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 20,
+   "servedSummary": null
+  },
+  {
+   "id": "76597ef6-8b3f-4b2c-a0ea-6c57b98695da",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 21:50 into the clip. Chelsea is also involved in the play as the match clock reaches 1:51.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=0.0s; ASR confirms goal by Rodriguez | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=22 preSamples=22 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 21:51",
+   "postTitleGate": "label:empty",
+   "windowTs": 1310.0490000247955,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "1:51",
+    "seconds": 111,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 24,
+   "servedSummary": null
+  },
+  {
+   "id": "3e2f8d87-08c9-44dc-9278-a229d2fa4d8c",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 26:31 into the clip. Chelsea participates in the play as the action develops.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=0.0s; players celebrate at t=0.0s | provisional goal: frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=26 preSamples=26 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 26:32",
+   "postTitleGate": "label:empty",
+   "windowTs": 1591.989000082016,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "6:30",
+    "seconds": 390,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 20,
+   "servedSummary": null
+  },
+  {
+   "id": "019e21c5-2de6-49b0-90a0-eb9d2b985ced",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 27:18 into the clip. Chelsea is also involved in the play as the action develops.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=0.0s, confirmed by the GOAL graphic. | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=22 preSamples=22 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 27:19",
+   "postTitleGate": "label:empty",
+   "windowTs": 1638.3389999866486,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "57:22",
+    "seconds": 3442,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 22,
+   "servedSummary": null
+  },
+  {
+   "id": "c02885ed-c9a1-490d-94a9-9f52580d68b7",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 27:40 into the clip. Chelsea participates in the play as the action continues at 57.44 of the match.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Liverpool scores to make it 2-1 at t=-0.0s | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=27 preSamples=27 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 27:42",
+   "postTitleGate": "label:empty",
+   "windowTs": 1660.2640001773834,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "57.44",
+    "seconds": 3464,
+    "shape": "dot",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:filler",
+   "storedWords": 25,
+   "servedSummary": null
+  },
+  {
+   "id": "c8d1dd24-4a3e-412d-9c79-0fddf8c7207f",
+   "rail": "live",
+   "body": "Liverpool is involved in this sequence at 31:00 into the clip. Chelsea competes against them during this play at 60.59 of the match.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=0.0s, confirmed by the net rippling and crowd eruption. | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=27 preSamples=27 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 31:00",
+   "postTitleGate": "label:empty",
+   "windowTs": 1860.4670000076294,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "token": "60.59",
+    "seconds": 3659,
+    "shape": "dot",
+    "period": null,
+    "legible": true
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:filler",
+   "storedWords": 23,
+   "servedSummary": null
+  }
+ ]
+}
