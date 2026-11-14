@@ -140,10 +140,12 @@ describe("ADAAAA-8773 — deterministic refusal ends the row on ONE call", () =>
     expect(rowFee).toBeLessThan(0.0033 * 2);
   });
 
-  it("keeps the retry slot for a NON-deterministic refusal", async () => {
-    // A shape refusal (`too-few-sentences`) is a property of ONE sampled reply —
-    // the ADAAAA-8687 rationale — so the row may spend its second call there.
-    // The fixture carries two credited kinds so `too-few-facts` is NOT the cause.
+  it("ends a NON-deterministic shape refusal on ONE call too (AC5 §13.2)", async () => {
+    // ADAAAA-9031 supersedes the ADAAAA-8687 rule this test pinned. §13.2 permits
+    // a second summary call ONLY on the AC8 repeat path (AC14 adds the filler
+    // regeneration); a shape refusal is neither, and the rev-10 leg measured the
+    // cost of re-sampling refusals. The fixture still carries two credited kinds,
+    // so `too-few-facts` is NOT the cause.
     const { store, patches } = stubStore();
     const f = stubFetch([
       ok("At 0:24 Manuel Ordoñez scores for Real Madrid."),
@@ -154,11 +156,10 @@ describe("ADAAAA-8773 — deterministic refusal ends the row on ONE call", () =>
       highlightId: "h1",
       evidence: EVIDENCE,
     });
-    expect(result.calls).toBe(2);
-    expect(f.calls()).toBe(2);
-    // The second reply is still refused (`too-few-facts` on the match clock), so
-    // the row drops — but the retry it was allowed was spent.
+    expect(result.calls).toBe(1);
+    expect(f.calls()).toBe(1);
     expect(patches[0].patch.summaryDropped).toBe(1);
+    expect(patches[0].patch.summaryRetryReason).toBeUndefined();
   });
 
   it("still accepts a body written on the clip offset (one call, copy stored)", async () => {

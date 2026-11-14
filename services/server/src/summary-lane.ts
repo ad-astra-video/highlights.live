@@ -40,6 +40,7 @@ import {
   gateSummaryDetail,
   resolveSummaryFee,
   repeatedSentences,
+  dropSentences,
   summaryBand,
   sentenceSimilarity,
   summaryOpeningRun,
@@ -50,6 +51,15 @@ import {
   type SummaryRail,
   type SummaryRetryDirective,
 } from "@highlights/events";
+
+/** ADAAAA-9031 (AC5 / spec §13.2): why a row billed a SECOND summary call. The
+ *  contract permits one only on the AC8 repeat path, plus the AC14 filler-clause
+ *  regeneration. Recording it on the row is what makes the meter auditable: the
+ *  rev-10 VOD leg billed 11 second calls and 3 served rows carried no reason. */
+export type SummaryRetryReason =
+  | "repeat-opening"
+  | "repeat-sentence"
+  | "filler-repair";
 
 /** The subset of the store this lane needs (narrow on purpose: the lane must not
  *  be able to touch a verdict, a clip or a price field). */
@@ -76,6 +86,8 @@ export interface SummaryLaneStore {
       summaryDroppedClauses?: number;
       summaryClauseClaims?: string[];
       summaryRepairedWords?: number;
+      /** ADAAAA-9031: the reason a second call was billed (AC5 §13.2). */
+      summaryRetryReason?: string;
     }
   ): Promise<unknown>;
 }
@@ -150,6 +162,11 @@ export interface SummaryRepeatVerdict {
   sameClock: boolean;
   openingRepeat: boolean;
   sentence: { a: string; b: string; similarity: number } | null;
+  /** ADAAAA-9031 (AC14.3): EVERY candidate sentence at or above the bar against
+   *  a served body. AC14's repair order is "regenerate once, then drop the
+   *  offending clause" — the lane needs the full list to drop them, not only the
+   *  closest pair. */
+  repeatedSentences: string[];
 }
 
 /**
@@ -205,6 +222,7 @@ export function summaryRepeatKey(
     : closestSentence !== null
       ? "sentence"
       : null;
+  const repeatedList = [...new Set(sentenceRepeats.map((r) => r.a))];
   return {
     key,
     against: best?.highlightId ?? null,
@@ -213,6 +231,7 @@ export function summaryRepeatKey(
     sameClock,
     openingRepeat,
     sentence: closestSentence,
+    repeatedSentences: repeatedList,
   };
 }
 
@@ -370,6 +389,11 @@ export async function runSummaryForRow(
   /** ADAAAA-8803: the measured shape of the draft the gate refused, handed to
    *  the retry call. Absent on the first pass, so the first prompt is unchanged. */
   let retry: SummaryRetryDirective | undefined;
+  /** ADAAAA-9031 (AC5 / spec §13.2): WHY a second call was billed. The rev-10 VOD
+   *  leg billed 11 second calls and 3 served rows recorded no reason at all, so a
+   *  census could not tell an AC8 repeat from a depth retry. Every row that bills
+   *  two calls now carries the reason it did. */
+  let retryReason: SummaryRetryReason | null = null;
   const started = now();
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
     // AC8 prompt-first: the regeneration (and any retry) is asked to avoid the
@@ -432,13 +456,26 @@ export async function runSummaryForRow(
         );
         break;
       }
-      // ADAAAA-8687: a refusal is retried ONCE, inside the contract's existing
-      // bound (`SUMMARY_MAX_CALLS_PER_ROW`, so a row still bills at most two
-      // calls, AC5) and inside the post-promotion p95 budget. A gate refusal is
-      // a property of ONE sampled reply, not of the row: the served probe
-      // measured 2/9 refusals spread across three repeats of the same three
-      // rows, so a second sample is the difference between 78% coverage and the
-      // 95% bar. A refused reply is still never stored as `summary`.
+      // ADAAAA-9031 (AC5 / spec §13.2): "the second call is permitted ONLY on
+      // the AC8 repeat path" — plus the explicit AC14 regeneration after the
+      // clause repair ("a failing candidate is regenerated once, then the
+      // offending clause is dropped"). A depth or claim refusal is neither, so it
+      // ends the row on ONE call. The rev-10 VOD leg billed 11 second calls and
+      // only 4 were the repeat path; 3 served rows recorded no reason at all.
+      //
+      // `too-few-facts` is deterministic HERE even on a row whose menu offers two
+      // kinds: §13.2 names it as never-retried, and the rev-10 VOD leg re-sampled
+      // exactly those rows (`26a58961`, `8f093fad`, `4c65a303`) to the identical
+      // refusal. The fix for a fact-poor FIRST sample is upstream (the prompt and
+      // the row's own attestation), not a second paid call.
+      const factPoor = decision.violations.includes("too-few-facts");
+      const fillerRepair = !factPoor && decision.droppedClauses.length > 0;
+      if (!fillerRepair) {
+        log(
+          `[summary:${descriptor.jobId}] one-call drop highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} words=${decision.words} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+        );
+        break;
+      }
       if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
         // ADAAAA-8803: the retry is TOLD what the refused draft measured. A
         // second sample of the same prompt is where the served VOD row
@@ -458,6 +495,7 @@ export async function runSummaryForRow(
           ...(decision.droppedClauses.length > 0 ? { droppedClauses: decision.droppedClauses } : {}),
           factMenu: summaryFactMenu(evidence),
         };
+        retryReason = "filler-repair";
         log(
           `[summary:${descriptor.jobId}] gate-retry highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} words=${decision.words} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
         );
@@ -473,7 +511,10 @@ export async function runSummaryForRow(
     // anyway, so it is reverted here. The prompt still asks the writer to avoid
     // the job's openings and sentences, so the retry usually lands a distinct body
     // and the drop is the backstop.
-    const opening = summaryOpeningRun(decision.summary);
+    /** The decision this row serves (the gate's own, or the AC14 clause-dropped
+     *  repair of it). */
+    let accepted = decision;
+    let prunedSentences: string[] = [];
     const repeat = state ? summaryRepeatKey(decision.summary, evidence, state.servedBodies) : null;
     if (repeat && repeat.key !== null) {
       const inputs =
@@ -483,43 +524,79 @@ export async function runSummaryForRow(
         `closestSentence=${repeat.sentence ? `${repeat.sentence.similarity.toFixed(3)} ${JSON.stringify(repeat.sentence.a.slice(0, 120))}` : "none"}`;
       if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
         retry = { words: decision.words, sentences: decision.sentences, violations: ["repeat-sentence"] };
+        retryReason = repeat.key === "opening" ? "repeat-opening" : "repeat-sentence";
         log(`[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — regenerating once`);
         continue;
       }
+      // ADAAAA-9031 (AC14.3): "a failing candidate is regenerated once, then the
+      // offending CLAUSE is dropped; a body that then falls under its floor is
+      // dropped with the named reason." The lane used to drop the whole body,
+      // which cost the rev-10 VOD leg 4 of 22 promoted rows even where the
+      // surviving sentences carried facts. Drop the repeated sentences and
+      // re-gate the remainder; only a body that still fails (or falls under the
+      // band floor) drops as `repeat`.
+      if (repeat.key === "sentence" && repeat.repeatedSentences.length > 0) {
+        const pruned = dropSentences(decision.summary, repeat.repeatedSentences);
+        const prunedDecision = gateSummaryDetail(pruned, evidence);
+        if (prunedDecision.summary) {
+          accepted = prunedDecision;
+          prunedSentences = repeat.repeatedSentences;
+          retryReason = retryReason ?? "repeat-sentence";
+          log(
+            `[summary:${descriptor.jobId}] repeat-clause-drop highlight=${descriptor.highlightId} dropped=${repeat.repeatedSentences.length} words=${prunedDecision.words} ${inputs}`
+          );
+        }
+      }
+      if (accepted === decision) {
+        lastGate = decision;
+        lastReason = "repeat";
+        log(
+          `[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+        );
+        break;
+      }
+    }
+    const servedBody = accepted.summary ?? decision.summary;
+    if (!servedBody) {
       lastGate = decision;
       lastReason = "repeat";
-      log(
-        `[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
-      );
       break;
     }
+    const opening = summaryOpeningRun(servedBody);
     servedOpenings?.add(opening);
-    for (const sentence of summarySentencesOf(decision.summary)) state?.servedSentences.push(sentence);
+    for (const sentence of summarySentencesOf(servedBody)) state?.servedSentences.push(sentence);
     state?.servedBodies.push({
       highlightId: descriptor.highlightId,
       windowTs: evidence.windowTs ?? null,
       windowDurationS: evidence.windowDurationS ?? null,
-      clockToken: attestedMatchClockToken(evidence) ?? clockTokensOf(decision.summary)[0] ?? null,
-      body: decision.summary,
+      clockToken: attestedMatchClockToken(evidence) ?? clockTokensOf(servedBody)[0] ?? null,
+      body: servedBody,
       opening,
     });
     const latencyMs = Math.max(0, Math.round(now() - started));
     await store.patchHighlightSummary(descriptor.highlightId, {
-      summary: decision.summary,
-      summaryGate: decision.gate,
-      summaryCaptionOverlap: decision.captionOverlap,
+      summary: servedBody,
+      summaryGate: accepted.gate,
+      summaryCaptionOverlap: accepted.captionOverlap,
       summaryCalls: calls,
       summaryDropped: 0,
       summaryP95Ms: latencyMs,
+      ...(retryReason ? { summaryRetryReason: retryReason } : {}),
+      ...(prunedSentences.length > 0
+        ? {
+            summaryDroppedSentences: (accepted.droppedSentences ?? 0) + prunedSentences.length,
+            summaryRepairedWords: accepted.words,
+          }
+        : {}),
     });
     log(
-      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${decision.words} sentences=${decision.sentences} gate=${decision.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)} clockToken=${JSON.stringify(clockTokensOf(decision.summary))} matchClockToken=${JSON.stringify(attestedMatchClockToken(evidence))}${
-        decision.droppedClauses.length > 0
-          ? ` droppedClauses=${decision.droppedClauses.length} substitutedClauses=${decision.substitutedClauses.length} repairedWords=${decision.repairedWords}`
+      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${accepted.words} sentences=${accepted.sentences} gate=${accepted.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)} clockToken=${JSON.stringify(clockTokensOf(servedBody))} matchClockToken=${JSON.stringify(attestedMatchClockToken(evidence))} retryReason=${JSON.stringify(retryReason)}${
+        accepted.droppedClauses.length > 0
+          ? ` droppedClauses=${accepted.droppedClauses.length} substitutedClauses=${accepted.substitutedClauses.length} repairedWords=${accepted.repairedWords}`
           : ""
-      }`
+      }${prunedSentences.length > 0 ? ` droppedRepeatedSentences=${prunedSentences.length}` : ""}`
     );
-    return { outcome: "stored", gate: decision.gate, calls, latencyMs };
+    return { outcome: "stored", gate: accepted.gate, calls, latencyMs };
   }
   const reason: SummaryDropReason = lastReason ?? "transport_failure";
   const latencyMs = Math.max(0, Math.round(now() - started));
@@ -552,6 +629,7 @@ export async function runSummaryForRow(
     summaryDropped: 1,
     summaryDroppedByReason: { [reason]: 1 },
     summaryP95Ms: latencyMs,
+    ...(retryReason ? { summaryRetryReason: retryReason } : {}),
   });
   // ADAAAA-8903 (AC1-live): a `too-few-facts` refusal on a row whose OWN evidence
   // offers two fact kinds AND whose judged body names an attested actor is the
@@ -801,6 +879,12 @@ export function summaryEvidenceForRow(row: {
     goalCrossed?: boolean | null;
     scoreBoardChanged?: boolean | null;
   } | null;
+  /** ADAAAA-9031: the Stage-2 confirmation dive's verdict on the ROW, and the
+   *  dive record it came from. A `confirmed_goal` is the row's strongest measured
+   *  attestation, and the folded `attestationUsed` flags can still read
+   *  `ballOutcome: null, goalCrossed: false` on the same row. */
+  goalConfirmed?: string | null;
+  confirmAttestation?: { goalConfirmed?: string | null } | null;
   asrTranscript?: string | null;
   matchContext?: unknown;
 }, rail: SummaryRail, adjacentScoreCue?: string | null): SummaryEvidence {
@@ -836,6 +920,13 @@ export function summaryEvidenceForRow(row: {
           ballOutcome: row.attestationUsed.ballOutcome ?? null,
           goalCrossed: row.attestationUsed.goalCrossed ?? null,
           scoreBoardChanged: row.attestationUsed.scoreBoardChanged ?? null,
+          // ADAAAA-9031 (AC1-VOD coverage): the Stage-2 dive's verdict rides the
+          // same attestation object the gate reads. On the rev-10 VOD rows the
+          // folded flags say `ballOutcome: null, goalCrossed: false` while the
+          // dive says `confirmed_goal` (authority `frame`, corroborated, 12
+          // frame refs) — the gate read only the flags and refused every honest
+          // goal clause on two promoted rows.
+          goalConfirmed: row.goalConfirmed ?? row.confirmAttestation?.goalConfirmed ?? null,
         }
       : null,
   };

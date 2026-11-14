@@ -438,6 +438,8 @@ export class Store {
       summaryDroppedClauses?: number;
       summaryClauseClaims?: string[];
       summaryRepairedWords?: number;
+      /** ADAAAA-9031 (AC5 §13.2): why a second summary call was billed. */
+      summaryRetryReason?: string;
     }
   ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);

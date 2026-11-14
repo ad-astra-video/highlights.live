@@ -2513,6 +2513,11 @@ export const HighlightRecordSchema = z.object({
   /** Words that survived the AC14.5 clause repair; beside `summaryFloorWords` it
    *  is the floor check the ticket names. */
   summaryRepairedWords: z.number().int().min(0).optional(),
+  /** ADAAAA-9031 (AC5 / spec §13.2): why this row billed a SECOND summary call —
+   *  `repeat-opening` / `repeat-sentence` (the only AC8 path the contract permits)
+   *  or `filler-repair` (the AC14 regeneration). Absent on a one-call row, so the
+   *  meter can prove every 2-call row was on a permitted path. */
+  summaryRetryReason: z.enum(["repeat-opening", "repeat-sentence", "filler-repair"]).optional(),
   // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
   // `reason` was derived from, with the frame that confirms it.
   colour: ColourSignalSchema.optional(),

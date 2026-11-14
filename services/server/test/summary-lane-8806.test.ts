@@ -77,21 +77,23 @@ const NAMED =
   "At 0:25, Barcelona drives forward as the team pushes toward the opponent's side of the pitch. Barcelona intercepts the ball near the wing at 0:25 of the clip.";
 
 describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
-  it("retries a clock-only reply when the row attests a second fact type", async () => {
+  // ADAAAA-9031 supersedes ADAAAA-8806's retry: §13.2 names `too-few-facts` a
+  // deterministic refusal, and the rev-10 legs re-sampled it to the identical
+  // refusal. The row still drops; the first sample is what the prompt and the
+  // row's attestation must improve, not a second paid call.
+  it("ends a clock-only reply on ONE call even when the row attests a second fact type", async () => {
     const { store, patches } = stubStore();
-    const { fn, seen, calls } = stubFetch([CLOCK_ONLY, NAMED]);
+    const { fn, calls } = stubFetch([CLOCK_ONLY, NAMED]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: fn }) as any, {
       jobId: "3740585f",
       highlightId: "2d8e9521",
       evidence: celebrationEvidence(),
     });
-    expect(result.outcome).toBe("stored");
-    expect(calls()).toBe(2);
-    expect(patches.at(-1)?.patch.summary).toContain("Barcelona");
-    // The retry is a REPAIR instruction: it carries the refused violation and the
-    // attested actor to name.
-    expect(seen[1].prompt).toContain("fact-poor");
-    expect(seen[1].prompt).toContain("NAME Barcelona");
+    expect(result.outcome).toBe("dropped");
+    expect(calls()).toBe(1);
+    expect(patches.at(-1)?.patch.summary).toBeUndefined();
+    expect(patches.at(-1)?.patch.summaryCalls).toBe(1);
+    expect(patches.at(-1)?.patch.summaryRetryReason).toBeUndefined();
   });
 
   it("still ends on ONE call when the row cannot nourish two fact types", async () => {

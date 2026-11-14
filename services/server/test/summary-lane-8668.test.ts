@@ -264,45 +264,44 @@ describe("runSummaryForRow — the promoted row's copy", () => {
     }
   });
 
-  it("retries a GATE refusal once and stores the second reply (ADAAAA-8687)", async () => {
+  // ADAAAA-9031 (AC5 / spec §13.2): these two cases pinned the ADAAAA-8687
+  // "retry any non-deterministic gate refusal once" rule, which §13.2 supersedes:
+  // a second summary call is permitted ONLY on the AC8 repeat path (AC14 adds the
+  // filler-clause regeneration). A shape refusal is neither, so the row now ends
+  // on ONE call and the refused reply stays replayable as `summaryRaw`.
+  it("ends a shape refusal on ONE call (AC5 §13.2)", async () => {
     const { store, patches } = stubStore();
-    // A SHAPE refusal (`too-few-sentences`) is a property of one sample — the
-    // ADAAAA-8687 retry rationale. It still carries two credited kinds, so the
-    // ADAAAA-8773 deterministic-refusal rule does not apply.
-    const f = stubFetch([ok("At 2:38 Northbridge shoot on the right side of the field."), ok(GOOD_SUMMARY)]);
-    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
-      jobId: "j1",
-      highlightId: "h1",
-      evidence: evidence(),
-    });
-    expect(result.outcome).toBe("stored");
-    expect(result.calls).toBe(2);
-    expect(f.calls()).toBe(2);
-    expect(patches[0].patch.summary).toBe(GOOD_SUMMARY);
-    // R4 (spec rev 2) is metered on the stored row and never gates.
-    expect(typeof patches[0].patch.summaryCaptionOverlap).toBe("number");
-    expect(patches[0].patch.summaryCalls).toBe(2);
-    expect(patches[0].patch.summaryDropped).toBe(0);
-  });
-
-  it("drops after TWO gate refusals and keeps the LAST refused reply as `summaryRaw` (ADAAAA-8687)", async () => {
-    const { store, patches } = stubStore();
-    const second = "The keeper claims the ball under pressure in midfield.";
-    const f = stubFetch([ok("At 2:38 Northbridge shoot on the right side of the field."), ok(second)]);
+    const first = "At 2:38 Northbridge shoot on the right side of the field.";
+    const f = stubFetch([ok(first), ok(GOOD_SUMMARY)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
       jobId: "j1",
       highlightId: "h1",
       evidence: evidence(),
     });
     expect(result.outcome).toBe("dropped");
-    // ADAAAA-8914: the second reply asserts nothing the row attests, so the clause
-    // repair empties it and the drop is named `filler`.
-    expect(result.reason).toBe("filler");
-    expect(result.calls).toBe(2);
+    expect(result.calls).toBe(1);
+    expect(f.calls()).toBe(1);
+    expect(patches).toHaveLength(1);
+    expect(patches[0].patch.summary).toBeUndefined();
+    expect(patches[0].patch.summaryRaw).toBe(first);
+    expect(patches[0].patch.summaryCalls).toBe(1);
+    expect(patches[0].patch.summaryRetryReason).toBeUndefined();
+  });
+
+  it("keeps the refused reply as `summaryRaw` on that one-call drop", async () => {
+    const { store, patches } = stubStore();
+    const first = "At 2:38 Northbridge shoot on the right side of the field.";
+    const f = stubFetch([ok(first), ok(GOOD_SUMMARY)]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
+      jobId: "j1",
+      highlightId: "h1",
+      evidence: evidence(),
+    });
+    expect(result.outcome).toBe("dropped");
     expect(patches.length).toBe(1);
     expect(patches[0].patch.summary).toBeUndefined();
-    expect(patches[0].patch.summaryRaw).toBe(second);
-    expect(patches[0].patch.summaryDroppedByReason).toEqual({ filler: 1 });
+    expect(patches[0].patch.summaryRaw).toBe(first);
+    expect(patches[0].patch.summaryDroppedByReason).toEqual({ [result.reason!]: 1 });
   });
 
   it("drops `pool_busy` when no decide service is configured (never fabricates)", async () => {

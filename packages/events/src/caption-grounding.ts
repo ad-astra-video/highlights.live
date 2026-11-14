@@ -366,9 +366,24 @@ export const BALL_OUTCOME_ASSERTION =
  * the caller then keeps today's behaviour, byte-identically.
  */
 export function attestedBallActionFrom(
-  attest?: { ballOutcome?: string | null; goalCrossed?: boolean | null } | null
+  attest?: {
+    ballOutcome?: string | null;
+    goalCrossed?: boolean | null;
+    /**
+     * ADAAAA-9031 (AC1-VOD coverage): the row's own Stage-2 deep-frame verdict.
+     * A `confirmed_goal` dive is a MEASURED ball outcome even when the folded
+     * low-level flags read `ballOutcome: null, goalCrossed: false`: the frame
+     * attestation is what confirms the goal (`corroborationSource:
+     * frame_attestation`, `momentConfidence: 1`). Reading only the low-level
+     * flags made the body gate refuse every honest goal clause on those rows
+     * ("the ball enters the net" -> `unattested-action`), which is the
+     * served-copy miss the rev-10 VOD leg measured. Absent => unchanged.
+     */
+    goalConfirmed?: string | null;
+  } | null
 ): boolean | null {
   if (!attest) return null;
+  if (String(attest.goalConfirmed ?? "").trim().toLowerCase() === "confirmed_goal") return true;
   if (attest.goalCrossed === true) return true;
   const outcome = String(attest.ballOutcome ?? "").trim().toLowerCase();
   if (outcome && outcome !== "none" && outcome !== "null" && outcome !== "false") return true;

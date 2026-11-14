@@ -1025,6 +1025,11 @@ export interface SummaryEvidence {
     ballOutcome?: string | null;
     goalCrossed?: boolean | null;
     scoreBoardChanged?: boolean | null;
+    /** ADAAAA-9031: the row's Stage-2 deep-frame verdict (`goalConfirmed`). A
+     *  `confirmed_goal` is a measured ball outcome even where the folded flags
+     *  read `ballOutcome: null, goalCrossed: false` — see
+     *  `attestedBallActionFrom`. Additive optional; absent => unchanged. */
+    goalConfirmed?: string | null;
   } | null;
   /**
    * ADAAAA-8914 (AC14.4): the row's own persisted scorebug reading. The body's
@@ -2284,10 +2289,26 @@ export interface SummarySentenceRepeat {
  *  three rows, clock differing) scores 0.818 — above the 0.80 bar, while two
  *  honest score lines (`… moves to 2-1` / `… moves to 2-2`) score 0.667 and stay
  *  clear, so the bar separates a template from a fact that differs by its own
- *  digits. */
+ *  digits.
+ *
+ *  ADAAAA-9031 (AC14.3): a clock token is NOT a fact that makes two sentences
+ *  different. The rev-10 VOD leg served two pairs at >= 0.80 with the QA metric
+ *  (`The clip carries this sequence at 0:24 into the clip.` vs `… at 1:21 into
+ *  the clip.`, 0.961) that this function scored BELOW the bar, because `0:24`
+ *  and `1:21` were two distinct tokens. Every clock token is therefore masked to
+ *  one placeholder before the comparison, so two template sentences that differ
+ *  only by when they happen are the SAME sentence — which is exactly the defect
+ *  AC14.3 names. Score digits are NOT masked: `2-1` vs `2-2` stays a difference,
+ *  because the scoreboard change is the fact the copy exists to carry. */
+export const SENTENCE_CLOCK_TOKEN_RE = /\b\d{1,3}:\d{2}\b/g;
+
+export function maskSentenceClocks(text: string): string {
+  return (text ?? "").replace(SENTENCE_CLOCK_TOKEN_RE, "clocktime");
+}
+
 export function sentenceSimilarity(a: string, b: string): number {
-  const left = new Set(sentenceTokens(a));
-  const right = new Set(sentenceTokens(b));
+  const left = new Set(sentenceTokens(maskSentenceClocks(a)));
+  const right = new Set(sentenceTokens(maskSentenceClocks(b)));
   if (left.size === 0 || right.size === 0) return 0;
   let shared = 0;
   for (const token of left) if (right.has(token)) shared++;
@@ -2349,6 +2370,24 @@ export function closestSentencePair(
     }
   }
   return best;
+}
+
+/**
+ * ADAAAA-9031 (AC14.3): drop the given sentences from a candidate body.
+ *
+ * AC14's own repair order is "regenerate once, THEN the offending clause is
+ * dropped; a body that then falls under its floor is dropped with the named
+ * reason". The lane used to drop the WHOLE body on a repeated sentence, which is
+ * why the rev-10 VOD leg lost 4 of 22 promoted rows to `dropped:repeat` even when
+ * the remaining two sentences carried facts. This is the extractive clause drop
+ * that order names: exact sentences only (the caller passes the sentences the
+ * repeat key flagged), bytes otherwise untouched.
+ */
+export function dropSentences(text: string, drop: readonly string[]): string {
+  if (!drop.length) return text;
+  const keys = new Set(drop.map((s) => (s ?? "").trim()).filter(Boolean));
+  const kept = summarySentencesOf(text).filter((s) => !keys.has(s.trim()));
+  return kept.join(" ").trim();
 }
 
 /** AC9 read: the DISTINCT fact types the body relays that the row attests. */
@@ -2936,6 +2975,20 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     // sentence is now a fact sentence, and the gate DELETES any sentence that is
     // not — a body that loses sentences falls under the floor and is dropped.
     "- Every sentence must carry at least one fact from the evidence: a score line, the clock, the attested match clock, an attested actor's action, or the competition/venue when the match context carries one. A sentence that only sets the scene adds no depth and is deleted.",
+    // ADAAAA-9031 (AC1-VOD coverage / AC14.3): the rev-10 VOD bodies spent whole
+    // sentences on the clip offset ("This scoring play occurs at 0:24 into the
+    // clip.", "The clip carries this sequence at 0:24 into the clip.", "Carlos
+    // Javier is in the passage at 0:24 into the clip.", "The window runs at 1:21
+    // into the clip."). A clock IS a fact, so the per-sentence rule above kept
+    // them, and two cards whose sentences differ only by that clock are the same
+    // copy (AC14.3 measured 0.961). The rule below was previously stated only on
+    // the RETRY pass; it belongs on the FIRST pass, which is where the defect was
+    // generated.
+    "- Never spend a whole sentence on the clip clock. The `Window:` offset must sit INSIDE a sentence that also carries another fact (an attested actor's act, the score line, or the competition). Never write 'This scoring play occurs at 0:24 into the clip', 'The clip carries this sequence at …', 'X is in the passage at …', 'The window runs at …' or 'This action occurs at …': those sentences say only WHEN, and a body made of them is deleted.",
+    // ADAAAA-9031 (AC14.3): distinctness is per SENTENCE, not per body — a body
+    // whose sentences all restate the same clock reads as one template.
+    "- Each sentence must carry a DIFFERENT fact from the sentence before it: do not restate the same clock, the same score line or the same actor's act in two sentences. Two sentences that differ only by a clock token count as the same sentence.",
+
     "- Never describe the atmosphere, the crowd, the fans, a celebration, a reaction, momentum, intensity, a 'pivotal moment', a 'turning point', a 'battle for control' or a 'vital point': the evidence measures none of those, so the gate deletes every sentence that does.",
     "- Do not reuse a sentence shape from another card in this job. Two cards must never carry the same sentence: no template such as 'This pivotal moment occurs at the … mark'.",
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
@@ -2994,8 +3047,10 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
           "- Do NOT describe possession, pressure, control or 'working the ball forward': the evidence measures no possession and no pressure, so the gate deletes every such sentence. Carry the second fact type with the score line (when the evidence attests a change), the clip clock, or a bounded act by a named attested actor. Do not describe the crowd, the atmosphere, a celebration or a player's reaction either: the evidence measures none of them.",
         ]
       : []),
-    attestsScoring
-      ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
+    attestsScoring && ballActionAttested === true
+      ? "- The row's own confirmation dive attests the ball outcome (a confirmed goal): you may say the ball crossed the line or found the net, once, and never claim which side's player did it unless the evidence names that player as the scorer."
+      : attestsScoring
+        ? "- Never claim a goal unless the evidence attests one; never invent a statistic."
       : "- This is NOT a scoring play: the words 'goal', 'scoring', 'score' and 'net' are off limits. Do not describe a goal or a scoring chance, do not name the net, and do not state a score or whether it changed.",
     "- Never invent a name, a team, a venue or a statistic. A role noun ('the midfielder', 'the keeper', 'the striker', 'the defender', 'the winger') is a claim: use it ONLY when the evidence below uses that word. Otherwise describe the play, the move or the shot, or name an attested team.",
     ...(attestsScoring

@@ -68,8 +68,16 @@ const cfg = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => {
-  it("retries the 36-word draft once and serves a target-length body", async () => {
+// ADAAAA-9031 (AC5 / spec §13.2) supersedes the retry expectations this file was
+// written against. §13.2 permits a second summary call ONLY on the AC8 repeat path
+// (AC14 adds the filler-clause regeneration); a depth refusal is neither, so a
+// sub-target draft now ends the row on ONE call and the card keeps its headline.
+// The rev-10 VOD grade measured exactly the old shape: 11 of 22 rows billed two
+// calls, only 4 of them on the repeat path, and 3 served rows recorded no reason
+// at all. The prompt-side shaping the old tests asserted (`RETRY: …`) is still
+// exercised on the repeat/filler paths in `summary-lane-9031.test.ts`.
+describe("ADAAAA-9031 (AC5 §13.2) — a sub-target draft ends the row on ONE call", () => {
+  it("does not re-sample the 36-word draft, and keeps its bytes as evidence", async () => {
     const { store, patches } = stubStore();
     const f = stubFetch([ok(SHORT), ok(LONG)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
@@ -77,36 +85,15 @@ describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => 
       highlightId: "0526c296",
       evidence: EVIDENCE,
     });
-    expect(result.outcome).toBe("stored");
-    expect(result.calls).toBe(2);
-    // ADAAAA-8803: the retry no longer re-reads the first-pass line. It is told
-    // the measured shape of the refused draft and asks for the floor plus a
-    // margin, so a boundary draft cannot re-land under it.
-    expect(f.bodies[0]).toContain("aim for 45-55 words");
-    expect(f.bodies[1]).toContain("RETRY: the previous draft measured");
-    expect(f.bodies[1]).toContain("this copy must reach at least 45 words");
-    expect(f.bodies[1]).toContain("too-few-words");
-    const stored = patches.find((p) => typeof p.patch.summary === "string");
-    expect(stored?.patch.summary).toBe(LONG);
-    expect(String(stored?.patch.summary).split(/\s+/).length).toBeGreaterThanOrEqual(40);
-    expect(stored?.patch.summaryCalls).toBe(2);
-    expect(stored?.patch.summaryDropped).toBe(0);
-  });
-
-  it("drops rather than serving a body that stays under the target", async () => {
-    const { store, patches } = stubStore();
-    const f = stubFetch([ok(SHORT), ok(SHORT)]);
-    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
-      jobId: "a200d2bd",
-      highlightId: "0526c296",
-      evidence: EVIDENCE,
-    });
     expect(result.outcome).toBe("dropped");
-    expect(result.calls).toBe(2);
+    expect(result.calls).toBe(1);
+    expect(f.calls()).toBe(1);
     const final = patches[patches.length - 1].patch;
     expect(final.summary).toBeUndefined();
-    expect(final.summaryGate).toBe("dropped:gate");
+    expect(final.summaryGate).toMatch(/^dropped:/);
     expect(final.summaryDropped).toBe(1);
+    expect(final.summaryCalls).toBe(1);
+    expect(final.summaryRetryReason).toBeUndefined();
     // The refused reply is kept as evidence, never served.
     expect(final.summaryRaw).toBe(SHORT);
   });
@@ -134,10 +121,12 @@ describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => 
     expect(result.outcome).toBe("dropped");
   });
 
-  it("spends the retry slot when the row DOES attest two facts (ADAAAA-8806)", async () => {
-    // The measured case: a clock-only draft on a row whose `matchContext` attests
-    // Barcelona is a sampling miss, not a property of the row.
-    const { store } = stubStore();
+  it("also ends a clock-only draft on ONE call when the row DOES attest two facts", async () => {
+    // ADAAAA-9031 reverses ADAAAA-8806's `too-few-facts` retry: §13.2 names the
+    // AC8 repeat path as the only permitted second call, and the grade measured
+    // the live/VOD cost of re-sampling a deterministic refusal. The row still
+    // drops; the reason on the row is now the gate's, with no retry billed.
+    const { store, patches } = stubStore();
     const clockOnly = "The clip lands at the 1:27 mark of the sequence and nothing else is attested here at all.";
     const f = stubFetch([ok(clockOnly), ok(LONG)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
@@ -145,8 +134,9 @@ describe("ADAAAA-8791 — the retry slot repairs a sub-target VOD draft", () => 
       highlightId: "y",
       evidence: EVIDENCE,
     });
-    expect(result.calls).toBe(2);
-    expect(result.outcome).toBe("stored");
-    expect(f.bodies[1]).toContain("fact-poor");
+    expect(result.calls).toBe(1);
+    expect(result.outcome).toBe("dropped");
+    const final = patches[patches.length - 1].patch;
+    expect(final.summaryRetryReason).toBeUndefined();
   });
 });
