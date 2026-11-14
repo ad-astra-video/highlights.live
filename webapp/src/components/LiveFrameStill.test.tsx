@@ -62,6 +62,9 @@ describe("AC4.1 — one <img> and one box", () => {
     expect(html).toContain("data-live-stage-frame-still-waiting");
     expect(html).toContain("No analyzed frame yet");
     expect(html).not.toContain("data-live-stage-frame-still-box=");
+    // ADAAAA-8986: no frame to age -> no `-age`/`-stale` markers at all.
+    expect(html).not.toContain("data-live-stage-frame-still-age");
+    expect(html).not.toContain("data-live-stage-frame-still-stale");
   });
 
   it("states a failed frame read instead of drawing an empty box", () => {
@@ -88,6 +91,11 @@ describe("ADAAAA-8970 — the no-preview state matrix (markup)", () => {
     expect(html).toContain("No analyzed frame yet");
     // text only: no caption claiming a frame that is not there
     expect(html).not.toContain("data-live-stage-frame-still-caption");
+    // ADAAAA-8986: a named waiting state has NO frame, so it carries no
+    // `-stale="true"` and no `-age` to contradict itself with.
+    expect(html).not.toContain("data-live-stage-frame-still-age");
+    expect(html).not.toContain("data-live-stage-frame-still-stale");
+    expect(html).not.toContain("age unknown");
   });
 
   it("frame 401/403: 0 `<img>`, 0 box, a NAMED refusal label distinct from waiting", () => {
@@ -106,6 +114,10 @@ describe("ADAAAA-8970 — the no-preview state matrix (markup)", () => {
     expect(html).toContain('aria-hidden="false"');
     expect(html).toContain("token was refused (frame fetch failed: HTTP 401)");
     expect(html).toContain("Sign in again");
+    // ADAAAA-8986: a refused read shows no picture, so no `-age`/`-stale`.
+    expect(html).not.toContain("data-live-stage-frame-still-age");
+    expect(html).not.toContain("data-live-stage-frame-still-stale");
+    expect(html).not.toContain("age unknown");
     // distinct from the waiting state, in marker AND copy
     expect(html).not.toContain("data-live-stage-frame-still-waiting");
     expect(html).not.toContain("No analyzed frame yet");
@@ -201,6 +213,16 @@ describe("AC4.3 — freshness is labelled, never implied", () => {
     const html = ssr({ anchorMs: null });
     expect(html).toContain('data-live-stage-frame-still-age="age unknown"');
     expect(html).toContain('data-live-stage-frame-still-stale="true"');
+  });
+
+  // ADAAAA-8986: `-age` is the frame's own capture time on the job's content
+  // anchor — pinned at a known anchor so the number is reproducible. A frame
+  // stamped T+112.3 in a job started 240 s ago reads 127 s, not 240 s.
+  it("measures -age from the frame's own capture instant at a known anchor", () => {
+    const html = ssr({ nowMs: ANCHOR + 240_000 });
+    expect(html).toContain('data-live-stage-frame-still-age="127s ago"');
+    expect(html).toContain('data-live-stage-frame-still-stale="true"');
+    expect(html).not.toContain('data-live-stage-frame-still-age="240s ago"');
   });
 
   it("carries no animation or spinner framing", () => {

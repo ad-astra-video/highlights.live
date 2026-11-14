@@ -24,6 +24,7 @@ import {
   latestLiveFrame,
   shouldPollStill,
   stillRefusalText,
+  stillShowsFrame,
   type LiveFrameRef,
 } from "./liveFrameStill";
 import { contentRect, overlayBox } from "./scoreboardOverlay";
@@ -85,6 +86,23 @@ describe("freshness (AC4.3 — from the served values, never implied)", () => {
     const wall = frameWallClockMs(30.5, ANCHOR)!;
     expect(wall).toBe(ANCHOR + 30_500);
     expect(frameAgeSeconds(wall, NOW)).toBe(11); // 42 s - 30.5 s
+  });
+
+  // ADAAAA-8986: `-age` is pinned at a known anchor so the derivation the
+  // module documents is reproducible instead of inferred from the served DOM.
+  // Job started 240 s ago, served frame stamp T+112.3 -> its own capture was
+  // 127.7 s ago: the age is the FRAME's, not the job's.
+  it("measures -age from the frame's own capture instant, not the job's start", () => {
+    const jobStartedMs = ANCHOR;
+    const nowMs = jobStartedMs + 240_000;
+    const wall = frameWallClockMs(112.3, jobStartedMs)!;
+    expect(wall).toBe(jobStartedMs + 112_300);
+    expect(frameAgeSeconds(wall, nowMs)).toBe(127);
+    expect(formatFrameAge(frameAgeSeconds(wall, nowMs))).toBe("127s ago");
+    // explicitly NOT `now - startedAt`: the literal 240 s anchor is not the age.
+    expect(frameAgeSeconds(wall, nowMs)).not.toBe(240);
+    // and a stamp at the job's start would read the full 240 s.
+    expect(frameAgeSeconds(frameWallClockMs(0, jobStartedMs), nowMs)).toBe(240);
   });
 
   it("uses an epoch-valued stamp as absolute wall clock (defensive unit guard)", () => {
@@ -429,6 +447,43 @@ describe("ADAAAA-8970 — the no-preview degrade matrix", () => {
     expect(auth).not.toContain("No analyzed frame yet");
   });
 });
+
+// ADAAAA-8986 (Inc 2 QA follow-up): a degrade state has no frame to age, so it
+// must carry no `-stale`/`-age`. The predicate is the single source of that rule
+// and is checked against the real source snapshots, not a hand-built literal.
+describe("ADAAAA-8986 — provenance markers only for a picture on screen", () => {
+  const FRAME: LiveFrameRef = { seq: 412, uri: "/jobs/job-1/frames/412", timestamp: 112.3 };
+
+  it("waiting and refused have no frame to age", async () => {
+    const waiting = await createLiveStillSource(fakeTransport([{ frames: [] }]).transport).poll("job-1");
+    expect(waiting.state).toBe("waiting");
+    expect(stillShowsFrame(waiting.state, waiting.frame, waiting.url)).toBe(false);
+
+    const refused = await new LiveStillSource({
+      ...fakeTransport([listOf([{ seq: 6, timestamp: 12 }])]).transport,
+      async fetchImage() {
+        throw new Error("frame fetch failed: HTTP 401");
+      },
+    }).poll("job-1");
+    expect(refused.state).toBe("refused");
+    expect(stillShowsFrame(refused.state, refused.frame, refused.url)).toBe(false);
+  });
+
+  it("a frame ref leaking into a degrade state is still not aged", () => {
+    // Defensive: the component must not age a frame whose bytes are not shown.
+    expect(stillShowsFrame("waiting", FRAME, "blob:frame-412")).toBe(false);
+    expect(stillShowsFrame("refused", FRAME, null)).toBe(false);
+    expect(stillShowsFrame("refused", FRAME, "blob:frame-412")).toBe(false);
+  });
+
+  it("ready with bytes on screen carries the markers", () => {
+    expect(stillShowsFrame("ready", FRAME, "blob:frame-412")).toBe(true);
+    // ready but nothing on screen: no picture, so no age.
+    expect(stillShowsFrame("ready", FRAME, null)).toBe(false);
+    expect(stillShowsFrame("ready", null, "blob:frame-412")).toBe(false);
+  });
+});
+
 
 // AC4.2 — the SAME Inc 3 mapper, proved on an <img> at the three stage aspects
 // the ticket names. Expected numbers are written out by hand (not recomputed

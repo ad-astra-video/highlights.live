@@ -97,6 +97,11 @@ export function contentAnchorMs(startedAt: string | null | undefined): number | 
  * content timestamp placed on the job's content-clock anchor. An epoch-valued
  * stamp is already absolute. `null` when neither source can be established —
  * the caller then renders "age unknown" instead of a fresh-looking still.
+ *
+ * ADAAAA-8986: `-age` is measured against THIS instant, never against
+ * `startedAt` alone — it is `now - (startedAt + served frame timestamp)`, the
+ * frame's own capture time, so a frame captured at `T+112.3` of a job started
+ * 240 s ago reads `128s ago` (127 s floored), not `240s ago`.
  */
 export function frameWallClockMs(timestampSec: number | null, anchorMs: number | null): number | null {
   if (timestampSec === null || !Number.isFinite(timestampSec)) return null;
@@ -116,6 +121,20 @@ export function frameAgeSeconds(wallMs: number | null, nowMs: number): number | 
  *  age is stale-by-default — it is never presented as fresh. */
 export function isFrameStale(ageSec: number | null): boolean {
   return ageSec === null || ageSec > LIVE_FRAME_STALE_SEC;
+}
+
+/**
+ * ADAAAA-8986: the provenance markers (`-seq`, `-stamp`, `-age`, `-stale`)
+ * describe a picture that is actually on screen. `waiting` and `refused` carry
+ * no frame to age, so the still omits `-age`/`-stale` there instead of
+ * advertising `-stale="true"` for a frame that does not exist.
+ */
+export function stillShowsFrame(
+  state: LiveStillStateKind,
+  frame: LiveFrameRef | null,
+  url: string | null,
+): boolean {
+  return state === "ready" && frame !== null && url !== null;
 }
 
 /** `42s ago`, or `age unknown` when the frame has no derivable wall clock. */

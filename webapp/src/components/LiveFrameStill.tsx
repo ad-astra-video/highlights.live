@@ -14,11 +14,12 @@
  *
  *   (no surface) - this component is not mounted at all: 0 `<img>`, 0 box.
  *   waiting      - surface present, no frame extracted yet: a NAMED waiting
- *                  state, text only, `aria-hidden` false so it is announced.
+ *                  state, text only, `aria-hidden` false so it is announced,
+ *                  and no `-age`/`-stale` markers (there is no frame to age).
  *   refused      - a frame read failed (401/403 or transport): a NAMED refusal
  *                  state that says the frame could not be read, distinct from
- *                  "no frames yet", and no `<img>` (an auth-refused still is
- *                  dropped, not re-shown).
+ *                  "no frames yet", no `<img>` (an auth-refused still is
+ *                  dropped, not re-shown) and no `-age`/`-stale` markers.
  *   ready        - 1 `<img>`, 1 box once measured, labelled with the frame's own
  *                  seq/stamp/age; over 60 s (or an underivable age) reads stale.
  *
@@ -57,6 +58,7 @@ import {
   isFrameStale,
   isAuthRefusal,
   stillRefusalText,
+  stillShowsFrame,
   type LiveFrameRef,
   type LiveStillRefusal,
   type LiveStillStateKind,
@@ -119,8 +121,11 @@ export function LiveFrameStillView({
   const why: LiveStillRefusal =
     refusal ?? (kind === "refused" ? (isAuthRefusal(frameErrorStatus(error)) ? "auth" : "transport") : null);
   const shown = imgSrc !== null;
-  const ageSec = frame ? frameAgeSeconds(frameWallClockMs(frame.timestamp, anchorMs), nowMs) : null;
-  const stale = isFrameStale(ageSec);
+  // ADAAAA-8986: a marker describes a picture that is on screen. `waiting` and
+  // `refused` have no frame to age, so they carry no `-age`/`-stale` at all.
+  const pictured = stillShowsFrame(kind, frame, imgSrc) ? frame : null;
+  const ageSec = pictured ? frameAgeSeconds(frameWallClockMs(pictured.timestamp, anchorMs), nowMs) : null;
+  const stale = pictured ? isFrameStale(ageSec) : false;
   const rect: Rect | null = geometry
     ? contentRect(geometry.stageW, geometry.stageH, geometry.elW, geometry.elH)
     : null;
@@ -144,9 +149,14 @@ export function LiveFrameStillView({
         data-live-stage-frame-still-layer
         data-live-stage-frame-still-seq={shown && frame ? String(frame.seq) : ""}
         data-live-stage-frame-still-stamp={shown && frame ? formatContentStamp(frame.timestamp) : ""}
-        data-live-stage-frame-still-age={formatFrameAge(ageSec)}
-        // AC4.3: stale is a MARKER, not only styling — a test (and QA) can read it.
-        data-live-stage-frame-still-stale={stale ? "true" : "false"}
+        // ADAAAA-8986: `-age`/`-stale` ship only with a picture to age, so a
+        // degrade state never advertises a stale frame it does not have.
+        {...(pictured
+          ? {
+              "data-live-stage-frame-still-age": formatFrameAge(ageSec),
+              "data-live-stage-frame-still-stale": stale ? "true" : "false",
+            }
+          : {})}
         data-live-stage-frame-still-content-rect={formatContentRect(rect)}
       >
         {/* 0 `<img>` in every degrade state: no element, not an empty `src`. */}
