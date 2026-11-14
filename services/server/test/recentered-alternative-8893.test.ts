@@ -179,8 +179,12 @@ describe("the option row states the dive's provenance", () => {
 
 // One option delivery against a live-shaped row: the cut records the spec the
 // seam handed it, so a test can assert the PLACEMENT the rail was asked for.
-function harness(existing: HighlightAlternative[] = [], cutResult?: { clipUri: string; bytes?: number; offsetSec?: number | null }) {
-  const rows = new Map([[owner.id, structuredClone(owner)]]);
+function harness(
+  existing: HighlightAlternative[] = [],
+  cutResult?: { clipUri: string; bytes?: number; offsetSec?: number | null },
+  card: HighlightRecord = owner
+) {
+  const rows = new Map([[card.id, structuredClone(card)]]);
   const stored: HighlightAlternative[] = [...existing];
   const cutCalls: number[] = [];
   const specs: RecenteredCutSpec[] = [];
@@ -197,7 +201,7 @@ function harness(existing: HighlightAlternative[] = [], cutResult?: { clipUri: s
     deliverRecenteredOption({
       deps,
       jobId: "job-8893",
-      highlightId: owner.id,
+      highlightId: card.id,
       dive,
       cut: async (spec) => {
         cutCalls.push(dive.ts);
@@ -226,16 +230,21 @@ describe("delivery keeps the card's clip and never writes the owner row", () => 
     expect(h.rows.get(owner.id)?.clipUri).toBe("/clips/job-8893-1587.mp4");
   });
 
-  it("stamps where the card's anchor actually landed in the option file (ADAAAA-8906)", async () => {
-    // The D5 grade could only see this by probing footage, because the row did
-    // not record the delivered placement. The option row now carries the
-    // measured number, so a mis-placed cut is readable from the row.
-    const h = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4", offsetSec: 7.02 });
+  it("stamps the MOMENT's offset (moment − start) and keeps the measured anchor placement beside it", async () => {
+    // ADAAAA-9004: the cut's delivered offset used to be stamped into
+    // momentDeliveredOffsetSec. On this card the window starts at 150 and the
+    // dive names 162.25, so the AC5.1 value is 12.25 while the cut measured its
+    // accept anchor at 8.667 of the file. Two numbers, two fields.
+    const h = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4", offsetSec: 8.667 });
     const option = await h.deliver();
-    expect(option?.momentDeliveredOffsetSec).toBeCloseTo(7.02, 3);
-    // Absent (content-clock fallback / a rail that measured nothing) stays absent.
+    expect(option?.momentDeliveredOffsetSec).toBeCloseTo(12.25, 3);
+    expect(option?.clipAnchorDeliveredOffsetSec).toBeCloseTo(8.667, 3);
+    // A rail that measured nothing leaves the anchor field absent — the moment
+    // stamp is arithmetic and does not depend on a measurement.
     const noMeasure = harness([], { clipUri: "/clips/job-8893-1587-recentered.mp4" });
-    expect((await noMeasure.deliver())?.momentDeliveredOffsetSec).toBeUndefined();
+    const unmeasured = await noMeasure.deliver();
+    expect(unmeasured?.clipAnchorDeliveredOffsetSec).toBeUndefined();
+    expect(unmeasured?.momentDeliveredOffsetSec).toBeCloseTo(12.25, 3);
   });
 
   it("never cuts a second option for the same row", async () => {
@@ -311,6 +320,10 @@ describe("the option's cut is placed on the CARD, never on the dive moment (ADAA
     expect(option?.windowAnchorTs).toBeCloseTo(162.25, 6); // dive moment = row provenance
     expect(option?.acceptAnchorTs).toBeCloseTo(158.667, 6);
     expect(option?.driftSec).toBeCloseTo(162.25 - 158.667, 3);
+    // ADAAAA-9004: the moment stamp is the option's own window arithmetic, so a
+    // rail's measured offset cannot move it (that number is its own field).
+    expect(option?.momentDeliveredOffsetSec).toBeCloseTo(12.25, 3);
+    expect(option?.clipAnchorDeliveredOffsetSec).toBeCloseTo(7.02, 3);
   });
 
   it("a celebration-tail card keeps its cue as the END", () => {
@@ -327,5 +340,68 @@ describe("acceptAnchorOf mirrors the row's accept anchor", () => {
     expect(acceptAnchorOf({ localizedTs: 158.667 })).toBeCloseTo(158.667, 3);
     expect(acceptAnchorOf({ localizedTs: undefined as any, trigger: { timestamp: 40 } })).toBe(40);
     expect(acceptAnchorOf({ localizedTs: undefined as any })).toBeNull();
+  });
+});
+
+describe("AC5.1 — momentDeliveredOffsetSec is `moment − window.start` (ADAAAA-9004)", () => {
+  // The served row the D5 grade read (job `e4c2fe29`, alt `3f43813c`, highlight
+  // `f4c74519`): the option row held window [151.666…, 166.666…], windowAnchorTs
+  // 157.666… and acceptAnchorTs 158.666… (signed drift -1), and stored
+  // momentDeliveredOffsetSec = 7 — which is `acceptAnchorTs - start` exactly,
+  // i.e. the accept ANCHOR's delivered offset. The contract value is
+  // `moment - start` = 6.000000. On a drift-0 row the two coincide, so the
+  // |drift| >= 1 population is the only place the defect is visible.
+  const gradedCard = HighlightRecordSchema.parse({
+    id: "f4c74519-42ed-4e16-ba49-341145aaebe3",
+    jobId: "e4c2fe29-68fe-472c-91da-b96d1dd8ca93",
+    start: 151.66666666666666,
+    end: 166.66666666666666,
+    localizedTs: 158.66666666666666,
+    clipUri: "/clips/e4c2fe29-68fe-472c-91da-b96d1dd8ca93-1517.mp4",
+    eventType: "GOAL",
+    outcome: "scoring_play",
+    status: "accepted",
+    score: 88,
+    createdAt: "2026-11-13T12:23:28.000Z",
+  });
+  const MOMENT = 157.66666666666666;
+
+  it("the moment stamp is ms-rounded window arithmetic on the row's own fields", async () => {
+    // Raw float subtraction is 6.000000000000014; the stamp is rounded to ms so
+    // the stored value reads as the contract's 6.000000 (tolerance ±0.001).
+    const h = harness([], { clipUri: "/clips/opt.mp4" }, gradedCard);
+    const option = await h.deliver({ ts: MOMENT, confidence: 0.82 });
+    expect(option?.momentDeliveredOffsetSec).toBe(6);
+  });
+
+  it("a |drift| >= 1 row stamps 6.000, not the accept anchor's 7.000", async () => {
+    // The cut measures the CARD's accept anchor inside the option file (7.000 on
+    // this row). That number must not land in the moment slot any more.
+    const h = harness(
+      [],
+      { clipUri: "/clips/e4c2fe29-68fe-472c-91da-b96d1dd8ca93-1517-recentered.mp4", bytes: 5_692_411, offsetSec: 7 },
+      gradedCard
+    );
+    const option = await h.deliver({ ts: MOMENT, confidence: 0.82 });
+    expect(option).not.toBeNull();
+
+    // provenance unchanged: the moment, the accept anchor and the signed drift
+    expect(option?.windowAnchorTs).toBeCloseTo(MOMENT, 6);
+    expect(option?.acceptAnchorTs).toBeCloseTo(158.66666666666666, 6);
+    expect(option?.driftSec).toBeCloseTo(-1, 6);
+    // placement unchanged: the option shares the card's window
+    expect(option?.start).toBeCloseTo(gradedCard.start, 6);
+    expect(option?.end).toBeCloseTo(gradedCard.end, 6);
+    // the graded clause, written as the AC writes it
+    expect(option?.momentDeliveredOffsetSec).toBeCloseTo((option!.windowAnchorTs ?? 0) - option!.start, 3);
+    expect(option?.momentDeliveredOffsetSec).toBeCloseTo(6, 3);
+    expect(option?.momentDeliveredOffsetSec).not.toBeCloseTo(
+      (option!.acceptAnchorTs ?? 0) - option!.start,
+      3
+    );
+    // and the measured anchor placement survives in its own field
+    expect(option?.clipAnchorDeliveredOffsetSec).toBeCloseTo(7, 3);
+    // the owner card is untouched (AC5.1 first half)
+    expect(h.rows.get(gradedCard.id)?.clipUri).toBe(gradedCard.clipUri);
   });
 });
