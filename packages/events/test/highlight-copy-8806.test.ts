@@ -188,8 +188,10 @@ describe("ADAAAA-8806 — the entity-bearing body survives the gate", () => {
     // the sequence." — an atmosphere clause AC14 deletes, and with it the body
     // fell under the live floor. The fixture now carries an attested actor's play
     // in both sentences, which is what a served body has to look like.
+    // ADAAAA-8934: the second sentence must carry a BOUNDED act — "keeps
+    // possession as the move develops" is a sustained state the repair deletes.
     const clean =
-      "At 1:34, Barcelona drives forward as the team moves toward the opponent's side of the pitch. Barcelona keeps possession as the move develops toward the wing.";
+      "At 1:34, Barcelona recovers the ball near the wing as the team moves toward the opponent's side of the pitch. Barcelona intercepts the ball near the box at 1:34 of the clip.";
     const evidence = evidenceFor(ROW_2, null);
     const decision = gateSummaryDetail(clean, evidence);
     expect(decision.violations).toEqual([]);

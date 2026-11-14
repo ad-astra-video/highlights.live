@@ -209,13 +209,15 @@ describe("ADAAAA-8910 defect 2 — the offset's frame is the CLIP, never the mat
     // as the sides reset.", is an atmosphere clause AC14 deletes — an unattested
     // clause is not part of THIS bar's evidence, so the fixture now carries an
     // attested actor's play instead.)
+    // ADAAAA-8934: "keeps possession as the sides reset" is a sustained state the
+    // clause repair deletes, so the second fact is a bounded act instead.
     const draft =
-      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the match. Real Madrid keeps possession as the sides reset.";
+      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the match. Real Madrid intercepts the ball at 1:42 into the clip as the sides reset.";
     const decision = gateSummaryDetail(draft, ROW_AED6);
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("neutralised");
     expect(decision.summary).toBe(
-      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the clip. Real Madrid keeps possession as the sides reset."
+      "Real Madrid moves the ball forward as the scoreboard moves to 2-1 at the 1:42 mark of the clip. Real Madrid intercepts the ball at 1:42 into the clip as the sides reset."
     );
     // The served copy can no longer assert a match stamp the row does not carry.
     expect(clockFrameClaims(decision.summary ?? "")).toEqual([]);
@@ -252,7 +254,9 @@ describe("ADAAAA-8910 defect 3 — a competition the match context does not carr
     // venue token (asserted below). The repair is not a second venue rule.
     const decision = gateSummaryDetail(draft, ROW_AED6);
     expect(decision.summary).toBeFalsy();
-    expect(decision.droppedClauses).toHaveLength(1);
+    // ADAAAA-8934: "Real Madrid holds possession near the touchline." is a second
+    // clause the repair deletes (a possession state), so the repair reports two.
+    expect(decision.droppedClauses).toHaveLength(2);
     expect(summaryViolations(draft, ROW_AED6)).toContain("unattested-venue");
   });
 
@@ -269,7 +273,9 @@ describe("ADAAAA-8910 defect 3 — the prompt stops asking for a fact the row ca
   it("drops the competition/venue from the fact menu and names the ban", () => {
     const prompt = buildSummaryPrompt(ROW_AED6);
     expect(prompt).not.toContain("the competition or venue, or an attested team's");
-    expect(prompt).toContain("the clock or spell, an attested team's or player's action");
+    // ADAAAA-8934: the action slot is a BOUNDED act, not "the team's action" (the
+    // phrase the rev-8 bodies answered with possession prose).
+    expect(prompt).toContain("the clock or spell, a bounded act (an interception, a recovery, a won-back ball, a counter) by a named attested actor");
     expect(prompt).toContain("The match context carries NO competition and NO venue");
     // The length-band and celebration instructions must not re-offer it either.
     expect(prompt).not.toMatch(/add another fact — the clock, the competition or venue/);
@@ -280,7 +286,9 @@ describe("ADAAAA-8910 defect 3 — the prompt stops asking for a fact the row ca
       ...ROW_AED6,
       matchContext: { ...JOB_CONTEXT, competition: "La Liga" },
     });
-    expect(prompt).toContain("the clock or spell, the competition or venue, an attested team's or player's action");
+    expect(prompt).toContain(
+      "the clock or spell, the competition or venue, a bounded act (an interception, a recovery, a won-back ball, a counter) by a named attested actor"
+    );
     expect(prompt).not.toContain("The match context carries NO competition and NO venue");
   });
 });
@@ -339,8 +347,10 @@ describe("ADAAAA-8910 defect 4 — a direction claim is not attested by the digi
     // (ADAAAA-8914 replaced its old second sentence, "The crowd answers as the
     // sides reset.", which was itself an atmosphere clause: a fixture of the
     // filler defect, not of this bar.)
+    // ADAAAA-8934: the second sentence is a bounded act — "presses high to force a
+    // turnover" is a pressure state the repair deletes.
     const restated =
-      "The scoreboard moves to 2-1 as Real Madrid works the ball forward at 1:42 into the clip. Barcelona presses high to force a turnover.";
+      "The scoreboard moves to 2-1 as Real Madrid works the ball forward at 1:42 into the clip. Barcelona intercepts the ball near the wing and counters at 1:42 of the clip.";
     expect(summaryViolations(restated, ROW_AED6)).toEqual([]);
     expect(gateSummaryDetail(restated, ROW_AED6).summary).toBe(restated);
   });

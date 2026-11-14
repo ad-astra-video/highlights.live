@@ -36,12 +36,14 @@ import {
   matchClockFrameClaims,
   repeatedSentences,
   resolveSummaryFee,
+  sentenceFactKinds,
   sentenceSimilarity,
   summaryClockReport,
   summaryFacts,
   summarySentenceFacts,
   summarySentencesOf,
   summaryViolations,
+  summaryWordCount,
   unattestedAtmosphereClaims,
   unattestedSentences,
   type SummaryEvidence,
@@ -178,19 +180,29 @@ describe("AC14.1/AC14.2 — the served bodies' filler sentences are unattested",
     const decision = gateSummaryDetail(SERVED_7574, ROW_7574);
     expect(decision.droppedClauses).toContain("This pivotal moment occurs at the 6:42 mark of the clip.");
     expect(decision.clauseClaims).toContain("pivotal moment");
-    // The repaired body is the row's one fact sentence (19 words < the 30-word
-    // draft), so it falls under the floor and is dropped with the named reason.
-    expect(decision.repairedWords).toBeLessThan(SUMMARY_LIVE_BAND.targetMinWords);
-    expect(decision.violations).toContain("too-few-words");
+    // ADAAAA-8934: the deletion alone left the row's one fact sentence (25 words
+    // against the live floor of 18), so the repair SUBSTITUTES a fact-bearing
+    // sentence from the row's own score transition instead of starving the card
+    // (the AC1 half of the same defect).
+    expect(decision.substitutedClauses.length).toBeGreaterThan(0);
+    expect(decision.repairedWords).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
+    // … and the row still refuses on its OWN compliance bars (the venue and the
+    // atmosphere prose it wrote), which is the correct drop.
+    expect(decision.summary).toBeNull();
+    expect(decision.violations).toContain("unattested-atmosphere");
   });
 
   it("keeps a repaired, fact-per-sentence body on the same evidence", () => {
     // The tightening is not a trade: a body that says the same facts in every
     // sentence serves (AC6 — the standing bars keep passing on the same rows).
+    // ADAAAA-8934: the second fact in each sentence is a BOUNDED act by a named
+    // attested actor. The rev-8 shape ("keeps possession", "presses high",
+    // "carries the ball forward") is a sustained STATE, which no channel on the
+    // row measures — it is deleted, so it can no longer stand in for a fact.
     const repaired = [
-      "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid keeps possession and works the ball forward through midfield near the box.",
-      "The scoreboard moves to 2-2 at the 2:35 mark of this clip. Barcelona keeps the ball and presses high to force a turnover near the wing.",
-      "The scoreboard moves to 2-1 at the 6:35 mark of this clip. Barcelona carries the ball forward and switches play to the left flank.",
+      "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid intercepts the ball near the box at the 1:35 mark of this clip.",
+      "The scoreboard moves to 2-2 at the 2:35 mark of this clip. Barcelona recovers the ball near the wing and counters at the 2:35 mark of this clip.",
+      "The scoreboard moves to 2-1 at the 6:35 mark of this clip. Real Madrid threads a pass to the left flank at the 6:35 mark of this clip.",
     ];
     const rows = [ROW_AED6, ROW_DC96, ROW_7574];
     rows.forEach((evidence, i) => {
@@ -203,15 +215,14 @@ describe("AC14.1/AC14.2 — the served bodies' filler sentences are unattested",
   });
 
   it("keeps a repaired VOD body in the target band on the same evidence", () => {
+    // ADAAAA-8934: bounded acts, not sustained state (see the live fixtures above).
     const repaired = [
-      "Real Madrid moves the ball forward as the scoreboard changes from 1-1 to 2-1 at the 0:27 mark of the clip. " +
-        "Barcelona presses high to force a turnover near the touchline. " +
-        "Real Madrid recycles the ball through midfield and switches play to the left. " +
-        "The scoreboard holds at 2-1 as the clip runs past 0:27.",
-      "Barcelona works the ball forward as the scoreboard changes from 2-1 to 2-2 at the 1:24 mark of the clip. " +
-        "Barcelona presses high to force a turnover near the byline. " +
-        "Real Madrid recycles the ball through midfield and looks to break forward. " +
-        "The scoreboard holds at 2-2 as the clip runs past 1:24.",
+      "Real Madrid intercepts the ball near the box and counters at 0:27 into the clip. " +
+        "Barcelona recovers the ball near the wing and threads a pass to the left flank at 0:27 of the clip. " +
+        "The scoreboard moves from 1-1 to 2-1 at the 0:27 mark and holds there as the clip closes out.",
+      "Barcelona recovers the ball near the wing and threads a pass to the left flank at 1:24 into the clip. " +
+        "Real Madrid intercepts the ball near the box and counters at 1:24 of the clip. " +
+        "The scoreboard moves from 2-1 to 2-2 at the 1:24 mark and holds there as the clip closes out.",
     ];
     const rows = [ROW_1A58, ROW_5322];
     rows.forEach((evidence, i) => {
@@ -318,20 +329,53 @@ describe("AC14.5 — the refusal path stays cheap", () => {
   it("drops the offending clauses extractively and reports the survivors' words", () => {
     const drop = dropFillerSentences(SERVED_5322, ROW_5322);
     expect(drop.dropped).toHaveLength(3);
-    expect(drop.text).toBe("Barcelona finds the equalizer to level the score at 2-2.");
     expect(drop.claims).toContain("momentum");
     expect(drop.claims).toContain("atmosphere");
+    // ADAAAA-8934: the deleted clauses are replaced with facts the row attests,
+    // in the slots they left, so the surviving sentence keeps its position.
+    expect(drop.text.startsWith("Barcelona finds the equalizer to level the score at 2-2.")).toBe(true);
+    expect(drop.substituted.length).toBeGreaterThan(0);
+    for (const sentence of drop.substituted) {
+      expect(sentenceFactKinds(sentence, ROW_5322).length).toBeGreaterThan(0);
+      expect(unattestedSentences(sentence, ROW_5322)).toEqual([]);
+    }
+    // ADAAAA-8934: the repair may substitute at most as many sentences as the draft
+    // itself kept, so a draft that grounded ONE sentence is not rebuilt into repair
+    // prose. This row therefore stays short and drops honestly (the rev-8 shape with
+    // 2-3 survivors is the case the substitution serves).
+    expect(drop.substituted.length).toBeLessThanOrEqual(2);
+    expect(summaryWordCount(drop.text)).toBeLessThan(SUMMARY_VOD_BAND.floorWords);
   });
 
-  it("drops a repaired body under its floor with the violation named", () => {
+  it("substitutes into the deleted slots, and may never become the body", () => {
+    // ADAAAA-8934: the repair now REPLACES deleted filler with attested facts. It is
+    // capped at the number of sentences the draft itself grounded, so a draft that
+    // kept one sentence of twelve words stays under the VOD floor and drops on depth
+    // — serving it would mean the repair wrote the card, not the model.
     const decision = gateSummaryDetail(SERVED_5322, ROW_5322);
     expect(decision.summary).toBeNull();
+    expect(decision.droppedClauses).toHaveLength(3);
+    expect(decision.substitutedClauses.length).toBeGreaterThan(0);
+    expect(decision.substitutedClauses.length).toBeLessThanOrEqual(2);
+    expect(decision.violations).toContain("too-few-words");
+    expect(decision.violations).toContain("unattested-atmosphere");
+    expect(decision.repairedWords).toBeGreaterThan(0);
+  });
+
+  it("falls under the floor only when the row attests no fact to substitute", () => {
+    // The repair cannot invent: a row with no score transition and no clip anchor
+    // offers an empty pool, so the deletion's shortfall stands and the depth bar
+    // names it.
+    const barren: SummaryEvidence = {
+      ...ROW_5322,
+      windowTs: null,
+      scoreTransition: null,
+    };
+    const decision = gateSummaryDetail(SERVED_5322, barren);
+    expect(decision.summary).toBeNull();
+    expect(decision.substitutedClauses).toEqual([]);
     expect(decision.repairedWords).toBeLessThan(SUMMARY_VOD_BAND.floorWords);
     expect(decision.violations).toContain("too-few-words");
-    expect(decision.violations).toContain("unattested-sentence");
-    expect(decision.violations).toContain("unattested-atmosphere");
-    // The refusal detail a `dropped:filler` row persists (§15.4).
-    expect(decision.droppedClauses).toHaveLength(3);
   });
 
   it("keeps the fee class and the call bound", () => {
