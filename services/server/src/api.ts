@@ -8316,13 +8316,54 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     return { observations: store.observationsForJob(req.params.id) };
   });
 
+  // ADAAAA-8973 (Inc 5): bound the per-poll frame list. A live operator leaves
+  // the job-detail page open for an hour and the 5 s detail poll fetched the
+  // WHOLE frame list (~93 B/frame, measured) every poll — O(frames) egress on the
+  // highest-attention screen. The route now:
+  //   * returns the FULL list for small jobs (<= SMALL_JOB_FULL_LIMIT frames) so
+  //     a small job's payload stays field-for-field identical to before (AC5.3);
+  //   * returns only the latest DEFAULT_FRAME_WINDOW rows for larger jobs, so a
+  //     default poll is ~constant bytes regardless of frame count (AC5.1 default);
+  //   * honours `sinceSeq`/`afterSeq` (synonyms) for incremental fetch — a
+  //     caught-up page sends its newest seq and gets only the newer rows (AC5.1);
+  //   * honours `limit` to override the default window (the frame debugger uses
+  //     this so its filmstrip is unaffected by the default window).
+  // Response shape is unchanged (`{ frames: [{ seq, uri, timestamp }] }`) so the
+  // served still path keeps working with no webapp route change.
+  const SMALL_JOB_FULL_LIMIT = 300;
+  const DEFAULT_FRAME_WINDOW = 50;
+  const MAX_FRAME_LIST_LIMIT = 10_000; // explicit `limit` cap: keep a bad param from re-opening the O(frames) path
+  const parseFrameQueryInt = (v: unknown): number | null => {
+    if (v === undefined || v === null) return null;
+    const s = Array.isArray(v) ? String(v[0]) : String(v);
+    if (s.trim() === "") return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+  };
+
   app.get<{ Params: { id: string } }>("/jobs/:id/frames", { preHandler: authReq }, async (req: any, reply) => {
     const dir = jobFrameDir(req.params.id);
     if (!dir) return reply.code(404).send({ error: "no frames for job" });
-    const list = jobFrameList(req.params.id);
-    const tsBySeq = new Map(store.observationsForJob(req.params.id).map((o) => [o.seq, o.timestamp]));
+    const jobId = req.params.id;
+    const list = jobFrameList(jobId);
+    const total = list.length;
+    // Incremental: `sinceSeq`/`afterSeq` (synonyms) -> strictly-newer rows. A page
+    // that is already caught up (since == newest) gets an empty row list.
+    const since = parseFrameQueryInt(req.query.sinceSeq ?? req.query.afterSeq);
+    let rows: { seq: number; file: string }[] = since === null ? list : list.filter((f) => f.seq > since);
+    // Window: an explicit `limit` wins; otherwise small jobs return everything
+    // (field-for-field unchanged, AC5.3) and large jobs return the latest window.
+    const limit = parseFrameQueryInt(req.query.limit);
+    const window =
+      limit !== null
+        ? Math.min(Math.max(1, limit), MAX_FRAME_LIST_LIMIT)
+        : total <= SMALL_JOB_FULL_LIMIT
+          ? total
+          : Math.min(DEFAULT_FRAME_WINDOW, rows.length);
+    rows = rows.slice(Math.max(0, rows.length - window));
+    const tsBySeq = new Map(store.observationsForJob(jobId).map((o) => [o.seq, o.timestamp]));
     return {
-      frames: list.map((f) => ({ seq: f.seq, uri: `/jobs/${req.params.id}/frames/${f.seq}`, timestamp: tsBySeq.get(f.seq) ?? null })),
+      frames: rows.map((f) => ({ seq: f.seq, uri: `/jobs/${jobId}/frames/${f.seq}`, timestamp: tsBySeq.get(f.seq) ?? null })),
     };
   });
 

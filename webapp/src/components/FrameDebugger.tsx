@@ -167,7 +167,9 @@ export function FrameDebugger({ jobId }: { jobId: string }) {
     (async () => {
       try {
         const [f, o] = await Promise.all([
-          api<{ frames: FrameMeta[] }>(`/jobs/${jobId}/frames`),
+          // ADAAAA-8973: the default frame route now returns a bounded latest-N
+          // window; request MAX_THUMBS explicitly so the filmstrip is unchanged.
+          api<{ frames: FrameMeta[] }>(`/jobs/${jobId}/frames?limit=${MAX_THUMBS}`),
           api<{ observations: Observation[] }>(`/jobs/${jobId}/observations`),
         ]);
         if (cancelled) return;
