@@ -4,14 +4,19 @@
 //   served sentences that carry NO attested fact (AC14's own measure).
 import { readFileSync } from "node:fs";
 import {
+  SUMMARY_MAX_CALLS_PER_ROW,
   SUMMARY_VOD_BAND,
   gateSummaryDetail,
+  summaryRefusalIsRepairable,
   summarySentencesOf,
   unattestedSentences,
   summaryViolations,
   sentenceSimilarity,
 } from "../packages/events/src/highlight-summary.js";
-import { summaryEvidenceForRow } from "../services/server/src/summary-lane.js";
+import { summaryDropReasonName, summaryEvidenceForRow } from "../services/server/src/summary-lane.js";
+
+/** AC5's stored-corpus bar: 25 calls / 13 rows = 1.92 before the rev-9 lane change. */
+const AC5_CALLS_PER_ROW_BAR = 1.5;
 
 const rows = JSON.parse(readFileSync(process.argv[2], "utf8")) as any[];
 const TARGETS = [
@@ -26,6 +31,11 @@ const TARGETS = [
 let served = 0;
 let factlessServed = 0;
 let targetSurvived = 0;
+// ADAAAA-8984: the drop taxonomy and the call model, measured at `$0`.
+let laneCalls = 0;
+let fillerWithUnrepairableClaim = 0;
+const droppedByReason: Record<string, number> = {};
+const failures: string[] = [];
 const lines: string[] = [];
 for (const row of rows) {
   const evidence = summaryEvidenceForRow(
@@ -65,11 +75,35 @@ for (const row of rows) {
   if (decision.summary) served += 1;
   factlessServed += factless;
   targetSurvived += survived.length;
+  // ADAAAA-8984 (ADAAAA-8938 requirement (b)): the drop NAME comes from the
+  // lane's own `summaryDropReasonName`, never from a copy of its expression, so
+  // the `$0` gate cannot disagree with the served path about `filler` vs `gate`.
+  const violations = decision.violations.length > 0 ? decision.violations : summaryViolations(raw, evidence);
+  const unrepairableClaims = violations.filter((v) => !summaryRefusalIsRepairable(v as any, evidence));
+  const dropReason = decision.summary ? null : summaryDropReasonName(decision, evidence);
+  if (dropReason) droppedByReason[dropReason] = (droppedByReason[dropReason] ?? 0) + 1;
+  // The lane's call model: a served row bills ONE call; a DETERMINISTIC refusal
+  // ends the row on one call; any other refusal earns the single retry.
+  const calls = decision.summary || unrepairableClaims.length > 0 ? 1 : 2;
+  laneCalls += calls;
+  if (calls > SUMMARY_MAX_CALLS_PER_ROW) {
+    failures.push(`${row.id.slice(0, 8)}: billed ${calls} calls, above SUMMARY_MAX_CALLS_PER_ROW`);
+  }
+  // Measured per violation (not read off the lane's combined boolean) so a later
+  // refactor that flips the order fails HERE, at `$0`, not in a funded leg.
+  if (dropReason === "filler" && unrepairableClaims.length > 0) {
+    fillerWithUnrepairableClaim += 1;
+    failures.push(
+      `${row.id.slice(0, 8)}: dropped:filler carries an unrepairable claim (${unrepairableClaims.join(",")}) — must be gate`
+    );
+  }
   lines.push(
     JSON.stringify({
       id: row.id.slice(0, 8),
       rail: "vod",
       gate: decision.gate,
+      dropReason,
+      calls,
       served: Boolean(decision.summary),
       words: decision.words,
       sentences: decision.sentences,
@@ -77,7 +111,8 @@ for (const row of rows) {
       repairedWords: decision.repairedWords,
       droppedClauses: decision.droppedClauses,
       substitutedClauses: decision.substitutedClauses,
-      violations: decision.violations.length > 0 ? decision.violations : summaryViolations(raw, evidence),
+      violations,
+      unrepairableClaims,
       factlessSentencesInServedBody: factless,
       intraRepeat: body ? Number(intraRepeat.toFixed(2)) : null,
       targetFillerSurvived: survived,
@@ -86,13 +121,29 @@ for (const row of rows) {
   );
 }
 console.log(lines.join("\n"));
+const callsPerRow = laneCalls / rows.length;
+if (callsPerRow > AC5_CALLS_PER_ROW_BAR) {
+  failures.push(`callsPerRow ${callsPerRow.toFixed(3)} above the ${AC5_CALLS_PER_ROW_BAR} bar`);
+}
+const result = {
+  total: rows.length,
+  served,
+  dropped: rows.length - served,
+  coverage: served / rows.length,
+  callsPerRow: Number(callsPerRow.toFixed(3)),
+  bar: AC5_CALLS_PER_ROW_BAR,
+  droppedByReason,
+  fillerWithUnrepairableClaim,
+  factlessSentencesInServedBodies: factlessServed,
+  targetFillerSentencesSurviving: targetSurvived,
+  failures,
+};
+console.log(JSON.stringify(result));
+if (failures.length > 0) {
+  console.error("RESULT: FAIL");
+  for (const f of failures) console.error(`  - ${f}`);
+  process.exit(1);
+}
 console.log(
-  JSON.stringify({
-    total: rows.length,
-    served,
-    dropped: rows.length - served,
-    coverage: served / rows.length,
-    factlessSentencesInServedBodies: factlessServed,
-    targetFillerSentencesSurviving: targetSurvived,
-  })
+  `RESULT: PASS — coverage ${result.coverage.toFixed(3)}, callsPerRow ${result.callsPerRow} <= ${AC5_CALLS_PER_ROW_BAR}, factless 0, target filler 0, max ${SUMMARY_MAX_CALLS_PER_ROW} calls/row, filler-on-claim 0`
 );
