@@ -141,20 +141,21 @@ const cfg = (over: Record<string, unknown> = {}) => ({
 // and no ball-forward. AC14 credits an **attested** actor action, so the
 // sustained-play vocabulary is refused on those rows (`sustainedFactUnattested`).
 //
-// The row is therefore DRY, and that is the honest outcome: the lane may not
-// serve a body whose only fact is the clock. What stays asserted here is the
-// instrument's side — the row's fact MENU still offers `clock` + `action` (an
-// attested name exists), so the lane still asks for two kinds; the gate simply
-// may not invent one.
+// ADAAAA-9001: the row is therefore DRY **and INELIGIBLE**. The instrument used
+// to keep naming `action` because an attested name exists, so the lane asked for
+// two kinds, spent its one retry on a prompt the gate can never satisfy, and
+// AC1-live scored the row as a coverage miss instead of an instrument blind spot.
+// `attestedFactKinds` now reads the gate's own predicate (`actionFactAttestable`):
+// no measured ball outcome => no `action` kind, so the menu and the gate agree.
 // ---------------------------------------------------------------------------
-describe("ADAAAA-8903 / ADAAAA-8941 — sustained play is not a fact on a no-outcome row", () => {
-  it("refuses sustained play as a fact kind (row c3257097)", () => {
+describe("ADAAAA-8903 / ADAAAA-8941 / ADAAAA-9001 — sustained play is not a fact on a no-outcome row", () => {
+  it("refuses sustained play as a fact kind and drops the kind from the menu (row c3257097)", () => {
     const evidence = evidenceFor(ROW_C3257097);
-    // The row's own menu offers two kinds — eligibility is the instrument's rule.
-    expect(attestedFactKinds(evidence).length).toBeGreaterThanOrEqual(SUMMARY_MIN_FACT_KINDS);
-    expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
-    // But the BODY cannot earn `action` from possession vocabulary: `summaryFacts`
-    // sees it, the attestation filter does not credit it.
+    // ADAAAA-9001: the menu no longer names a kind no body can clear.
+    expect(attestedFactKinds(evidence)).toEqual(["clock"]);
+    expect(attestedFactKinds(evidence).length).toBeLessThan(SUMMARY_MIN_FACT_KINDS);
+    // The BODY cannot earn `action` from possession vocabulary: `summaryFacts`
+    // sees it, the attestation filter does not credit it — the same predicate.
     expect(summaryFacts(STORED_RAW_C3257097).map((f) => f.kind)).toEqual(expect.arrayContaining(["action"]));
     expect(attestedSummaryFactKinds(STORED_RAW_C3257097, evidence)).toEqual(["clock"]);
     const decision = gateSummaryDetail(STORED_RAW_C3257097, evidence);
@@ -162,9 +163,9 @@ describe("ADAAAA-8903 / ADAAAA-8941 — sustained play is not a fact on a no-out
     expect(decision.violations).toEqual(expect.arrayContaining(["unattested-sentence", "too-few-facts"]));
   });
 
-  it("refuses sustained play as a fact kind (row eaf1da9f)", () => {
+  it("refuses sustained play as a fact kind and drops the kind from the menu (row eaf1da9f)", () => {
     const evidence = evidenceFor(ROW_EAF1DA9F);
-    expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
+    expect(attestedFactKinds(evidence)).toEqual(["clock"]);
     expect(attestedSummaryFactKinds(STORED_RAW_EAF1DA9F, evidence)).toEqual(["clock"]);
     const decision = gateSummaryDetail(STORED_RAW_EAF1DA9F, evidence);
     expect(decision.summary).toBeNull();
@@ -179,14 +180,19 @@ describe("ADAAAA-8903 / ADAAAA-8941 — sustained play is not a fact on a no-out
       highlightId: ROW_C3257097.id,
       evidence: evidenceFor(ROW_C3257097),
     });
-    // The menu names two kinds, so the refusal is repairable and earns the one
-    // regeneration — but the same filler cannot clear it, so the row serves no copy.
+    // ADAAAA-9001: the menu is a single kind, so `too-few-facts` is DETERMINISTIC
+    // — the row drops on ONE call instead of buying a retry the prompt cannot
+    // satisfy. The refusal is still named on the row (§15.4).
     expect(result.outcome).toBe("dropped");
-    expect(f.calls()).toBe(2);
+    expect(f.calls()).toBe(1);
+    expect(result.calls).toBe(1);
     const patch = patches.at(-1)?.patch as Record<string, unknown>;
     expect(patch.summary).toBeUndefined();
     expect(patch.summaryRaw).toBe(STORED_RAW_C3257097);
     expect(patch.summaryGate).toMatch(/^dropped:/);
+    expect(patch.summaryDroppedByReason).toEqual({ gate: 1 });
+    expect(patch.summaryViolations).toEqual(expect.arrayContaining(["too-few-facts"]));
+    expect(patch.summaryCalls).toBe(1);
   });
 
   it("does not open the ball-outcome lane the prompt closes", () => {
@@ -211,6 +217,33 @@ describe("ADAAAA-8903 / ADAAAA-8941 — sustained play is not a fact on a no-out
     expect(decision.summary).toBeNull();
     expect(decision.violations).toContain("too-few-facts");
   });
+
+  it("reads the same predicate the gate reads for `action` on a no-outcome row", () => {
+    // ADAAAA-9001 acceptance: the eligibility instrument and the AC14 gate may
+    // not disagree about whether a row can serve an action fact.
+    const evidence = evidenceFor(ROW_C3257097);
+    // The row measured no ball outcome, so the MENU names no action …
+    expect(attestedFactKinds(evidence)).not.toContain("action");
+    // … and the gate credits no action from the vocabulary it closes.
+    expect(attestedSummaryFactKinds(STORED_RAW_C3257097, evidence)).not.toContain("action");
+    // AC14.1's honest-body guard still holds and is why the MENU — not the gate —
+    // is the side that narrows: an attested actor plus a play verb the row's own
+    // attestation does not forbid is still credited, so no honest body is refused
+    // by the menu change.
+    const honest = "Barcelona passes wide at the 7:41 mark of the clip.";
+    expect(attestedSummaryFactKinds(honest, evidence)).toContain("action");
+  });
+
+  it("keeps the action kind on a row that DID measure an outcome", () => {
+    // The fix must not move the measured rows: `ADAAAA-8903`'s sustained-play
+    // credit and the menu's `action` kind both stay exactly as they were.
+    const measured = {
+      ...evidenceFor(ROW_C3257097),
+      attestation: { ballOutcome: "shot", goalCrossed: false, scoreBoardChanged: false },
+    };
+    expect(attestedFactKinds(measured)).toEqual(["clock", "action"]);
+    expect(attestedSummaryFactKinds(STORED_RAW_C3257097, measured)).toEqual(["clock", "action"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -223,10 +256,18 @@ describe("ADAAAA-8903 — §15.4 refusal detail on the row", () => {
   it("writes the violation list and the judged word count with the band on a drop", async () => {
     const { store, patches } = stubStore();
     const f = stubFetch([THIN, THIN]);
+    // ADAAAA-9001: this case is 8914's AC14.5 guard (the clause repair is what
+    // takes the body under the floor), so it runs on a row that DID measure a ball
+    // outcome — on the raw no-outcome row the menu is the clock alone and the drop
+    // is deterministic (`gate`), which the fixture one test below now covers.
+    const measured = {
+      ...evidenceFor(ROW_C3257097),
+      attestation: { ballOutcome: "shot", goalCrossed: false, scoreBoardChanged: false },
+    };
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
       jobId: "9bed3bd7",
       highlightId: "h-8903-drop",
-      evidence: evidenceFor(ROW_C3257097),
+      evidence: measured,
     });
     expect(result.outcome).toBe("dropped");
     const patch = patches.at(-1)!.patch;

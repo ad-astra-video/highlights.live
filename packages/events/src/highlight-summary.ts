@@ -1255,6 +1255,59 @@ function sameScore(a: string, b: string): boolean {
   return scoreDigits(a) === scoreDigits(b) && scoreDigits(a) !== "";
 }
 
+/**
+ * ADAAAA-9001: can the AC14 gate credit ANY `action` fact on this row?
+ *
+ * `attestedFactKinds` used to answer "action is available" from the attested
+ * ACTOR alone, which is only one of the gate's two conditions. The other is the
+ * row's own ball attestation: on a row whose attestation RECORDED no ball outcome
+ * (`summaryBallActionAttested === false`) the gate refuses every action class the
+ * lane can ask for — shot/save/head verbs by `unattested-action`
+ * (`BALL_OUTCOME_ASSERTION`) and possession / pressure / ball-forward vocabulary
+ * by `sustainedFactUnattested` (ADAAAA-8941 defect 1).
+ *
+ * A menu that nevertheless names `action` is an eligibility claim no body can
+ * clear: `summaryRefusalIsRepairable("too-few-facts", evidence)` answered `true`
+ * and the lane spent its one retry on a prompt it could not satisfy (a billed
+ * second call per such row on every live leg), and AC1-live counted the row as a
+ * coverage miss instead of as the instrument's own blind spot. Measured on live
+ * job `9bed3bd7` rows `c3257097` / `eaf1da9f` (fixtures in
+ * `services/server/test/summary-lane-8903.test.ts`).
+ *
+ * `null` (a row that carries no attestation at all — legacy / VOD rows) keeps the
+ * old behaviour byte-identically, and a row that DID measure an outcome keeps
+ * ADAAAA-8903's sustained-play credit.
+ */
+export function actionFactAttestable(evidence: SummaryEvidence): boolean {
+  if (attestedActorNames(evidence).length === 0) return false;
+  return summaryBallActionAttested(evidence) !== false;
+}
+
+/**
+ * The fact kinds the GATE credits against.
+ *
+ * ADAAAA-9001 keeps the MENU (`attestedFactKinds`) strict: the lane must not ASK
+ * for an action on a row that measured no ball outcome, because the copy the
+ * prompt then demands (sustained play) is refused. The gate's own credit stays
+ * per-FACT, exactly as ADAAAA-8941 wrote it: a body that names an attested actor
+ * and uses a play verb the row's attestation does not forbid still serves —
+ * that ticket's AC14.1 guard ("refusing filler must not refuse honest bodies"):
+ *
+ *   gateSummaryDetail("Barcelona passes wide at the 18:12 mark of the match. …",
+ *                     a no-outcome row) -> accepted
+ *
+ * Both sides read the same evidence predicate (`summaryBallActionAttested` via
+ * `actionFactAttestable` / `sustainedFactUnattested`). The menu is the lane's ASK,
+ * the gate is the writer's CREDIT; the menu is never wider than the gate, which is
+ * the direction that matters (a narrow menu costs one prompt line, a wide menu
+ * costs a billed retry on every such row).
+ */
+function gateFactKinds(evidence: SummaryEvidence): Set<SummaryFactKind> {
+  const kinds = new Set(attestedFactKinds(evidence));
+  if (attestedActorNames(evidence).length > 0) kinds.add("action");
+  return kinds;
+}
+
 /** AC9: which fact TYPES the ROW can attest. A type the evidence does not carry
  *  is never available, so a body can never earn it by asserting it. */
 export function attestedFactKinds(evidence: SummaryEvidence): SummaryFactKind[] {
@@ -1268,7 +1321,9 @@ export function attestedFactKinds(evidence: SummaryEvidence): SummaryFactKind[] 
   // starve depth, so a team name is an entity too). ADAAAA-8735: only the row's
   // STRUCTURED sources attest one — a sentence-initial capital of a common noun
   // in the decide reason (`Ball`) and the renderer's own `Teams:` label do not.
-  if (attestedActorNames(evidence).length > 0) kinds.push("action");
+  // ADAAAA-9001: and the row must have MEASURED a ball outcome, because on a
+  // no-outcome row the AC14 gate refuses every action class the lane can ask for.
+  if (actionFactAttestable(evidence)) kinds.push("action");
   if (matchContextVenueText(evidence.matchContext).length > 0) kinds.push("venue");
   return kinds;
 }
@@ -1730,7 +1785,7 @@ export function matchClockFrameClaims(text: string, evidence: SummaryEvidence): 
  *  action that NAMES an attested actor, and a competition only when the match
  *  context carries one. */
 export function sentenceFactKinds(sentence: string, evidence: SummaryEvidence): SummaryFactKind[] {
-  const available = new Set(attestedFactKinds(evidence));
+  const available = gateFactKinds(evidence);
   const out = new Set<SummaryFactKind>();
   const matchClockToken = attestedMatchClockToken(evidence);
   for (const fact of summaryFacts(sentence)) {
@@ -1906,7 +1961,7 @@ export function closestSentencePair(
 
 /** AC9 read: the DISTINCT fact types the body relays that the row attests. */
 export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence): SummaryFactKind[] {
-  const available = new Set(attestedFactKinds(evidence));
+  const available = gateFactKinds(evidence);
   const out = new Set<SummaryFactKind>();
   for (const fact of summaryFacts(text)) {
     if (!available.has(fact.kind)) continue;
@@ -2399,11 +2454,48 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // competition" — an assertion with no evidence. A menu the row cannot fill is a
   // prompt asking for an invented fact.
   const attestsVenue = matchContextVenueText(input.matchContext).length > 0;
+  // ADAAAA-9001: the menu must not offer a fact type the row cannot earn. The
+  // same predicate `attestedFactKinds` reads decides whether the action kind is
+  // on the row's menu, so the prompt and the eligibility instrument cannot
+  // disagree about what "two facts" means here.
+  const attestsAction = actionFactAttestable(input);
+  /** How many DISTINCT fact kinds the row's evidence can carry. ADAAAA-9001: the
+   *  depth instruction must not demand two kinds from a row that attests one —
+   *  that is the same defect as a menu naming `action` on a no-outcome row. */
+  const factKindCount = 1 + (attestsScoring ? 1 : 0) + (attestsVenue ? 1 : 0) + (attestsAction ? 1 : 0);
+  const lengthFacts = [
+    "the clock",
+    attestsVenue ? "the competition or venue" : null,
+    attestsAction ? "a named attested actor's action" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  /** ADAAAA-9001: the per-sentence fact list every rule below repeats. It must
+   *  name only kinds this row can actually earn — an `action` the row attests no
+   *  outcome for is prose the AC14 gate deletes. */
+  const sentenceFacts = [
+    attestsScoring ? "a score line" : null,
+    "the clock",
+    "the attested match clock",
+    attestsAction ? "an attested actor's action" : null,
+    attestsVenue ? "the competition/venue" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  /** The same list as the retry directives spell it (they carry no "the"). */
+  const sentenceFactHint = [
+    attestsScoring ? "a score line" : null,
+    "the clock",
+    attestsAction ? "a named attested actor's action" : null,
+    attestsVenue ? "the competition/venue" : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
   const factMenu = [
     attestsScoring ? "the score line" : null,
     "the clock or spell",
     attestsVenue ? "the competition or venue" : null,
-    "an attested team's or player's action",
+    attestsAction ? "an attested team's or player's action" : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -2413,13 +2505,19 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // against a 40-word floor (one-word margin), and the retried row re-landed at
   // 34 words because the retry re-read the same "at least 40 words" line.
   const retryMin = summaryRetryMinWords(band);
+  // ADAAAA-9001: "the half or spell and a named attested actor's action" was the
+  // retry's word-count advice on EVERY row, including a row whose menu carries no
+  // action kind — advice the gate then refuses.
+  const retryDepth = attestsAction
+    ? "The half or spell and a named attested actor's action carry the most words without inventing anything."
+    : "The half or spell carries the most words without inventing anything; this row attests no action, so do not describe one.";
   const retryLines = input.retry
     ? [
         `RETRY: the previous draft measured ${input.retry.words} words${
           typeof input.retry.sentences === "number" ? ` across ${input.retry.sentences} sentences` : ""
         } and was refused${input.retry.violations && input.retry.violations.length > 0 ? ` for: ${input.retry.violations.join(", ")}` : ""}.`,
         `- Close the measured shortfall: this copy must reach at least ${retryMin} words inside ${band.minSentences}-${band.maxSentences} sentences. ${retryMin} is ${retryMin - band.floorWords} words above the ${band.floorWords}-word floor on purpose: a draft that only just clears the floor is the defect this retry exists to repair.`,
-        `- Expand with facts, not filler: add ${factMenu}. The half or spell and a named attested actor's action carry the most words without inventing anything.`,
+        `- Expand with facts, not filler: add ${factMenu}. ${retryDepth}`,
         `- Do NOT spend a whole sentence on the clip clock: the \`Window:\` label (${typeof input.windowTs === "number" && Number.isFinite(input.windowTs) ? clockLabel(input.windowTs) : "the offset"}) must sit INSIDE a sentence that also carries another fact. A sentence that only says when the clip moment occurs adds no depth and does not count toward the two-fact rule.`,
         "- Do not pad with generic talk about momentum, intensity or the crowd rising: every added sentence must carry a fact from the evidence below.",
       ]
@@ -2437,14 +2535,18 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, ${attestsVenue ? "the competition or venue, " : ""}or a named attested actor's action — rather than padding.`,
+    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — ${lengthFacts} — rather than padding.`,
     ...retryLines,
-    `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
+    ...(factKindCount >= 2
+      ? [`- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`]
+      : [
+          `- The evidence attests only ${factMenu}: this row cannot carry two different fact kinds, so keep the copy on the facts it lists and invent no second kind.`,
+        ]),
     // ADAAAA-8914 (AC14.1/AC14.2): the depth bars were BODY bars, so a 46-word
     // body with one fact and three scene-setting sentences cleared them. Every
     // sentence is now a fact sentence, and the gate DELETES any sentence that is
     // not — a body that loses sentences falls under the floor and is dropped.
-    "- Every sentence must carry at least one fact from the evidence: a score line, the clock, the attested match clock, an attested actor's action, or the competition/venue when the match context carries one. A sentence that only sets the scene adds no depth and is deleted.",
+    `- Every sentence must carry at least one fact from the evidence: ${sentenceFacts}. A sentence that only sets the scene adds no depth and is deleted.`,
     "- Never describe the atmosphere, the crowd, the fans, a celebration, a reaction, momentum, intensity, a 'pivotal moment', a 'turning point', a 'battle for control' or a 'vital point': the evidence measures none of those, so the gate deletes every sentence that does.",
     "- Do not reuse a sentence shape from another card in this job. Two cards must never carry the same sentence: no template such as 'This pivotal moment occurs at the … mark'.",
     "- Use only fact types the evidence carries: state a score only when the evidence attests a score change, and name a competition or venue only when the match context does. Never guess a fact.",
@@ -2468,20 +2570,34 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     ...(attestsVenue
       ? []
       : [
-          "- The match context carries NO competition and NO venue: never name one, and never write 'this competition', 'this tournament', 'this league', 'the stadium', 'the arena' or 'the atmosphere in the ground'. Describe the play, not the occasion.",
+          // ADAAAA-9001: "describe the play" is also prose this row may not carry
+          // when it measured no ball outcome, so the line is neutral there.
+          `- The match context carries NO competition and NO venue: never name one, and never write 'this competition', 'this tournament', 'this league', 'the stadium', 'the arena' or 'the atmosphere in the ground'. ${
+            attestsAction ? "Describe the play, not the occasion." : "Stay on the facts listed above, not the occasion."
+          }`,
         ]),
     // ADAAAA-8910 (defect 4): the score digits and the sides' names are attested;
     // WHICH SIDE scored is not. r1 and r3 of job `9bed3bd7` carry the same
     // `1-1>2-1` transition and named opposite teams as the scorer.
     ...(attestsScoring
       ? [
-          "- The evidence attests the score CHANGE and the sides' names, never which side scored. Do NOT say who took the lead, levelled, equalised, went ahead, made it 2-1 or restored the lead — state the score line as the scoreboard shows it ('the scoreboard moves to 2-1') and name the attested team for what it is doing in this clip (pressing, holding possession, working the ball).",
+          `- The evidence attests the score CHANGE and the sides' names, never which side scored. Do NOT say who took the lead, levelled, equalised, went ahead, made it 2-1 or restored the lead — state the score line as the scoreboard shows it ('the scoreboard moves to 2-1') and ${
+            attestsAction
+              ? "name the attested team for what it is doing in this clip (pressing, holding possession, working the ball)."
+              : "name the attested team only as the entity the score line belongs to — this row attests no action, so do not describe its play."
+          }`,
         ]
       : []),
-    "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.",
+    `- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. ${
+      attestsAction
+        ? "An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact."
+        : "This row attests no action, so naming an attested team or player is an ENTITY fact, never an action claim: do not say what they did."
+    }`,
     ...(attestedActors.length > 0
       ? [
-          `- The evidence attests these actors: ${attestedActors.slice(0, 8).join(", ")}. NAME at least one of them and say what they did — that is the second fact type your copy needs, and the headline is not allowed to carry a name so this is where it belongs.`,
+          attestsAction
+            ? `- The evidence attests these actors: ${attestedActors.slice(0, 8).join(", ")}. NAME at least one of them and say what they did — that is the second fact type your copy needs, and the headline is not allowed to carry a name so this is where it belongs.`
+            : `- The evidence attests these actors: ${attestedActors.slice(0, 8).join(", ")}. NAME at least one of them — the headline is not allowed to carry a name, so the body must carry it. Do not describe what they did: this row attests no action.`,
         ]
       : []),
     ...(ballActionAttested === false
@@ -2491,9 +2607,14 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
           // crowd" as substitute material, and that is exactly what the served VOD
           // bodies then wrote ("The crowd erupts in celebration", "the atmosphere
           // in the stadium is electric") — nothing in the row measures a crowd or
-          // a reaction. The legal substitute is an ATTESTED actor's sustained
-          // play, which is what AC9 can credit.
-          "- Describe the team's sustained play instead — possession, pressing, working the ball forward — and NAME an attested team or player when the evidence attests one. Do not describe the crowd, the atmosphere, a celebration or a player's reaction: the evidence measures none of them.",
+          // a reaction.
+          // ADAAAA-9001: it then offered the team's SUSTAINED PLAY, which is the
+          // same defect one layer down — the AC14 gate refuses that vocabulary on
+          // a row that measured no ball outcome (`sustainedFactUnattested`, 8941
+          // defect 1), so the prompt was asking for prose its own gate drops. The
+          // row attests NO action at all (`actionFactAttestable`), so the copy
+          // says so and points at the facts the evidence actually lists.
+          "- This window measured NO ball outcome, so the row attests NO action: do not describe possession, pressing, working the ball forward or 'sustained play'. Do not describe the crowd, the atmosphere, a celebration or a player's reaction: the evidence measures none of them. Carry the clock, the attested match clock and the competition or venue when the evidence lists them, and nothing about the play itself.",
         ]
       : []),
     attestsScoring
@@ -2502,7 +2623,15 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- Never invent a name, a team, a venue or a statistic. A role noun ('the midfielder', 'the keeper', 'the striker', 'the defender', 'the winger') is a claim: use it ONLY when the evidence below uses that word. Otherwise describe the play, the move or the shot, or name an attested team.",
     ...(attestsScoring
       ? []
-      : [`- Name the clock in your copy (the window label, e.g. \`0:12\`), but the clock alone is not enough: pair it with ${attestsVenue ? "the competition/venue or " : ""}an attested action.`]),
+      : [
+          `- Name the clock in your copy (the window label, e.g. \`0:12\`), but the clock alone is not enough: ${
+            attestsAction
+              ? `pair it with ${attestsVenue ? "the competition/venue or " : ""}an attested action.`
+              : attestsVenue
+                ? "pair it with the competition/venue — this row attests no action, so do not describe the play."
+                : "this row attests no second kind, so keep the copy on the clock and invent nothing else."
+          }`,
+        ]),
     "- Do not open with the same words as another card in this job: vary your first four words.",
     ...(input.avoidOpenings && input.avoidOpenings.length > 0
       ? [`- Do not open with any of these already-served runs: ${input.avoidOpenings.slice(0, 8).map((o) => `'${o}'`).join(", ")}.`]
@@ -2527,7 +2656,15 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       const actor = attestedActors[0];
       if (!actor) return [];
       return [
-        `- The previous draft was fact-poor (${violations.join(", ")}). NAME ${actor} and say what they did, so the copy carries two different facts.`,
+        attestsAction
+          ? `- The previous draft was fact-poor (${violations.join(", ")}). NAME ${actor} and say what they did, so the copy carries two different facts.`
+          : `- The previous draft was fact-poor (${violations.join(", ")}). NAME ${actor} so the copy carries the attested entity, and add ${[
+              attestsScoring ? "the score line" : null,
+              "the clock",
+              attestsVenue ? "the competition/venue" : null,
+            ]
+              .filter(Boolean)
+              .join(", ")} — this row attests no action, so do not describe what the team did.`,
       ];
     })(),
     ...(() => {
@@ -2561,7 +2698,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       }
       if (violations.includes("unattested-side")) {
         lines.push(
-          "- The previous draft said which side scored or took the lead. Restate the scoreboard line only ('the scoreboard moves to 2-1') and name the attested team for its play (pressing, possession), never as the scorer."
+          "- The previous draft said which side scored or took the lead. Restate the scoreboard line only ('the scoreboard moves to 2-1') and name the attested team — never as the scorer, and never for its play (this row attests no action, so pressing/possession is refused).",
         );
       }
       // ADAAAA-8914 (AC14): the retry is told which sentence the gate DELETED and
@@ -2569,7 +2706,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       // clause instead of re-landing the same filler.
       if (violations.includes("unattested-atmosphere") || violations.includes("unattested-sentence")) {
         lines.push(
-          "- The previous draft spent sentences on atmosphere, a crowd, a reaction or significance instead of a fact; the gate deleted them. Replace each one with a sentence that carries a fact from the evidence: the score line, the clock or match clock, or a NAMED attested actor's action."
+          `- The previous draft spent sentences on atmosphere, a crowd, a reaction or significance instead of a fact; the gate deleted them. Replace each one with a sentence that carries a fact from the evidence: ${sentenceFactHint}.`,
         );
       }
       if (violations.includes("repeat-sentence")) {
@@ -2579,7 +2716,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       }
       if (violations.includes("too-few-words") || violations.includes("too-few-sentences")) {
         lines.push(
-          "- The previous draft fell under the depth floor after the gate deleted its scene-setting sentences. Rebuild it from facts only: every sentence must carry a score line, the clock, or a named attested actor's action."
+          `- The previous draft fell under the depth floor after the gate deleted its scene-setting sentences. Rebuild it from facts only: every sentence must carry ${sentenceFactHint}.`,
         );
       }
       return lines;

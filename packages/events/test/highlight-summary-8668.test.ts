@@ -583,7 +583,12 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
     // there. Snapshot the branch so a prompt edit is a reviewed change.
     const celebration = buildSummaryPrompt({ ...shipped[0].evidence, postTitle: null });
     expect(celebration).toContain("This is NOT a scoring play");
-    expect(celebration).toContain("Carry at least TWO different facts from the evidence, not just the clock");
+    // ADAAAA-9001: this row measured no ball outcome, so its menu is the clock
+    // alone and the prompt says so instead of demanding a second kind it cannot
+    // earn ("Carry at least TWO … the clock or spell, an attested actor's action"
+    // was that demand; the gate refused every action on the row).
+    expect(celebration).toContain("The evidence attests only the clock or spell");
+    expect(celebration).not.toContain("Carry at least TWO different facts");
     expect(celebration).toMatchSnapshot();
     const scoring = buildSummaryPrompt({ ...shipped[2].evidence, postTitle: "Midfielder scores" });
     expect(scoring).toContain("the score line, the clock or spell");
