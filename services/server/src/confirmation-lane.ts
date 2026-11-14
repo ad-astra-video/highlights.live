@@ -126,7 +126,34 @@ const LANE_LABELS = {
   // the row may still store accept-lane evidence (`attestationUsed`) this
   // derivation does not read, so the sentence must not claim "no measurement".
   pending: "Awaiting approval — no confirming dive recorded for this window",
+  // ADAAAA-8965 (D4-live): the three no-verdict card states. Each sentence names
+  // the ROW's own state, never an evidence claim, so a card that carries no dive
+  // verdict reads as "there is no card/verdict here" instead of as UNCONFIRMED
+  // silence. See `noVerdictConfirmation()`.
+  notPromoted: "Not promoted — this window carried no highlight, so no dive verdict exists for it",
+  mergedDuplicate: "Merged into another moment — deduped into that card's footage",
+  alternativeNotHighlight: "Served as an alternative of its moment, not as a highlight card",
 } as const;
+
+/** ADAAAA-8965 (D4-live): the reason a SERVED row carries no verdict.
+ *
+ *  D4 makes every promoted row dive, so the only rows left without a verdict are
+ *  rows that never became a card, were deduped into another moment, or are served
+ *  as that moment's alternative. Each is a real state the served payload can
+ *  contain; publishing `unconfirmed` + this reason on it keeps the AC4.1 bar
+ *  ("no served card with neither a verdict nor a skip reason") measurable without
+ *  ever inventing a lane or a dive for a row that has none. */
+export type NoVerdictReason = "not_promoted" | "merged_duplicate" | "alternative_not_highlight";
+
+export function noVerdictConfirmation(reason: NoVerdictReason): HighlightConfirmation {
+  const label =
+    reason === "merged_duplicate"
+      ? LANE_LABELS.mergedDuplicate
+      : reason === "alternative_not_highlight"
+        ? LANE_LABELS.alternativeNotHighlight
+        : LANE_LABELS.notPromoted;
+  return { lane: "unconfirmed", label, skipReason: reason };
+}
 
 /** Read the Stage-1 verdict's measured criteria (`verdict.criteria`) out of a
  *  captured analysis. Absent/legacy captures yield `undefined`. */
@@ -486,8 +513,13 @@ export function confirmationForHighlightRow(
   },
   candidate?: ConfirmationInput,
   /** ADAAAA-8721 (D3): the deployment gate the accept path read, so a lane-less
-   *  card can name `dive_disabled` instead of guessing. Omitted = unknown. */
-  options?: { confirmEnabled?: boolean }
+   *  card can name `dive_disabled` instead of guessing. Omitted = unknown.
+   *
+   *  ADAAAA-8965 (D4-live): `cardKind` names the rail a row is served on when
+   *  that rail is not a highlight/notable card (a merged duplicate, or a moment's
+   *  alternative). A row served there carries no verdict by construction, so the
+   *  card states its reason instead of shipping no `confirmation` block at all. */
+  options?: { confirmEnabled?: boolean; cardKind?: NoVerdictReason }
 ): HighlightConfirmation | undefined {
   // ADAAAA-8542: a held row is neither confirmed nor refuted. It wins over the
   // candidate-derived lane (which still reads `dive`, because the dive's verdict
@@ -539,7 +571,13 @@ export function confirmationForHighlightRow(
       dive: rowDive,
     });
   }
-  if (candidate) return servedConfirmation(deriveConfirmation(withSkipInput(candidate, row, options)));
+  if (candidate) {
+    const derived = servedConfirmation(deriveConfirmation(withSkipInput(candidate, row, options)));
+    // ADAAAA-8965 (D4-live): a rejected/suppressed card derives no lane. It still
+    // answers "why is there no verdict?" with its rail's own reason (a highlight
+    // card that was never promoted), never with silence.
+    return derived ?? noVerdictConfirmation(options?.cardKind ?? "not_promoted");
+  }
   // ADAAAA-8678: highlight row status is pending|accepted|rejected and `pending`
   // is a PUBLISH state (auto-publish off), not a rejection: it derives its lane
   // like an accepted row, so a served GOAL card never carries an evidence-free
@@ -547,7 +585,9 @@ export function confirmationForHighlightRow(
   // approve queue ("Awaiting approval — …") and badges UNCONFIRMED.
   const status: ConfirmationInput["status"] =
     row.status === "accepted" ? "accepted" : row.status === "rejected" ? "rejected" : row.status === "pending" ? "pending" : "suppressed";
-  return servedConfirmation(deriveConfirmation(withSkipInput({ status, trigger: row.trigger }, row, options)));
+  const derived = servedConfirmation(deriveConfirmation(withSkipInput({ status, trigger: row.trigger }, row, options)));
+  // ADAAAA-8965 (D4-live): same rule for a row with no linked candidate.
+  return derived ?? noVerdictConfirmation(options?.cardKind ?? "not_promoted");
 }
 
 /** ADAAAA-8721 (D3): fold the persisted skip evidence (the row's stored drop
