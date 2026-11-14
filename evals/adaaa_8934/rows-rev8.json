@@ -1,0 +1,2177 @@
+[
+ {
+  "id": "301ce95b-2c77-4cd2-b94b-7f8a086b3e72",
+  "jobFull": "3c221d18-3b40-4f36-a660-422a048deeb3",
+  "jobTitle": "Real Madrid vs Barcelona Goals Highlights",
+  "eventType": "GOAL",
+  "start": 17,
+  "end": 32,
+  "localizedTs": 24,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 24,
+  "triggerDur": null,
+  "reason": "The ASR commentary explicitly states 'el remate gol' (the shot goal) at the start of the window, and the visual evidence shows the ball entering the net at t=18:02, followed by a celebration by the player in the blue and red kit.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); the text claims a score line but no scoreboard read / score_delta record carries it; confirmation pass: goal confirmed (deep frame dive); The visual evidence shows the ball clearly entering the net at t=21.0s, followed by a celebration by the player in the blue and red kit. This is corroborated by the ASR commentary 'el remate gol' and 'acaba de marcar el Real Madrid'.",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "frame",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": true,
+   "frameRefCount": 12,
+   "goalConfirmed": "confirmed_goal",
+   "scoreBoardChanged": false
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": "Es Carlos Javier quien la pisa, Carlos Javier quien intenta progresar por la banda izquierda, sigue Carlos Javier, el centro para Ordo\u00f1ez, el remate gol.  Acaba de marcar el Real Madrid, acaba de marcar Manuel Ordo\u00f1ez, Manu, en el minuto.",
+  "summary": null,
+  "summaryRaw": "Manuel Ordo\u00f1ez works the ball forward to create a scoring opportunity. Real Madrid maintains possession as the play develops in this clip at 0:24. The scoreboard reflects the result of the action. Carlos Javier attempts to progress down the left side before the final sequence occurs.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 46,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 24,
+  "summaryDroppedClauses": 2,
+  "summaryViolations": [
+   "too-few-words",
+   "too-few-sentences",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T11:56:34.329Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "El remate, poleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a."
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:55:05.001230Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T11:56:16.499770Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T11:58:16.032372Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:01:52.351492Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:01:52.351514Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "31219646-67b6-4948-a7f9-033e1e00cacb",
+  "jobFull": "3c221d18-3b40-4f36-a660-422a048deeb3",
+  "jobTitle": "Real Madrid vs Barcelona Goals Highlights",
+  "eventType": "GOAL",
+  "start": 20,
+  "end": 35,
+  "localizedTs": 27,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 27,
+  "triggerDur": null,
+  "reason": "The ball is seen entering the net at 18:06, confirmed by the scoreboard change from 1-1 to 2-1 and the ASR commentary 'Acaba de marcar el Real Madrid'.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "1-1>2-1",
+   "transitionScore": {
+    "pre": [
+     1,
+     1
+    ],
+    "post": [
+     2,
+     1
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": null,
+  "summaryRaw": "Real Madrid works the ball forward to change the scoreboard to 2-1. This scoring play occurs at the 0:27 mark in this clip. Barcelona maintains their position as the scoreboard moves from 1-1 to 2-1. The action shows the transition in the scoreline during the match.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 46,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 35,
+  "summaryDroppedClauses": 1,
+  "summaryViolations": [
+   "too-few-words",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T11:56:51.302Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "El remate, poleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a."
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:55:05.001230Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T11:56:16.499770Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T11:58:16.032372Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:01:52.351492Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:01:52.351514Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "8216e21b-b969-4b43-be62-07ff78f2dac8",
+  "jobFull": "3c221d18-3b40-4f36-a660-422a048deeb3",
+  "jobTitle": "Real Madrid vs Barcelona Goals Highlights",
+  "eventType": "GOAL",
+  "start": 77,
+  "end": 92,
+  "localizedTs": 84,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 84,
+  "triggerDur": null,
+  "reason": "The ball is clearly seen entering the net at t=22:10, confirmed by the scoreboard update to 2-2 and the crowd/commentary eruption.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "2-1>2-2",
+   "transitionScore": {
+    "pre": [
+     2,
+     1
+    ],
+    "post": [
+     2,
+     2
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": "Barcelona works the ball forward to create a scoring opportunity. The scoreboard moves to 2-2 during this sequence. This play occurs at 1:24 into the clip. Barcelona maintains possession to advance the play and move the ball toward the goal.",
+  "summaryRaw": null,
+  "summaryGate": "accepted",
+  "summaryCalls": 2,
+  "summaryWordCount": null,
+  "summaryFloorWords": null,
+  "summaryRepairedWords": null,
+  "summaryDroppedClauses": null,
+  "summaryViolations": null,
+  "createdAt": "2026-11-13T12:01:55.266Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "El remate, poleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a."
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:55:05.001230Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T11:56:16.499770Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T11:58:16.032372Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:01:52.351492Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:01:52.351514Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "2e0e1614-13ce-4c88-9738-fa4d79ac1454",
+  "jobFull": "5da11cff-2005-4595-ac67-f5353bcbf365",
+  "jobTitle": "Real Madrid vs Barcelona Goal Highlights",
+  "eventType": "GOAL",
+  "start": 17,
+  "end": 32,
+  "localizedTs": 24,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 24,
+  "triggerDur": null,
+  "reason": "The ASR commentary explicitly states 'el remate gol' (the shot goal) at the start of the window, and the visual evidence shows a player in a white kit (Real Madrid) striking the ball into the net, followed by a celebration and a referee raising an arm to signal the goal.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball entering the net area (crossing the goal line) at t=26.0s, and the referee's arm signal at the end of the clip confirms the goal.",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "frame",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": true,
+   "frameRefCount": 12,
+   "goalConfirmed": "confirmed_goal",
+   "scoreBoardChanged": false
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": "Es Carlos Javier quien la pisa, Carlos Javier quien intenta progresar por la banda izquierda, sigue Carlos Javier, el centro para Ordo\u00f1ez, el remate gol.  Acaba de marcar el Real Madrid, acaba de marcar Manuel Ordo\u00f1ez, Manu, en el minuto.",
+  "summary": null,
+  "summaryRaw": "Real Madrid works the ball forward as Manuel Ordo\u00f1ez moves into the attacking area. The scoreboard remains unchanged during this sequence at 0:24 into the clip. Carlos Javier attempts to progress down the left flank before the play continues. Barcelona maintains their position as the action develops.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 47,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 34,
+  "summaryDroppedClauses": 1,
+  "summaryViolations": [
+   "too-few-words",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T12:04:50.166Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Voy a rejazar con los pu\u00f1os  de bich\u00e1ez, bal\u00f3n dividido,  el remate,  oleador del Real Madrid, y el bal\u00f3n  es para el barza, lo intenta  por banda derecha, la mine  y la mal, la mi"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T12:03:37.792432Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T12:04:36.478016Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T12:05:51.594074Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:06:50.150560Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:06:50.150586Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "ede1a00a-b0e0-4db9-9822-327d4e93663c",
+  "jobFull": "5da11cff-2005-4595-ac67-f5353bcbf365",
+  "jobTitle": "Real Madrid vs Barcelona Goal Highlights",
+  "eventType": "GOAL",
+  "start": 20,
+  "end": 35,
+  "localizedTs": 27,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 27,
+  "triggerDur": null,
+  "reason": "The ASR confirms a goal ('Acaba de marcar el Real Madrid'), the scoreboard changes from 1-1 to 2-1 at 18:06, and the frames show the immediate celebration of the Real Madrid players.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "1-1>2-1",
+   "transitionScore": {
+    "pre": [
+     1,
+     1
+    ],
+    "post": [
+     2,
+     1
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": null,
+  "summaryRaw": "Real Madrid players celebrate as the scoreboard moves to 2-1. Barcelona works the ball forward during the play. This sequence occurs at 0:27 into the clip. The score transition from 1-1 to 2-1 is confirmed by the scoreboard.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 38,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 28,
+  "summaryDroppedClauses": 1,
+  "summaryViolations": [
+   "too-few-words",
+   "unattested-sentence",
+   "unattested-atmosphere"
+  ],
+  "createdAt": "2026-11-13T12:04:58.217Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Voy a rejazar con los pu\u00f1os  de bich\u00e1ez, bal\u00f3n dividido,  el remate,  oleador del Real Madrid, y el bal\u00f3n  es para el barza, lo intenta  por banda derecha, la mine  y la mal, la mi"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T12:03:37.792432Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T12:04:36.478016Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T12:05:51.594074Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:06:50.150560Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:06:50.150586Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "fe07de97-17e6-4c05-8dad-878882f9f361",
+  "jobFull": "5da11cff-2005-4595-ac67-f5353bcbf365",
+  "jobTitle": "Real Madrid vs Barcelona Goal Highlights",
+  "eventType": "GOAL",
+  "start": 77,
+  "end": 92,
+  "localizedTs": 84,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 84,
+  "triggerDur": null,
+  "reason": "The scoreboard updates from 2-1 to 2-2 at t=22:13, and the ball is seen crossing the goal line into the net at t=22:13.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "2-1>2-2",
+   "transitionScore": {
+    "pre": [
+     2,
+     1
+    ],
+    "post": [
+     2,
+     2
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": null,
+  "summaryRaw": "Barcelona works the ball forward to create a scoring opportunity. The scoreboard moves to 2-2 at the 1:24 mark in this clip. This sequence follows a period of sustained possession by the team. The scoreboard updates as the play concludes.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 40,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 22,
+  "summaryDroppedClauses": 2,
+  "summaryViolations": [
+   "too-few-words",
+   "too-few-sentences",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T12:06:55.814Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Voy a rejazar con los pu\u00f1os  de bich\u00e1ez, bal\u00f3n dividido,  el remate,  oleador del Real Madrid, y el bal\u00f3n  es para el barza, lo intenta  por banda derecha, la mine  y la mal, la mi"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T12:03:37.792432Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T12:04:36.478016Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T12:05:51.594074Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:06:50.150560Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:06:50.150586Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "3cdf3fdd-0490-40cb-93eb-55e299317c5f",
+  "jobFull": "98717871-f7e7-4175-b6b3-c1f6a231102c",
+  "jobTitle": "Barcelona Goal Highlights",
+  "eventType": "GOAL",
+  "start": 17,
+  "end": 32,
+  "localizedTs": 24,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 24,
+  "triggerDur": null,
+  "reason": "The ASR confirms a goal ('el remate gol') and the visual evidence shows the ball entering the net at t=18:02, followed by a celebration and a referee's signal.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); the text claims a score line but no scoreboard read / score_delta record carries it; confirmation pass: goal confirmed (deep frame dive); The visual evidence shows the ball entering the net at t=21.00, followed by a referee's signal and a celebration. The ASR also confirms the goal ('el remate gol').",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "frame",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": true,
+   "frameRefCount": 12,
+   "goalConfirmed": "confirmed_goal",
+   "scoreBoardChanged": false
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": "Es Carlos Javier quien la pisa.  Carlos Javier quien intenta progresar por la banda izquierda.  Sigue Carlos Javier.  El centro para Ordo\u00f1ez, el remate gol.  Acaba de marcar el Real Madrid.  Acaba de marcar Manuel Ordo\u00f1ez.  Man\u00fa, en el minuto.",
+  "summary": null,
+  "summaryRaw": "Manuel Ordo\u00f1ez scores for Real Madrid as the ball enters the net at 0:24 into the clip. The ASR confirms the goal after a play involving Carlos Javier. Real Madrid continues to work the ball forward to create this scoring opportunity.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 41,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 30,
+  "summaryDroppedClauses": 1,
+  "summaryViolations": [
+   "too-few-words",
+   "too-few-sentences",
+   "unattested-action",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T11:56:35.855Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Si, con la Albarsa,  va a rechazar con los pu\u00f1os de Abitzaes, Val\u00f3n dividido, el remate,  oleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a, lo intenta por banda  derecha, La Min"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:55:08.000468Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T11:56:20.116794Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T11:58:17.141240Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:01:54.391967Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:01:54.391990Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "924ca3d3-1966-455c-8462-c31e89592d25",
+  "jobFull": "98717871-f7e7-4175-b6b3-c1f6a231102c",
+  "jobTitle": "Barcelona Goal Highlights",
+  "eventType": "GOAL",
+  "start": 20,
+  "end": 35,
+  "localizedTs": 27,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 27,
+  "triggerDur": null,
+  "reason": "The ASR confirms the goal ('el remate gol') at the start of the window, and the scoreboard changes from 1-1 to 2-1 at 18:06.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "1-1>2-1",
+   "transitionScore": {
+    "pre": [
+     1,
+     1
+    ],
+    "post": [
+     2,
+     1
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": "Barcelona works the ball forward to create a scoring opportunity. The scoreboard moves to 2-1 during this sequence. This play occurs at the 0:27 mark in this clip. Barcelona maintains possession as the score transition from 1-1 to 2-1 is confirmed.",
+  "summaryRaw": null,
+  "summaryGate": "accepted",
+  "summaryCalls": 2,
+  "summaryWordCount": null,
+  "summaryFloorWords": null,
+  "summaryRepairedWords": null,
+  "summaryDroppedClauses": null,
+  "summaryViolations": null,
+  "createdAt": "2026-11-13T11:56:53.121Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Si, con la Albarsa,  va a rechazar con los pu\u00f1os de Abitzaes, Val\u00f3n dividido, el remate,  oleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a, lo intenta por banda  derecha, La Min"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:55:08.000468Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T11:56:20.116794Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T11:58:17.141240Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:01:54.391967Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:01:54.391990Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "464427a8-d02c-4937-ae35-786c94a58b18",
+  "jobFull": "9af31dcb-af66-4eba-8586-2f69aae09a63",
+  "jobTitle": "Real Madrid vs Barcelona Goals",
+  "eventType": "GOAL",
+  "start": 17,
+  "end": 32,
+  "localizedTs": 24,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 24,
+  "triggerDur": null,
+  "reason": "The ASR commentary explicitly states 'el remate gol' (the shot goal) at the end of the sequence, and the visual evidence shows the ball entering the net at 18:02, followed by a referee signaling a goal and players celebrating.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); the text claims a score line but no scoreboard read / score_delta record carries it; confirmation pass: goal confirmed (deep frame dive); The visual evidence shows the ball clearly entering the net at 21.00s, followed by a referee signaling a goal and players celebrating. The ball trajectory confirms it crossed the goal line into the net.",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "frame",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": true,
+   "frameRefCount": 12,
+   "goalConfirmed": "confirmed_goal",
+   "scoreBoardChanged": false
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": "Es Carlos Javier quien la pisa, Carlos Javier quien intenta progresar por la banda izquierda, sigue Carlos Javier, el centro para Ordo\u00f1ez, el remate gol.  Acaba de marcar el Real Madrid, acaba de marcar Manuel Ordo\u00f1ez, Manu, en el minuto.",
+  "summary": null,
+  "summaryRaw": "Carlos Javier works the ball forward along the left flank before providing a center for Ordo\u00f1ez. Manuel Ordo\u00f1ez then finishes the sequence as the ball enters the net. This scoring play occurs at 0:24 into the clip. Real Madrid continues to press for possession.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 44,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 37,
+  "summaryDroppedClauses": 1,
+  "summaryViolations": [
+   "too-few-words",
+   "unattested-action",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T12:02:04.702Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Voy a rechazar con los pu\u00f1os  de Abitzaez, bal\u00f3n dividido,  el remate, oleador del Real Madrid  y el bal\u00f3n es para el Bar\u00e7a,  lo intenta por banda derecha,  la mine llamal, la mine"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:59:22.564848Z",
+     "names": [],
+     "action": [
+      "no evidence"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T12:01:47.049063Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "flipped unknown -> Barcelona at away"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T12:03:27.599450Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:05:27.379957Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:05:27.379988Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "d35f6f9f-973d-49b7-9d8d-d56883f4be30",
+  "jobFull": "9af31dcb-af66-4eba-8586-2f69aae09a63",
+  "jobTitle": "Real Madrid vs Barcelona Goals",
+  "eventType": "GOAL",
+  "start": 20,
+  "end": 35,
+  "localizedTs": 27,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 27,
+  "triggerDur": null,
+  "reason": "The ASR commentary explicitly states 'Acaba de marcar el Real Madrid' (Real Madrid just scored) and the scoreboard changes from 1-1 to 2-1 at 18:06.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "1-1>2-1",
+   "transitionScore": {
+    "pre": [
+     1,
+     1
+    ],
+    "post": [
+     2,
+     1
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": "Real Madrid scores to change the scoreboard to 2-1. Barcelona works the ball forward as the play develops. This scoring play occurs at the 0:27 mark in this clip. The scoreboard moves from 1-1 to 2-1 during this sequence. Barcelona continues to press for control.",
+  "summaryRaw": null,
+  "summaryGate": "accepted",
+  "summaryCalls": 2,
+  "summaryWordCount": null,
+  "summaryFloorWords": null,
+  "summaryRepairedWords": null,
+  "summaryDroppedClauses": null,
+  "summaryViolations": null,
+  "createdAt": "2026-11-13T12:02:33.008Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Voy a rechazar con los pu\u00f1os  de Abitzaez, bal\u00f3n dividido,  el remate, oleador del Real Madrid  y el bal\u00f3n es para el Bar\u00e7a,  lo intenta por banda derecha,  la mine llamal, la mine"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:59:22.564848Z",
+     "names": [],
+     "action": [
+      "no evidence"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T12:01:47.049063Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "flipped unknown -> Barcelona at away"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T12:03:27.599450Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:05:27.379957Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:05:27.379988Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "3347f3f8-ffca-442d-ab3d-d092ae71ce37",
+  "jobFull": "9af31dcb-af66-4eba-8586-2f69aae09a63",
+  "jobTitle": "Real Madrid vs Barcelona Goals",
+  "eventType": "GOAL",
+  "start": 77,
+  "end": 92,
+  "localizedTs": 84,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 84,
+  "triggerDur": null,
+  "reason": "The ball is seen entering the net at t=22:10, followed by a scoreboard update to 2-2 at t=22:11 and a crowd/commentary eruption.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "2-1>2-2",
+   "transitionScore": {
+    "pre": [
+     2,
+     1
+    ],
+    "post": [
+     2,
+     2
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": null,
+  "summaryRaw": "Barcelona works the ball forward to change the scoreboard to 2-2. This scoring sequence occurs at the 1:24 mark in this clip. The team maintains possession as the play develops. Barcelona continues to press for control throughout the sequence.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 39,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 31,
+  "summaryDroppedClauses": 1,
+  "summaryViolations": [
+   "too-few-words",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T12:05:36.724Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Voy a rechazar con los pu\u00f1os  de Abitzaez, bal\u00f3n dividido,  el remate, oleador del Real Madrid  y el bal\u00f3n es para el Bar\u00e7a,  lo intenta por banda derecha,  la mine llamal, la mine"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:59:22.564848Z",
+     "names": [],
+     "action": [
+      "no evidence"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T12:01:47.049063Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "flipped unknown -> Barcelona at away"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T12:03:27.599450Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:05:27.379957Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:05:27.379988Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "da70fb9b-e7ae-4095-879a-1101249bc3ba",
+  "jobFull": "e19c6ce4-ec62-4f3c-b53e-dd5404a53c3a",
+  "jobTitle": "Real Madrid goal against Barcelona",
+  "eventType": "GOAL",
+  "start": 17,
+  "end": 32,
+  "localizedTs": 24,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 24,
+  "triggerDur": null,
+  "reason": "The ASR commentary explicitly states 'el remate gol' (the goal shot) at the start of the window, and the visual evidence shows a player in a white kit (Real Madrid) striking the ball into the net, followed by a referee raising an arm to signal a goal.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); confirmation pass: goal confirmed (deep frame dive); The visual evidence shows the ball clearly entering the net after a shot from a Real Madrid player, and the referee's arm signal confirms the goal. The ball trajectory shows a clear path into the goal area.",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "frame",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": true,
+   "frameRefCount": 12,
+   "goalConfirmed": "confirmed_goal",
+   "scoreBoardChanged": false
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": "Es Carlos Javier quien la pisa.  Carlos Javier quien intenta progresar por la banda izquierda.  Sigue Carlos Javier.  El centro para Ordo\u00f1ez, el remate gol.  Acaba de marcar el Real Madrid.  Acaba de marcar Manuel Ordo\u00f1ez.  Man\u00fa, en el minuto.",
+  "summary": null,
+  "summaryRaw": "Real Madrid works the ball forward as Manuel Ordo\u00f1ez moves into the area. The scoreboard remains unchanged as the play develops in this clip at 0:24. Manuel Ordo\u00f1ez completes the sequence to finish the move. Real Madrid continues to press against Barcelona during this sequence.",
+  "summaryGate": "dropped:filler",
+  "summaryCalls": 2,
+  "summaryWordCount": 45,
+  "summaryFloorWords": 40,
+  "summaryRepairedWords": 35,
+  "summaryDroppedClauses": 1,
+  "summaryViolations": [
+   "too-few-words",
+   "unattested-sentence"
+  ],
+  "createdAt": "2026-11-13T11:56:35.306Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Si, con la albarsa,  va a ir rechazar con los pu\u00f1os de Abichsaez, Val\u00f3n dividido,  el remate, oleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a,  que le intenta por banda derecha"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:55:08.592977Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T11:56:18.346964Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T11:58:16.531076Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:01:53.831863Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:01:53.831899Z",
+   "resolverVersion": 1
+  }
+ },
+ {
+  "id": "7bba5625-a943-4070-9885-9285e5ffce62",
+  "jobFull": "e19c6ce4-ec62-4f3c-b53e-dd5404a53c3a",
+  "jobTitle": "Real Madrid goal against Barcelona",
+  "eventType": "GOAL",
+  "start": 20,
+  "end": 35,
+  "localizedTs": 27,
+  "verdict": null,
+  "outcome": "scoring_play",
+  "triggerTs": 27,
+  "triggerDur": null,
+  "reason": "The ASR commentary confirms 'Acaba de marcar el Real Madrid' at the start of the window, and the scoreboard changes from 1-1 to 2-1 at 18:06.; scoreboard score change confirmed",
+  "caption": null,
+  "postTitle": null,
+  "attestationUsed": {
+   "authority": "scoreboard",
+   "ballOutcome": null,
+   "goalCrossed": false,
+   "corroborated": false,
+   "goalConfirmed": null,
+   "transitionKey": "1-1>2-1",
+   "transitionScore": {
+    "pre": [
+     1,
+     1
+    ],
+    "post": [
+     2,
+     1
+    ]
+   },
+   "scoreBoardChanged": true
+  },
+  "deferredAttestation": null,
+  "matchClock": null,
+  "asrTranscript": null,
+  "summary": "The scoreboard moves to 2-1 during this sequence. Barcelona works the ball forward as the score changes. This action occurs at 0:27 into the clip. The scoreboard reflects the transition from 1-1 to 2-1. Barcelona maintains possession while moving the ball toward the goal.",
+  "summaryRaw": null,
+  "summaryGate": "accepted",
+  "summaryCalls": 1,
+  "summaryWordCount": null,
+  "summaryFloorWords": null,
+  "summaryRepairedWords": null,
+  "summaryDroppedClauses": null,
+  "summaryViolations": null,
+  "createdAt": "2026-11-13T11:56:52.494Z",
+  "matchContext": {
+   "sport": "soccer",
+   "teams": [
+    {
+     "name": "Barcelona",
+     "side": "away",
+     "evidence": [
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:04 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:05 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:06 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA-2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 IRMA 2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:07 RMA 2:1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:08 |RMA2-1 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA 2-2 BAR"
+      },
+      {
+       "source": "scorebug_ocr",
+       "snippet": "22:17 |RMA2-2 BAR"
+      },
+      {
+       "source": "asr",
+       "snippet": "Si, con la albarsa,  va a ir rechazar con los pu\u00f1os de Abichsaez, Val\u00f3n dividido,  el remate, oleador del Real Madrid y el Val\u00f3n es para el Bar\u00e7a,  que le intenta por banda derecha"
+      }
+     ],
+     "kitColors": [],
+     "confidence": 0.85
+    }
+   ],
+   "trail": [
+    {
+     "at": "2026-11-13T11:55:08.592977Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 0
+    },
+    {
+     "at": "2026-11-13T11:56:18.346964Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 25
+    },
+    {
+     "at": "2026-11-13T11:58:16.531076Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 50
+    },
+    {
+     "at": "2026-11-13T12:01:53.831863Z",
+     "names": [
+      {
+       "name": "Barcelona",
+       "side": "away",
+       "confidence": 0.85
+      }
+     ],
+     "action": [
+      "no change"
+     ],
+     "progressPct": 90
+    }
+   ],
+   "ambiguous": false,
+   "inferredAt": "2026-11-13T12:01:53.831899Z",
+   "resolverVersion": 1
+  }
+ }
+]

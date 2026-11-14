@@ -79,11 +79,14 @@ const STORED_RAW_5F32F6F4 =
  *  the clause repair and `This sequence follows a move by …` asserts nothing — so
  *  a body that keeps its depth has to carry a fact in every sentence. The row is
  *  VOD (`rail: "vod"`, 40-word floor), hence 3-5 fact sentences. */
+// ADAAAA-8934: sentences 3 and 4 used to assert sustained possession ("keeps
+// possession", "recycles the ball") — a state the row measures nowhere, which the
+// clause repair now deletes. The bounded acts below carry the same depth.
 const CLIP_ANCHORED_5F32F6F4 =
   "Barcelona works the ball down the left at the 0:24 mark of this clip. " +
   "Carlos Javier drives the ball forward and the cross comes in from the wing. " +
-  "Barcelona keeps possession as the ball is worked inside the box. " +
-  "Barcelona recycles the ball to the left as the clip runs past 0:24.";
+  "Barcelona intercepts the ball near the box and counters at 0:24 into the clip. " +
+  "Carlos Javier recovers the ball near the wing and threads a pass at 0:24 of the clip.";
 
 /** The stored `summaryRaw` of `995cd9b5` — also refused `too-few-facts`. The
  *  fourth sentence carries the clip offset (ADAAAA-8791: the VOD floor is the
@@ -183,7 +186,12 @@ describe("gate — the clock is what starved the row (replayed on the stored bod
 
   it("does the same for the scoreboard row: score alone was under the bar", () => {
     expect(attestedSummaryFactKinds(STORED_RAW_995CD9B5, ROW_995CD9B5)).toEqual(["score"]);
-    expect(gateSummaryDetail(STORED_RAW_995CD9B5, ROW_995CD9B5).violations).toContain("too-few-facts");
+    // ADAAAA-8934: the repair now fills the slots the deleted filler left with
+    // facts the row attests (here the clip anchor), so the draft no longer starves
+    // on the density bar — its remaining refusal is the deep-row case covered below.
+    const repaired = gateSummaryDetail(STORED_RAW_995CD9B5, ROW_995CD9B5);
+    expect(repaired.substitutedClauses.length).toBeGreaterThan(0);
+    expect(repaired.repairedWords).toBeGreaterThan(0);
 
     const kinds = attestedSummaryFactKinds(CLIP_ANCHORED_995CD9B5, ROW_995CD9B5);
     expect(kinds.sort()).toEqual(["clock", "score"]);
@@ -210,8 +218,10 @@ describe("gate — the clock is what starved the row (replayed on the stored bod
     // QA-F4's `$0` replay clause: "a body naming an attested team (e.g. Barcelona
     // from matchContext.teams) serves". The team is the only entity the VOD rail
     // attests on row 5f32f6f4 besides the ASR names, so it must carry the copy.
+    // ADAAAA-8934: bounded acts replace the possession/shape clauses, which the
+    // clause repair deletes as sustained state.
     const body =
-      "Barcelona work the ball down the left at the 0:24 mark of this clip. Barcelona cuts out the low cross at the near post and clears it away. Barcelona recycles the ball back into the box under pressure. Barcelona keep their shape through the restart.";
+      "Barcelona work the ball down the left at the 0:24 mark of this clip. Barcelona cuts out the low cross at the near post and clears it away. Barcelona intercepts the ball near the box and counters at 0:24 of the clip. Carlos Javier recovers the ball near the wing and threads a pass.";
     const decision = gateSummaryDetail(body, ROW_5F32F6F4);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(body);

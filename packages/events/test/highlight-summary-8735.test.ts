@@ -179,8 +179,11 @@ describe("AC9 — action is credited only off an attested actor (rev 4)", () => 
     // asserts nothing the row attests, which the clause repair deletes. The
     // fixture names the team in both sentences, which is what the bar under test
     // is about.
+    // ADAAAA-8934: the second fact must be a BOUNDED act — "work the ball toward
+    // the wing" is a sustained state the row never measured, so the clause repair
+    // deletes it (the bar under test is the NAMED actor, not the verb class).
     const body =
-      "At 3:23, Northbridge shoot on the right side of the field. Northbridge work the ball toward the wing as the move develops.";
+      "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball near the wing at 3:23 of the clip.";
     expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
     expect(attestedSummaryFactKinds(body, evidence)).toEqual(["clock", "action"]);
     expect(gateSummaryDetail(body, evidence).summary).toBe(body);
@@ -219,6 +222,8 @@ describe("AC9 — action is credited only off an attested actor (rev 4)", () => 
     const prompt = buildSummaryPrompt({ ...teamContext(), postTitle: null });
     expect(prompt).toContain("An action fact counts ONLY when you NAME an attested team or player from the evidence");
     expect(prompt).toContain("a bare verb with no named actor is not a fact");
-    expect(prompt).toContain("an attested team's or player's action");
+    // ADAAAA-8934: the menu names a BOUNDED act; "an attested team's or player's
+    // action" was the phrasing the rev-8 bodies answered with possession prose.
+    expect(prompt).toContain("a bounded act (an interception, a recovery, a won-back ball, a counter)");
   });
 });

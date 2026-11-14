@@ -43,6 +43,7 @@ import {
   summaryBand,
   summaryOpeningRun,
   summarySentencesOf,
+  summaryFactMenu,
   type SummaryDropReason,
   type SummaryEvidence,
   type SummaryRail,
@@ -305,10 +306,18 @@ export async function runSummaryForRow(
         // `2f5a5796` went 28 -> 34 words against the 40-word floor; the retry now
         // carries the shortfall and asks for the floor plus a margin
         // (`summaryRetryMinWords`), so it cannot re-land on the boundary.
+        // ADAAAA-8934: the retry is handed the DELETED clause list and the fact
+        // menu beside the shortfall. The rev-8 grade measured 9 rows retried and
+        // 9 still dropped: the second call re-read the same prompt, re-wrote the
+        // same possession/pressure clauses, and the clause repair deleted them
+        // again. Naming what was deleted (and what may replace it) is the only
+        // thing that makes the second sample different from the first.
         retry = {
           words: decision.words,
           sentences: decision.sentences,
           violations: decision.violations,
+          ...(decision.droppedClauses.length > 0 ? { droppedClauses: decision.droppedClauses } : {}),
+          factMenu: summaryFactMenu(evidence),
         };
         log(
           `[summary:${descriptor.jobId}] gate-retry highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} words=${decision.words} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
@@ -369,7 +378,11 @@ export async function runSummaryForRow(
       summaryP95Ms: latencyMs,
     });
     log(
-      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${decision.words} sentences=${decision.sentences} gate=${decision.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)} clockToken=${JSON.stringify(clockTokensOf(decision.summary))} matchClockToken=${JSON.stringify(attestedMatchClockToken(evidence))}`
+      `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${decision.words} sentences=${decision.sentences} gate=${decision.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)} clockToken=${JSON.stringify(clockTokensOf(decision.summary))} matchClockToken=${JSON.stringify(attestedMatchClockToken(evidence))}${
+        decision.droppedClauses.length > 0
+          ? ` droppedClauses=${decision.droppedClauses.length} substitutedClauses=${decision.substitutedClauses.length} repairedWords=${decision.repairedWords}`
+          : ""
+      }`
     );
     return { outcome: "stored", gate: decision.gate, calls, latencyMs };
   }

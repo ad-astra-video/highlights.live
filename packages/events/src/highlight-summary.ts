@@ -449,29 +449,129 @@ const VENUE_RE = /\b(?:stadium|arena|ground|park|cup|league|championship|tournam
 const ACTION_RE = /\b(?:scores?|scored|strikes?|struck|shoots?|shot|heads?|headed|finishes?|finished|converts?|converted|buries|buried|taps?|tapped|rolls?|rolled|slots?|slotted|drives?|drove|saves?|saved|blocks?|blocked|tackles?|tackled|passes?|passed|crosses?|crossed|clears?|cleared|wins|won|levels?|levelled|equalises?|equalised|restores?|restored|answers?|answered|completes?|completed|nets?|netted|rips?|ripped|fires?|fired|volleys?|volleyed|lobs?|lobbed|curls?|curled|assists?|assisted)\b/i;
 
 /**
- * ADAAAA-8903: the SUSTAINED-PLAY action class — the second `action` FACT source,
- * disjoint from the ball-outcome verbs above.
+ * ADAAAA-8934 (AC14, closing the rev-8 loophole): the SUSTAINED-STATE class.
  *
- * The measured defect (live job `9bed3bd7`, promoted rows `c3257097` / `eaf1da9f`,
- * served build `6426d6bf`): both rows attest `clock + action` and served nothing,
- * refused `too-few-facts` on both calls. Their replies were
- * "Barcelona maintains possession … the team works the ball across the pitch …"
- * and "Barcelona maintains control … continues to pressure the opposition …",
- * i.e. exactly the copy the prompt DEMANDS on such a row: `ballActionAttested ===
- * false` (this window measured no ball outcome) makes every shot/save/head verb a
- * `unattested-action` refusal, so the only legal action prose is sustained play —
- * which `ACTION_RE` had no verb for. The lane therefore asked for prose its own
- * gate could never credit, and every BIG_PLAY row on that build shipped a card
- * with no body (AC1-live 3/5 = 60%).
+ * **NOT a fact.** This is the vocabulary AC14's rev-8 grade measured as filler:
+ * `packages/events` credited it as an `action` fact whenever the sentence NAMED
+ * an attested team, so 7 of the 18 sentences in the 4 served VOD bodies of job
+ * set `3c221d18 … 5da11cff` carried no attested fact at all and still passed the
+ * gate with `summaryViolations: null`:
  *
- * Widening this cannot manufacture a fact: `attestedSummaryFactKinds` credits an
- * `action` only when the body NAMES an actor the row's structured evidence
- * attests (`bodyNamesAttestedActor`), and the ball-outcome bar
- * (`bodyAssertsUnattestedAction`) is a separate, untouched gate. A bare
- * "the ball is worked forward" still earns nothing.
+ *   `Barcelona maintains possession while moving the ball toward the goal.`
+ *   `Barcelona maintains possession to advance the play and move the ball …`
+ *   `Barcelona continues to press for control.`
+ *   `Barcelona works the ball forward as the play develops.`
+ *   `Barcelona works the ball forward as the score changes.`
+ *   `Barcelona works the ball forward to create a scoring opportunity.`
+ *
+ * Every one of those asserts an ONGOING STATE — who holds the ball, who is
+ * pressing — and no channel this lane reads measures possession, pressure or
+ * control: `matchContext` carries teams/players (and a competition only when a
+ * resolver read one), `attestation` carries the score transition and the ball
+ * outcome, `matchClock` carries the scorebug reading, and the transcript carries
+ * speech. A name is an ENTITY, not an attestation that the entity did anything
+ * (AC14: `hasAttestedEntity` may never stand in for an attested actor action), so
+ * a possession/pressure clause is now factless and the clause repair deletes it.
+ *
+ * ADAAAA-8903 had widened `summaryFacts` with this lexicon to rescue rows whose
+ * only legal prose was sustained play; the rev-8 grade proves that rescue served
+ * copy the row cannot support. The discrete-ACT class below keeps the rescue
+ * narrow where it is defensible.
  */
-const SUSTAINED_ACTION_RE =
-  /\b(?:possess(?:es|ed|ing)?|maintains?|maintained?|maintaining|retains?|retained?|controls?|controlled?|controlling|presses|pressed|pressing|pressures?|pressured|counters?|countered?|counter-?attacks?|counter-?attacked|intercepts?|intercepted?|dispossess(?:es|ed)?|recovers?|recovered?|wins?\s+back|won\s+back|works?\s+the\s+ball|worked\s+the\s+ball|circulates?|circulated?|switches?\s+(?:play|the\s+ball)|switched\s+(?:play|the\s+ball)|carries?\s+(?:the\s+ball|possession)|carried\s+(?:the\s+ball|possession)|keeps?\s+(?:the\s+ball|possession|their\s+shape)|kept\s+(?:the\s+ball|possession)|holds?\s+possession|held\s+possession|builds?\s+up|building\s+up|built\s+up|advanced?|advancing|breaks?\s+forward|broke\s+forward|threads?\s+(?:a\s+pass|the\s+ball)|threaded|spreads?\s+play|spread\s+play|recycles?\s+(?:the\s+ball|possession)|recycled)\b/i;
+export const SUSTAINED_STATE_RE =
+  /\b(?:possess(?:es|ed|ing)?|maintains?|maintained?|maintaining|retains?|retained?|controls?|controlled?|controlling|presses|pressed|pressing|pressures?|pressured|works?\s+the\s+ball|worked\s+the\s+ball|circulates?|circulated?|switches?\s+(?:play|the\s+ball)|switched\s+(?:play|the\s+ball)|carries?\s+(?:the\s+ball|possession)|carried\s+(?:the\s+ball|possession)|keeps?\s+(?:the\s+ball|possession|their\s+shape)|kept\s+(?:the\s+ball|possession)|holds?\s+possession|held\s+possession|builds?\s+up|building\s+up|built\s+up|advanced?|advancing|breaks?\s+forward|broke\s+forward|spreads?\s+play|spread\s+play|recycles?\s+(?:the\s+ball|possession)|recycled)\b/i;
+
+/**
+ * ADAAAA-8934: the SUSTAINED-ACT class — a BOUNDED act a named attested actor
+ * performs in one moment (an interception, a recovery, a won-back ball, a
+ * counter, a threaded pass). It stays an `action` fact under the same rule every
+ * other action fact follows — the body must NAME an attested actor
+ * (`bodyNamesAttestedActor`) — because it asserts an EVENT rather than an
+ * ongoing state. Deliberately disjoint from `SUSTAINED_STATE_RE`: nothing here
+ * can be earned by naming a team and describing what it is still doing.
+ */
+const SUSTAINED_ACT_ACTION_RE =
+  /\b(?:counters?|countered?|counter-?attacks?|counter-?attacked|intercepts?|intercepted?|dispossess(?:es|ed)?|recovers?|recovered?|wins?\s+back|won\s+back|threads?\s+(?:a\s+pass|the\s+ball)|threaded)\b/i;
+
+/**
+ * ADAAAA-8934: the `ACTION_RE` verbs that are ALSO ordinary nouns — `the score`,
+ * `a shot`, `the save`, `his pass`.
+ *
+ * The rev-8 grade measured `Barcelona works the ball forward as the score
+ * changes.` credited as an `action` fact. Nothing acted: the regex read the NOUN
+ * "score" as a verb. That is the AC14 loophole one level below the possession
+ * class — a sentence that asserts no act earning the fact the body bar requires —
+ * and it is the same shape as the `hasAttestedEntity` substitution QA found
+ * (`sentenceNameFacts` never earned it; the VERB matcher did).
+ *
+ * A match on one of these tokens counts as an ACTION only when it is not
+ * introduced by a determiner, possessive or count ("the score", "his shot",
+ * "two saves"). Everything else in `ACTION_RE` is unambiguously verbal.
+ */
+const ACTION_NOUN_TOKENS = new Set([
+  "score",
+  "scores",
+  "shot",
+  "shots",
+  "save",
+  "saves",
+  "block",
+  "blocks",
+  "tackle",
+  "tackles",
+  "pass",
+  "passes",
+  "cross",
+  "crosses",
+  "finish",
+  "finishes",
+  "header",
+]);
+
+const ACTION_NOUN_LEAD_WORDS = new Set([
+  "the",
+  "a",
+  "an",
+  "this",
+  "that",
+  "these",
+  "those",
+  "his",
+  "her",
+  "their",
+  "its",
+  "our",
+  "your",
+  "another",
+  "same",
+  "every",
+  "each",
+  "no",
+  "one",
+  "two",
+  "three",
+  "first",
+  "second",
+  "third",
+  "final",
+  "opening",
+  "closing",
+]);
+
+/** The FIRST action verb the text asserts — skipping a noun use of an ambiguous
+ *  token (`the score`, `his shot`). `null` when the text asserts no act. */
+function firstActionVerb(text: string): string | null {
+  const re = new RegExp(ACTION_RE.source, "gi");
+  for (let match = re.exec(text ?? ""); match; match = re.exec(text ?? "")) {
+    const token = match[0].toLowerCase();
+    if (ACTION_NOUN_TOKENS.has(token)) {
+      const lead = ((text ?? "").slice(0, match.index).match(/([A-Za-z']+)\s+$/) ?? [])[1]?.toLowerCase();
+      if (lead && ACTION_NOUN_LEAD_WORDS.has(lead)) continue;
+    }
+    return match[0];
+  }
+  return null;
+}
 
 /** Every fact the summary asserts, with the substring that carries it. */
 export function summaryFacts(text: string): { kind: SummaryFactKind; text: string }[] {
@@ -485,15 +585,15 @@ export function summaryFacts(text: string): { kind: SummaryFactKind; text: strin
   if (spell) out.push({ kind: "clock", text: spell[0] });
   const venue = body.match(VENUE_RE);
   if (venue) out.push({ kind: "venue", text: venue[0] });
-  const action = body.match(ACTION_RE);
-  if (action) out.push({ kind: "action", text: action[0] });
-  // ADAAAA-8903: sustained play is an `action` fact too — only when no
-  // ball-outcome verb already carried it (one action fact per body, so the
-  // fact COUNT is unchanged and this can never lift a body over the two-kind
-  // bar on its own).
+  const action = firstActionVerb(body);
+  if (action) out.push({ kind: "action", text: action });
+  // ADAAAA-8903 added a second action source for sustained play; ADAAAA-8934
+  // narrows it to BOUNDED acts (see `SUSTAINED_ACT_ACTION_RE`): a possession /
+  // pressure / control clause is a STATE the lane measures nowhere, so it is not
+  // a fact and the clause repair deletes it before the gate judges.
   else {
-    const sustained = body.match(SUSTAINED_ACTION_RE);
-    if (sustained) out.push({ kind: "action", text: sustained[0] });
+    const act = body.match(SUSTAINED_ACT_ACTION_RE);
+    if (act) out.push({ kind: "action", text: act[0] });
   }
   return out;
 }
@@ -852,7 +952,15 @@ export function summaryRefusalIsRepairable(
   violation: SummaryViolation,
   evidence: SummaryEvidence
 ): boolean {
-  if (!SUMMARY_DETERMINISTIC_REFUSALS.includes(violation)) return true;
+  if (!SUMMARY_DETERMINISTIC_REFUSALS.includes(violation)) {
+    // ADAAAA-8971 (AC5): an `unattested-*` refusal on a row whose fact menu is
+    // EMPTY is deterministic — the menu is `attestedFactKinds`, so the row attests
+    // no fact kind at all and every sample of the same prompt must assert
+    // something unattested. The retry slot cannot buy a served body here, so the
+    // row ends on ONE call instead of re-sampling a prompt it cannot satisfy.
+    if (violation.startsWith("unattested-") && summaryFactMenu(evidence).length === 0) return false;
+    return true;
+  }
   if (violation === "too-few-facts") {
     return attestedFactKinds(evidence).length >= SUMMARY_MIN_FACT_KINDS;
   }
@@ -1597,11 +1705,51 @@ export function matchClockFrameClaims(text: string, evidence: SummaryEvidence): 
   return claims;
 }
 
+/**
+ * ADAAAA-8934 (AC14): does ONE sentence earn the `action` fact it asserts?
+ *
+ * Two conditions, both required — the rev-8 grade proved the old single check
+ * (`bodyNamesAttestedActor`, i.e. the row attests the ENTITY) credited a
+ * possession/pressure clause as an attested actor action:
+ *
+ *  1. the sentence NAMES an actor the row's own evidence attests
+ *     (`attestedActorNames`: `matchContext` teams/players, the resolver trail, the
+ *     ASR transcript) — never a bare role noun and never a slogan;
+ *  2. the asserted act is one the row can support:
+ *     * a BALL-OUTCOME verb (`scores`, `shoots`, `heads`, …) needs the row to have
+ *       measured a ball outcome — the same `summaryBallActionAttested !== false`
+ *       condition `bodyAssertsUnattestedAction` enforces body-wide, so the two
+ *       bars cannot disagree (the sentence path may not credit a fact the body
+ *       bar refuses);
+ *     * a BOUNDED act (`intercepts`, `recovers`, `wins back`, `counters`,
+ *       `threads a pass`) is an event a named actor performs;
+ *     * a SUSTAINED STATE (possession / pressure / control / working the ball) is
+ *       NOT a fact at all — `summaryFacts` no longer produces one for it, so it
+ *       never reaches this function.
+ */
+export function sentenceActionAttested(sentence: string, factText: string, evidence: SummaryEvidence): boolean {
+  if (!bodyNamesAttestedActor(sentence, evidence)) return false;
+  const verb = (factText ?? "").trim();
+  // The fact must BE an act: a verb `summaryFacts` credited (a ball-outcome verb or
+  // a bounded act). The noun guard is the same one `summaryFacts` applies, so
+  // `the score` can never satisfy this path either.
+  if (!verb) return false;
+  if (firstActionVerb(verb) === null && !SUSTAINED_ACT_ACTION_RE.test(verb)) return false;
+  // ADAAAA-8934: the MEASURED-OUTCOME condition applies to the ball-outcome
+  // vocabulary only (`BALL_OUTCOME_ASSERTION`, the same list the body bar
+  // `bodyAssertsUnattestedAction` reads), not to every verb in `ACTION_RE`. The
+  // broad test refused a carry ("drives forward") on a row that measured no
+  // outcome — the body bar never refuses it, so the sentence path must not either.
+  if (BALL_OUTCOME_ASSERTION.test(verb)) return summaryBallActionAttested(evidence) !== false;
+  return true;
+}
+
 /** The fact kinds ONE sentence carries, credited under the same rules the body
  *  bar uses (`attestedSummaryFactKinds`): a score line the row's transition
  *  grounds, the row's own match clock (or the clip offset the window anchors), an
- *  action that NAMES an attested actor, and a competition only when the match
- *  context carries one. */
+ *  action that NAMES an attested actor and asserts an attested act
+ *  (`sentenceActionAttested`), and a competition only when the match context
+ *  carries one. */
 export function sentenceFactKinds(sentence: string, evidence: SummaryEvidence): SummaryFactKind[] {
   const available = new Set(attestedFactKinds(evidence));
   const out = new Set<SummaryFactKind>();
@@ -1611,7 +1759,7 @@ export function sentenceFactKinds(sentence: string, evidence: SummaryEvidence): 
     if (fact.kind === "score" && !scoreFactGrounded(fact.text, evidence)) continue;
     if (fact.kind === "venue" && !venueFactGrounded(fact.text, evidence)) continue;
     if (fact.kind === "clock" && !clockFactGrounded(fact.text, evidence) && fact.text !== matchClockToken) continue;
-    if (fact.kind === "action" && !bodyNamesAttestedActor(sentence, evidence)) continue;
+    if (fact.kind === "action" && !sentenceActionAttested(sentence, fact.text, evidence)) continue;
     out.add(fact.kind);
   }
   return [...out];
@@ -1650,34 +1798,304 @@ export function unattestedSentences(text: string, evidence: SummaryEvidence): Su
   );
 }
 
-/** AC14.5: the deterministic repair — DELETE the offending clause, never rewrite
- *  it. Extractive like `clampSummaryDepth`, so a sentence that survives keeps its
- *  bytes and a fact survives the repair. A body whose remaining sentences fall
- *  under the band floor is then refused by the depth bars (and the lane names the
- *  drop `filler`). A sentence that carries a competition/venue claim is left to
- *  ADAAAA-8910's `unattested-venue` bar rather than deleted here. */
+/**
+ * ADAAAA-8934: the fact MENU the prompt offers, and the menu the retry is handed.
+ *
+ * The action slot names a BOUNDED act by a named attested actor and nothing else:
+ * a possession / pressure / control clause is not a fact (see
+ * `SUSTAINED_STATE_RE`), so the prompt must not offer "say what the team is
+ * doing". A menu the row cannot fill is a prompt asking for an invented fact
+ * (ADAAAA-8910 defect 3), which is exactly how the rev-8 filler was produced.
+ *
+ * Exported so the lane can pass the SAME menu into the retry directive instead of
+ * letting a second sample re-read a prompt it already failed (AC14/AC5).
+ */
+export function summaryFactMenu(evidence: SummaryEvidence): string[] {
+  // ADAAAA-8971 (AC5): the menu lists only the facts THIS ROW attests. The rev-8
+  // retry offered `the score line` to every `scoring_play` VERDICT, including rows
+  // whose evidence carries no measured transition (their kinds are clock + a named
+  // actor), so the second sample was instructed to write a fact the gate then
+  // refuses (`scoreFactGrounded`) — a retry that cannot succeed by construction.
+  // The clock line was offered unconditionally too, including on a row with no
+  // window anchor. Both are now read off `attestedFactKinds`, which is the same
+  // set the gate credits, so an empty menu means the row has nothing to say and
+  // the lane's determinism rule (`summaryRefusalIsRepairable`) can see that.
+  const kinds = new Set(attestedFactKinds(evidence));
+  return [
+    kinds.has("score") ? "the score line" : null,
+    kinds.has("clock") ? "the clock or spell" : null,
+    kinds.has("venue") ? "the competition or venue" : null,
+    kinds.has("action")
+      ? "a bounded act (an interception, a recovery, a won-back ball, a counter) by a named attested actor"
+      : null,
+  ].filter((entry): entry is string => Boolean(entry));
+}
+
+/**
+ * ADAAAA-8934 (AC1-VOD / AC14): the fact sentences the clause repair may
+ * SUBSTITUTE.
+ *
+ * The rev-8 grade measured two halves of one defect on job set `3c221d18 …
+ * 5da11cff`:
+ *
+ *  * the gate credited a possession/pressure clause as an `action` fact whenever
+ *    the row named an attested team (7 of 18 served sentences were factless);
+ *  * the repair then DELETED that clause, the body fell from 38-47 words to 22-37,
+ *    under the 40-word VOD floor, and 9 of 13 promoted rows served nothing at all
+ *    (AC1-VOD 4/8 cards = 50 %).
+ *
+ * Deleting filler therefore converts AC14 compliance straight into an AC1 miss.
+ * The repair has to REPLACE the clause with a fact the row's own evidence already
+ * attests, before the body is re-counted against the floor.
+ *
+ * The pool below is composed ONLY from facts the row attests — its score
+ * transition (`from` -> `to`), its clip offset (`windowTs`, framed as the clip and
+ * never as match time), the competition/venue when `matchContext` carries one, and
+ * an attested actor when the window's own transcript names one (a transcript name
+ * is measured in THIS window; a `matchContext` team is attested for the match, so
+ * it is only used where the sentence also carries a score or the clock). Nothing
+ * here is invented and every candidate is re-checked through `sentenceFactKinds`
+ * and the standing claim bars before it can be used, so the repair can never
+ * launder a body past the gate it just failed.
+ */
+export interface SummaryFactCandidate {
+  sentence: string;
+  kinds: SummaryFactKind[];
+}
+
+/** ADAAAA-8934: the sentences the repair may substitute, gate-safe and ordered by
+ *  preference (denser fact first). Empty when the row attests no fact the repair
+ *  can phrase — the repair then leaves the deletion alone. */
+/** A transcript name read from running commentary picks up the sentence-initial
+ *  particle of the language it was spoken in ("Es Carlos Javier quien la pisa" ->
+ *  `Es Carlos Javier`). The NAME gate tolerates the longer string; a substitution
+ *  sentence does not, so the pool strips a leading function word before it uses a
+ *  transcript name as an actor. */
+const ACTOR_NAME_PARTICLES = new Set([
+  "es","el","la","los","las","y","de","del","en","con","por","para","un","una","que","quien","sigue","acaba","pero","cuando","al","se","this","the","and",
+]);
+
+function cleanActorName(name: string): string | null {
+  const words = name.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+  while (words.length > 1 && ACTOR_NAME_PARTICLES.has(words[0].toLowerCase())) words.shift();
+  const cleaned = words.join(" ");
+  if (!cleaned || ACTOR_NAME_PARTICLES.has(cleaned.toLowerCase())) return null;
+  return cleaned;
+}
+
+export function summaryFactCandidates(evidence: SummaryEvidence): SummaryFactCandidate[] {
+  const transcriptNames = attestedEntityNames(evidence.transcript ?? "")
+    .map((name) => cleanActorName(name))
+    .filter((name): name is string => Boolean(name));
+  const actors = attestedActorNames(evidence)
+    .map((name) => cleanActorName(name) ?? name.trim().replace(/\s+/g, " "))
+    .filter(Boolean);
+  /** A name this WINDOW measured (its transcript), preferred for the actor slot. */
+  const windowActor = transcriptNames[0] ?? null;
+  /** Any attested entity — only ever paired with a score/clock fact. */
+  const entity = windowActor ?? actors[0] ?? null;
+  const from = (evidence.scoreTransition?.from ?? "").trim();
+  const to = (evidence.scoreTransition?.to ?? "").trim();
+  const scoreAttested =
+    Boolean(from) && Boolean(to) && Boolean(scoreDigits(from)) && Boolean(scoreDigits(to)) && !sameScore(from, to);
+  const ts = typeof evidence.windowTs === "number" && Number.isFinite(evidence.windowTs) ? evidence.windowTs : null;
+  const clock = ts !== null ? clockLabel(ts) : null;
+  const venue = matchContextVenueText(evidence.matchContext);
+  const out: string[] = [];
+  if (scoreAttested && clock) {
+    out.push(`The scoreboard moves from ${from} to ${to} at ${clock} into the clip.`);
+    out.push(`At ${clock} into the clip the scoreboard reads ${from} to ${to}.`);
+    if (entity) out.push(`${entity} is in the sequence as the scoreboard moves from ${from} to ${to} at ${clock}.`);
+    out.push(`The clip carries the score change from ${from} to ${to} at ${clock}.`);
+  } else if (scoreAttested) {
+    out.push(`The scoreboard moves from ${from} to ${to} during this sequence.`);
+    out.push(`The scoreboard reads ${to} after ${from} in this sequence.`);
+    if (entity) out.push(`${entity} is in the sequence as the scoreline moves from ${from} to ${to}.`);
+  }
+  if (clock) {
+    if (windowActor) out.push(`${windowActor} is in the passage at ${clock} into the clip.`);
+    out.push(`The clip carries this sequence at ${clock} into the clip.`);
+    out.push(`This passage sits at ${clock} of the clip.`);
+    out.push(`The window runs at ${clock} into the clip.`);
+  }
+  if (venue) out.push(`The clip comes from the ${venue}.`);
+  return out
+    .map((sentence) => ({ sentence, kinds: sentenceFactKinds(sentence, evidence) }))
+    .filter((candidate) => candidate.kinds.length > 0)
+    .filter((candidate) => unattestedAtmosphereClaims(candidate.sentence).length === 0)
+    .filter((candidate) => clockFrameClaims(candidate.sentence).length === 0)
+    .filter((candidate) => unattestedVenueClaims(candidate.sentence, evidence).length === 0)
+    .filter((candidate) => unattestedSideClaims(candidate.sentence, evidence).length === 0)
+    .filter((candidate) => unattestedRoleNouns(candidate.sentence, evidence).length === 0)
+    .filter((candidate) => !bodyAssertsUnattestedAction(candidate.sentence, evidence));
+}
+
+/** A row-specific rotation seed, so two cards in one job do not start the pool at
+ *  the same sentence (AC14.3's sentence-similarity bar is job-scoped). Derived from
+ *  the row's own facts only, so it is deterministic and replayable. */
+function summaryFactSentenceSeed(evidence: SummaryEvidence): number {
+  const from = (evidence.scoreTransition?.from ?? "").replace(/\D+/g, "");
+  const to = (evidence.scoreTransition?.to ?? "").replace(/\D+/g, "");
+  const ts = typeof evidence.windowTs === "number" && Number.isFinite(evidence.windowTs) ? Math.floor(evidence.windowTs) : 0;
+  return (Number(from || 0) * 31 + Number(to || 0) * 17 + ts) % 97;
+}
+
+/** AC14.5 + ADAAAA-8934: the deterministic repair.
+ *
+ *  Two steps, in this order:
+ *   1. DELETE the offending clause (extractive, never rewritten) — the rev-8 rule;
+ *   2. when the deletions take the body under the band's floor (or under its
+ *      sentence minimum), SUBSTITUTE a fact-bearing sentence from the row's own
+ *      evidence (`summaryFactCandidates`) into the slot the deleted sentence left,
+ *      keeping the body's sentence order, and top up by appending only while the
+ *      body is still short.
+ *
+ *  Step 2 is the AC1 half of the same defect. It runs ONLY when the deletion took
+ *  the body under the band, so a body that still clears the band keeps its own
+ *  bytes; and it never runs when every sentence was deleted, because rebuilding a
+ *  body from zero would serve copy the model never grounded (the "length is fixed,
+ *  value is not" shape AC14 exists to stop). A row whose evidence offers no further
+ *  fact stays short and is refused by the depth bars — the repair cannot invent one.
+ *
+ *  A sentence that carries a competition/venue claim is left to ADAAAA-8910's
+ *  `unattested-venue` bar rather than deleted here. */
 export interface SummaryFillerDrop {
   text: string;
   dropped: string[];
   claims: string[];
+  /** ADAAAA-8934: the fact-bearing sentences the repair substituted for deleted
+   *  ones (in place or appended) to clear the band floor again. */
+  substituted: string[];
+}
+
+/** ADAAAA-8934: does this body clear the rail's depth band? */
+function summaryClearsBand(sentences: readonly string[], band: SummaryDepthBand): boolean {
+  return (
+    summaryWordCount(sentences.join(" ")) >= band.floorWords && sentences.length >= band.minSentences
+  );
 }
 
 export function dropFillerSentences(text: string, evidence: SummaryEvidence): SummaryFillerDrop {
   const reports = summarySentenceFacts(text, evidence);
   const dropped: string[] = [];
   const claims: string[] = [];
-  const kept: string[] = [];
+  /** Kept sentences in order, with `null` marking the slot a deleted sentence left
+   *  (ADAAAA-8934: the repair substitutes into that slot, so the body keeps the
+   *  draft's sentence order instead of bolting facts onto its tail). */
+  const slots: (string | null)[] = [];
+  let survivors = 0;
   for (const report of reports) {
     const unattested = report.facts.length === 0 && report.venueClaims.length === 0;
     if (report.claims.length > 0 || unattested) {
       dropped.push(report.sentence);
       for (const claim of report.claims) if (!claims.includes(claim)) claims.push(claim);
+      // ADAAAA-8934: a sentence deleted for asserting a CLAIM the row cannot
+      // support (`takes the lead`, `this intense match`, the atmosphere) leaves NO
+      // slot for the repair to fill. Substituting a true fact where a false claim
+      // stood would serve a body the writer never wrote — the claim bars stay
+      // extractive, and only the FILLER clauses (no fact, no claim) are replaced.
+      if (report.claims.length === 0) slots.push(null);
       continue;
     }
-    kept.push(report.sentence);
+    survivors += 1;
+    slots.push(report.sentence);
   }
-  if (dropped.length === 0) return { text: (text ?? "").trim(), dropped: [], claims: [] };
-  return { text: kept.join(" ").trim(), dropped, claims };
+  if (dropped.length === 0) return { text: (text ?? "").trim(), dropped: [], claims: [], substituted: [] };
+
+  const filled = (): string[] => slots.filter((sentence): sentence is string => typeof sentence === "string");
+  // The deletion emptied the body: there is nothing left to serve. Rebuilding it
+  // from the pool would serve synthetic copy for a draft that grounded nothing.
+  if (survivors === 0) return { text: filled().join(" ").trim(), dropped, claims, substituted: [] };
+
+  const band = summaryBand(evidence.rail);
+  // A body that already clears the band after the deletion keeps its own bytes —
+  // the repair is extractive unless the extraction cost the card its copy.
+  if (summaryClearsBand(filled(), band)) return { text: filled().join(" ").trim(), dropped, claims, substituted: [] };
+
+  const candidates = summaryFactCandidates(evidence);
+  if (candidates.length === 0) return { text: filled().join(" ").trim(), dropped, claims, substituted: [] };
+  const seed = summaryFactSentenceSeed(evidence);
+  const rotated = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .sort((a, b) => ((a.index + seed) % candidates.length) - ((b.index + seed) % candidates.length) || a.index - b.index);
+  const used = new Set<number>();
+  const substituted: string[] = [];
+  const bodyKinds = (): Set<SummaryFactKind> => new Set(filled().flatMap((sentence) => sentenceFactKinds(sentence, evidence)));
+  /** The kinds this row's own evidence lets the repair PHRASE. A row that attests
+   *  a single fact (a clock-only window) offers no new kind, so its substitution is
+   *  a single-kind fact sentence — the only honest material it has; a row with a
+   *  score transition offers denser two-kind sentences, and those are capped so a
+   *  body cannot be padded with three score restatements. */
+  const poolKinds = new Set(candidates.flatMap((candidate) => candidate.kinds));
+  const novelAvailable = (): boolean => {
+    const known = bodyKinds();
+    return [...poolKinds].some((kind) => !known.has(kind));
+  };
+  let denseSubstitutions = 0;
+  const accept = (candidate: SummaryFactCandidate): boolean => {
+    if (candidate.kinds.length === 0) return false;
+    const known = bodyKinds();
+    const novel = candidate.kinds.filter((kind) => !known.has(kind)).length;
+    if (novel === 0) {
+      // A sentence that adds no NEW kind must carry two attested facts, and only
+      // two such restatements may be substituted: past that the body is padding.
+      if (candidate.kinds.length < 2 && novelAvailable()) return false;
+      if (novelAvailable() && denseSubstitutions >= 2) return false;
+    }
+    if (filled().some((other) => sentenceSimilarity(other, candidate.sentence) >= SUMMARY_SENTENCE_REPEAT_THRESHOLD)) return false;
+    return true;
+  };
+  const pick = (): { candidate: SummaryFactCandidate; index: number } | null => {
+    let best: { entry: { candidate: SummaryFactCandidate; index: number }; rank: number } | null = null;
+    for (const entry of rotated) {
+      if (used.has(entry.index) || !accept(entry.candidate)) continue;
+      const known = bodyKinds();
+      const novel = entry.candidate.kinds.filter((kind) => !known.has(kind)).length;
+      // Fewest substitutions that clear the floor: a novel fact first, then the
+      // densest sentence, then the longest. The rotation only breaks ties, so two
+      // rows of one job still start from different sentences (AC14.3).
+      const rank = novel * 1000 + entry.candidate.kinds.length * 100 + summaryWordCount(entry.candidate.sentence);
+      if (!best || rank > best.rank) best = { entry, rank };
+    }
+    return best ? best.entry : null;
+  };
+  /** Record a substitution: `used` keeps it out of later picks, and a restatement
+   *  of facts the body already carries spends one of the two allowed. */
+  const commit = (entry: { candidate: SummaryFactCandidate; index: number }): void => {
+    used.add(entry.index);
+    const known = bodyKinds();
+    if (entry.candidate.kinds.every((kind) => known.has(kind))) denseSubstitutions += 1;
+    substituted.push(entry.candidate.sentence);
+  };
+  // Step 2a: substitute into the slots the deletions left, in body order.
+  for (let slot = 0; slot < slots.length; slot += 1) {
+    if (slots[slot] !== null) continue;
+    if (summaryClearsBand(filled(), band)) break;
+    const next = pick();
+    if (!next) break;
+    if (summaryWordCount([...filled(), next.candidate.sentence].join(" ")) > band.hardMaxWords) break;
+    commit(next);
+    slots[slot] = next.candidate.sentence;
+  }
+  // Step 2b: top up by appending while the body is still short of the band.
+  // ADAAAA-8934: the repair may never BECOME the body. At most as many sentences
+  // as the draft itself kept may be substituted, so a draft that grounded almost
+  // nothing still drops on depth instead of being rebuilt into repair prose (the
+  // rev-8 shape serves the model's copy, with holes filled — not a report).
+  let guard = 0;
+  while (
+    substituted.length < survivors &&
+    !summaryClearsBand(filled(), band) &&
+    filled().length < band.maxSentences &&
+    guard++ < candidates.length
+  ) {
+    const next = pick();
+    if (!next) break;
+    if (summaryWordCount([...filled(), next.candidate.sentence].join(" ")) > band.hardMaxWords) break;
+    commit(next);
+    slots.push(next.candidate.sentence);
+  }
+  return { text: filled().join(" ").trim(), dropped, claims, substituted };
 }
 
 /** AC14.3: normalized sentence tokens. Unlike `normalizeSummaryTokens` (the
@@ -1789,7 +2207,10 @@ export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence
     // ADAAAA-8735: an ACTION fact is credited only when the body NAMES the
     // attested team/player. A verb alone ("the ball shoots on the left") is a
     // bare action, not a fact the row attests — the measured rev-3 defect.
-    if (fact.kind === "action" && !bodyNamesAttestedActor(text, evidence)) continue;
+    // ADAAAA-8934: naming the actor is necessary but not sufficient — a
+    // ball-outcome verb needs the row to have measured an outcome
+    // (`sentenceActionAttested`, the same condition the per-sentence path uses).
+    if (fact.kind === "action" && !sentenceActionAttested(text, fact.text, evidence)) continue;
     out.add(fact.kind);
   }
   return [...out];
@@ -1966,6 +2387,11 @@ export interface SummaryGateDecision {
   /** The unattested clause vocabulary that caused those deletions
    *  (`crowd`, `momentum`, `pivotal moment`, …), for the drop log and §15.4. */
   clauseClaims: string[];
+  /** ADAAAA-8934: the fact-bearing sentences the repair ADDED from the row's own
+   *  evidence to clear the band floor after those deletions. Empty when the body
+   *  still cleared the band on its own bytes (extractive purity) or when the
+   *  row's evidence offered no further fact. */
+  substitutedClauses: string[];
   /** ADAAAA-8914 (AC14.5): words left in the body AFTER the clause repair (0 when
    *  the repair left nothing, and the judged word count when it deleted nothing).
    *  This is the number the floor check reads, so a `dropped:filler` row shows the
@@ -1993,7 +2419,7 @@ export interface SummaryGateDecision {
 export function gateSummaryDetail(raw: string | null | undefined, evidence: SummaryEvidence): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
-  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], repairedWords: 0, raw: "", captionOverlap: 0 };
+  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], substitutedClauses: [], repairedWords: 0, raw: "", captionOverlap: 0 };
   const clamped = clampSummaryDepth(stripped, evidence.rail);
   const candidates: { text: string; trimmed: boolean }[] =
     clamped && clamped !== stripped ? [{ text: stripped, trimmed: false }, { text: clamped, trimmed: true }] : [{ text: stripped, trimmed: false }];
@@ -2006,6 +2432,8 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
   /** ADAAAA-8914 (AC14.5): the filler clauses the LAST candidate lost. */
   let droppedClauses: string[] = [];
   let clauseClaims: string[] = [];
+  /** ADAAAA-8934: the fact sentences the repair ADDED to restore the band. */
+  let substitutedClauses: string[] = [];
   /** Words left after the clause repair — the number AC14.5's floor check reads. */
   let repairedWords = 0;
   for (const candidate of candidates) {
@@ -2036,6 +2464,7 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
         droppedSentences = neutralised.droppedSentences;
         droppedClauses = filler.dropped;
         clauseClaims = filler.claims;
+        substitutedClauses = filler.substituted;
         repairedWords = repaired ? summaryWordCount(repaired) : summaryWordCount(judged);
         return {
           summary: judged,
@@ -2051,6 +2480,7 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
           droppedSentences,
           droppedClauses,
           clauseClaims,
+          substitutedClauses,
           repairedWords,
           raw: stripped,
           captionOverlap: captionTokenOverlap(judged, evidence.caption),
@@ -2067,6 +2497,7 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     droppedSentences = neutralised.droppedSentences;
     droppedClauses = filler.dropped;
     clauseClaims = filler.claims;
+    substitutedClauses = filler.substituted;
     repairedWords = filler.dropped.length > 0 ? (repaired ? summaryWordCount(repaired) : 0) : summaryWordCount(clockFrame.text);
     if (repaired) {
       // A repaired body that fell under the floor is AC14.5's case: the DROP is
@@ -2091,6 +2522,7 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     droppedSentences,
     droppedClauses,
     clauseClaims,
+    substitutedClauses,
     repairedWords,
     raw: stripped,
     captionOverlap: captionTokenOverlap(stripped, evidence.caption),
@@ -2161,6 +2593,16 @@ export interface SummaryRetryDirective {
   sentences?: number;
   /** The violation tokens that refused it, e.g. `["too-few-words"]`. */
   violations?: string[];
+  /** ADAAAA-8934 (AC14): the sentences the clause repair DELETED from the refused
+   *  draft because they carried no attested fact (possession / pressure /
+   *  atmosphere / a venue the evidence lacks). A retry that only hears "too few
+   *  words" repeats the same clauses — the rev-8 grade measured 9 rows retried and
+   *  9 still dropped — so the retry is shown exactly what was deleted and told to
+   *  replace each one with a fact from the menu below. */
+  droppedClauses?: string[];
+  /** ADAAAA-8934: the fact menu the retry may draw on, so the replacement clauses
+   *  come from the row's own evidence instead of new atmosphere. */
+  factMenu?: string[];
 }
 
 /** Everything the summary prompt may show the model. Built from the row's own
@@ -2263,27 +2705,37 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // competition" — an assertion with no evidence. A menu the row cannot fill is a
   // prompt asking for an invented fact.
   const attestsVenue = matchContextVenueText(input.matchContext).length > 0;
-  const factMenu = [
-    attestsScoring ? "the score line" : null,
-    "the clock or spell",
-    attestsVenue ? "the competition or venue" : null,
-    "an attested team's or player's action",
-  ]
-    .filter(Boolean)
-    .join(", ");
+  const factMenu = summaryFactMenu(input).join(", ");
   // ADAAAA-8803: the depth instruction is a BAND, and the RETRY is told what the
   // refused draft measured. Both fixes answer the same measured defect on the
   // served VOD leg of job `4e5ddf8d`: a compliant draft landed on 41 words
   // against a 40-word floor (one-word margin), and the retried row re-landed at
   // 34 words because the retry re-read the same "at least 40 words" line.
   const retryMin = summaryRetryMinWords(band);
+  // ADAAAA-8934: the retry now carries the DELETE list, not only the shortfall.
+  // The rev-8 lane handed the refusal tokens to a second sample of the same prompt,
+  // so the replacement draft re-landed the same possession/pressure clauses, the
+  // same clauses were deleted, and the row dropped again (9 retried, 9 dropped).
+  const retryDropped = (input.retry?.droppedClauses ?? []).filter((line) => line.trim()).slice(0, 4);
+  const retryMenu = (input.retry?.factMenu ?? []).filter((line) => line.trim());
+  // ADAAAA-8971 (AC5): the "most words without inventing anything" clause names
+  // only the fact types the row's menu actually offers. It used to name the score
+  // line unconditionally, so a row with no measured transition was told its best
+  // expansion was a fact the gate refuses (`scoreFactGrounded`).
+  const heaviestFacts = retryMenu.filter((entry) => /^the score line$|^the clock or spell$/.test(entry));
+  const retryHeaviest = heaviestFacts.length > 0 ? heaviestFacts.join(" and ") : "the attested facts";
   const retryLines = input.retry
     ? [
         `RETRY: the previous draft measured ${input.retry.words} words${
           typeof input.retry.sentences === "number" ? ` across ${input.retry.sentences} sentences` : ""
         } and was refused${input.retry.violations && input.retry.violations.length > 0 ? ` for: ${input.retry.violations.join(", ")}` : ""}.`,
         `- Close the measured shortfall: this copy must reach at least ${retryMin} words inside ${band.minSentences}-${band.maxSentences} sentences. ${retryMin} is ${retryMin - band.floorWords} words above the ${band.floorWords}-word floor on purpose: a draft that only just clears the floor is the defect this retry exists to repair.`,
-        `- Expand with facts, not filler: add ${factMenu}. The half or spell and a named attested actor's action carry the most words without inventing anything.`,
+        `- Expand with facts, not filler: add ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}. ${retryHeaviest} carry the most words without inventing anything.`,
+        ...(retryDropped.length > 0
+          ? [
+              `- These sentences were DELETED from that draft because they carry no attested fact: ${retryDropped.map((line) => `"${line.trim()}"`).join(" ")} Never restate them and never paraphrase what they said: replace each one with a sentence built on ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}.`,
+            ]
+          : []),
         `- Do NOT spend a whole sentence on the clip clock: the \`Window:\` label (${typeof input.windowTs === "number" && Number.isFinite(input.windowTs) ? clockLabel(input.windowTs) : "the offset"}) must sit INSIDE a sentence that also carries another fact. A sentence that only says when the clip moment occurs adds no depth and does not count toward the two-fact rule.`,
         "- Do not pad with generic talk about momentum, intensity or the crowd rising: every added sentence must carry a fact from the evidence below.",
       ]
@@ -2303,7 +2755,12 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- State only what the evidence below supports.",
     `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, ${attestsVenue ? "the competition or venue, " : ""}or a named attested actor's action — rather than padding.`,
     ...retryLines,
-    `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`,
+    // ADAAAA-8971 (AC5): a row whose evidence attests NO fact kind has an empty
+    // menu. Asking it to "carry two facts from the list" would be an instruction
+    // it cannot follow, so the line names the row's own limit instead.
+    factMenu.length > 0
+      ? `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`
+      : "- The evidence carries no attested fact kind for this window: write only what the evidence below states, and never a scene-setting or atmosphere sentence.",
     // ADAAAA-8914 (AC14.1/AC14.2): the depth bars were BODY bars, so a 46-word
     // body with one fact and three scene-setting sentences cleared them. Every
     // sentence is now a fact sentence, and the gate DELETES any sentence that is
@@ -2339,7 +2796,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     // `1-1>2-1` transition and named opposite teams as the scorer.
     ...(attestsScoring
       ? [
-          "- The evidence attests the score CHANGE and the sides' names, never which side scored. Do NOT say who took the lead, levelled, equalised, went ahead, made it 2-1 or restored the lead — state the score line as the scoreboard shows it ('the scoreboard moves to 2-1') and name the attested team for what it is doing in this clip (pressing, holding possession, working the ball).",
+          "- The evidence attests the score CHANGE and the sides' names, never which side scored. Do NOT say who took the lead, levelled, equalised, went ahead, made it 2-1 or restored the lead — state the score line as the scoreboard shows it ('the scoreboard moves to 2-1') and let the attested team appear only in a sentence that also carries the score line or the clip clock (never as the subject of 'is pressing' / 'is holding possession').",
         ]
       : []),
     "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.",
@@ -2355,9 +2812,16 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
           // crowd" as substitute material, and that is exactly what the served VOD
           // bodies then wrote ("The crowd erupts in celebration", "the atmosphere
           // in the stadium is electric") — nothing in the row measures a crowd or
-          // a reaction. The legal substitute is an ATTESTED actor's sustained
-          // play, which is what AC9 can credit.
-          "- Describe the team's sustained play instead — possession, pressing, working the ball forward — and NAME an attested team or player when the evidence attests one. Do not describe the crowd, the atmosphere, a celebration or a player's reaction: the evidence measures none of them.",
+          // a reaction.
+          // ADAAAA-8934: it then offered "the team's sustained play — possession,
+          // pressing, working the ball forward", and THAT is exactly what the rev-8
+          // bodies wrote ("Barcelona maintains possession …", "works the ball
+          // forward as the play develops."). No channel this lane reads measures
+          // possession or pressure, so a possession clause is filler too: the
+          // second fact type has to come from the score line, the clip clock or a
+          // bounded act by a named attested actor — never from what a team is
+          // still doing.
+          "- Do NOT describe possession, pressure, control or 'working the ball forward': the evidence measures no possession and no pressure, so the gate deletes every such sentence. Carry the second fact type with the score line (when the evidence attests a change), the clip clock, or a bounded act by a named attested actor. Do not describe the crowd, the atmosphere, a celebration or a player's reaction either: the evidence measures none of them.",
         ]
       : []),
     attestsScoring
