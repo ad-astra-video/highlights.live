@@ -96,6 +96,29 @@ describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
     expect(patches.at(-1)?.patch.summaryRetryReason).toBeUndefined();
   });
 
+  // ADAAAA-9032 x ADAAAA-9031 (integration): 9032's corpus case is a body whose
+  // FACTS are only the clock on a row that DOES attest a measured transition. The
+  // two landings agree on the call count (9031: `too-few-facts` never buys a second
+  // call) and 9032 supplies the NAME: `gate`, because the row could not serve at any
+  // length and its fact menu is what failed, not the depth.
+  it("names a facts-only reply on a relayable row `gate`, still on ONE call", async () => {
+    const { store, patches } = stubStore();
+    const CLOCK_FACTS_ONLY =
+      "The clip carries this sequence at 0:25 into the clip. This passage sits at 0:25 of the clip.";
+    const { fn, calls } = stubFetch([CLOCK_FACTS_ONLY, NAMED]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: fn }) as any, {
+      jobId: "3740585f",
+      highlightId: "2d8e9521-facts-only",
+      evidence: { ...celebrationEvidence(), scoreTransition: { from: "0-1", to: "1-1" } },
+    });
+    expect(result.outcome).toBe("dropped");
+    expect(calls()).toBe(1);
+    expect(patches.at(-1)?.patch.summary).toBeUndefined();
+    expect(patches.at(-1)?.patch.summaryCalls).toBe(1);
+    expect(patches.at(-1)?.patch.summaryRetryReason).toBeUndefined();
+    expect(patches.at(-1)?.patch.summaryDroppedByReason).toEqual({ gate: 1 });
+  });
+
   it("still ends on ONE call when the row cannot nourish two fact types", async () => {
     const { store, patches } = stubStore();
     const { fn, calls } = stubFetch([CLOCK_ONLY, NAMED]);
@@ -115,8 +138,17 @@ describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
   it("classifies the refusal by the row's own fact menu", () => {
     const withEntity = celebrationEvidence() as any;
     const without = { ...celebrationEvidence(), matchContext: null } as any;
-    expect(summaryRefusalIsRepairable("too-few-facts", withEntity)).toBe(true);
+    // ADAAAA-9032 (rev-10 natural job `771f42de`): a named actor on a row that
+    // measured no outcome is NOT relayable — 12 of 12 second samples re-landed the
+    // identical `too-few-facts` refusal, so the kind analysis must name the drop
+    // `gate` rather than spend a call.
+    expect(summaryRefusalIsRepairable("too-few-facts", withEntity)).toBe(false);
     expect(summaryRefusalIsRepairable("too-few-facts", without)).toBe(false);
+    // A MEASURED transition is relayable by copy (restating the pair), so that row
+    // is classified as a repairable CLASS even though ADAAAA-9031's §13.2 rule
+    // still ends the row on one call — the predicate feeds the drop NAME.
+    const relayable = { ...celebrationEvidence(), scoreTransition: { from: "0-1", to: "1-1" } } as any;
+    expect(summaryRefusalIsRepairable("too-few-facts", relayable)).toBe(true);
     // The two hard refusals stay deterministic on every row.
     expect(summaryRefusalIsRepairable("ungrounded-name", withEntity)).toBe(false);
     expect(summaryRefusalIsRepairable("internal-token", withEntity)).toBe(false);
