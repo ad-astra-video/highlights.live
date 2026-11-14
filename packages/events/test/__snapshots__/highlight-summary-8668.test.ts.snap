@@ -6,8 +6,11 @@ The headline is already on the card; your copy sits underneath it and must add d
 Rail: live. Write 2-3 sentences, 25-55 words.
 Rules:
 - State only what the evidence below supports.
-- Hit the length band: aim for 25-55 words. If the copy runs short of 25, add another fact — the clock, or a named attested actor's action — rather than padding.
+- Hit the length band: aim for 25-55 words, and never fewer than 25. Write 2-3 sentences of at least 13 words each: 2 sentences at 13 words is 26 words, which clears the band. Count the words before you answer — a body that stops at 20 words or fewer is short, even though a shorter body can still serve.
 - Carry at least TWO different facts from the evidence, not just the clock: the clock or spell. A body whose only fact is the clock does not count.
+- Pack two facts into one sentence where the evidence allows it: put the clip offset INSIDE the sentence that names an attested actor's act, and put the score line in the sentence that names the team. A sentence that carries two attested facts is worth more than a second sentence that carries one.
+The row's attested facts, with the values this window measured — write a sentence around each value, never a list:
+- the clock — the clip offset 0:12
 - Every sentence must carry at least one fact from the evidence: a score line, the clock, the attested match clock, an attested actor's action, or the competition/venue when the match context carries one. A sentence that only sets the scene adds no depth and is deleted.
 - Never spend a whole sentence on the clip clock. The \`Window:\` offset must sit INSIDE a sentence that also carries another fact (an attested actor's act, the score line, or the competition). Never write 'This scoring play occurs at 0:24 into the clip', 'The clip carries this sequence at …', 'X is in the passage at …', 'The window runs at …' or 'This action occurs at …': those sentences say only WHEN, and a body made of them is deleted.
 - Each sentence must carry a DIFFERENT fact from the sentence before it: do not restate the same clock, the same score line or the same actor's act in two sentences. Two sentences that differ only by a clock token count as the same sentence.
@@ -44,7 +47,7 @@ The headline is already on the card; your copy sits underneath it and must add d
 Rail: vod. Write 3-5 sentences, 45-55 words.
 Rules:
 - State only what the evidence below supports.
-- Hit the length band: aim for 45-55 words. If the copy runs short of 45, add another fact — the clock, or a named attested actor's action — rather than padding.
+- Hit the length band: aim for 45-55 words, and never fewer than 45. Write 3-5 sentences of at least 15 words each: 3 sentences at 15 words is 45 words, which clears the band. Count the words before you answer — a body that stops at 40 words or fewer is short, even though a shorter body can still serve.
 - The evidence carries no attested fact kind for this window: write only what the evidence below states, and never a scene-setting or atmosphere sentence.
 - Every sentence must carry at least one fact from the evidence: a score line, the clock, the attested match clock, an attested actor's action, or the competition/venue when the match context carries one. A sentence that only sets the scene adds no depth and is deleted.
 - Never spend a whole sentence on the clip clock. The \`Window:\` offset must sit INSIDE a sentence that also carries another fact (an attested actor's act, the score line, or the competition). Never write 'This scoring play occurs at 0:24 into the clip', 'The clip carries this sequence at …', 'X is in the passage at …', 'The window runs at …' or 'This action occurs at …': those sentences say only WHEN, and a body made of them is deleted.
@@ -82,8 +85,14 @@ The headline is already on the card; your copy sits underneath it and must add d
 Rail: live. Write 2-3 sentences, 25-55 words.
 Rules:
 - State only what the evidence below supports.
-- Hit the length band: aim for 25-55 words. If the copy runs short of 25, add another fact — the clock, or a named attested actor's action — rather than padding.
+- Hit the length band: aim for 25-55 words, and never fewer than 25. Write 2-3 sentences of at least 13 words each: 2 sentences at 13 words is 26 words, which clears the band. Count the words before you answer — a body that stops at 20 words or fewer is short, even though a shorter body can still serve.
 - Carry at least TWO different facts from the evidence, not just the clock: the score line, the clock or spell, a bounded act (an interception, a recovery, a won-back ball, a counter) by a named attested actor. A body whose only fact is the clock does not count.
+- Pack two facts into one sentence where the evidence allows it: put the clip offset INSIDE the sentence that names an attested actor's act, and put the score line in the sentence that names the team. A sentence that carries two attested facts is worth more than a second sentence that carries one.
+The row's attested facts, with the values this window measured — write a sentence around each value, never a list:
+- the score line — the scoreboard moves from 1-2 to 2-2
+- the clock — the clip offset 2:38
+- a bounded act by a named attested actor — named actors you may use: Northbridge, Riverside; acts that count: tackles, intercepts, wins the ball back, recovers, dispossesses, counters, passes, crosses, threads a pass, drives forward, completes a pass
+- This row attests 3 fact kinds: use every one of them, in 3 sentences. 3 sentences of 9 words already clear the band.
 - Every sentence must carry at least one fact from the evidence: a score line, the clock, the attested match clock, an attested actor's action, or the competition/venue when the match context carries one. A sentence that only sets the scene adds no depth and is deleted.
 - Never spend a whole sentence on the clip clock. The \`Window:\` offset must sit INSIDE a sentence that also carries another fact (an attested actor's act, the score line, or the competition). Never write 'This scoring play occurs at 0:24 into the clip', 'The clip carries this sequence at …', 'X is in the passage at …', 'The window runs at …' or 'This action occurs at …': those sentences say only WHEN, and a body made of them is deleted.
 - Each sentence must carry a DIFFERENT fact from the sentence before it: do not restate the same clock, the same score line or the same actor's act in two sentences. Two sentences that differ only by a clock token count as the same sentence.

@@ -1960,6 +1960,29 @@ export function sentenceActionAttested(sentence: string, factText: string, evide
   return true;
 }
 
+/** ADAAAA-9047: does the text print the row's own scorebug reading byte-for-byte?
+ *
+ * `serveAttestedMatchClock` (ADAAAA-8941) rewrites the clip offset into the row's
+ * attested match clock, and on the live rail that reading is sometimes DOT-shaped
+ * (`matchClock.token` `57.44`, `39.24`, `147.44` — the scorebug's own separator).
+ * `summaryFacts` only extracts an `m:ss` clock (`CLOCK_RE`), so the served body
+ * lost the clock FACT it was just rewritten to carry: the `$0` replay of live job
+ * `771f42de` measures four rows refused `too-few-facts` whose copy carried
+ * clock + action, and the identical body SERVES once its clock is a spell.
+ *
+ * AC14.4 already declares the reading a fact wherever the body prints it
+ * (`clockFactGrounded` returns true for `fact.text === attestedMatchClockToken`),
+ * so this is the extraction half of the same clause, not a new bar: the fact
+ * count still has to reach `SUMMARY_MIN_FACT_KINDS`, and only the row's OWN token
+ * is credited.
+ */
+function carriesAttestedMatchClockToken(text: string, evidence: SummaryEvidence): boolean {
+  const token = attestedMatchClockToken(evidence);
+  if (!token) return false;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\d:.])${escaped}(?![\\d])`).test(text ?? "");
+}
+
 /** The fact kinds ONE sentence carries, credited under the same rules the body
  *  bar uses (`attestedSummaryFactKinds`): a score line the row's transition
  *  grounds, the row's own match clock (or the clip offset the window anchors), an
@@ -1988,8 +2011,12 @@ export function sentenceFactKinds(sentence: string, evidence: SummaryEvidence): 
     ) continue;
     out.add(fact.kind);
   }
+  // ADAAAA-9047: the scorebug reading `serveAttestedMatchClock` served into this
+  // sentence is a clock fact (AC14.4), including the dot-shaped readings
+  // `summaryFacts` cannot extract as `m:ss`.
+  if (available.has("clock") && !out.has("clock") && carriesAttestedMatchClockToken(sentence, evidence)) out.add("clock");
   return [...out];
-}
+} 
 
 /** AC14.1: the per-sentence report. `facts` is what the row ATTESTED in that
  *  sentence, so an empty list is an unattested sentence (the filler the depth
@@ -2055,6 +2082,80 @@ export function summaryFactMenu(evidence: SummaryEvidence): string[] {
       ? "a bounded act (an interception, a recovery, a won-back ball, a counter) by a named attested actor"
       : null,
   ].filter((entry): entry is string => Boolean(entry));
+}
+
+/**
+ * ADAAAA-9047 (writer round, AC1 depth on the LIVE rail): the act vocabulary the
+ * first pass may use, stated as verbs.
+ *
+ * The rev-10 live grade served two bodies at 23 and 20 words against AC1's
+ * p50 >= 25 bar, and the `$0` replay of the same 14 stored rows shows why the
+ * writer stalls: on a live `big_play` row the only attested kinds are `clock` and
+ * `action`, the act is a TEAM name plus a verb, and the prompt named the act
+ * channel only abstractly ("a bounded act (an interception, a recovery, a
+ * won-back ball, a counter)"). The model wrote the one shape it was not told to
+ * avoid — "X is involved in this sequence", "X participates in the play as the
+ * action develops" — which the clause repair deletes, and the body then falls
+ * under the floor.
+ *
+ * Every verb below is read off the gate's own two action sources
+ * (`ACTION_RE` and `SUSTAINED_ACT_ACTION_RE`) and carries NO ball outcome, so a
+ * row that measured none (`attestationUsed.ballOutcome: null`) may still use it:
+ * `BALL_OUTCOME_ASSERTION` names the shots/saves/net verbs, and they are not in
+ * this list. This is a prompt vocabulary, not a bar — the gate still credits an
+ * act only when the sentence names an attested actor.
+ */
+export const SUMMARY_WRITER_ACT_VOCABULARY: readonly string[] = [
+  "tackles",
+  "intercepts",
+  "wins the ball back",
+  "recovers",
+  "dispossesses",
+  "counters",
+  "passes",
+  "crosses",
+  "threads a pass",
+  "drives forward",
+  "completes a pass",
+];
+
+/**
+ * ADAAAA-9047 (writer round): the fact menu WITH the row's own measured values.
+ *
+ * `summaryFactMenu` names the CATEGORIES (a contract the lane hands to the retry,
+ * unchanged here); this renders the VALUE beside each category so the first pass
+ * has material to write a full sentence from instead of guessing what "the score
+ * line" means on this row. Nothing below is invented: every line is read off the
+ * same helpers the gate grounds against (`attestedFactKinds`, the row's
+ * `scoreTransition`, `windowTs`, `attestedMatchClockToken`, the match context's
+ * venue, `attestedActorNames`), so it cannot hand over a fact the row does not
+ * attest — the rev-8 failure mode (`ADAAAA-8910` defect 3) was a menu the row
+ * could not fill.
+ */
+export function summaryFactMenuDetail(evidence: SummaryEvidence): string[] {
+  const kinds = new Set(attestedFactKinds(evidence));
+  const from = (evidence.scoreTransition?.from ?? "").trim();
+  const to = (evidence.scoreTransition?.to ?? "").trim();
+  const ts = typeof evidence.windowTs === "number" && Number.isFinite(evidence.windowTs) ? evidence.windowTs : null;
+  const out: string[] = [];
+  if (kinds.has("score")) out.push(`the score line — the scoreboard moves from ${from} to ${to}`);
+  if (kinds.has("clock")) {
+    const clock = ts !== null ? clockLabel(ts) : null;
+    // The row's own scorebug reading has its own prompt line (ADAAAA-8914/8941,
+    // "the row's attested MATCH clock is …"), so this value stays the clip offset
+    // the `Window:` label carries — naming the match stamp here would state a
+    // second clock frame beside the line that forbids one.
+    out.push(`the clock — the clip offset${clock ? ` ${clock}` : ""}`);
+  }
+  const venue = matchContextVenueText(evidence.matchContext);
+  if (kinds.has("venue") && venue) out.push(`the competition or venue — ${venue}`);
+  if (kinds.has("action")) {
+    const actors = attestedActorNames(evidence).slice(0, 6);
+    out.push(
+      `a bounded act by a named attested actor — named actors you may use: ${actors.length > 0 ? actors.join(", ") : "(none; carry the depth with the clock)"}; acts that count: ${SUMMARY_WRITER_ACT_VOCABULARY.join(", ")}`
+    );
+  }
+  return out;
 }
 
 /**
@@ -2478,6 +2579,11 @@ export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence
     ) continue;
     out.add(fact.kind);
   }
+  // ADAAAA-9047: the row's own scorebug reading is a clock fact wherever the body
+  // prints it (AC14.4), including the dot-shaped readings `summaryFacts` cannot
+  // extract as `m:ss`. The sentence path credits the same token, so the body bar
+  // and the per-sentence report cannot disagree.
+  if (available.has("clock") && !out.has("clock") && carriesAttestedMatchClockToken(text, evidence)) out.add("clock");
   return [...out];
 }
 
@@ -2980,6 +3086,20 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // prompt asking for an invented fact.
   const attestsVenue = matchContextVenueText(input.matchContext).length > 0;
   const factMenu = summaryFactMenu(input).join(", ");
+  // ADAAAA-9047 (writer round): the menu above names CATEGORIES; the first pass
+  // also needs the row's own measured VALUES beside them, because on the live
+  // rail the only attested kinds are usually `clock` + `action` and the model has
+  // to be told which actors and which acts the gate actually credits. Rendering
+  // values (never example sentences) keeps AC14 intact: there is no sample line
+  // for the writer to copy from one card to the next.
+  const factValues = summaryFactMenuDetail(input);
+  // ADAAAA-9047: the per-sentence length the band implies. The band is 2-3
+  // sentences / 25-55 words, so a writer that stops at its two shortest fact
+  // sentences lands at 20-23 words — measured on the rev-10 live job `771f42de`,
+  // where the two served bodies read 23 and 20 words and p50 sat at 21.5 against
+  // AC1's 25. Nothing here is a bar: the serve floor stays at `band.floorWords`
+  // and the target band stays exactly `band.targetMinWords..targetMaxWords`.
+  const perSentenceMin = Math.ceil(band.targetMinWords / band.minSentences);
   // ADAAAA-8803: the depth instruction is a BAND, and the RETRY is told what the
   // refused draft measured. Both fixes answer the same measured defect on the
   // served VOD leg of job `4e5ddf8d`: a compliant draft landed on 41 words
@@ -3027,7 +3147,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words. If the copy runs short of ${band.targetMinWords}, add another fact — the clock, ${attestsVenue ? "the competition or venue, " : ""}or a named attested actor's action — rather than padding.`,
+    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words, and never fewer than ${band.targetMinWords}. Write ${band.minSentences}-${band.maxSentences} sentences of at least ${perSentenceMin} words each: ${band.minSentences} sentences at ${perSentenceMin} words is ${band.minSentences * perSentenceMin} words, which clears the band. Count the words before you answer — a body that stops at ${band.targetMinWords - 5} words or fewer is short, even though a shorter body can still serve.`,
     ...retryLines,
     // ADAAAA-8971 (AC5): a row whose evidence attests NO fact kind has an empty
     // menu. Asking it to "carry two facts from the list" would be an instruction
@@ -3035,6 +3155,25 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     factMenu.length > 0
       ? `- Carry at least TWO different facts from the evidence, not just the clock: ${factMenu}. A body whose only fact is the clock does not count.`
       : "- The evidence carries no attested fact kind for this window: write only what the evidence below states, and never a scene-setting or atmosphere sentence.",
+    // ADAAAA-9047 (writer round): the depth lever that does NOT add a call. Two
+    // facts inside one sentence is free words the gate already credits
+    // (`sentenceFactKinds` returns every kind a sentence carries), and the rev-10
+    // live bodies failed AC1 depth by writing one fact per sentence. The row's
+    // own VALUES are then rendered under it so the actor/act slot is concrete:
+    // measured on the `$0` replay of job `771f42de`, a body built from this block
+    // reaches 26-29 words on rows whose stored drafts sat at 20-23.
+    ...(factValues.length > 0
+      ? [
+          "- Pack two facts into one sentence where the evidence allows it: put the clip offset INSIDE the sentence that names an attested actor's act, and put the score line in the sentence that names the team. A sentence that carries two attested facts is worth more than a second sentence that carries one.",
+          `The row's attested facts, with the values this window measured — write a sentence around each value, never a list:`,
+          ...factValues.map((value) => `- ${value}`),
+          ...(factValues.length > SUMMARY_MIN_FACT_KINDS
+            ? [
+                `- This row attests ${factValues.length} fact kinds: use every one of them, in ${Math.min(band.maxSentences, Math.max(band.minSentences, factValues.length))} sentences. ${band.maxSentences} sentences of ${Math.ceil(band.targetMinWords / band.maxSentences)} words already clear the band.`,
+              ]
+            : []),
+        ]
+      : []),
     // ADAAAA-8914 (AC14.1/AC14.2): the depth bars were BODY bars, so a 46-word
     // body with one fact and three scene-setting sentences cleared them. Every
     // sentence is now a fact sentence, and the gate DELETES any sentence that is
