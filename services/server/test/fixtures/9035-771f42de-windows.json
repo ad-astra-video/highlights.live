@@ -1,0 +1,4864 @@
+{
+ "job": "771f42de-82eb-4357-8e0b-2121865f4608",
+ "note": "ADAAAA-9035: the stored decide timelines of the natural live job 771f42de (browser share, 75 min, 820 decide calls, framesAnalyzed 4663, served 328bb3b). Extracted at $0 from decide_audit.prompt_text: one record per `ocr=\"\u2026\"` line, ts = the prompt's own relative offset. 47 windows of the 819 stored ones: the listing-row windows (14:06), the 0-0 O-O windows (14:08), both goal boundaries (14:10, 14:13), the side-flipped 1-0/0-1 windows (14:12) and the 3-3 noise windows (14:20). The prompt caps each ocr field at ~40 chars, so the listing row reaches the timeline as `FULL MATCH : Liverpool 7`; the untruncated row is kept in LISTING_ROWS in the test.",
+ "windows": [
+  {
+   "gk": "g0",
+   "created": "2026-11-14T14:06:13.355Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -0.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g1",
+   "created": "2026-11-14T14:06:16.384Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -3.1,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.4,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -0.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g2",
+   "created": "2026-11-14T14:06:18.653Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -5.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.4,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -3.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -0.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g3",
+   "created": "2026-11-14T14:06:21.247Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -7.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -6.5,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.5,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.6,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -0.6,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g4",
+   "created": "2026-11-14T14:06:25.766Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -9.4,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -9.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -3.4,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -0.4,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g5",
+   "created": "2026-11-14T14:06:28.499Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -3.4,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -3.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g7",
+   "created": "2026-11-14T14:06:32.091Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.6,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.5,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -4.0,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -3.3,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.6,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -2.2,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -1.5,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -0.8,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g8",
+   "created": "2026-11-14T14:06:35.699Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -9.1,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.5,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -6.8,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -6.1,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g9",
+   "created": "2026-11-14T14:06:38.754Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -9.6,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.9,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "FULL MATCH : Liverpool 7"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "O-Osky SPORTS35:28|0-0Sky SPORTS35:28ALLEDA"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "0-0sky SPORTS35:33ALL RE"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "O-Osky SPORTS35:36|0-0sky sports35:36EXCUE "
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "O-Osky SPORTS35:36|0-0sky sports35:36EXCUE "
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g43",
+   "created": "2026-11-14T14:08:22.398Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "sky SPORTS37.08"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -8.2,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -7.5,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g44",
+   "created": "2026-11-14T14:08:24.693Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -10.0,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -9.3,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "sky sports37:11"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g45",
+   "created": "2026-11-14T14:08:28.753Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "sky sports37:14"
+     ]
+    },
+    {
+     "ts": -9.5,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "O-Osky sports37:17Imain "
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -0.4,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "sky sports37.26"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g46",
+   "created": "2026-11-14T14:08:32.132Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.6,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "sky sports37.20USD"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "O-Osky sports37:23"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "sky sports37.26"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "sky sports37.26"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "sky sports37.26"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "sky sports37.26"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "sky sports37.26"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "sky sports37:30main even"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g79",
+   "created": "2026-11-14T14:10:10.521Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.7,
+     "ocr": [
+      "O-O38:55"
+     ]
+    },
+    {
+     "ts": -9.0,
+     "ocr": [
+      "O-O38:55"
+     ]
+    },
+    {
+     "ts": -8.7,
+     "ocr": [
+      "O-O38:55"
+     ]
+    },
+    {
+     "ts": -8.0,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -7.6,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -6.9,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -6.2,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -5.5,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -4.1,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -3.4,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -2.7,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -2.0,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "O-O39.05"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g79:call2",
+   "created": "2026-11-14T14:10:12.129Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.4,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -8.7,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -8.0,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "O-O38.58"
+     ]
+    },
+    {
+     "ts": -7.0,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -5.9,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "O-O39.08"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g81",
+   "created": "2026-11-14T14:10:16.061Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "O-O39.02"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -0.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g82",
+   "created": "2026-11-14T14:10:18.188Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -9.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "O-O39.05"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g83",
+   "created": "2026-11-14T14:10:21.100Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.6,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "O-O39.08"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -6.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -2.6,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -2.2,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g84",
+   "created": "2026-11-14T14:10:24.455Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "sky sportsmain eventLIVE"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g85",
+   "created": "2026-11-14T14:10:28.839Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -8.9,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "OALsky sportsmain eventL"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g86",
+   "created": "2026-11-14T14:10:31.784Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.8,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "sky sports39:18main even"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g87",
+   "created": "2026-11-14T14:10:34.611Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "sky sports0-139:21"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g88",
+   "created": "2026-11-14T14:10:38.599Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "0-1sky sports39.24main e"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "0-1sky sports39.27main e"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "0-1sky sports39.30"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky scarcS39.33StardC"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky scarcS39.33StardC"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky scarcS39.33StardC"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "0-1sky scarcS39.33StardC"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g126",
+   "created": "2026-11-14T14:12:31.624Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.8,
+     "ocr": [
+      "0-1sky sports41:18main e"
+     ]
+    },
+    {
+     "ts": -9.5,
+     "ocr": [
+      "0-1sky sports41:18main e"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "0-1sky sports41:18main e"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "0-1sky sports41:18main e"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "0-1sky sports41:18main e"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g127",
+   "created": "2026-11-14T14:12:34.587Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.8,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -9.1,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "0-1sky sports41:21intane"
+     ]
+    },
+    {
+     "ts": -7.3,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -7.0,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -4.8,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -3.8,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -3.1,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -2.4,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g128",
+   "created": "2026-11-14T14:12:37.275Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "0-1sky sports41:24wih ev"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -2.9,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -2.2,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g129",
+   "created": "2026-11-14T14:12:40.459Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -8.2,
+     "ocr": [
+      "0-1sky sports41:27LIVE"
+     ]
+    },
+    {
+     "ts": -7.5,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -6.1,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -5.4,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g130",
+   "created": "2026-11-14T14:12:43.901Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -10.0,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -9.6,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -8.9,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -8.2,
+     "ocr": [
+      "0-1sky spores41:31"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -2.4,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g131",
+   "created": "2026-11-14T14:12:47.451Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -9.1,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "S1-0-1sky sports41:34Mai"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -7.0,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -5.9,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -3.1,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -2.4,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g133",
+   "created": "2026-11-14T14:12:50.806Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.4,
+     "ocr": [
+      "0-1sky sports41:37LIVECA"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -7.7,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -7.0,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -5.9,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -3.1,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -2.4,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g134",
+   "created": "2026-11-14T14:12:53.927Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.7,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -9.0,
+     "ocr": [
+      "0-1sky sports41.40"
+     ]
+    },
+    {
+     "ts": -8.0,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -7.3,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -6.2,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -5.5,
+     "ocr": [
+      "0-1sky sports41:43main e"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -4.8,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -4.1,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -3.8,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -3.1,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "0-1sky sports41:46[main "
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "0-1sky sports41.49main e"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "0-1sky sports41.49main e"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "0-1sky sports41.49main e"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "0-1sky sports41.49main e"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "0-1sky sports41.49main e"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g151",
+   "created": "2026-11-14T14:13:46.197Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "0-1sky sports42:34LAKE C"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "0-1sky sports42:34LAKE C"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "0-1sky sports42:34LAKE C"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "0-1sky sports42:34LAKE C"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "0-1sky sports42:34LAKE C"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -0.4,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g152",
+   "created": "2026-11-14T14:13:49.713Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.8,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -9.1,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -7.6,
+     "ocr": [
+      "0-1sky sports42:37mainem"
+     ]
+    },
+    {
+     "ts": -7.3,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -5.9,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -4.8,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -4.1,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -3.8,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -3.4,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -2.6,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -2.3,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -1.5,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -0.8,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g153",
+   "created": "2026-11-14T14:13:53.694Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.8,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -9.1,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -8.0,
+     "ocr": [
+      "sky sports0-142.40PREDAT"
+     ]
+    },
+    {
+     "ts": -7.3,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -7.0,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -5.8,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -5.5,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -4.7,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -4.0,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -2.4,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g154",
+   "created": "2026-11-14T14:13:55.966Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.7,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -9.0,
+     "ocr": [
+      "sky sportsmain event:L.F"
+     ]
+    },
+    {
+     "ts": -8.6,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -7.9,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "sky sportsmain eventLFC"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -3.1,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g155",
+   "created": "2026-11-14T14:14:00.174Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -8.7,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -8.0,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -7.3,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -6.6,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -5.2,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -4.5,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -3.8,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -3.1,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -1.7,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g156",
+   "created": "2026-11-14T14:14:03.193Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -9.5,
+     "ocr": [
+      "sky sports42:47mainevent"
+     ]
+    },
+    {
+     "ts": -8.9,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -6.1,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -5.4,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -3.3,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -2.6,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -0.4,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g158",
+   "created": "2026-11-14T14:14:07.524Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -10.0,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -9.6,
+     "ocr": [
+      "1-1Sky Sports42:51"
+     ]
+    },
+    {
+     "ts": -9.0,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -8.6,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -7.9,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -6.8,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -6.1,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -5.4,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -4.0,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g159",
+   "created": "2026-11-14T14:14:09.937Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -10.0,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -9.6,
+     "ocr": [
+      "1-1sky SPORTSmain event4"
+     ]
+    },
+    {
+     "ts": -8.9,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -7.5,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "1-1sky sports42.58"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -3.1,
+     "ocr": [
+      "1-1sky sports4301main ev"
+     ]
+    },
+    {
+     "ts": -2.4,
+     "ocr": [
+      "1-1Sky Eports43:04Suppor"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "1-1Sky Eports43:04Suppor"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "1-1Sky Eports43:04Suppor"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "1-1Sky Eports43:04Suppor"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "1-1Sky Eports43:04Suppor"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g274",
+   "created": "2026-11-14T14:19:56.460Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "1-1sky sports48-42-3 MIN"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "1-1sky sports48-42-3 MIN"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "1-1sky sports48.45in in "
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "1-1sky sports48.45in in "
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "1-1sky sports48.45in in "
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "1-1sky sports48.45in in "
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "1-1sky sports48.45in in "
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g275",
+   "created": "2026-11-14T14:20:00.764Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "1-1sky sports48.45in in "
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -8.4,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "sky sports1-1-4848-48-3 "
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g277",
+   "created": "2026-11-14T14:20:03.212Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.5,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "1-1-148:51-3 MINSLIVE"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -6.0,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -5.3,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -4.3,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -3.6,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -0.0,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g278",
+   "created": "2026-11-14T14:20:06.358Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -7.8,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "sky sports48:54-3 MINS"
+     ]
+    },
+    {
+     "ts": -6.7,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -4.2,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -1.8,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -1.5,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g279",
+   "created": "2026-11-14T14:20:11.594Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -9.6,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -8.9,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -4.7,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -2.2,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -1.5,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -0.4,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g280",
+   "created": "2026-11-14T14:20:11.833Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -9.5,
+     "ocr": [
+      "1-1sky sports48.57main e"
+     ]
+    },
+    {
+     "ts": -8.8,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -7.1,
+     "ocr": [
+      "1-1Sky Sports49.00ALL RE"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -3.5,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -1.0,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g281",
+   "created": "2026-11-14T14:20:15.415Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -9.1,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -7.0,
+     "ocr": [
+      "1-14903ALL REDALL RED3-3"
+     ]
+    },
+    {
+     "ts": -6.3,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -5.6,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -4.9,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -2.8,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -1.1,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -0.3,
+     "ocr": [
+      "1-1COMALLALLALL ALLALL A"
+     ]
+    }
+   ]
+  },
+  {
+   "gk": "g282",
+   "created": "2026-11-14T14:20:19.034Z",
+   "scoreStored": null,
+   "sbStored": "no",
+   "observations": [
+    {
+     "ts": -9.9,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -9.2,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -8.5,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -8.1,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -7.4,
+     "ocr": [
+      "1-1SPORTS49.06-3 MINS"
+     ]
+    },
+    {
+     "ts": -6.4,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -5.7,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -5.0,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -4.6,
+     "ocr": [
+      "1-149:09-3 MINS"
+     ]
+    },
+    {
+     "ts": -3.9,
+     "ocr": [
+      "1-1COMALLALLALL ALLALL A"
+     ]
+    },
+    {
+     "ts": -3.2,
+     "ocr": [
+      "1-1COMALLALLALL ALLALL A"
+     ]
+    },
+    {
+     "ts": -2.5,
+     "ocr": [
+      "1-1COMALLALLALL ALLALL A"
+     ]
+    },
+    {
+     "ts": -2.1,
+     "ocr": [
+      "1-1COMALLALLALL ALLALL A"
+     ]
+    },
+    {
+     "ts": -1.4,
+     "ocr": [
+      "1-1COMALLALLALL ALLALL A"
+     ]
+    },
+    {
+     "ts": -0.7,
+     "ocr": [
+      "1-1Sky SPORTS49:16-3 MIN"
+     ]
+    },
+    {
+     "ts": 0.0,
+     "ocr": [
+      "1-1Sky SPORTS49:16-3 MIN"
+     ]
+    }
+   ]
+  }
+ ]
+}

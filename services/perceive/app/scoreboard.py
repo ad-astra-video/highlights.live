@@ -101,6 +101,30 @@ _ZERO_PADDED_GROUP_RE = re.compile(r"0\d+")
 _CLOCK_GLUE_BEFORE_RE = re.compile(r"\d{1,2}:$")
 _CLOCK_GLUE_AFTER_RE = re.compile(r":\d{1,2}")
 
+# ADAAAA-9035: the video LISTING / TITLE overlay chrome a score crop reads on a
+# browser share — the page's `FULL MATCH : Liverpool 7-6 Chelsea (1080p)` title
+# row, not a scoreboard. Mirrors `OCR_LISTING_LINE_RE` in the server analyzer;
+# `7-6` out of that row is a phantom score STATE that discards a window's own
+# genuine readings through the one-distinct-transition clause.
+_LISTING_LINE_RE = re.compile(
+    r"(?:\bfull\s*match\b|\bmatch\s*highlights\b|\bextended\s*highlights\b|\bfirst\s*half\s*highlights\b"
+    r"|\bfull\s*replay\b|\bmatch\s*preview\b)"
+    r"|\b(?:1080|720|480|360)p\b",
+    re.IGNORECASE,
+)
+
+
+def _line_is_score_listing(text: str) -> bool:
+    """Is this OCR line a listing/title overlay rather than a scoreboard?
+
+    ADAAAA-9035, mirroring ``ocrLineIsScoreListing`` in the server analyzer.
+    Pure; reads the line only.
+    """
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return _LISTING_LINE_RE.search(value) is not None
+
 
 # --- Scoreboard region-of-interest (ADAAAA-7081) ------------------------------
 # The scoreboard graphic occupies a bounded region of the broadcast frame. OCR
@@ -685,6 +709,10 @@ def _pair_is_noise(
         return True
     if _CHROME_TOKEN_RE.search(text) and not (adjacent[0] and adjacent[1]):
         return True
+    # ADAAAA-9035: a listing/title overlay row is never a scoreboard, even when
+    # the pair IS sandwiched between the two club names.
+    if _line_is_score_listing(text):
+        return True
     return False
 
 
@@ -794,6 +822,11 @@ def parse_ocr_score(
             continue
         box = ocr_boxes[i] if ocr_boxes is not None and i < len(ocr_boxes) else None
         if not _line_in_roi(roi, box):
+            continue
+        # ADAAAA-9035: a listing/title overlay row (`FULL MATCH : X 7-6 Y
+        # (1080p)`) is not a frame's scoreboard, so no family may read it —
+        # including the glued ones, which bypass ``_pair_is_noise``.
+        if _line_is_score_listing(text):
             continue
         pair = _score_pair_in_line(text, sport)
         if pair is not None:

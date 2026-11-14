@@ -21,13 +21,17 @@ import { describe, expect, it } from "vitest";
 
 import {
   LIVE_MATCH_CONTEXT_FOLDS_S,
+  LIVE_MATCH_CONTEXT_MAX_OCR_FRAMES,
   LIVE_MATCH_CONTEXT_MAX_TRANSCRIPT_CHARS,
   createLiveMatchContextWriter,
   type MatchContext,
 } from "../src/match-context";
 import {
+  LIVE_MATCH_CONTEXT_MAX_OCR_LINE_CHARS,
+  LIVE_MATCH_CONTEXT_WINDOW_OCR_FRAMES,
   LiveRunShared,
   observeDecideOnly,
+  observeWindowOcrFrames,
   toDecideMatchContext,
   type AnalyzerConfig,
   type DecisionResult,
@@ -102,8 +106,10 @@ describe("createLiveMatchContextWriter (ADAAAA-8408)", () => {
     expect(LIVE_MATCH_CONTEXT_FOLDS_S).toEqual([0, 60, 120, 240]);
     expect(client.bodies).toHaveLength(4);
     expect(store.patches).toHaveLength(4);
-    // Each body is the live shape: commentary + previous + progress, and NO
-    // explicit OCR / kit payload (perceive reads the session for those).
+    // Each body is the live shape: commentary + previous + progress. It carries
+    // NO explicit OCR / kit payload when the windows supplied no OCR frames
+    // (perceive reads the live session for those); ADAAAA-9038 adds `ocrFrames`
+    // only once a window actually handed the writer some.
     for (const body of client.bodies) {
       expect(body).not.toHaveProperty("ocrFrames");
       expect(body).not.toHaveProperty("kitSamples");
@@ -238,6 +244,107 @@ describe("createLiveMatchContextWriter (ADAAAA-8408)", () => {
     writer.noteWindow({ centerTs: 0, transcript: "x" });
     await writer.finish();
     expect(store.patches).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADAAAA-9038: the per-frame OCR supply the fold needs to corroborate a
+// both-sides plate. Measured on six natural live browser jobs: the fold read ONE
+// OCR frame per job (`frames: 1` on a 55-minute share) and every published name
+// sat at 0.50 against the 0.60 usable floor because a single scorebug read can
+// never corroborate itself. These tests pin the zero-cost supply path: the reads
+// the perceive pass already paid for, forwarded bounded.
+// ---------------------------------------------------------------------------
+
+describe("live match-context OCR supply (ADAAAA-9038)", () => {
+  it("forwards only frames that READ text, deduped by content clock and bounded", () => {
+    const observations = [
+      { ts: 1, ocr: [] as string[] },
+      { ts: 2, ocr: ["09:46 RMA 1-1 BAR"] },
+      { ts: 3, ocr: ["   "] },
+      { ts: 2, ocr: ["dup ts, ignored"] },
+      ...Array.from({ length: 10 }, (_, i) => ({ ts: 10 + i, ocr: [`plate ${i}`] })),
+    ];
+    const frames = observeWindowOcrFrames({ observations });
+    expect(frames).toHaveLength(LIVE_MATCH_CONTEXT_WINDOW_OCR_FRAMES);
+    expect(frames.at(-1)).toEqual({ ts: 19, lines: ["plate 9"] });
+    expect(frames.every((f) => f.lines.every((l) => l.trim().length > 0))).toBe(true);
+    // A window with no observations (or no reads) adds nothing at all.
+    expect(observeWindowOcrFrames({})).toEqual([]);
+    expect(observeWindowOcrFrames({ observations: [{ ts: 1, ocr: [] }] })).toEqual([]);
+    // A long line is truncated, never refused: the fold caps its own snippets.
+    const long = observeWindowOcrFrames({ observations: [{ ts: 1, ocr: ["x".repeat(900)] }] });
+    expect(long[0].lines[0]).toHaveLength(LIVE_MATCH_CONTEXT_MAX_OCR_LINE_CHARS);
+  });
+
+  it("carries the frames into the fold body and keeps the newest bounded set", async () => {
+    const store = fakeStore();
+    const client = foldClient((_body, call) => ({ matchContext: context([team("Real Madrid", "home", 0.7)], call) }));
+    const writer = createLiveMatchContextWriter({
+      jobId: "job-live",
+      client: client as any,
+      getSessionId: () => "sess-1",
+      hints: { gameHint: "soccer" },
+      getJob: store.getJob,
+      patchJob: store.patchJob,
+      log: () => {},
+      maxOcrFrames: 4,
+    });
+    writer.noteWindow({
+      centerTs: 0,
+      transcript: "Madrid on the ball",
+      ocrFrames: [
+        { ts: 1, lines: ["plate a"] },
+        { ts: 2, lines: ["plate b"] },
+      ],
+    });
+    await writer.finish();
+    expect(client.bodies[0].ocrFrames).toEqual([
+      { ts: 1, lines: ["plate a"] },
+      { ts: 2, lines: ["plate b"] },
+    ]);
+    // The same content clock updates in place instead of stacking a duplicate.
+    writer.noteWindow({
+      centerTs: 60,
+      ocrFrames: [
+        { ts: 2, lines: ["plate b2"] },
+        { ts: 3, lines: ["plate c"] },
+        { ts: 4, lines: ["plate d"] },
+      ],
+    });
+    await writer.finish();
+    expect(client.bodies[1].ocrFrames).toEqual([
+      { ts: 1, lines: ["plate a"] },
+      { ts: 2, lines: ["plate b2"] },
+      { ts: 3, lines: ["plate c"] },
+      { ts: 4, lines: ["plate d"] },
+    ]);
+    // Bounded: the run keeps the newest `maxOcrFrames` frames, the oldest dropped.
+    writer.noteWindow({ centerTs: 120, ocrFrames: [{ ts: 5, lines: ["plate e"] }, { ts: 6, lines: ["plate f"] }] });
+    await writer.finish();
+    expect(client.bodies[2].ocrFrames.map((f: any) => f.ts)).toEqual([3, 4, 5, 6]);
+  });
+
+  it("hands the writer the window's own frames through the analyzer hook", async () => {
+    let seen: any = null;
+    const payload = payloadAt(12);
+    (payload as any).observations = [
+      { ts: 9.1, ocr: ["09:46 RMA 1-1 BAR"], tracks: [] },
+      { ts: 9.9, ocr: [], tracks: [] },
+      { ts: 10.7, ocr: ["26:17 RMA2-2 BAR"], tracks: [] },
+    ];
+    await observeDecideOnly(
+      decideClient(),
+      new LiveRunShared(),
+      cfgWith({ onObserveWindowEvidence: (input: any) => (seen = input) }),
+      "sess-1",
+      payload
+    );
+    expect(seen.centerTs).toBe(12);
+    expect(seen.ocrFrames).toEqual([
+      { ts: 9.1, lines: ["09:46 RMA 1-1 BAR"] },
+      { ts: 10.7, lines: ["26:17 RMA2-2 BAR"] },
+    ]);
   });
 });
 

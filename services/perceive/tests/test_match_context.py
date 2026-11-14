@@ -12,8 +12,12 @@ import random
 
 from app.match_context import (
     FLIP_MARGIN,
+    PAIRED_PLATE_CONFIDENCE,
+    PAIRED_PLATE_MIN_FRAMES,
+    PAIRED_PLATE_SPORTS,
     RESOLVER_VERSION,
     SINGLE_SOURCE_CAP,
+    SOURCE_WEIGHTS,
     SPORT_UNKNOWN,
     TEAM_LEXICON,
     USABLE_CONFIDENCE,
@@ -29,6 +33,7 @@ from app.match_context import (
     associate_kits,
     build_match_context,
     cluster_kit_colors,
+    corroborate_paired_plates,
     fold_confidence,
     generic_scorebug_sides,
     is_plausible_player_box,
@@ -2083,3 +2088,149 @@ def test_white_shirt_region_ignores_grey_bright_boards_and_the_crowd():
     crowd = [[GREEN_PITCH[:] for _ in range(200)] for _ in range(200)]
     _paint(crowd, (0.40, 0.05, 0.46, 0.20), WHITE)  # crowd band, no grass under it
     assert sample_white_shirt_regions(crowd) == []
+
+
+# ---------------------------------------------------------------------------
+# ADAAAA-9038 — paired-plate cross-frame corroboration
+# ---------------------------------------------------------------------------
+# Measured on six natural live browser jobs (`source=browser`): the fold read ONE
+# OCR frame per job and every published name sat at 0.50 (scorebug only, ASR 0
+# chars) against USABLE_CONFIDENCE 0.60, so 0/27 promoted rows could attest the
+# action fact. These lines are VERBATIM from those jobs' stored
+# `matchContextEvidence.channelOutcomes.scorebug_ocr.rawLines`.
+PLATE_NAME_LINE = 'PABLO IAGO ALVAREZ 7"LAMINE YAMAL NASRAAUI\'SREAL MADRID1-1FC BARCELONAFtSoccerFly'
+PLATE_BAR_ONLY = "09:46 RMA 1-1 BAR"
+PLATE_CAROUSEL_ROW = "26:17 RMA2-2 BAR"
+LISTING_ROW = "FULL MATCH : Liverpool 7-6 Chelsea (1080p)0-0sky sports35:09"
+
+
+def _frame(*lines):
+    return {"lines": list(lines)}
+
+
+def _teams(ctx):
+    return {t["side"]: (t["name"], t["confidence"]) for t in ctx["teams"]}
+
+
+def test_paired_plate_on_two_frames_reaches_usable_confidence():
+    out = resolve_match_context(sport_hint="soccer", game_hint="soccer",
+                                ocr_frames=[_frame(PLATE_NAME_LINE, PLATE_BAR_ONLY)] * 2)
+    teams = _teams(out["matchContext"])
+    assert teams["home"] == ("Real Madrid", PAIRED_PLATE_CONFIDENCE)
+    assert teams["away"] == ("Barcelona", PAIRED_PLATE_CONFIDENCE)
+    assert teams["home"][1] >= USABLE_CONFIDENCE
+    # A usable attribution is not "ambiguous" any more, so a caption may name it.
+    assert out["matchContext"]["ambiguous"] is False
+    audit = out["evidenceStatus"]["channelOutcomes"]["scorebug_ocr"]["pairedPlates"]
+    assert audit == [{
+        "home": "Real Madrid",
+        "away": "Barcelona",
+        "frames": 2,
+        "confidence": PAIRED_PLATE_CONFIDENCE,
+        "line": PLATE_NAME_LINE,
+        "lifted": True,
+    }]
+
+
+def test_paired_plate_on_one_frame_stays_below_the_floor():
+    """The shipped behaviour, byte for byte: one frame is one observation."""
+    out = resolve_match_context(sport_hint="soccer", game_hint="soccer",
+                                ocr_frames=[_frame(PLATE_NAME_LINE, PLATE_BAR_ONLY)])
+    teams = _teams(out["matchContext"])
+    assert teams["home"] == ("Real Madrid", SOURCE_WEIGHTS["scorebug_ocr"])
+    assert teams["away"] == ("Barcelona", SOURCE_WEIGHTS["scorebug_ocr"])
+    assert teams["home"][1] < USABLE_CONFIDENCE
+    assert "pairedPlates" not in out["evidenceStatus"]["channelOutcomes"]["scorebug_ocr"]
+
+
+def test_a_second_frame_naming_a_different_pair_does_not_corroborate():
+    out = resolve_match_context(
+        sport_hint="soccer", game_hint="soccer",
+        ocr_frames=[_frame(PLATE_NAME_LINE, PLATE_BAR_ONLY),
+                    _frame("REAL MADRID1-0FC SEVILLA FtSoccer", "19:44 RMA 2-1 SEV")],
+    )
+    assert _teams(out["matchContext"])["home"] == ("Real Madrid", SOURCE_WEIGHTS["scorebug_ocr"])
+    assert "pairedPlates" not in out["evidenceStatus"]["channelOutcomes"]["scorebug_ocr"]
+
+
+def test_a_listing_overlay_never_corroborates_even_on_many_frames():
+    """`FULL MATCH : Liverpool 7-6 Chelsea (1080p)` is a title/listing row: it
+    names a pair but it is not a plate, and 7-6 is a phantom score STATE."""
+    out = resolve_match_context(sport_hint="soccer", game_hint="soccer",
+                                ocr_frames=[_frame(LISTING_ROW)] * 4)
+    teams = _teams(out["matchContext"])
+    assert teams["home"] == ("Liverpool", SOURCE_WEIGHTS["scorebug_ocr"])
+    assert teams["home"][1] < USABLE_CONFIDENCE
+    assert "pairedPlates" not in out["evidenceStatus"]["channelOutcomes"]["scorebug_ocr"]
+
+
+def test_carousel_rows_inside_one_frame_are_still_one_observation():
+    """The stored jobs printed three fixtures rows in ONE frame
+    (`09:46 RMA 1-1 BAR`, `19:44 RMA 2-1 BAR`, `26:17 RMA2-2 BAR`): repetition
+    inside a frame is a listing, not corroboration."""
+    out = resolve_match_context(
+        sport_hint="soccer", game_hint="soccer",
+        ocr_frames=[_frame(PLATE_BAR_ONLY, "19:44 RMA 2-1 BAR", PLATE_CAROUSEL_ROW)] * 2,
+    )
+    # Only the away club resolves on those rows, so no both-sides plate exists.
+    assert _teams(out["matchContext"]).get("away") == ("Barcelona", SOURCE_WEIGHTS["scorebug_ocr"])
+    assert "home" not in _teams(out["matchContext"])
+    assert "pairedPlates" not in out["evidenceStatus"]["channelOutcomes"]["scorebug_ocr"]
+
+
+def test_a_lone_side_repeat_never_corroborates():
+    out = resolve_match_context(sport_hint="soccer", game_hint="soccer",
+                                ocr_frames=[_frame(PLATE_BAR_ONLY)] * 3)
+    assert _teams(out["matchContext"]) == {"away": ("Barcelona", SOURCE_WEIGHTS["scorebug_ocr"])}
+    assert "pairedPlates" not in out["evidenceStatus"]["channelOutcomes"]["scorebug_ocr"]
+
+
+def test_the_pair_lift_is_sport_scoped():
+    """Soccer only: no other sport inherits the exception."""
+    out = resolve_match_context(sport_hint="basketball", game_hint="basketball",
+                                ocr_frames=[_frame("Lakers 100-99 Celtics")] * 2)
+    assert _teams(out["matchContext"])["home"][1] < USABLE_CONFIDENCE
+    assert "basketball" not in PAIRED_PLATE_SPORTS
+
+
+def test_a_corroborated_pair_never_publishes_the_raw_ocr_token_run():
+    out = resolve_match_context(sport_hint="soccer", game_hint="soccer",
+                                ocr_frames=[_frame(PLATE_NAME_LINE, PLATE_BAR_ONLY)] * 2)
+    names = [t["name"] for t in out["matchContext"]["teams"]]
+    assert names == ["Real Madrid", "Barcelona"]
+    for raw in ("RMA", "BAR", "PABLO", "NASRAAUI", "FtSoccerFly"):
+        assert raw not in names
+
+
+def test_a_corroborated_pair_leaves_a_multi_source_candidate_alone():
+    """A side already carrying a second channel is usable on its own evidence and
+    is not re-priced by the plate gate."""
+    out = resolve_match_context(
+        sport_hint="soccer", game_hint="soccer",
+        ocr_frames=[_frame(PLATE_NAME_LINE, PLATE_BAR_ONLY)] * 2,
+        transcript="Barcelona keep the ball",
+    )
+    teams = _teams(out["matchContext"])
+    assert teams["away"][0] == "Barcelona"
+    assert teams["away"][1] == round(SOURCE_WEIGHTS["scorebug_ocr"] + SOURCE_WEIGHTS["asr"], 4)
+    assert teams["home"] == ("Real Madrid", PAIRED_PLATE_CONFIDENCE)
+
+
+def test_corroborate_paired_plates_is_inert_below_two_frames_and_off_sport():
+    candidates = fold_confidence(
+        [TeamText("Real Madrid", "home", "RMA", PLATE_NAME_LINE),
+         TeamText("Barcelona", "away", "BAR", PLATE_BAR_ONLY)],
+        [], [],
+    )
+    one_frame = [_frame(PLATE_NAME_LINE, PLATE_BAR_ONLY)]
+    assert corroborate_paired_plates(candidates, one_frame, "soccer") == []
+    assert all(c.paired_frames == 0 for c in candidates)
+    assert {c.confidence for c in candidates} == {SOURCE_WEIGHTS["scorebug_ocr"]}
+    # Two frames on a non-soccer sport: still inert.
+    non_soccer = fold_confidence(
+        [TeamText("Real Madrid", "home", "RMA", PLATE_NAME_LINE),
+         TeamText("Barcelona", "away", "BAR", PLATE_BAR_ONLY)],
+        [], [],
+    )
+    assert corroborate_paired_plates(non_soccer, one_frame * 2, "basketball") == []
+    assert {c.confidence for c in non_soccer} == {SOURCE_WEIGHTS["scorebug_ocr"]}

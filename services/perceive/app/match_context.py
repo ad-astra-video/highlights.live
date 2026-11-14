@@ -74,6 +74,35 @@ SOURCE_WEIGHTS: dict[str, float] = {
     "asr": 0.35,
     "metadata": 0.15,
 }
+# --- paired-plate cross-frame corroboration (ADAAAA-9038) -------------------
+# The single-source doctrine says one CHANNEL cannot corroborate itself: a
+# source that repeats itself still counts once. That is true of a loose read, but
+# it is the wrong rule for a printed, both-sides plate: the scorebug that prints
+# ``HOME n-m AWAY`` on two DIFFERENT frames is two independent observations of the
+# same two names, in the same layout, which is exactly the corroboration the
+# doctrine asks for — it just arrives inside one channel. Nothing here lowers a
+# synonym bar or accepts a partial read:
+#
+#  - BOTH sides must be named on ONE line, around a score shape
+#    (``parse_ocr_teams`` side assignment), so a lone ``Real Madrid`` mention
+#    never corroborates anything;
+#  - the SAME (home, away) pair must print on >= ``PAIRED_PLATE_MIN_FRAMES``
+#    DISTINCT frames, so a listing row (three rows of a fixtures carousel in one
+#    frame) and a one-frame fold both stay below the floor;
+#  - a listing/title overlay line is refused outright (``_line_is_score_listing``,
+#    ADAAAA-9035) and a fuzzy OCR hit is never lifted;
+#  - the lift is SPORT-SCOPED: only the sports whose score surface prints a club
+#    pair are eligible, so no other sport inherits the exception;
+#  - the ceiling is ``PAIRED_PLATE_CONFIDENCE`` (0.70): above the usable floor so
+#    the attribution is usable, below the multi-channel ceiling (0.95) so a
+#    corroborated plate is never treated as two independent CHANNELS.
+# Measured context (ADAAAA-9038): on six natural live browser jobs every
+# published name sat at 0.50 (scorebug only, ASR chars 0) against USABLE 0.60, so
+# 0/27 promoted rows could attest the action fact and 27/27 could with a usable
+# team.
+PAIRED_PLATE_MIN_FRAMES = 2
+PAIRED_PLATE_CONFIDENCE = 0.70
+PAIRED_PLATE_SPORTS = frozenset({"soccer"})
 # A re-check may only FLIP an attributed team (stored confidence >= 0.6) when
 # the replacement beats the stored confidence by this margin AND has this many
 # independent agreeing sources (plan §3 Stage 4 monotonic guard).
@@ -3189,6 +3218,11 @@ class Candidate:
     name: str
     side: str
     sources: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # ADAAAA-9038: how many DISTINCT OCR frames printed this side's name as part
+    # of a both-sides plate read (``HOME n-m AWAY`` on one line). Only the two
+    # sides of a corroborated pair carry a non-zero value; the fold counts each
+    # agreeing observation, capped by ``PAIRED_PLATE_CONFIDENCE``.
+    paired_frames: int = 0
 
     def add(self, source: str, snippet: str, fuzzy: bool = False) -> None:
         entry: dict[str, Any] = {"source": source, "snippet": snippet}
@@ -3208,9 +3242,19 @@ class Candidate:
                 continue
             # A source that only ever produced fuzzy reads counts discounted.
             factor = FUZZY_EVIDENCE_FACTOR if entries and all(e.get("fuzzy") for e in entries) else 1.0
-            total += weight * factor
+            # ADAAAA-9038: a both-sides plate read that repeated on >= 2 distinct
+            # frames is counted once per agreeing observation instead of once for
+            # the channel. Only a PAIRED read sets `paired_frames` (see
+            # `corroborate_paired_plates`), so a loose single-name repeat still
+            # counts once and stays under `SINGLE_SOURCE_CAP`.
+            observations = 1
+            if source == "scorebug_ocr" and self.paired_frames >= PAIRED_PLATE_MIN_FRAMES:
+                observations = min(self.paired_frames, PAIRED_PLATE_MIN_FRAMES)
+            total += weight * factor * observations
             n_sources += 1
         if n_sources <= 1:
+            if self.paired_frames >= PAIRED_PLATE_MIN_FRAMES:
+                return round(min(total, PAIRED_PLATE_CONFIDENCE), 4)
             return round(min(total, SINGLE_SOURCE_CAP), 4)
         return round(min(total, 0.95), 4)
 
@@ -3287,6 +3331,105 @@ def fold_confidence(
         elif c.confidence == cur.confidence and cur.side == "unknown" and c.side != "unknown":
             best[c.name] = c
     return sorted(best.values(), key=lambda c: (-c.confidence, c.name))
+
+
+def corroborate_paired_plates(
+    candidates: Sequence[Candidate],
+    ocr_frames: Optional[Sequence[Mapping[str, Any]]],
+    sport: str,
+) -> list[dict[str, Any]]:
+    """Lift a both-sides plate read that repeated across frames (ADAAAA-9038).
+
+    A plate read is a FRAME that names both sides at once: its OCR (the union of
+    the score screen crop and the whole-frame read the pass already paid for)
+    resolves exactly one home-side and exactly one away-side club, and at least one
+    of those lines carries a score shape, so the frame really printed a plate
+    rather than two unrelated banners. One frame of that is one observation of the
+    scorebug (weight 0.50, capped 0.55, below the 0.60 usable floor — which is why
+    a live browser share with no ASR could never publish a team).
+
+    The SAME pair on >= ``PAIRED_PLATE_MIN_FRAMES`` DISTINCT frames is that many
+    agreeing observations of the same printed fact, so the two sides of that pair
+    count one scorebug observation per frame and reach ``PAIRED_PLATE_CONFIDENCE``.
+
+    Why per frame and not per line: measured on the stored live jobs, a real
+    broadcast plate prints its abbreviations in separate reads inside one frame
+    (``09:46 RMA 1-1 BAR`` resolves only the away club; the graphic's
+    ``REAL MADRID1-1FC BARCELONA`` resolves the home club), so requiring both names
+    on ONE line would refuse every real plate. The frame is the unit the fold
+    already aggregates, and the corroboration gate is the frame count.
+
+    Refused on purpose (each refusal is a measured failure mode, not a bar):
+
+    - a frame that names only ONE side (the ``RMA``-only reads in the census);
+    - a listing/title overlay line (``_line_is_score_listing``, ADAAAA-9035): the
+      fixtures carousel that printed ``09:46 RMA 1-1 BAR`` / ``19:44 RMA 2-1 BAR``
+      / ``26:17 RMA2-2 BAR`` in ONE frame is a listing, so it can neither form a
+      plate nor corroborate one;
+    - repetitions inside ONE frame (three carousel rows are still one frame);
+    - a different pair on the second frame;
+    - a fuzzy OCR hit (``FUZZY_EVIDENCE_FACTOR`` already discounts it, and a fuzzy
+      pair is exactly the read that must stay capped);
+    - any sport not in ``PAIRED_PLATE_SPORTS``.
+
+    Returns the bounded, inspectable audit rows that ride the persisted
+    ``evidenceStatus.channelOutcomes.scorebug_ocr.pairedPlates``. Names are always
+    the lexicon's, never the raw OCR token run.
+    """
+    if sport not in PAIRED_PLATE_SPORTS or not ocr_frames:
+        return []
+    from .scoreboard import _line_is_score_listing  # local: parsers stay separate
+
+    frames_for: dict[tuple[str, str], set[int]] = {}
+    line_for: dict[tuple[str, str], str] = {}
+    fuzzy_for: dict[tuple[str, str], bool] = {}
+    for index, frame in enumerate(ocr_frames):
+        lines = [str(line or "").strip() for line in (frame.get("lines") or frame.get("ocr") or [])]
+        lines = [line for line in lines if line and not _line_is_score_listing(line)]
+        if not lines or not any(_SCORE_SHAPE_RE.search(line) for line in lines):
+            continue
+        teams = parse_ocr_teams(lines, sport)
+        home = [t for t in teams if t.side == "home"]
+        away = [t for t in teams if t.side == "away"]
+        if len(home) != 1 or len(away) != 1 or home[0].name == away[0].name:
+            continue
+        key = (home[0].name, away[0].name)
+        frames_for.setdefault(key, set()).add(index)
+        line_for.setdefault(key, (home[0].snippet or lines[0])[:200])
+        fuzzy_for[key] = fuzzy_for.get(key, False) or bool(home[0].fuzzy or away[0].fuzzy)
+
+    audit: list[dict[str, Any]] = []
+    for key in sorted(frames_for):
+        frames = frames_for[key]
+        if len(frames) < PAIRED_PLATE_MIN_FRAMES:
+            continue
+        home_name, away_name = key
+        if fuzzy_for.get(key, False):
+            continue
+        lifted = False
+        for cand in candidates:
+            if cand.name not in (home_name, away_name):
+                continue
+            expected_side = "home" if cand.name == home_name else "away"
+            if cand.side != expected_side:
+                continue
+            # Only a single-channel read needs corroboration: a candidate already
+            # carrying another source is usable on its own and is left untouched.
+            if set(cand.sources) != {"scorebug_ocr"}:
+                continue
+            cand.paired_frames = max(cand.paired_frames, len(frames))
+            lifted = True
+        audit.append(
+            {
+                "home": home_name,
+                "away": away_name,
+                "frames": len(frames),
+                "confidence": PAIRED_PLATE_CONFIDENCE,
+                "line": line_for[key],
+                "lifted": lifted,
+            }
+        )
+    return audit
 
 
 def apply_monotonic_guard(
@@ -3594,6 +3737,10 @@ def resolve_match_context(
         status["sources"].append(name if present else f"{name}:not_captured")
 
     candidates = fold_confidence(scorebug, commentary, metadata)
+    # ADAAAA-9038: corroborate a both-sides plate read across frames BEFORE the
+    # per-side fold is read, so the persisted confidence and the AC2 fold line
+    # both see the lifted value.
+    paired_plates = corroborate_paired_plates(candidates, ocr_frames, sport)
     # Per-side folded confidence BEFORE any suppression, so the record shows the
     # strongest claim each side could have had even when the pass publishes
     # nothing (AC2). A `null` side means no candidate ever reached that side.
@@ -3623,6 +3770,11 @@ def resolve_match_context(
             # The raw OCR text, so an operator reads the line that produced (or
             # failed to produce) a team instead of guessing from a count.
             "rawLines": (team_samples or raw_samples)[:MAX_STATUS_OCR_LINES],
+            # ADAAAA-9038: which both-sides plate reads repeated across frames and
+            # what they lifted, so the record explains a usable attribution from
+            # one channel without a box shell. Bounded, and empty when nothing
+            # corroborated (the shipped shape for every other job).
+            **({"pairedPlates": paired_plates[:MAX_STATUS_TEAMS]} if paired_plates else {}),
         },
         "asr": {
             "chars": len(transcript or ""),
