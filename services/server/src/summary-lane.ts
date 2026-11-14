@@ -205,6 +205,34 @@ export interface SummaryLaneRunResult {
 }
 
 /**
+ * ADAAAA-8984 — NAME a refusal. `filler` vs `gate` is a DIAGNOSTIC, so it lives in
+ * ONE place: the lane calls this and the `$0` replay (`tools/replay-8934.ts`) calls
+ * it too, which is what keeps the served path and the gate that grades it from
+ * drifting apart.
+ *
+ * The ORDER is the contract, and `services/server/test/summary-lane-8984.test.ts`
+ * pins it: a CLAIM violation that no repair can clear is tested FIRST, the word
+ * shortfall second. A row whose only action-bearing clause is unattested cannot be
+ * repaired at any length (measured: padding the rev-8 row `3cdf3fdd` to 58 words
+ * only trades `too-few-words` for `unattested-side`), so naming it `filler` — a
+ * depth name — sends the next census round after depth instead of attribution
+ * (ADAAAA-8938 requirement (b)).
+ *
+ * `filler` stays reserved for the class the definition names: a filler deletion
+ * that leaves the body short with NO unrepairable claim in it.
+ */
+export function summaryDropReasonName(
+  decision: ReturnType<typeof gateSummaryDetail>,
+  evidence: SummaryEvidence
+): Extract<SummaryDropReason, "filler" | "gate"> {
+  const unrepairableClaim = decision.violations.some((v) => !summaryRefusalIsRepairable(v, evidence));
+  if (unrepairableClaim) return "gate";
+  const fillerDrop =
+    decision.droppedClauses.length > 0 && decision.repairedWords < summaryBand(evidence.rail).floorWords;
+  return fillerDrop ? "filler" : "gate";
+}
+
+/**
  * Generate, gate, store. ONE inference plus at most one retry; a failure writes
  * the meter only. The row's status, verdict, caption, title and clip fields are
  * never touched — only the six `summary*` fields.
@@ -272,12 +300,13 @@ export async function runSummaryForRow(
       // menu cannot nourish two kinds, an invented name, an internal token) keeps
       // the `gate` name: that row was never repairable by a second sample, so the
       // clause repair is not what sank it.
-      const deterministicRefusal = decision.violations.some((v) => !summaryRefusalIsRepairable(v, evidence));
-      const fillerDrop =
-        !deterministicRefusal &&
-        decision.droppedClauses.length > 0 &&
-        decision.repairedWords < summaryBand(evidence.rail).floorWords;
-      lastReason = fillerDrop ? "filler" : "gate";
+      // ADAAAA-8984: the name is computed by `summaryDropReasonName`, which tests
+      // the CLAIM violation BEFORE the word shortfall. An evidence-limited claim
+      // refusal on a short row is a `gate` drop, never `filler`: the row cannot
+      // serve at ANY length, so a depth name would send the next census round
+      // after the wrong defect (ADAAAA-8938 requirement (b)). The `$0` replay
+      // calls the SAME function, so the gate cannot disagree with the lane.
+      lastReason = summaryDropReasonName(decision, evidence);
       // ADAAAA-8773 / spec §13.2 (rev 7): a DETERMINISTIC refusal ends the row on
       // ONE call. The row's fact menu is fixed and the same prompt cannot repair a
       // clock anchor, an invented name or an enum-shaped token; the served VOD job
