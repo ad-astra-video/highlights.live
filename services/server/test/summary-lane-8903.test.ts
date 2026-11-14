@@ -231,9 +231,13 @@ describe("ADAAAA-8903 — §15.4 refusal detail on the row", () => {
     expect(result.outcome).toBe("dropped");
     const patch = patches.at(-1)!.patch;
     // ADAAAA-8914 (AC14.5): both sentences are unattested filler, so the clause
-    // repair empties the body and the drop is named `filler` (the repair, not a
-    // compliance bar, is what dropped it).
-    expect(patch.summaryDroppedByReason).toEqual({ filler: 1 });
+    // repair empties the body. ADAAAA-9032: the drop NAME is `gate`, not `filler` —
+    // this row measured no outcome (`authority: none`), so its `too-few-facts`
+    // refusal is unrepairable by a second sample (12 of 12 measured re-samples on
+    // job `771f42de` re-landed it) and `summaryDropReasonName` tests the claim
+    // violation BEFORE the word shortfall. A `filler` name here would send the next
+    // census round after depth instead of attribution (ADAAAA-8938 (b)).
+    expect(patch.summaryDroppedByReason).toEqual({ gate: 1 });
     // … and the DETAIL rides the row so the next census needs no replay.
     // ADAAAA-8914: neither sentence carries a fact, so the repair empties the body;
     // the detail keeps the fact-density token (the writer's defect) and the

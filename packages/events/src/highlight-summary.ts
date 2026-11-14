@@ -981,7 +981,37 @@ export function summaryRefusalIsRepairable(
     return true;
   }
   if (violation === "too-few-facts") {
-    return attestedFactKinds(evidence).length >= SUMMARY_MIN_FACT_KINDS;
+    const kinds = attestedFactKinds(evidence);
+    if (kinds.length < SUMMARY_MIN_FACT_KINDS) return false;
+    // ADAAAA-9032 (rev-10 natural job `771f42de`, 14 promoted rows): 12 of the 14
+    // rows billed a second call and **12 of 12 re-landed the identical refusal** —
+    // a `too-few-facts` refusal whose body used the clock and whose only missing
+    // kind was `action` on a row whose attestation recorded NO measured outcome
+    // (`ballOutcome: null, goalCrossed: false, scoreBoardChanged: false`,
+    // `refusalReason: no_measured_authority`). On that row `action` is a menu entry
+    // the copy cannot RELAY without asserting an act nothing measured — the writer's
+    // only paths back to the kind are the possession lexicon AC14 deletes or a
+    // discrete act the box never saw. So the second sample is futile by
+    // construction, exactly the class §13.2 forbids paying for.
+    //
+    // ADAAAA-9031 subsequently made EVERY `too-few-facts` refusal one-call in the
+    // lane, so this predicate no longer decides the retry for that violation. What
+    // it still decides is the DROP NAME: `summaryDropReasonName` asks whether any
+    // violation is unrepairable BEFORE it asks whether the body is merely short, so
+    // a cell here returns `gate` (attribution/supply) instead of `filler` (depth).
+    // Measured on `771f42de`: 5 of the 12 refused rows were recorded `dropped:filler`
+    // and move to `dropped:gate`, which is the class the PO's rev-11 gate reports
+    // per row (ADAAAA-9034) and what ADAAAA-8938 requirement (b) asks the census to
+    // point at.
+    //
+    // The kind is repairable only when copy can RELAY it from the row's own
+    // evidence: `score` (restating the measured pair) and `venue` (restating the
+    // context's competition), plus `action` when the row measured a ball outcome.
+    const relayable =
+      kinds.includes("score") ||
+      kinds.includes("venue") ||
+      (kinds.includes("action") && summaryBallActionAttested(evidence) !== false);
+    return relayable;
   }
   return false;
 }

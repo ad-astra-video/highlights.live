@@ -115,11 +115,16 @@ describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
   it("classifies the refusal by the row's own fact menu", () => {
     const withEntity = celebrationEvidence() as any;
     const without = { ...celebrationEvidence(), matchContext: null } as any;
-    expect(summaryRefusalIsRepairable("too-few-facts", withEntity)).toBe(true);
+    // ADAAAA-9032: a named actor alone is not a relayable fact on a row that
+    // measured no outcome — 12 of 12 second samples re-landed the same refusal.
+    expect(summaryRefusalIsRepairable("too-few-facts", withEntity)).toBe(false);
     expect(summaryRefusalIsRepairable("too-few-facts", without)).toBe(false);
+    // A measured transition IS relayable, so that row keeps the retry slot.
+    const relayable = { ...celebrationEvidence(), scoreTransition: { from: "0-1", to: "1-1" } } as any;
+    expect(summaryRefusalIsRepairable("too-few-facts", relayable)).toBe(true);
     // The two hard refusals stay deterministic on every row.
-    expect(summaryRefusalIsRepairable("ungrounded-name", withEntity)).toBe(false);
-    expect(summaryRefusalIsRepairable("internal-token", withEntity)).toBe(false);
+    expect(summaryRefusalIsRepairable("ungrounded-name", relayable)).toBe(false);
+    expect(summaryRefusalIsRepairable("internal-token", relayable)).toBe(false);
   });
 });
 
