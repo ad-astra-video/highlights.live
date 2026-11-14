@@ -1526,6 +1526,44 @@ function ocrPairTeamAdjacent(text: string, index: number, len: number): { left: 
  * `LALIGA|0JALIGA05-40 AL1UberFC B`. None of it is a scoreboard. */
 const OCR_CHROME_TOKEN_RE = /(?:laliga|stanley|spotify|whitebit|lauga|culers|nike\.com)/i;
 
+/**
+ * ADAAAA-9035: the video LISTING / TITLE overlay chrome — a page's "FULL MATCH :
+ * Liverpool 7-6 Chelsea (1080p)" thumbnail / title row, not a scoreboard.
+ *
+ * Measured on the natural live job `771f42de` (75 min, 820 decide calls, served
+ * `328bb3b`): the job's ONE match-context OCR frame was the listing row
+ *
+ *   `FULL MATCH : Liverpool 7-6 Chelsea (1080p)0-0sky sports35:09`
+ *
+ * and `parseOcrScoreLine` read `7-6` out of it as a score pair (team token on
+ * both sides of the dash). `7-6` is not a score of this match, not a state the
+ * plate can hold in soccer, and not a value any window may carry: it is a
+ * second distinct score state in whatever window it lands in, which trips the
+ * "at most one distinct transition" clause of
+ * {@link scoreboardDeltaFromReadings} and throws that window's OWN genuine
+ * readings away — a supply defect, not a copy defect.
+ *
+ * The tokens must be WORD-anchored (`\b`): the pinned Sky Sports control
+ * `2-5 3-2FULLMATCHFINALVS` is a LEGITIMATE full-match card carrying the final
+ * plate (`3-2`), and its glued `FULLMATCH` has no trailing boundary, so it
+ * survives. A listing row names a video (quality token like `(1080p)`, a title
+ * form `FULL MATCH :`, `MATCH HIGHLIGHTS`), which a scoreboard never renders, so
+ * any pair on such a line is refused (fail closed: absent evidence, never a
+ * forged score state). Mirrored by `_LISTING_LINE_RE` /
+ * `_line_is_score_listing` in `services/perceive/app/scoreboard.py`, and pinned
+ * for both layers by `services/server/test/fixtures/8841-ocr-parity-table.json`.
+ */
+const OCR_LISTING_LINE_RE =
+  /(?:\bfull\s*match\b|\bmatch\s*highlights\b|\bextended\s*highlights\b|\bfirst\s*half\s*highlights\b|\bfull\s*replay\b|\bmatch\s*preview\b)|\b(?:1080|720|480|360)p\b/i;
+
+/** ADAAAA-9035: is this OCR line a listing/title overlay rather than a frame's
+ * scoreboard? See {@link OCR_LISTING_LINE_RE}. Pure; reads the line only. */
+export function ocrLineIsScoreListing(text: string): boolean {
+  const value = typeof text === "string" ? text.trim() : "";
+  if (!value) return false;
+  return OCR_LISTING_LINE_RE.test(value);
+}
+
 /** ADAAAA-8841: the sports whose score plate cannot reach two digits. Mirrored
  * by `_SINGLE_DIGIT_SCORE_SPORTS` in `services/perceive/app/scoreboard.py`. */
 const SINGLE_DIGIT_SCORE_SPORTS: ReadonlySet<string> = new Set([
@@ -1636,6 +1674,10 @@ export function ocrScorePairIsNoise(
   if (ocrPairEqualsLineClock(text, rawLeft, rawRight)) return true;
   // 3. chrome line with no score-plate sandwich.
   if (OCR_CHROME_TOKEN_RE.test(text) && !(adj.left && adj.right)) return true;
+  // 4. listing / title overlay (ADAAAA-9035): a `FULL MATCH : X 7-6 Y (1080p)`
+  //    thumbnail row is never a scoreboard, even when the pair IS sandwiched
+  //    between the two club names (that is exactly how it parses today).
+  if (ocrLineIsScoreListing(text)) return true;
   return false;
 }
 
@@ -1684,6 +1726,10 @@ export function parseOcrScoreLine(
   for (const raw of lines ?? []) {
     const text = typeof raw === "string" ? raw.trim() : "";
     if (!text) continue;
+    // ADAAAA-9035: a listing/title overlay row (`FULL MATCH : X 7-6 Y (1080p)`)
+    // is not a frame's scoreboard, so NO family may read a pair out of it —
+    // including the glued ones, which bypass {@link ocrScorePairIsNoise}.
+    if (ocrLineIsScoreListing(text)) continue;
     const re = new RegExp(OCR_SCORE_PAIR_RE.source, "g");
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
