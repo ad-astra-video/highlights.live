@@ -56,9 +56,13 @@ export function useLiveFrameStill(
     sourceRef.current = createLiveStillSource({
       // The route answers 404 while the job has no frame directory yet (nothing
       // cropped so far). That is "no frame yet", not a failure to report.
-      listFrames: async (id: string) => {
+      // ADAAAA-8973: `sinceSeq` is the source's incremental cursor (undefined on
+      // the first poll). The server then serves only the newer rows, so a
+      // caught-up poll transfers ~0 bytes instead of the whole frame list.
+      listFrames: async (id: string, sinceSeq?: number) => {
         try {
-          return await api<{ frames?: unknown }>(`/jobs/${id}/frames`);
+          const qs = sinceSeq === undefined ? "" : `?sinceSeq=${encodeURIComponent(String(sinceSeq))}`;
+          return await api<{ frames?: unknown }>(`/jobs/${id}/frames${qs}`);
         } catch (e: unknown) {
           if ((e as { status?: number } | null)?.status === 404) return { frames: [] };
           throw e;

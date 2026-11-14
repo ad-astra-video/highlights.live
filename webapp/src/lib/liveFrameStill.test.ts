@@ -600,3 +600,111 @@ describe("ADAAAA-8962 AC3 — no object URL outlives its stage", () => {
     }),
   );
 });
+
+// ADAAAA-8973 (Inc 5): the list request is INCREMENTAL. A caught-up poll sends
+// `sinceSeq=<newest seq>` and the server serves only the rows newer than it
+// (usually none), so a job page left open for an hour transfers ~constant bytes
+// instead of the whole frame list. The transport below models the server's
+// `sinceSeq` filter exactly, so `since` records what the page actually requested.
+describe("AC5.1 — incremental frame-list fetch (sinceSeq cursor)", () => {
+  function incrementalTransport(frames: () => number[]) {
+    const since: Array<number | undefined> = [];
+    const transport = {
+      async listFrames(_jobId: string, sinceSeq?: number) {
+        since.push(sinceSeq);
+        const all = frames();
+        const rows = sinceSeq === undefined ? all : all.filter((s) => s > sinceSeq);
+        return listOf(rows.map((s) => ({ seq: s, timestamp: s })));
+      },
+      async fetchImage(uri: string) {
+        return `blob:${uri}`;
+      },
+    };
+    return { transport, since };
+  }
+
+  it("sends no cursor on the first poll, then the newest seq on every later poll", async () => {
+    const { transport, since } = incrementalTransport(() => [40, 41, 42]);
+    const source = createLiveStillSource(transport);
+
+    const first = await source.poll("job-1");
+    expect(first.state).toBe("ready");
+    expect(first.frame?.seq).toBe(42);
+    expect(source.sinceSeq).toBe(42); // seeded from the default window
+
+    // Caught up: the server answers `{frames: []}` for sinceSeq=42.
+    const second = await source.poll("job-1");
+    const third = await source.poll("job-1");
+
+    expect(since).toEqual([undefined, 42, 42]);
+    // An empty INCREMENTAL response is "caught up", not "no frame yet": the
+    // still stays ready on the frame already on screen, with no second fetch.
+    for (const snap of [second, third]) {
+      expect(snap.state).toBe("ready");
+      expect(snap.frame?.seq).toBe(42);
+      expect(snap.url).toBe("blob:/jobs/job-1/frames/42");
+      expect(snap.refusal).toBeNull();
+    }
+    expect(source.counts).toEqual({ listRequests: 3, imageRequests: 1 });
+  });
+
+  it("advances the still (one new image fetch) when a newer frame lands", async () => {
+    let frames = [10, 11, 12];
+    const { transport, since } = incrementalTransport(() => frames);
+    const source = createLiveStillSource(transport);
+
+    expect((await source.poll("job-1")).frame?.seq).toBe(12);
+    frames = [10, 11, 12, 13, 14]; // 13 + 14 land between polls
+    const second = await source.poll("job-1");
+    expect(second.frame?.seq).toBe(14);
+    expect(second.url).toBe("blob:/jobs/job-1/frames/14");
+    expect(source.sinceSeq).toBe(14);
+    expect(since).toEqual([undefined, 12]);
+    expect(source.counts).toEqual({ listRequests: 2, imageRequests: 2 });
+  });
+
+  it("does not forget the cursor or the still when an incremental fetch fails", async () => {
+    let frames = [5, 6];
+    let fail = false;
+    const since: Array<number | undefined> = [];
+    const source = createLiveStillSource({
+      async listFrames(_jobId: string, sinceSeq?: number) {
+        since.push(sinceSeq);
+        if (fail) throw new Error("list failed: HTTP 502");
+        const rows = sinceSeq === undefined ? frames : frames.filter((s) => s > sinceSeq);
+        return listOf(rows.map((s) => ({ seq: s, timestamp: s })));
+      },
+      async fetchImage(uri: string) {
+        return `blob:${uri}`;
+      },
+    });
+
+    await source.poll("job-1"); // shows 6
+    fail = true;
+    const bad = await source.poll("job-1");
+    // The last honest still stays on screen, with its own seq — not a blank.
+    expect(bad.state).toBe("ready");
+    expect(bad.frame?.seq).toBe(6);
+    expect(bad.error).toContain("502");
+    // The cursor did not move, so the next poll re-asks from the same place.
+    expect(source.sinceSeq).toBe(6);
+    expect(since).toEqual([undefined, 6]);
+
+    fail = false;
+    frames = [6, 7];
+    expect((await source.poll("job-1")).frame?.seq).toBe(7);
+    expect(since).toEqual([undefined, 6, 6]);
+  });
+
+  it("reset() forgets the cursor, so a return to the stage re-reads the window", async () => {
+    const { transport, since } = incrementalTransport(() => [1, 2, 3]);
+    const source = createLiveStillSource(transport);
+    await source.poll("job-1");
+    expect(source.sinceSeq).toBe(3);
+    source.reset();
+    expect(source.sinceSeq).toBeUndefined();
+    await source.poll("job-1");
+    expect(since).toEqual([undefined, undefined]);
+    expect(source.counts).toEqual({ listRequests: 2, imageRequests: 2 });
+  });
+});

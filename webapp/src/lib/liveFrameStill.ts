@@ -48,14 +48,16 @@ export const LIVE_FRAME_STALE_SEC = 60;
 const EPOCH_SEC_FLOOR = 1e9;
 
 /**
- * The newest frame of a served list. Frames are ordered by seq by the route, but
- * the decimation path can drop seqs, so take the max rather than the last row —
- * and ignore a row whose seq is not a finite number instead of guessing.
+ * ADAAAA-8973 (Inc 5): every servable frame row in a `GET /jobs/:id/frames`
+ * payload (shape unchanged: `{seq, uri, timestamp}`), skipping a row whose seq
+ * is not a finite number instead of guessing. `LiveStillSource` MERGES these
+ * rows across polls (an incremental poll serves only the newer ones), and
+ * `latestLiveFrame` takes the max of them.
  */
-export function latestLiveFrame(payload: unknown): LiveFrameRef | null {
+export function servedFrameRows(payload: unknown): LiveFrameRef[] {
   const frames = (payload as { frames?: unknown } | null | undefined)?.frames;
-  if (!Array.isArray(frames)) return null;
-  let best: LiveFrameRef | null = null;
+  if (!Array.isArray(frames)) return [];
+  const out: LiveFrameRef[] = [];
   for (const row of frames) {
     const raw = row as { seq?: unknown; uri?: unknown; timestamp?: unknown } | null;
     const seq = Number(raw?.seq);
@@ -63,8 +65,20 @@ export function latestLiveFrame(payload: unknown): LiveFrameRef | null {
     const uri = typeof raw?.uri === "string" ? raw.uri : "";
     const ts = Number(raw?.timestamp);
     const timestamp = raw?.timestamp !== null && raw?.timestamp !== undefined && Number.isFinite(ts) ? ts : null;
-    const ref: LiveFrameRef = { seq, uri, timestamp };
-    if (best === null || seq > best.seq) best = ref;
+    out.push({ seq, uri, timestamp });
+  }
+  return out;
+}
+
+/**
+ * The newest frame of a served list. Frames are ordered by seq by the route, but
+ * the decimation path can drop seqs, so take the max rather than the last row —
+ * and ignore a row whose seq is not a finite number instead of guessing.
+ */
+export function latestLiveFrame(payload: unknown): LiveFrameRef | null {
+  let best: LiveFrameRef | null = null;
+  for (const ref of servedFrameRows(payload)) {
+    if (best === null || ref.seq > best.seq) best = ref;
   }
   return best;
 }
@@ -159,8 +173,16 @@ export type LiveStillStateKind = "waiting" | "refused" | "ready";
 export type LiveStillRefusal = "auth" | "transport" | null;
 
 export interface LiveStillTransport {
-  /** `GET /jobs/:id/frames` (auth required). */
-  listFrames(jobId: string): Promise<unknown>;
+  /**
+   * `GET /jobs/:id/frames` (auth required).
+   *
+   * ADAAAA-8973 (Inc 5): `sinceSeq` is an optional incremental cursor. The
+   * server then serves only the rows whose seq is strictly greater than it, so
+   * a caught-up poll transfers `{frames: []}` (~constant bytes) instead of the
+   * whole list. A transport that ignores the argument still works (it serves the
+   * default window) — the client is correct either way.
+   */
+  listFrames(jobId: string, sinceSeq?: number): Promise<unknown>;
   /** `authFetchFrame(uri, token)` — a revocable blob object URL. */
   fetchImage(uri: string): Promise<string>;
 }
@@ -239,12 +261,25 @@ export function isAuthRefusal(status: number | null): boolean {
  * the page unmounted — creates a blob object URL nobody will ever render. The
  * generation guard below revokes that URL at the source and answers `waiting`,
  * so no object URL outlives its stage.
+ *
+ * ADAAAA-8973 (Inc 5, bounded poll): the list request is INCREMENTAL. The first
+ * poll sends no cursor, so the server serves its default (latest-N) window and
+ * the source records the newest seq it saw. Every later poll sends
+ * `sinceSeq=<that seq>`, so a caught-up page transfers only the newer rows —
+ * usually none. An empty response on a cursor poll therefore means "caught up",
+ * NOT "no frames yet": the still already on screen stays `ready` with its own
+ * seq/stamp/age. Only a first poll (no cursor) that serves no rows is `waiting`.
  */
 export class LiveStillSource {
   private loadedSeq: number | null = null;
   private url: string | null = null;
   /** The frame the current `url` depicts (never the newest merely-listed seq). */
   private shownFrame: LiveFrameRef | null = null;
+  /** ADAAAA-8973: the newest frame the server has served, kept across polls so
+   *  an incremental poll that serves no rows does not blank the still. */
+  private newestSeen: LiveFrameRef | null = null;
+  /** ADAAAA-8973: incremental cursor = newest seq the server has served. */
+  private cursor: number | null = null;
   /** Latched 401/403: no further image request until `reset()`. */
   private authRefused = false;
   private listRequests = 0;
@@ -259,14 +294,23 @@ export class LiveStillSource {
     return { listRequests: this.listRequests, imageRequests: this.imageRequests };
   }
 
+  /** ADAAAA-8973: the cursor handed to the next `listFrames` (`undefined` on the
+   *  first poll, so the server serves its default window). */
+  get sinceSeq(): number | undefined {
+    return this.cursor ?? undefined;
+  }
+
   /** Forget the cached image (stage left the no-preview state, or the job
    *  changed): the next poll re-fetches the frame it finds, and a previously
-   *  refused token is allowed one fresh attempt. */
+   *  refused token is allowed one fresh attempt. ADAAAA-8973: the incremental
+   *  cursor is forgotten too, so the next poll re-reads the default window. */
   reset(): void {
     this.generation += 1;
     this.loadedSeq = null;
     this.url = null;
     this.shownFrame = null;
+    this.newestSeen = null;
+    this.cursor = null;
     this.authRefused = false;
   }
 
@@ -305,7 +349,9 @@ export class LiveStillSource {
     this.listRequests += 1;
     let payload: unknown;
     try {
-      payload = await this.transport.listFrames(jobId);
+      // ADAAAA-8973: hand the incremental cursor to the transport so a caught-up
+      // poll transfers only the rows newer than the newest frame we have.
+      payload = await this.transport.listFrames(jobId, this.cursor ?? undefined);
     } catch (e: unknown) {
       if (generation !== this.generation) return this.dropped();
       const text = errorText(e);
@@ -322,7 +368,21 @@ export class LiveStillSource {
     // list was in flight: this answer is nobody's.
     if (generation !== this.generation) return this.dropped();
 
-    const frame = latestLiveFrame(payload);
+    // ADAAAA-8973: MERGE the rows this poll served instead of replacing the
+    // newest. A first poll (no cursor) seeds it from the server's default
+    // window; an incremental poll serves only rows newer than the cursor, so an
+    // empty response means "caught up" — the still on screen stays `ready` with
+    // its own seq/stamp/age, it does not blank to `waiting`.
+    let newest = this.newestSeen;
+    for (const ref of servedFrameRows(payload)) {
+      if (newest === null || ref.seq > newest.seq) newest = ref;
+    }
+    if (newest !== null) {
+      this.newestSeen = newest;
+      // The cursor only moves forward, and only from rows the server served.
+      if (this.cursor === null || newest.seq > this.cursor) this.cursor = newest.seq;
+    }
+    const frame = newest;
     // No extracted frame yet (the job's frame dir does not exist or the writer
     // has not landed one): an honest, NAMED empty — never a placeholder picture.
     if (!frame) {
