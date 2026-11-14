@@ -13,7 +13,7 @@
 //     the vocabulary that caused them and the surviving word count on the row
 //     (§15.4 fields), and the row still bills at most two calls.
 import { describe, expect, it } from "vitest";
-import { SUMMARY_FEE_RATIO, SUMMARY_VOD_BAND } from "@highlights/events";
+import { SUMMARY_FEE_RATIO, SUMMARY_VOD_BAND, summaryOpeningRun } from "@highlights/events";
 import {
   newSummaryJobState,
   runSummaryForRow,
@@ -87,8 +87,12 @@ const evidenceFor = (row: Record<string, unknown>, rail: "live" | "vod") =>
 // rev-8 shape ("keeps possession … works the ball forward") is a sustained STATE
 // that no channel on this row measures, so the gate now deletes it instead of
 // crediting it as an action fact.
+// ADAAAA-8941 (defect 2, in the served tree): a body that frames the CLIP offset
+// as a clock is neutralised to the row's own attested match clock, so the served
+// text carries `18:13` and the prompt-avoid list sees that sentence. Writing the
+// match clock directly keeps the fixture's served form identical to its input.
 const FACT_BODY_AED6 =
-  "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid intercepts the ball near the box at the 1:35 mark of this clip.";
+  "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid intercepts the ball near the box at the 18:13 mark of the match.";
 
 const FILLER_VOD =
   "Barcelona finds the equalizer to level the score at 2-2. The crowd erupts in celebration as the team secures a vital point in this intense match. This scoring play shifts the momentum during the game. The atmosphere in the stadium is electric following this dramatic turn of events.";
@@ -181,7 +185,7 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
     );
     // The prompt NAMES the sentence the previous card already served.
     expect(second.prompts[0]).toContain("Do not reuse a sentence already served on another card in this job");
-    expect(second.prompts[0]).toContain("The scoreboard moves to 2-1 at the 1:35 mark of this clip.");
+    expect(second.prompts[0]).toContain("The scoreboard moves to 2-1 at the 18:13 mark of the match.");
   });
 
   it("regenerates once with the repeat named, then drops `repeat`", async () => {
@@ -190,9 +194,25 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
     // reuses it, which is the AC14.3 defect one level below the template.
     // ADAAAA-8934: a bounded act — a sustained-play clause would be DELETED by the
     // clause repair, so it could never be the sentence the next card repeats.
-    const servedSentence = "Real Madrid intercepts the ball near the box at the 1:35 mark of this clip.";
+    // A clock-free bounded act: row `dc96ed06` attests match clock 22:19, so a
+    // sentence carrying `18:13` would be neutralised on this row's evidence and the
+    // repeat comparison must run on copy both rows can serve verbatim.
+    const servedSentence = "Real Madrid intercepts the ball near the box.";
     state.servedSentences.push(servedSentence);
-    const repeated = `The scoreboard moves to 2-2 at the 2:35 mark of this clip. ${servedSentence}`;
+    // The LANE's repeat key reads `servedBodies` (the bodies this job actually
+    // served), while `servedSentences` is the prompt-first avoid list; AC14.3 needs
+    // both halves, so the previous card's body is recorded as served.
+    const servedBodyAed6 =
+      "The scoreboard moves to 2-1 at the 18:13 mark of the match. " + servedSentence;
+    state.servedBodies.push({
+      highlightId: "aed6c4a4",
+      windowTs: 95.67,
+      windowDurationS: 15,
+      clockToken: "18:13",
+      body: servedBodyAed6,
+      opening: summaryOpeningRun(servedBodyAed6),
+    });
+    const repeated = `The scoreboard changes from 2-1 to 2-2 at the 22:19 mark of the match. ${servedSentence}`;
     const { store, patches } = stubStore();
     const f = stubFetch([repeated, repeated]);
     const result = await runSummaryForRow(

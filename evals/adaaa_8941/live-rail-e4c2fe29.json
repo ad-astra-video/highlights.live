@@ -1,0 +1,918 @@
+{
+ "jobId": "e4c2fe29-68fe-472c-91da-b96d1dd8ca93",
+ "source": "file-sim",
+ "matchContext": {
+  "sport": "soccer",
+  "teams": [
+   {
+    "name": "Barcelona",
+    "side": "away",
+    "kitColors": [],
+    "confidence": 0.85,
+    "evidence": [
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:20 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:21 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:22 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:23 RMA-2-BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:24 RMA 2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:25 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:31 |RMA-2-BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:38 RMA-2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:39 IRMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:40 IRMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:41 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:42 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:43 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:53 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:55 |RMA 2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:57 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:00 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.02 RMA 2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.12 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:13 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.14 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.15 RMA2.2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:16 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.19 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:20 RMA2-2 BAR"
+     },
+     {
+      "source": "asr",
+      "snippet": "que frivolidad falta,  todo ni es, y es,  bal\u00f3n para el barza."
+     }
+    ]
+   }
+  ],
+  "inferredAt": "2026-11-13T12:24:32.653563Z",
+  "resolverVersion": 1,
+  "ambiguous": false,
+  "trail": [
+   {
+    "at": "2026-11-13T12:20:31.473423Z",
+    "progressPct": 0,
+    "names": [
+     {
+      "side": "away",
+      "name": "Barcelona",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "no change"
+    ]
+   },
+   {
+    "at": "2026-11-13T12:21:32.805829Z",
+    "progressPct": 25,
+    "names": [
+     {
+      "side": "away",
+      "name": "Barcelona",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "no change"
+    ]
+   },
+   {
+    "at": "2026-11-13T12:22:31.016117Z",
+    "progressPct": 50,
+    "names": [
+     {
+      "side": "away",
+      "name": "Barcelona",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "no change"
+    ]
+   },
+   {
+    "at": "2026-11-13T12:24:32.653531Z",
+    "progressPct": 100,
+    "names": [
+     {
+      "side": "away",
+      "name": "Barcelona",
+      "confidence": 0.85
+     }
+    ],
+    "action": [
+     "no change"
+    ]
+   }
+  ]
+ },
+ "rows": [
+  {
+   "id": "23f9b28e-7ddc-4694-909f-4fa51d937ee2",
+   "rail": "live",
+   "body": "Barcelona maintains possession and works the ball forward during this sequence. At 1:42 into the clip, the team continues their sustained play.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "ASR confirms goal at t=-1.7s and scoreboard changes to RMA 2-1 | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=15 preSamples=14 postSamples=1 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": "Scoreboard changes to RMA 2-1.",
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 102.66666666666666,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1092,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:12",
+    "ts": 101
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 101,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": {
+    "status": "provisional",
+    "cues": [
+     "asr_goal_call"
+    ],
+    "refuted": false,
+    "held": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 0,
+   "createdAt": "2026-11-13T12:22:15.634Z"
+  },
+  {
+   "id": "f4c74519-42ed-4e16-ba49-341145aaebe3",
+   "rail": "live",
+   "body": "Barcelona works the ball forward during this sequence. At 2:40 into the clip, the team maintains possession to continue their sustained play.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=-1.3s; scoreboard changes to 2-2 at t=-1.3s | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=13 preSamples=12 postSamples=1 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": "Scoreboard changes to 2-2.",
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 160,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1333,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "22:13",
+    "ts": 158.66666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 157.66666666666666,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": {
+    "status": "provisional",
+    "cues": [
+     "asr_goal_call"
+    ],
+    "refuted": false,
+    "held": true
+   },
+   "storedSummaryGate": "accepted",
+   "storedWords": 0,
+   "createdAt": "2026-11-13T12:23:13.173Z"
+  },
+  {
+   "id": "5a7faaf8-53f9-4596-a6d1-1df091b35830",
+   "rail": "live",
+   "body": "Barcelona maintains control of the ball during this sequence. At 5:12 into the clip, the team continues their sustained play to move the ball forward.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-2.0s, confirmed by ASR and crowd surge. | live scoring lane: the span's score transition was already credited to an earlier overlapping window (one transition, one scoring row) (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=13 preSamples=3 postSamples=10 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 312.66666666666663,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 693,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "11:33",
+    "ts": 312.66666666666663
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "near_miss",
+    "corroborated": false,
+    "source": null,
+    "momentTs": 301.66666666666663,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "accepted",
+   "storedWords": 0,
+   "createdAt": "2026-11-13T12:25:46.112Z"
+  },
+  {
+   "id": "bb3efae5-d67a-4d76-b23d-2a74ceee3cd4",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 6:42 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "ASR confirms goal at t=-1.7s and scoreboard changes to 2-1 | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the window's measured score transition 1-1>2-1 at 401s lands below the score state this run already read (2-2) \u2014 a rewind cannot attest a new GOAL (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=15 preSamples=13 postSamples=2 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": "Scoreboard changes to 2-1.",
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 402.66666666666663,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1092,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:12",
+    "ts": 401
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "near_miss",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 401,
+    "momentConfidence": 0.9
+   },
+   "provisionalGoal": {
+    "status": "provisional",
+    "cues": [
+     "asr_goal_call"
+    ],
+    "refuted": true,
+    "held": null
+   },
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:27:16.446Z"
+  },
+  {
+   "id": "e94b3093-146c-4b5a-a780-f15cb8751831",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 7:45 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "Scoreboard changes to 2-2 at t=-6.3s and ball enters net; scoreboard score change confirmed | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the window's measured score transition 2-1>2-2 at 458.667s lands below the score state this run already read (4-2) \u2014 a rewind cannot attest a new GOAL (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=12 preSamples=9 postSamples=3 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 465,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1333,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "22:13",
+    "ts": 458.66666666666663
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 458.66666666666663,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": {
+    "status": "provisional",
+    "cues": [
+     "asr_goal_call"
+    ],
+    "refuted": false,
+    "held": true
+   },
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:28:18.134Z"
+  },
+  {
+   "id": "20275c17-9c8d-44f0-a35a-7bac172e394f",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 11:42 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-1.0s, confirmed by ASR and scoreboard change. | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=7 preSamples=6 postSamples=1 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 702.6666666666666,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1092,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:12",
+    "ts": 701.6666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "not_goal",
+    "corroborated": false,
+    "source": null,
+    "momentTs": null,
+    "momentConfidence": null
+   },
+   "provisionalGoal": {
+    "status": "provisional",
+    "cues": [
+     "asr_goal_call"
+    ],
+    "refuted": true,
+    "held": null
+   },
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:32:16.338Z"
+  },
+  {
+   "id": "70003f7f-0517-4a4d-8a81-47e1bc294174",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 12:50 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=-1.0s; scoreboard changes to 2-2; crowd erupts.; scoreboard score change confirmed | live scoring lane: the window's measured score transition 2-1>2-2 at 761.667s lands below the score state this run already read (4-2) \u2014 a rewind cannot attest a new GOAL (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=6 preSamples=2 postSamples=4 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": "Scoreboard changes to 2-2.",
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 770,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1339,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "22:19",
+    "ts": 761.6666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "not_goal",
+    "corroborated": false,
+    "source": null,
+    "momentTs": null,
+    "momentConfidence": null
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:33:25.134Z"
+  },
+  {
+   "id": "99518e60-d401-4a71-a5b1-259f408be4f5",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 15:47 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-0.3s, confirmed by the keeper on the ground. | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=7 preSamples=7 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 947,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 900,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "15:00",
+    "ts": 945.6666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "near_miss",
+    "corroborated": false,
+    "source": null,
+    "momentTs": 949.6666666666666,
+    "momentConfidence": 0.8
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:36:21.178Z"
+  },
+  {
+   "id": "bbe776b6-3e8f-44de-a252-30ced21f8ae6",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 16:42 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "ASR confirms goal at t=-1.7s; scoreboard changes to 2-1 at 18:12 | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1002.6666666666666,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 1001,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:37:15.594Z"
+  },
+  {
+   "id": "69908383-8254-4a86-bd77-9dac7d0ef35d",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 17:40 into the clip, the team continues their sustained play to move the ball toward the opposition.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-1.3s, confirmed by the keeper's position and crowd reaction. | provisional goal: asr_goal_call + frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1060,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "not_goal",
+    "corroborated": false,
+    "source": null,
+    "momentTs": null,
+    "momentConfidence": null
+   },
+   "provisionalGoal": {
+    "status": "provisional",
+    "cues": [
+     "asr_goal_call",
+     "frame_celebration"
+    ],
+    "refuted": true,
+    "held": null
+   },
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 29,
+   "createdAt": "2026-11-13T12:38:13.232Z"
+  },
+  {
+   "id": "1270bc8d-69d0-499e-b94b-ecbd3849af0d",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 18:00 into the clip, the team continues their sustained play to move the ball toward the opposition.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-1.3s, confirmed by the net rippling and player celebration. | provisional goal: frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1080,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 1080.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 29,
+   "createdAt": "2026-11-13T12:38:33.134Z"
+  },
+  {
+   "id": "42d02e48-be22-4e10-a262-9b3fdee9cb71",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and moves the ball forward during this sequence. At 21:39 into the clip, the team continues their sustained play to advance the ball.",
+   "reason": null,
+   "reasonRaw": "ASR confirms goal at t=0.0 and ball enters net at t=1.0 | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1299.6666666666665,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 1303.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 26,
+   "createdAt": "2026-11-13T12:42:14.652Z"
+  },
+  {
+   "id": "2b372151-dd3d-4c40-9264-e990620225cd",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 22:45 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-2.0s, confirmed by the scoreboard change to 2-2. | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1365,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "not_goal",
+    "corroborated": false,
+    "source": null,
+    "momentTs": null,
+    "momentConfidence": null
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:43:20.590Z"
+  },
+  {
+   "id": "3c0d585a-17ac-464c-a167-a73dc78d272e",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 23:00 into the clip, the team continues their sustained play to move the ball toward the opposition.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-1.3s, confirmed by the keeper's position and net ripple. | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1380,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 1378.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 29,
+   "createdAt": "2026-11-13T12:43:33.194Z"
+  },
+  {
+   "id": "61d2f951-9f37-48cf-81e5-cf9cd112abc1",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 24:43 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=0.0s, confirmed by the crowd eruption. | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1483.6666666666665,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 1483.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:45:17.061Z"
+  },
+  {
+   "id": "75326c6e-ade3-412d-9e80-dc7ff7c81932",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 26:42 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "ASR confirms goal at t=0.0s and scoreboard changes to 2-1 | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1602.6666666666665,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 1601.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:47:16.624Z"
+  },
+  {
+   "id": "820f4116-422c-4bb7-bbec-cd072e0e7723",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 27:40 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=-1.3s; crowd erupts and players celebrate. | provisional goal: asr_goal_call + frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1660,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "scoring_play",
+   "eventType": "GOAL",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "confirmed_goal",
+    "corroborated": true,
+    "source": "frame_attestation",
+    "momentTs": 1658.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:48:16.088Z"
+  },
+  {
+   "id": "fabd3fde-e737-41c9-a37e-8dbfc1786f47",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 28:00 into the clip, the team continues their sustained play to move the ball forward.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-1.3s, confirmed by the keeper's position and net ripple. | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1680,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "near_miss",
+    "corroborated": false,
+    "source": null,
+    "momentTs": 1678.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": null,
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 27,
+   "createdAt": "2026-11-13T12:48:34.235Z"
+  },
+  {
+   "id": "ef1e61a3-b7b8-4591-ac39-782bb9b36d19",
+   "rail": "live",
+   "body": null,
+   "raw": "Barcelona maintains possession and works the ball forward during this sequence. At 28:08 into the clip, the team continues their sustained play to move the ball toward the opposition.",
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=0.0s, confirmed by the keeper's position and crowd reaction. | provisional goal: asr_goal_call + frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the scorebug was never read in this span (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=0 preSamples=0 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": null,
+   "postTitleGate": "absent",
+   "windowTs": 1688.6666666666665,
+   "windowDurationS": 15.0,
+   "scoreTransition": null,
+   "matchClock": null,
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "goalAttestation": {
+    "confirmed": "near_miss",
+    "corroborated": false,
+    "source": null,
+    "momentTs": 1689.6666666666665,
+    "momentConfidence": 1
+   },
+   "provisionalGoal": {
+    "status": "provisional",
+    "cues": [
+     "asr_goal_call",
+     "frame_celebration"
+    ],
+    "refuted": true,
+    "held": null
+   },
+   "storedSummaryGate": "dropped:repeat",
+   "storedWords": 29,
+   "createdAt": "2026-11-13T12:48:41.853Z"
+  }
+ ]
+}

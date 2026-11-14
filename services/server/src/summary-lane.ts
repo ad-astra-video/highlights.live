@@ -41,6 +41,7 @@ import {
   resolveSummaryFee,
   repeatedSentences,
   summaryBand,
+  sentenceSimilarity,
   summaryOpeningRun,
   summarySentencesOf,
   summaryFactMenu,
@@ -102,12 +103,121 @@ export interface SummaryJobState {
    *  compares the first four words, so the rev-7 live bodies repeated a whole
    *  sentence template in sentence 2 (0.965-0.982 pairwise similarity) and all
    *  three served. The job is the scope for the same reason it is the scope for
-   *  openings: the defect is two CARDS on one video. */
+   *  openings: the defect is two CARDS on one video. Kept for the PROMPT-first
+   *  avoidance (`avoidSentences`) only — ADAAAA-8969 moved the DROP decision onto
+   *  `servedBodies` because job-wide sentence equality also refuses honest cards. */
   servedSentences: string[];
+  /** ADAAAA-8969 (increment 2, defect 3): the bodies this job actually SERVED,
+   *  with the instants that tell one promotion from another. The repeat key reads
+   *  these, so "another promotion from the same prompt template" (a shared opening
+   *  run, one shared sentence) is no longer a repeat: the measured live leg
+   *  dropped 16/19 promotions that way and could not fill a 10-card deck. */
+  servedBodies: SummaryServedBody[];
+}
+
+/** One body a job served, as the repeat key reads it. */
+export interface SummaryServedBody {
+  highlightId: string;
+  windowTs: number | null;
+  windowDurationS: number | null;
+  /** The row's attested match clock, else the first clock token its body prints. */
+  clockToken: string | null;
+  body: string;
+  opening: string | null;
+}
+
+/** ADAAAA-8941 (integration repair): the repeat key's two CONTRACT bars — the
+ *  bars spec rev 16 grades, neither of which takes an instant exception:
+ *
+ *  - **AC8**: no two served bodies in one job share a normalized 4-word opening
+ *    run. A candidate that repeats a served opening is regenerated once, then
+ *    dropped with `summaryDroppedByReason: {repeat: 1}`.
+ *  - **AC14**: no two served bodies in one job share a normalized sentence at
+ *    >= 0.80 similarity (the template detector, `repeatedSentences`).
+ *
+ *  A shared opening or sentence is graded on the COPY, not on whether the two
+ *  rows happen to sit on different windows: the defect AC8 exists to stop is
+ *  "every card opens the same way", and two instants with the same opening are
+ *  still two cards that read the same. */
+export type SummaryRepeatKey = "opening" | "sentence";
+
+export interface SummaryRepeatVerdict {
+  /** null => this body is a DISTINCT promotion and must serve. */
+  key: SummaryRepeatKey | null;
+  against: string | null;
+  bodySimilarity: number;
+  windowOverlapS: number | null;
+  sameClock: boolean;
+  openingRepeat: boolean;
+  sentence: { a: string; b: string; similarity: number } | null;
+}
+
+/**
+ * ADAAAA-8941 (integration repair): the repeat key, on the CONTRACT's scope.
+ *
+ * ADAAAA-8969 increment 2 scoped this key to "the same promotion" so a shared
+ * opening or sentence on a different window would serve. That answers the deck
+ * shortfall by dropping the AC8/AC14 bars — the spec grades both on the served
+ * COPY within one job, with no instant exception (§4, rev 16). It also did not
+ * buy the coverage it claimed: the integrated lens (increment 1's attested-fact
+ * gate first) refuses every one of those template bodies anyway, so the stored
+ * rows serve 0 with either key. The deck shortfall is upstream body diversity
+ * (decide-prompt parity, ADAAAA-8928), not a missing exception in this guard.
+ *
+ * So the key keeps both contract bars and reports the instant evidence as
+ * EVIDENCE ONLY (for the census and the log), never as a suppression.
+ */
+export function summaryRepeatKey(
+  body: string,
+  evidence: SummaryEvidence,
+  served: readonly SummaryServedBody[]
+): SummaryRepeatVerdict {
+  const opening = summaryOpeningRun(body);
+  const windowTs = evidence.windowTs ?? null;
+  const ownToken = attestedMatchClockToken(evidence) ?? clockTokensOf(body)[0] ?? null;
+  let best: SummaryServedBody | null = null;
+  let bodySimilarity = 0;
+  let overlapS: number | null = null;
+  let sameClock = false;
+  const sentenceRepeats: NonNullable<SummaryRepeatVerdict["sentence"]>[] = [];
+  for (const other of served) {
+    const similarity = sentenceSimilarity(body, other.body);
+    if (best === null || similarity > bodySimilarity) {
+      best = other;
+      bodySimilarity = similarity;
+      overlapS =
+        windowTs !== null && other.windowTs !== null ? Math.abs(windowTs - other.windowTs) : null;
+      sameClock =
+        ownToken !== null && other.clockToken !== null && ownToken === other.clockToken;
+    }
+    for (const repeat of repeatedSentences(body, summarySentencesOf(other.body))) {
+      sentenceRepeats.push(repeat);
+    }
+  }
+  const openingRepeat = opening !== null && served.some((s) => s.opening === opening);
+  const closestSentence =
+    sentenceRepeats.length > 0
+      ? sentenceRepeats.reduce((a, b) => (b.similarity > a.similarity ? b : a))
+      : null;
+  // AC8 first: a repeated opening is the cheaper, more visible defect to name.
+  const key: SummaryRepeatKey | null = openingRepeat
+    ? "opening"
+    : closestSentence !== null
+      ? "sentence"
+      : null;
+  return {
+    key,
+    against: best?.highlightId ?? null,
+    bodySimilarity,
+    windowOverlapS: overlapS,
+    sameClock,
+    openingRepeat,
+    sentence: closestSentence,
+  };
 }
 
 export function newSummaryJobState(): SummaryJobState {
-  return { servedOpenings: new Set<string>(), servedSentences: [] };
+  return { servedOpenings: new Set<string>(), servedSentences: [], servedBodies: [] };
 }
 
 export interface SummaryLaneConfig {
@@ -355,48 +465,44 @@ export async function runSummaryForRow(
       }
       break;
     }
-    // AC8: a repeated opening is regenerated once (prompt asks for a different
-    // one); a second repeat drops the body rather than serving two identical
-    // openings in one job.
+    // AC8 + AC14 (ADAAAA-8941 integration repair): ONE repeat key on the
+    // contract's job scope. A shared normalized 4-word opening (AC8) or a shared
+    // sentence at >= 0.80 similarity (AC14) is a repeat, regenerate once, then
+    // drop. ADAAAA-8969 increment 2 briefly exempted rows on different windows;
+    // that traded both bars for a coverage number the attested-fact gate refuses
+    // anyway, so it is reverted here. The prompt still asks the writer to avoid
+    // the job's openings and sentences, so the retry usually lands a distinct body
+    // and the drop is the backstop.
     const opening = summaryOpeningRun(decision.summary);
-    if (opening && servedOpenings?.has(opening)) {
-      if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
-        log(
-          `[summary:${descriptor.jobId}] repeat-opening highlight=${descriptor.highlightId} opening=${JSON.stringify(opening)} — regenerating once`
-        );
-        continue;
-      }
-      lastGate = decision;
-      lastReason = "repeat";
-      log(
-        `[summary:${descriptor.jobId}] repeat-opening highlight=${descriptor.highlightId} opening=${JSON.stringify(opening)} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
-      );
-      break;
-    }
-    // ADAAAA-8914 (AC14.3): a SENTENCE this job already served on another card is
-    // the same defect one level down — the rev-7 live bodies all carried "This
-    // pivotal moment occurs at the … mark of the match" at 0.965-0.982 similarity
-    // while the first-four-words bar passed. Regenerate once with the offending
-    // sentence named, then drop `repeat`: two cards may not recite each other.
-    const sentenceRepeats = state ? repeatedSentences(decision.summary, state.servedSentences) : [];
-    if (sentenceRepeats.length > 0) {
-      const closest = sentenceRepeats.reduce((a, b) => (b.similarity > a.similarity ? b : a));
+    const repeat = state ? summaryRepeatKey(decision.summary, evidence, state.servedBodies) : null;
+    if (repeat && repeat.key !== null) {
+      const inputs =
+        `key=${repeat.key} against=${JSON.stringify(repeat.against)} ` +
+        `bodySimilarity=${repeat.bodySimilarity.toFixed(3)} windowOverlapS=${repeat.windowOverlapS ?? "n/a"} ` +
+        `sameClock=${JSON.stringify(repeat.sameClock)} openingRepeat=${JSON.stringify(repeat.openingRepeat)} ` +
+        `closestSentence=${repeat.sentence ? `${repeat.sentence.similarity.toFixed(3)} ${JSON.stringify(repeat.sentence.a.slice(0, 120))}` : "none"}`;
       if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
         retry = { words: decision.words, sentences: decision.sentences, violations: ["repeat-sentence"] };
-        log(
-          `[summary:${descriptor.jobId}] repeat-sentence highlight=${descriptor.highlightId} similarity=${closest.similarity.toFixed(3)} sentence=${JSON.stringify(closest.a.slice(0, 120))} — regenerating once`
-        );
+        log(`[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — regenerating once`);
         continue;
       }
       lastGate = decision;
       lastReason = "repeat";
       log(
-        `[summary:${descriptor.jobId}] repeat-sentence highlight=${descriptor.highlightId} similarity=${closest.similarity.toFixed(3)} sentence=${JSON.stringify(closest.a.slice(0, 120))} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+        `[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
       );
       break;
     }
     servedOpenings?.add(opening);
     for (const sentence of summarySentencesOf(decision.summary)) state?.servedSentences.push(sentence);
+    state?.servedBodies.push({
+      highlightId: descriptor.highlightId,
+      windowTs: evidence.windowTs ?? null,
+      windowDurationS: evidence.windowDurationS ?? null,
+      clockToken: attestedMatchClockToken(evidence) ?? clockTokensOf(decision.summary)[0] ?? null,
+      body: decision.summary,
+      opening,
+    });
     const latencyMs = Math.max(0, Math.round(now() - started));
     await store.patchHighlightSummary(descriptor.highlightId, {
       summary: decision.summary,

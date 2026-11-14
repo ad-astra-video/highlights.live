@@ -199,10 +199,14 @@ describe("AC14.1/AC14.2 — the served bodies' filler sentences are unattested",
     // attested actor. The rev-8 shape ("keeps possession", "presses high",
     // "carries the ball forward") is a sustained STATE, which no channel on the
     // row measures — it is deleted, so it can no longer stand in for a fact.
+    // ADAAAA-8941 (defect 2, in the served tree): a clock framed on the CLIP
+    // offset is neutralised to the row's own attested match clock, so the served
+    // text is not the input. Writing each row's attested stamp directly keeps the
+    // fact-per-sentence proof byte-for-byte (18:13 / 22:19 / 18:13).
     const repaired = [
-      "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid intercepts the ball near the box at the 1:35 mark of this clip.",
-      "The scoreboard moves to 2-2 at the 2:35 mark of this clip. Barcelona recovers the ball near the wing and counters at the 2:35 mark of this clip.",
-      "The scoreboard moves to 2-1 at the 6:35 mark of this clip. Real Madrid threads a pass to the left flank at the 6:35 mark of this clip.",
+      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid intercepts the ball near the box and counters.",
+      "The scoreboard moves to 2-2 at the 22:19 mark of the match. Barcelona recovers the ball near the wing and counters.",
+      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid threads a pass to the left flank.",
     ];
     const rows = [ROW_AED6, ROW_DC96, ROW_7574];
     rows.forEach((evidence, i) => {

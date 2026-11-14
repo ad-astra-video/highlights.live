@@ -101,7 +101,8 @@ describe("ADAAAA-8125 AC1 — the 22-row class is unproducible at the seam", () 
     // The seam is a pure writer: it returns the surface for a row it accepts, and
     // the only difference from the pre-fix seam is the copy. Counts (§3 whole-goal
     // counts, banner counts, chapter sums) are computed elsewhere and untouched.
-    expect(Object.keys(demoted).sort()).toEqual(["caption", "postTitleGate", "reason", "reason_raw"]);
+    // ADAAAA-8969: the row also records its own non-asserting label title now.
+    expect(Object.keys(demoted).sort()).toEqual(["caption", "postTitle", "postTitleGate", "reason", "reason_raw"]);
   });
 });
 
@@ -119,9 +120,10 @@ describe("ADAAAA-8125 AC3 — rows that already carried copy are byte-identical"
       caption: "The scoreboard updates from 1-1 to 2-1 as players celebrate a goal.",
       cardTitles: ["The scoreboard updates from 1-1 to 2-1 as players celebrate a goal."],
       reason_raw: GOAL_CELEBRATE,
-      // ADAAAA-8356: additive AUDIT token (not copy) — this fixture's reply
-      // carried no post title, so the gate records the PROMPT miss.
-      postTitleGate: "absent",
+      // ADAAAA-8969: this fixture's reply carried no post title, so the seam
+      // stores the row's own non-asserting label and names the cause.
+      postTitle: "GOAL",
+      postTitleGate: "label:empty",
     });
   });
 
@@ -134,7 +136,8 @@ describe("ADAAAA-8125 AC3 — rows that already carried copy are byte-identical"
       reason: "No. 9 reacts to a play in the penalty area",
       caption: "No. 9 reacts to a play in the penalty area",
       cardTitles: ["No. 9 reacts to a play in the penalty area"],
-      postTitleGate: "absent",
+      postTitle: "BIG PLAY",
+      postTitleGate: "label:empty",
     });
   });
 
@@ -149,13 +152,14 @@ describe("ADAAAA-8125 AC3 — rows that already carried copy are byte-identical"
       caption: "A player shoots from the penalty area.",
       cardTitles: ["A player shoots from the penalty area."],
       reason_raw: raw,
-      postTitleGate: "absent",
+      postTitle: "BIG PLAY",
+      postTitleGate: "label:empty",
     });
   });
 
   it("VOD (no grounding context) is untouched: the gate line passes through", () => {
     const surface = storedSurfaceFor(row("The No. 9 finishes low into the corner.", "GOAL", "scoring_play", 70), undefined);
-    expect(surface).toEqual({ reason: "The No. 9 finishes low into the corner." });
+    expect(surface).toEqual({ reason: "The No. 9 finishes low into the corner.", postTitle: "GOAL" });
   });
 });
 
@@ -168,7 +172,7 @@ describe("ADAAAA-8125 clause 3 — no honest sentence stores nothing, the row su
     expect(surface.cardTitles).toBeUndefined();
     expect(surface.reason_raw).toBe(raw);
     // The surface still exists: the row is accepted, it simply carries no copy.
-    expect(Object.keys(surface)).toEqual(["postTitleGate", "reason_raw"]);
+    expect(Object.keys(surface)).toEqual(["postTitle", "postTitleGate", "reason_raw"]);
   });
 
   it("never serves a placeholder or a neighbouring ladder line", () => {

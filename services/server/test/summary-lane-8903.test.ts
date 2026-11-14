@@ -154,8 +154,11 @@ describe("ADAAAA-8903 → ADAAAA-8934 — the census replies assert no fact; a b
     // AC14: every sentence carries no attested fact, so the repair deletes both and
     // the row refuses instead of serving the filler the rev-8 gate accepted.
     expect(decision.summary).toBeNull();
-    // The clock-bearing sentence survives; the sustained-play clause is deleted.
-    expect(decision.droppedClauses).toHaveLength(1);
+    // ADAAAA-8941 (defect 2, in the served tree): the stored reply frames a bare
+    // `7:41 mark` that is neither the row's attested match clock nor its window
+    // anchor, so BOTH sentences are deleted (the clock one is a clock-frame claim).
+    // The sustained-play clause was the only one the pre-8941 gate dropped.
+    expect(decision.droppedClauses).toHaveLength(2);
     expect(decision.violations).toContain("too-few-facts");
   });
 
@@ -165,7 +168,9 @@ describe("ADAAAA-8903 → ADAAAA-8934 — the census replies assert no fact; a b
     expect(attestedSummaryFactKinds(STORED_RAW_EAF1DA9F, evidence)).toEqual(["clock"]);
     const decision = gateSummaryDetail(STORED_RAW_EAF1DA9F, evidence);
     expect(decision.summary).toBeNull();
-    expect(decision.droppedClauses).toHaveLength(1);
+    // ADAAAA-8941 (defect 2): both sentences go — the `7:57 mark` clock frame is
+    // not the row's attested clock, beside the sustained-play clause.
+    expect(decision.droppedClauses).toHaveLength(2);
     expect(decision.violations).toContain("too-few-facts");
   });
 
