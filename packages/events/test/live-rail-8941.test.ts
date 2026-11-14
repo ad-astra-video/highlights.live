@@ -194,3 +194,90 @@ describe("ADAAAA-8941 defect 2 — the served body prints the row's OWN match cl
   });
 });
 
+
+// --- Defect 2, second live reading (job `771f42de` on tree `328bb3b`) ---------
+//
+// The first clock repair required the clip frame to FOLLOW the stamp, so the two
+// bodies this leg served kept the recording offset: `at 4:16` on a row whose
+// scorebug read `39.24`, and `as the clip progresses from 7:44` on one that read
+// `42:51`. Both rows are verbatim from
+// `evals/adaaa_8941/live-rail-771f42de.json`.
+
+const goalRow = (
+  id: string,
+  windowTs: number,
+  token: string,
+  seconds: number,
+  transition: { from: string; to: string },
+  scoreBoardChanged: boolean
+): { id: string; evidence: SummaryEvidence } => ({
+  id,
+  evidence: {
+    rail: "live",
+    // The row's own verdict on the served tree: a scoring play, not a `goal`
+    // claim (the `goal-claim` bar is scoped to that verdict).
+    verdict: "scoring_play",
+    eventType: "GOAL",
+    reason: null,
+    caption: null,
+    postTitle: `GOAL · ${token}`,
+    windowTs,
+    windowDurationS: 15,
+    scoreTransition: transition,
+    matchContext: { sport: "soccer", teams: ["Liverpool", "Chelsea"], ambiguous: true },
+    transcript: null,
+    attestation: { ballOutcome: null, goalCrossed: false, scoreBoardChanged },
+    matchClock: { token, seconds, period: null, legible: true },
+  },
+});
+
+/** `1ec16b32`: a DOT-shaped scorebug token (`39.24` is the OCR read of 39:24). */
+const ROW_771_1EC1 = goalRow("1ec16b32", 256.2220001220703, "39.24", 2364, { from: "0-0", to: "0-1" }, true);
+/** `8cafc2a0`: the clip reference sits BEFORE the stamp. */
+const ROW_771_8CAF = goalRow("8cafc2a0", 464.44000005722046, "42:51", 2571, { from: "0-1", to: "1-1" }, true);
+
+const SERVED_1EC1 =
+  "Chelsea scores to move the scoreboard to 0-1. Liverpool is in the sequence as the scoreboard moves from 0-0 to 0-1 at 4:16.";
+const SERVED_8CAF =
+  "The scoreboard moves to 1-1 during this sequence. Chelsea is involved in the play as the clip progresses from 7:44.";
+
+describe("ADAAAA-8941 defect 2 — the second live reading's clock shapes", () => {
+  it("serves the token on a bare anchored stamp, dot shape included", () => {
+    const served = serveAttestedMatchClock(SERVED_1EC1, ROW_771_1EC1.evidence);
+    expect(served.served).toEqual(["4:16"]);
+    expect(served.text).not.toContain("4:16");
+    expect(served.text).toContain("39.24");
+    const decision = gateSummaryDetail(SERVED_1EC1, ROW_771_1EC1.evidence);
+    expect(decision.summary).not.toBeNull();
+    const report = summaryClockReport(decision.summary as string, ROW_771_1EC1.evidence);
+    expect(report.servesMatchClock).toBe(true);
+    expect(report.matchClockToken).toBe("39.24");
+  });
+
+  it("renames a clip reference that PRECEDES the stamp, and serves the token", () => {
+    const served = serveAttestedMatchClock(SERVED_8CAF, ROW_771_8CAF.evidence);
+    expect(served.served).toEqual(["7:44"]);
+    expect(served.text).toContain("as the match progresses from 42:51");
+    expect(served.text).not.toContain("clip");
+    expect(served.text).not.toContain("7:44");
+    const decision = gateSummaryDetail(SERVED_8CAF, ROW_771_8CAF.evidence);
+    expect(decision.summary).not.toBeNull();
+    expect(decision.gate).toBe("neutralised");
+    const report = summaryClockReport(decision.summary as string, ROW_771_8CAF.evidence);
+    expect(report.tokens).toEqual(["42:51"]);
+    expect(report.servesMatchClock).toBe(true);
+  });
+
+  it("leaves a bare stamp the row's own window cannot anchor", () => {
+    // `9:59` is neither `39.24` nor anchored by this row's 256.2 s window.
+    const fabricated = "Chelsea scores to move the scoreboard to 0-1 at 9:59.";
+    expect(serveAttestedMatchClock(fabricated, ROW_771_1EC1.evidence).served).toEqual([]);
+    expect(serveAttestedMatchClock(fabricated, ROW_771_1EC1.evidence).text).toBe(fabricated);
+  });
+
+  it("does not touch a body whose only stamp already is the token", () => {
+    const honest = "The scoreboard moves to 1-1 during this sequence at 42:51.";
+    expect(serveAttestedMatchClock(honest, ROW_771_8CAF.evidence).served).toEqual([]);
+    expect(serveAttestedMatchClock(honest, ROW_771_8CAF.evidence).text).toBe(honest);
+  });
+});
