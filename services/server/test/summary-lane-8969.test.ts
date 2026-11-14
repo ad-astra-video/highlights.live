@@ -1,5 +1,5 @@
-// ADAAAA-8969 (increment 2) — the repeat key's SCOPE, and the title lane's
-// empty-candidate degrade.
+// ADAAAA-8941 (defect 3, integration repair) — the repeat key's CONTRACT scope,
+// and ADAAAA-8969 defect 4's title-lane write/gate pair.
 //
 // Defect 3 was measured on live leg `e4c2fe29-68fe-472c-91da-b96d1dd8ca93`
 // (rev-8, `file-sim`, 19 promoted rows): `summaryGate: accepted` 3,
@@ -7,12 +7,22 @@
 // was the JOB-WIDE opening-run equality (all 16) — every promotion from the one
 // decide prompt opens the same way.
 //
-// These tests pin the scoped key on the real fixture plus the degenerate shapes
-// the scope must still refuse, and pin defect 4's write/gate pair.
+// ADAAAA-8969 increment 2 briefly exempted rows on different windows from the
+// key. Spec rev 16 grades AC8 (shared normalized 4-word opening) and AC14
+// (shared sentence at >= 0.80) on the served copy within one job with no instant
+// exception, so the exemption was a bar change: these tests pin the contract
+// reading, including that the stored rows honestly reproduce 3 served / 16
+// `repeat` drops. The deck shortfall is upstream body diversity (ADAAAA-8928).
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { gatePostTitleDetail, postTitleLabel, storedLabelTitle, type SummaryEvidence } from "@highlights/events";
+import {
+  gatePostTitleDetail,
+  postTitleLabel,
+  storedLabelTitle,
+  summaryOpeningRun,
+  type SummaryEvidence,
+} from "@highlights/events";
 import { summaryRepeatKey, type SummaryServedBody } from "../src/summary-lane.js";
 
 interface FixtureRow {
@@ -64,8 +74,13 @@ function servedOf(row: FixtureRow): SummaryServedBody {
   };
 }
 
-describe("ADAAAA-8969 defect 3 — the repeat key is scoped to the same promotion", () => {
-  it("serves >= 10 of the 19 stored rev-8 rows (the deck bar), vs 3 under the old key", () => {
+describe("ADAAAA-8941 defect 3 — the repeat key keeps AC8/AC14 on the job scope", () => {
+  it("reproduces the stored census: 3 servable / 16 `repeat` drops on the 19 stored rows", () => {
+    // The contract reading of defect 3: the rev-8 key was NOT over-broad. All 19
+    // stored bodies come from one decide template, and AC8 (shared 4-word opening)
+    // plus AC14 (shared sentence at >= 0.80) are copy bars with no instant
+    // exception — so the deck shortfall on these bytes is upstream body diversity,
+    // not a missing exception here. 3 served / 16 repeat is the honest number.
     const rows = [...FIXTURE.rows].sort((a, b) => (a.windowTs ?? 0) - (b.windowTs ?? 0));
     const served: SummaryServedBody[] = [];
     const drops: Record<string, number> = {};
@@ -77,107 +92,21 @@ describe("ADAAAA-8969 defect 3 — the repeat key is scoped to the same promotio
         drops[verdict.key] = (drops[verdict.key] ?? 0) + 1;
         continue;
       }
-      served.push({ ...servedOf(row), opening: verdict.openingRepeat ? null : null });
+      served.push({ ...servedOf(row), opening: summaryOpeningRun(body) });
     }
-    // The stored census is 3 servable / 16 repeat drops; the scoped key must clear
-    // the 10-card bar on the same bytes.
-    expect(served.length).toBeGreaterThanOrEqual(10);
-    // The measured residual is ONE row: `1270bc8d` shares `18:00`'s clock token
-    // with a nearer neighbour, so the scoped key still refuses it (the census in
-    // `evals/adaaa_8969/replay8969.ts` prints the pair).
-    expect(served.length).toBe(18);
-    expect(drops).toEqual({ "same-clock": 1 });
-    expect(FIXTURE.rows.filter((r) => r.postTitleGate === "absent")).toHaveLength(19);
+    expect(drops).toEqual({ opening: 16 });
+    expect(served.length).toBe(3);
   });
 
-  it("refuses the same window even when the words differ (one card per moment)", () => {
-    const a = {
+  it("refuses a shared opening on a DIFFERENT window (AC8 has no instant exception)", () => {
+    const a: SummaryServedBody = {
       highlightId: "a",
       windowTs: 100,
       windowDurationS: 15,
       clockToken: "18:12",
       body: "Barcelona works the ball forward and the scoreboard moves to 2-1 at 18:12.",
-      opening: "barcelona works the",
+      opening: "barcelona works the ball",
     };
-    const evidence: SummaryEvidence = {
-      rail: "live",
-      verdict: "big_play",
-      eventType: "BIG_PLAY",
-      reason: null,
-      caption: null,
-      postTitle: null,
-      windowTs: 104,
-      windowDurationS: 15,
-      scoreTransition: null,
-      matchContext: null,
-      transcript: null,
-      attestation: null,
-      matchClock: { token: "18:12", seconds: 1092, legible: true },
-    };
-    const verdict = summaryRepeatKey(
-      "A low drive from Barcelona is blocked at the edge of the box and recycled wide.",
-      evidence,
-      [a]
-    );
-    expect(verdict.key).toBe("same-window");
-  });
-
-  it("refuses the same clock token with near-identical text on a different window", () => {
-    const a = {
-      highlightId: "a",
-      windowTs: 100,
-      windowDurationS: 15,
-      clockToken: "18:12",
-      body: "Barcelona works the ball forward and the scoreboard moves to 2-1 at 18:12.",
-      opening: "barcelona works the",
-    };
-    const evidence: SummaryEvidence = {
-      rail: "live",
-      verdict: "big_play",
-      eventType: "BIG_PLAY",
-      reason: null,
-      caption: null,
-      postTitle: null,
-      windowTs: 400,
-      windowDurationS: 15,
-      scoreTransition: null,
-      matchContext: null,
-      transcript: null,
-      attestation: null,
-      matchClock: { token: "18:12", seconds: 1092, legible: true },
-    };
-    const verdict = summaryRepeatKey(
-      "Barcelona works the ball forward and the scoreboard moves to 2-1 at 18:12 in this clip.",
-      evidence,
-      [a]
-    );
-    expect(verdict.key).toBe("same-clock");
-  });
-
-  it("refuses a near-identical body when no instant tells the two apart", () => {
-    const body = "Barcelona maintains possession and works the ball forward during the build-up phase.";
-    const a = { highlightId: "a", windowTs: null, windowDurationS: null, clockToken: null, body, opening: null };
-    const evidence: SummaryEvidence = {
-      rail: "live",
-      verdict: "big_play",
-      eventType: "BIG_PLAY",
-      reason: null,
-      caption: null,
-      postTitle: null,
-      windowTs: null,
-      windowDurationS: null,
-      scoreTransition: null,
-      matchContext: null,
-      transcript: null,
-      attestation: null,
-      matchClock: null,
-    };
-    expect(summaryRepeatKey(body, evidence, [a]).key).toBe("near-identical-body");
-  });
-
-  it("serves the same text on two DIFFERENT instants (a differing instant is evidence of a different promotion)", () => {
-    const body = "Barcelona maintains possession and works the ball forward during the build-up phase.";
-    const a = { highlightId: "a", windowTs: 100, windowDurationS: 15, clockToken: "18:12", body, opening: null };
     const evidence: SummaryEvidence = {
       rail: "live",
       verdict: "big_play",
@@ -193,7 +122,80 @@ describe("ADAAAA-8969 defect 3 — the repeat key is scoped to the same promotio
       attestation: null,
       matchClock: { token: "22:19", seconds: 1339, legible: true },
     };
-    expect(summaryRepeatKey(body, evidence, [a]).key).toBeNull();
+    const verdict = summaryRepeatKey(
+      "Barcelona works the ball wide and the scoreboard moves to 2-1 at 22:19.",
+      evidence,
+      [a]
+    );
+    expect(verdict.key).toBe("opening");
+    // The instant evidence is still reported for the census.
+    expect(verdict.windowOverlapS).toBe(300);
+  });
+
+  it("refuses a shared sentence at >= 0.80 on a DIFFERENT window (AC14 template detector)", () => {
+    const a: SummaryServedBody = {
+      highlightId: "a",
+      windowTs: 100,
+      windowDurationS: 15,
+      clockToken: "18:12",
+      body: "Barcelona finds the equaliser at 18:12. The move builds through midfield for Northbridge.",
+      opening: "barcelona finds the",
+    };
+    const evidence: SummaryEvidence = {
+      rail: "live",
+      verdict: "big_play",
+      eventType: "BIG_PLAY",
+      reason: null,
+      caption: null,
+      postTitle: null,
+      windowTs: 400,
+      windowDurationS: 15,
+      scoreTransition: null,
+      matchContext: null,
+      transcript: null,
+      attestation: null,
+      matchClock: { token: "22:19", seconds: 1339, legible: true },
+    };
+    const verdict = summaryRepeatKey(
+      "A low drive is blocked at 22:19. The move builds through midfield for Northbridge.",
+      evidence,
+      [a]
+    );
+    expect(verdict.key).toBe("sentence");
+    expect(verdict.openingRepeat).toBe(false);
+    expect(verdict.sentence?.similarity).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("serves a body whose opening run and sentences are both distinct", () => {
+    const a: SummaryServedBody = {
+      highlightId: "a",
+      windowTs: 100,
+      windowDurationS: 15,
+      clockToken: "18:12",
+      body: "Barcelona finds the equaliser at 18:12. Northbridge clears the second ball wide.",
+      opening: "barcelona finds the",
+    };
+    const evidence: SummaryEvidence = {
+      rail: "live",
+      verdict: "big_play",
+      eventType: "BIG_PLAY",
+      reason: null,
+      caption: null,
+      postTitle: null,
+      windowTs: 400,
+      windowDurationS: 15,
+      scoreTransition: null,
+      matchContext: null,
+      transcript: null,
+      attestation: null,
+      matchClock: { token: "22:19", seconds: 1339, legible: true },
+    };
+    const verdict = summaryRepeatKey(
+      "A low drive from Riverside is blocked at 22:19. Riverside recycles the ball to the left.",
+      evidence,
+      [a]
+    );
+    expect(verdict.key).toBeNull();
   });
 });
 
