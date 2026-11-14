@@ -107,6 +107,23 @@ class ScriptedDet:
         return {"regions": []}
 
 
+class ScriptedOcr:
+    """The SECOND Florence copy (the OCR lane), scripted like ``ScriptedDet``.
+
+    ADAAAA-9021: the served image runs `PERCEIVE_DUAL_FLORENCE=1`, so the
+    scoreboard `<OCR>` read behind `_run` comes from `get_ocr_detector()` — a
+    second, REAL Florence copy. Patching only `get_detector` leaves the name
+    channel to that real model, which reads nothing on a synthetic frame, and
+    also pays a real model build + a real GPU inference inside pytest.
+    """
+
+    def __init__(self, lines):
+        self.lines = list(lines)
+
+    def ocr(self, rgb, roi=None):
+        return list(self.lines)
+
+
 @pytest.fixture()
 def client():
     return TestClient(app)
@@ -114,10 +131,14 @@ def client():
 
 def _run(client, det, monkeypatch, frames, frame_b64, teams=None):
     sid = f"sess-kitref-{uuid.uuid4().hex[:8]}"
+    lane = ScriptedOcr(frames[0][1])
     monkeypatch.setattr(_app, "get_detector", lambda lora_ref=None: det)
+    monkeypatch.setattr(_app, "dual_florence_enabled", lambda: True)
+    monkeypatch.setattr(_app, "get_ocr_detector", lambda: lane)
     out = []
     for seq, (ts, lines) in enumerate(frames):
         det.crop_lines = list(lines)
+        lane.lines = list(lines)
         body = {"seq": seq, "timestamp": ts, "image": frame_b64, "gameHint": "soccer"}
         if teams is not None:
             body["matchContextTeams"] = teams
@@ -295,6 +316,12 @@ def test_the_demotion_reaches_the_observation_on_a_name_only_reference(client, m
 
     assert state.surface_identity["verdict"] == "contradicted"
     assert state.surface_identity["kitReference"] == "prior"
+    # ADAAAA-9021 guard: the pass must have READ the fixture's printed name. On the
+    # served image the scoreboard `<OCR>` read comes from the SECOND Florence copy,
+    # so an unscripted lane yields `names=[]` and the rule takes the documented
+    # `absent` branch. This fails HERE, naming the read, instead of depending on
+    # which copy of the OCR the box happens to have loaded.
+    assert state.surface_identity["names"] == ["LALIGA"], state.surface_identity["names"]
     assert not any(o.get("scoreBoardChanged") for o in obs), "a contradicted surface must not attest"
     demoted = [o["scoreboardSurfaceDemoted"] for o in obs if o.get("scoreboardSurfaceDemoted")]
     assert demoted, "the demotion must be named on the window"
@@ -313,6 +340,8 @@ def test_a_genuine_name_only_reference_still_attests_its_own_goal(client, monkey
     )
 
     assert state.surface_identity["verdict"] == "consistent"
+    # ADAAAA-9021: the genuine printed names are the READ, not the environment.
+    assert state.surface_identity["names"] == ["PORTUGAL", "SPAIN"], state.surface_identity["names"]
     assert any(o.get("scoreBoardChanged") for o in obs)
     assert not any(o.get("scoreboardSurfaceDemoted") for o in obs)
 
