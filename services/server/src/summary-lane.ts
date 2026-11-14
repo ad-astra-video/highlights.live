@@ -40,7 +40,7 @@ import {
   gateSummaryDetail,
   resolveSummaryFee,
   repeatedSentences,
-  dropSentences,
+  pruneRepeatedSentences,
   summaryBand,
   sentenceSimilarity,
   summaryOpeningRun,
@@ -515,6 +515,8 @@ export async function runSummaryForRow(
      *  repair of it). */
     let accepted = decision;
     let prunedSentences: string[] = [];
+    /** ADAAAA-9052: fact sentences the repeat repair substituted to reach the band. */
+    let prunedSubstituted = 0;
     const repeat = state ? summaryRepeatKey(decision.summary, evidence, state.servedBodies) : null;
     if (repeat && repeat.key !== null) {
       const inputs =
@@ -523,7 +525,17 @@ export async function runSummaryForRow(
         `sameClock=${JSON.stringify(repeat.sameClock)} openingRepeat=${JSON.stringify(repeat.openingRepeat)} ` +
         `closestSentence=${repeat.sentence ? `${repeat.sentence.similarity.toFixed(3)} ${JSON.stringify(repeat.sentence.a.slice(0, 120))}` : "none"}`;
       if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
-        retry = { words: decision.words, sentences: decision.sentences, violations: ["repeat-sentence"] };
+        // ADAAAA-9052: the regeneration is told WHICH sentences repeated (and which
+        // facts the row attests), so the second sample writes a different fact
+        // instead of re-landing the same template one clock token over.
+        retry = {
+          words: decision.words,
+          sentences: decision.sentences,
+          violations: ["repeat-sentence"],
+          ...(repeat.key === "sentence" && repeat.repeatedSentences.length > 0
+            ? { repeatedSentences: repeat.repeatedSentences, factMenu: summaryFactMenu(evidence) }
+            : {}),
+        };
         retryReason = repeat.key === "opening" ? "repeat-opening" : "repeat-sentence";
         log(`[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — regenerating once`);
         continue;
@@ -535,15 +547,28 @@ export async function runSummaryForRow(
       // surviving sentences carried facts. Drop the repeated sentences and
       // re-gate the remainder; only a body that still fails (or falls under the
       // band floor) drops as `repeat`.
+      // ADAAAA-9052: and a remainder the drop took UNDER the floor is now
+      // repaired back to the band with a different attested fact instead of the
+      // row being discarded — dropping the row was the defect (rev-11 VOD
+      // coverage: `54388ada`, `285ae8d0`, `0b6ee1d8`, `87e616cc`, `2646edbb` all
+      // dropped as `repeat` with fact-bearing survivors). The substitution may
+      // not repeat a sentence the job already served, so the repair cannot
+      // re-break AC14.3.
       if (repeat.key === "sentence" && repeat.repeatedSentences.length > 0) {
-        const pruned = dropSentences(decision.summary, repeat.repeatedSentences);
-        const prunedDecision = gateSummaryDetail(pruned, evidence);
+        const prune = pruneRepeatedSentences(
+          decision.summary,
+          repeat.repeatedSentences,
+          evidence,
+          state?.servedSentences ?? []
+        );
+        const prunedDecision = gateSummaryDetail(prune.text, evidence);
         if (prunedDecision.summary) {
           accepted = prunedDecision;
           prunedSentences = repeat.repeatedSentences;
+          prunedSubstituted = prune.substituted.length;
           retryReason = retryReason ?? "repeat-sentence";
           log(
-            `[summary:${descriptor.jobId}] repeat-clause-drop highlight=${descriptor.highlightId} dropped=${repeat.repeatedSentences.length} words=${prunedDecision.words} ${inputs}`
+            `[summary:${descriptor.jobId}] repeat-clause-drop highlight=${descriptor.highlightId} dropped=${repeat.repeatedSentences.length} substituted=${prune.substituted.length} words=${prunedDecision.words} ${inputs}`
           );
         }
       }
@@ -594,7 +619,7 @@ export async function runSummaryForRow(
         accepted.droppedClauses.length > 0
           ? ` droppedClauses=${accepted.droppedClauses.length} substitutedClauses=${accepted.substitutedClauses.length} repairedWords=${accepted.repairedWords}`
           : ""
-      }${prunedSentences.length > 0 ? ` droppedRepeatedSentences=${prunedSentences.length}` : ""}`
+      }${prunedSentences.length > 0 ? ` droppedRepeatedSentences=${prunedSentences.length} repairedSentences=${prunedSubstituted}` : ""}`
     );
     return { outcome: "stored", gate: accepted.gate, calls, latencyMs };
   }

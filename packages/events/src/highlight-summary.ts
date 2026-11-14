@@ -2238,14 +2238,46 @@ export function dropFillerSentences(text: string, evidence: SummaryEvidence): Su
   // the repair is extractive unless the extraction cost the card its copy.
   if (summaryClearsBand(filled(), band)) return { text: filled().join(" ").trim(), dropped, claims, substituted: [] };
 
-  const candidates = summaryFactCandidates(evidence);
-  if (candidates.length === 0) return { text: filled().join(" ").trim(), dropped, claims, substituted: [] };
+  const grown = substituteSummaryFacts(slots, evidence, survivors);
+  return { text: grown.text, dropped, claims, substituted: grown.substituted };
+}
+
+/**
+ * ADAAAA-9052: the ONE substitution engine behind BOTH deterministic repairs —
+ * the AC14.5 filler deletion (`dropFillerSentences`) and the AC14 repeat prune
+ * (`pruneRepeatedSentences`).
+ *
+ * It fills the slots a deletion left, in body order, then tops up by appending,
+ * drawing only on `summaryFactCandidates` — facts the row's own evidence attests.
+ * `forbid` is the caller's extra bar: every sentence the JOB has already served.
+ * The repeat prune passes it, because the clause it deleted was deleted for
+ * repeating one of those sentences; substituting a paraphrase of the same
+ * template would re-break AC14.3 through the repair door.
+ *
+ * Bounds kept from ADAAAA-8934: at most as many sentences as the draft itself
+ * kept are substituted (the repair may never BECOME the body), never a sentence
+ * that already repeats one in the body, never past the band's `hardMaxWords`.
+ */
+function substituteSummaryFacts(
+  slots: (string | null)[],
+  evidence: SummaryEvidence,
+  survivors: number,
+  forbid: readonly string[] = []
+): { text: string; substituted: string[] } {
+  const filled = (): string[] => slots.filter((sentence): sentence is string => typeof sentence === "string");
+  const substituted: string[] = [];
+  const band = summaryBand(evidence.rail);
+  const barred = forbid.map((line) => (line ?? "").trim()).filter(Boolean);
+  const candidates = summaryFactCandidates(evidence).filter(
+    (candidate) =>
+      !barred.some((other) => sentenceSimilarity(other, candidate.sentence) >= SUMMARY_SENTENCE_REPEAT_THRESHOLD)
+  );
+  if (candidates.length === 0) return { text: filled().join(" ").trim(), substituted };
   const seed = summaryFactSentenceSeed(evidence);
   const rotated = candidates
     .map((candidate, index) => ({ candidate, index }))
     .sort((a, b) => ((a.index + seed) % candidates.length) - ((b.index + seed) % candidates.length) || a.index - b.index);
   const used = new Set<number>();
-  const substituted: string[] = [];
   const bodyKinds = (): Set<SummaryFactKind> => new Set(filled().flatMap((sentence) => sentenceFactKinds(sentence, evidence)));
   /** The kinds this row's own evidence lets the repair PHRASE. A row that attests
    *  a single fact (a clock-only window) offers no new kind, so its substitution is
@@ -2321,7 +2353,72 @@ export function dropFillerSentences(text: string, evidence: SummaryEvidence): Su
     commit(next);
     slots.push(next.candidate.sentence);
   }
-  return { text: filled().join(" ").trim(), dropped, claims, substituted };
+  return { text: filled().join(" ").trim(), substituted };
+}
+
+/** ADAAAA-9052 (AC14 coverage residual): the repeat prune's REPAIR.
+ *
+ *  AC14's own order is "regenerate once, then the offending clause is dropped".
+ *  ADAAAA-9031 implemented the drop; a body that the drop took under the band
+ *  floor was then discarded whole, which is what cost the rev-11 VOD census its
+ *  coverage: rows `ec7d75f4`, `26a58961`, `54388ada` (and `285ae8d0`, `0b6ee1d8`,
+ *  `87e616cc`, `2646edbb`) dropped as `repeat` with the surviving sentences
+ *  carrying facts. Dropping the row is the defect.
+ *
+ *  So a pruned body that no longer clears its band is re-grown to the band with a
+ *  fact the row's own evidence attests and the body does not yet carry — the same
+ *  substitution engine the AC14.5 filler repair uses, with ONE extra bar: a
+ *  substitution may not repeat a sentence the JOB has already served (`forbid`).
+ *  The clause it replaced was dropped for repeating one of those sentences, so a
+ *  paraphrase of the same template would re-break AC14.3 through the repair door.
+ *
+ *  Nothing here may invent a fact: every candidate comes from
+ *  `summaryFactCandidates`, is re-checked through its own gate filters, and the
+ *  caller re-gates the repaired body before it can be served. A row whose evidence
+ *  offers no admissible fact stays short and drops with its named reason — the
+ *  repair cannot manufacture depth any more than the writer can. */
+export interface SummaryRepeatPrune {
+  /** The pruned (and, when it was short, re-grown) body. */
+  text: string;
+  /** The repeated sentences that were removed. */
+  dropped: string[];
+  /** True when the remainder cleared the band as-is — no fact was substituted. */
+  pruned: boolean;
+  /** The fact-bearing sentences the repair substituted to reach the band. */
+  substituted: string[];
+}
+
+export function pruneRepeatedSentences(
+  text: string,
+  drop: readonly string[],
+  evidence: SummaryEvidence,
+  forbid: readonly string[] = []
+): SummaryRepeatPrune {
+  const keys = new Set(drop.map((sentence) => (sentence ?? "").trim()).filter(Boolean));
+  if (keys.size === 0) return { text: (text ?? "").trim(), dropped: [], pruned: true, substituted: [] };
+  const slots: (string | null)[] = [];
+  const dropped: string[] = [];
+  let survivors = 0;
+  for (const sentence of summarySentencesOf(text)) {
+    if (keys.has(sentence.trim())) {
+      slots.push(null);
+      dropped.push(sentence);
+      continue;
+    }
+    slots.push(sentence);
+    survivors += 1;
+  }
+  if (dropped.length === 0) return { text: (text ?? "").trim(), dropped: [], pruned: true, substituted: [] };
+  const filled = (): string[] => slots.filter((sentence): sentence is string => typeof sentence === "string");
+  // Every sentence repeated: there is no copy left to repair, and rebuilding the
+  // body from the pool would serve repair prose the writer never grounded.
+  if (survivors === 0) return { text: filled().join(" ").trim(), dropped, pruned: false, substituted: [] };
+  const band = summaryBand(evidence.rail);
+  if (summaryClearsBand(filled(), band)) {
+    return { text: filled().join(" ").trim(), dropped, pruned: true, substituted: [] };
+  }
+  const grown = substituteSummaryFacts(slots, evidence, survivors, [...forbid, ...dropped]);
+  return { text: grown.text, dropped, pruned: false, substituted: grown.substituted };
 }
 
 /** AC14.3: normalized sentence tokens. Unlike `normalizeSummaryTokens` (the
@@ -2877,6 +2974,13 @@ export interface SummaryRetryDirective {
   /** ADAAAA-8934: the fact menu the retry may draw on, so the replacement clauses
    *  come from the row's own evidence instead of new atmosphere. */
   factMenu?: string[];
+  /** ADAAAA-9052 (AC14.3 coverage residual): the sentences the repeat key flagged
+   *  against a body this job ALREADY serves. The old repeat retry said only
+   *  `repeat-sentence`, so the second sample re-wrote the same template one clock
+   *  token over and the clause repair had to delete it again. Naming the sentences
+   *  (with the fact menu above) is what makes the second sample different from the
+   *  first — the same reason `droppedClauses` exists for the filler repair. */
+  repeatedSentences?: string[];
 }
 
 /** Everything the summary prompt may show the model. Built from the row's own
@@ -2992,6 +3096,8 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // same clauses were deleted, and the row dropped again (9 retried, 9 dropped).
   const retryDropped = (input.retry?.droppedClauses ?? []).filter((line) => line.trim()).slice(0, 4);
   const retryMenu = (input.retry?.factMenu ?? []).filter((line) => line.trim());
+  // ADAAAA-9052: the sentences the repeat key flagged, named in the retry.
+  const retryRepeated = (input.retry?.repeatedSentences ?? []).filter((line) => line.trim()).slice(0, 4);
   // ADAAAA-8971 (AC5): the "most words without inventing anything" clause names
   // only the fact types the row's menu actually offers. It used to name the score
   // line unconditionally, so a row with no measured transition was told its best
@@ -3008,6 +3114,15 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
         ...(retryDropped.length > 0
           ? [
               `- These sentences were DELETED from that draft because they carry no attested fact: ${retryDropped.map((line) => `"${line.trim()}"`).join(" ")} Never restate them and never paraphrase what they said: replace each one with a sentence built on ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}.`,
+            ]
+          : []),
+        // ADAAAA-9052 (AC14.3): the repeat retry names the sentences another card in
+        // this job already carries, so the second sample changes the FACT rather than
+        // the clock token inside the same template. The clause repair would otherwise
+        // delete the regenerated sentence too and the row would drop on depth.
+        ...(retryRepeated.length > 0
+          ? [
+              `- These sentences REPEAT a sentence a card in this job already carries: ${retryRepeated.map((line) => `"${line.trim()}"`).join(" ")} Do not reuse or paraphrase them, and do not swap only their clock: write a different sentence that carries a different fact from ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}.`,
             ]
           : []),
         `- Do NOT spend a whole sentence on the clip clock: the \`Window:\` label (${typeof input.windowTs === "number" && Number.isFinite(input.windowTs) ? clockLabel(input.windowTs) : "the offset"}) must sit INSIDE a sentence that also carries another fact. A sentence that only says when the clip moment occurs adds no depth and does not count toward the two-fact rule.`,

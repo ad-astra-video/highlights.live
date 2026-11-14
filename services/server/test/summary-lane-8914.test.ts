@@ -13,7 +13,7 @@
 //     the vocabulary that caused them and the surviving word count on the row
 //     (§15.4 fields), and the row still bills at most two calls.
 import { describe, expect, it } from "vitest";
-import { SUMMARY_FEE_RATIO, SUMMARY_VOD_BAND, summaryOpeningRun } from "@highlights/events";
+import { SUMMARY_FEE_RATIO, SUMMARY_VOD_BAND, summaryBand, summaryOpeningRun } from "@highlights/events";
 import {
   newSummaryJobState,
   runSummaryForRow,
@@ -188,7 +188,7 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
     expect(second.prompts[0]).toContain("The scoreboard moves to 2-1 at the 18:13 mark of the match.");
   });
 
-  it("regenerates once with the repeat named, then drops `repeat`", async () => {
+  it("regenerates once with the repeat named, then repairs the pruned body instead of dropping it", async () => {
     const state = newSummaryJobState();
     // The previous card served this (factual) sentence; the next row's reply
     // reuses it, which is the AC14.3 defect one level below the template.
@@ -221,15 +221,25 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
       { jobId: "9bed3bd7", highlightId: ROW_DC96.id, evidence: evidenceFor(ROW_DC96, "live") },
       state
     );
-    expect(result.outcome).toBe("dropped");
-    expect(result.reason).toBe("repeat");
+    // ADAAAA-9052 (superseding this test's earlier drop expectation): dropping the
+    // repeated CLAUSE took the body under the live band and the lane then discarded
+    // the ROW. The repair re-grows it with a different attested fact, so the row
+    // serves — and the repeated sentence still never joins the job's served set.
+    expect(result.outcome).toBe("stored");
     expect(result.calls).toBe(2); // one regeneration, never a third call
     expect(f.prompts[1]).toContain("The previous draft repeated a sentence another card in this job already carries.");
+    expect(f.prompts[1]).toContain("REPEAT a sentence a card in this job already carries");
+    expect(f.prompts[1]).toContain(servedSentence);
     const last = patches.at(-1)!.patch as Record<string, unknown>;
-    expect(last.summaryGate).toBe("dropped:repeat");
-    expect(last.summaryDroppedByReason).toEqual({ repeat: 1 });
-    // The repeated sentence never joins the job's served set.
-    expect(state.servedSentences).toEqual([servedSentence]);
+    const repaired = String(last.summary);
+    expect(last.summaryDropped).toBe(0);
+    expect(last.summaryRetryReason).toBe("repeat-sentence");
+    expect(repaired).not.toContain(servedSentence);
+    // AC2 depth: the repaired body clears the live rail's floor.
+    expect(repaired.split(/\s+/).filter(Boolean).length).toBeGreaterThanOrEqual(summaryBand("live").floorWords);
+    // The repeated sentence never re-enters the job's served set: it stays exactly
+    // the one seeded entry the test pushed above.
+    expect(state.servedSentences.filter((sentence) => sentence === servedSentence)).toHaveLength(1);
   });
 
   it("serves a body that repeats nothing", async () => {
