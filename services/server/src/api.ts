@@ -125,7 +125,7 @@ import {
 // composite detail read and the incremental sections-delta stream.
 import { servedHighlightRow, servedNotableRow, countSuppressedSiblingAlternatives, type ServedRowContext } from "./served-highlight-rows";
 // ADAAAA-8530: the read-side confirmation lane a served highlight card states.
-import { confirmationForHighlightRow, laneConfirmsGoal } from "./confirmation-lane";
+import { confirmationForHighlightRow, laneConfirmsGoal, noVerdictConfirmation } from "./confirmation-lane";
 import { buildSummaryLadder } from "./summary-ladder";
 import { applyJobTitle } from "./job-title";
 import { buildVodMeter, formatVodMeterLine } from "./vod-meter";
@@ -7201,7 +7201,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // ADAAAA-8321: how many replay windows this job attached as alternatives
         // (never their own highlights). Additive top-level field.
         replaysAttached: servedAlternatives.attached,
-        duplicateHighlights: postable.duplicates,
+        duplicateHighlights: postable.duplicates.map((d) => ({
+          ...d,
+          confirmation: noVerdictConfirmation("merged_duplicate"),
+        })),
         traces,
         sections: sectionList,
         maxTraces,
@@ -7362,7 +7365,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           postable.notableMoments.moments,
           alternativesByOwner
         ),
-        duplicateHighlights: postable.duplicates,
+        duplicateHighlights: postable.duplicates.map((d) => ({
+          ...d,
+          confirmation: noVerdictConfirmation("merged_duplicate"),
+        })),
         maxTraces: maxTracesForSource(job.source),
         summaryLadder,
       };

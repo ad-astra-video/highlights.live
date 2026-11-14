@@ -139,10 +139,15 @@ describe("AC3 — the highlight-row derivation IS the decide-note derivation", (
     expect(JSON.stringify(served)).not.toContain("corroborated");
   });
 
-  it("a row whose lane cannot be derived stays ABSENT (never invented)", () => {
+  it("a row whose lane cannot be derived STATES WHY instead of staying absent", () => {
     // A non-accepted row with no dive: `deriveConfirmation` returns undefined, so
     // a legacy/rejected row never states a lane the pipeline did not derive.
-    expect(confirmationForHighlightRow({ status: "rejected" })).toBeUndefined();
+    // ADAAAA-8965 (D4-live): it no longer ships SILENCE either — a row that never
+    // became a card names `not_promoted`, so the AC4.1 census cannot confuse it
+    // with a lost verdict. The lane still reads `unconfirmed` (nothing is invented).
+    const rejected = confirmationForHighlightRow({ status: "rejected" });
+    expect(rejected?.lane).toBe("unconfirmed");
+    expect(rejected?.skipReason).toBe("not_promoted");
     // ADAAAA-8678 (which landed after this file): a PENDING row is a publish
     // state, not a rejection, so it states its lane — worded as the approve
     // queue — instead of serving no block at all.
