@@ -55,6 +55,7 @@ from typing import Any, Mapping, NamedTuple, Optional, Sequence
 from .match_context import (
     _COLOR_BUCKETS,
     kit_prior_primary,
+    name_color,
     sample_scorebug_swatches,
 )
 
@@ -174,6 +175,67 @@ SURFACE_IDENTITY_KIT_DISTANCE_BARS: dict[str, float] = {
     "navy": 0.51,
     "red": 0.43,
     "pink": 0.20,
+}
+
+# ADAAAA-8975: a printed-name match is a CONJUNCT for prior-derived kit references.
+#
+# ADAAAA-8936 measured, on the shipped sampler/metric, that a red bar wide enough
+# for recall also CONTAINS every saturated foreign fill the reference space can
+# hand the red arm:
+#
+#   reference  genuine worst  bar (1.15x)  foreign fills inside that bar
+#   red        0.3667         0.43          orange 0.2479, pink 0.3134,
+#                                          gold 0.3699, yellow 0.4372
+#   pink       0.1714         0.20          purple 0.2323
+#
+# No bar value separates them: a genuine red plate reaches 0.3667 at the verified
+# ROI, and every fill above sits BELOW that, so widening or narrowing the number
+# cannot make a red reference reject an orange fill that sits inside its own bar.
+# The closure is the OTHER channel, and it only applies where the reference is a
+# curated prior — `kitReference == "prior"` (ADAAAA-8908) means the colour is a
+# reference for a team NAME, not a measurement of this match's kit; an OBSERVED
+# `kitColors` entry is a measurement, so the bar alone still corroborates it.
+#
+# What "inside the bar" means for a prior. The measured genuine populations are
+# DEFINED as readings whose own `name_color` sits in the reference's family
+# (ADAAAA-8936: "readings whose shipped `name_color` is in R's family on a side
+# whose own job declares R"). So the conjunct asks whether the SWATCH reads as the
+# reference's family:
+#
+#   * SAME family (the genuine-plate shape) -> the kit channel still corroborates
+#     on its own. That is the population every measured bar was derived from, and
+#     it is what keeps the three ADAAAA-8927 Barcelona frames `consistent`: their
+#     swatch reads `blue` while the OCR mangles the printed name into
+#     `BARSANT`/`BARAZENDA`, so a bare name conjunct would demote a genuine
+#     surface — the failure AC2.2 forbids. All 555 measured blue readings read
+#     blue by definition of the population, and the served census reads `BAR` on
+#     16/16 bursts.
+#   * DIFFERENT family (the foreign-fill shape) -> the fill is not this match's
+#     colour, it merely lands inside this family's loose bar. `consistent` now
+#     requires the printed name to match too. With names READ and unmatched the
+#     surface is `contradicted` — the named refusal, and the only verdict that
+#     withholds a score change; with names UNREAD it stays `absent`, because
+#     ADAAAA-8908's rule is not widened into a new recall path.
+#
+# Measured recall cost, not assumed: every genuine reading is same-family BY
+# CONSTRUCTION (the 555 blue / 15 red / 41 pink / 187 navy readings cannot move),
+# so the guard moves only foreign-fill rows — 118 of 1681 measured foreign
+# readings against `red`, 0 against `blue` (green 0.797, orange 0.651, pink 0.491,
+# white 0.492 are all outside 0.44). The served Barcelona arm (ADAAAA-8922: 16
+# bursts / 192 frames, 10 consistent / 6 absent / 0 contradicted) is unchanged.
+_KIT_REFERENCE_FAMILIES: dict[str, str] = {
+    "blue": "blue",
+    "navy": "blue",
+    "sky blue": "blue",
+    "red": "red",
+    "maroon": "red",
+    "orange": "orange",
+    "gold": "orange",
+    "yellow": "orange",
+    "white": "achromatic",
+    "grey": "achromatic",
+    "gray": "achromatic",
+    "black": "achromatic",
 }
 
 # AC2.4: the identity pass is a one-off per session, plus at most one re-read
@@ -390,6 +452,20 @@ class KitDistance(NamedTuple):
     ``best_source`` the reference source that produced it, ``best_bar`` the bar it
     was judged at. ``any_inside`` is true when ANY compared side sat inside ITS OWN
     reference's bar.
+
+    ADAAAA-8975 adds what those inside readings PROVE, because an inside reading
+    against a curated prior is not evidence on its own:
+
+    - ``inside_observed`` — an inside reading used the job's own `kitColors`
+      (a measurement), which corroborates the kit channel by itself.
+    - ``inside_prior_same_family`` — an inside reading used a curated prior AND the
+      swatch's own ``name_color`` sits in that prior's family: the genuine-plate
+      shape the measured bars were derived from.
+    - ``inside_prior_foreign`` — an inside reading used a curated prior but the
+      swatch reads as a DIFFERENT family (a saturated orange fill inside the red
+      bar). This is the shape the printed-name conjunct must reject.
+    - ``best_color`` — ``name_color`` of the swatch the reported distance came
+      from, published so the board and the served proof can name the fill.
     """
 
     best: Optional[float]
@@ -397,6 +473,31 @@ class KitDistance(NamedTuple):
     best_bar: Optional[float]
     any_inside: bool
     observed_used: bool
+    inside_observed: bool = False
+    inside_prior_same_family: bool = False
+    inside_prior_foreign: bool = False
+    best_color: Optional[str] = None
+
+    @property
+    def corroborated(self) -> bool:
+        """Whether the kit channel corroborated this match WITHOUT the name channel.
+
+        Observed kit colours always do; a curated prior does only when the swatch
+        reads as the prior's own colour family (ADAAAA-8975).
+        """
+        return self.inside_observed or self.inside_prior_same_family
+
+
+def kit_reference_family(name: Optional[str]) -> str:
+    """The colour FAMILY a kit reference name belongs to (ADAAAA-8975).
+
+    The grouping is the one ADAAAA-8936 measured the genuine populations in —
+    ``blue/navy/sky blue``, ``red/maroon``, ``orange/gold/yellow``, achromatic — so
+    "the swatch reads as this reference's family" is exactly the condition the
+    measured recall floors were taken under. An unlisted name is its own family.
+    """
+    key = str(name or "").strip().lower()
+    return _KIT_REFERENCE_FAMILIES.get(key, key)
 
 
 def _side_kit_distance(
@@ -417,12 +518,20 @@ def _side_kit_distance(
     ``bar`` replaces the table for EVERY reference — that is the pre-8952 one-bar
     behaviour a caller passing ``threshold`` expects, and it must not silently
     keep per-family bars for the names the table happens to carry.
+
+    ADAAAA-8975 records WHICH KIND of evidence each inside reading is
+    (``corroborated``), so the verdict can require a printed name when the only
+    inside reading is a prior whose swatch is a different colour family.
     """
     best: Optional[float] = None
     best_source: Optional[str] = None
     best_bar: Optional[float] = None
+    best_color: Optional[str] = None
     any_inside = False
     observed_used = False
+    inside_observed = False
+    inside_prior_same_family = False
+    inside_prior_foreign = False
     by_side = {str((t or {}).get("side") or ""): t for t in teams or []}
     for side, colour in sides.items():
         team = by_side.get(side)
@@ -433,6 +542,7 @@ def _side_kit_distance(
             continue
         if source == "observed":
             observed_used = True
+        swatch_color = name_color(colour)
         for name, ref in refs:
             d = chroma_distance(colour, ref)
             ref_bar = bar if bar is not None else kit_distance_bar(name)
@@ -440,9 +550,26 @@ def _side_kit_distance(
                 best = d
                 best_source = source
                 best_bar = ref_bar
+                best_color = swatch_color
             if d <= ref_bar:
                 any_inside = True
-    return KitDistance(best, best_source, best_bar, any_inside, observed_used)
+                if source == "observed":
+                    inside_observed = True
+                elif kit_reference_family(swatch_color) == kit_reference_family(name):
+                    inside_prior_same_family = True
+                else:
+                    inside_prior_foreign = True
+    return KitDistance(
+        best,
+        best_source,
+        best_bar,
+        any_inside,
+        observed_used,
+        inside_observed,
+        inside_prior_same_family,
+        inside_prior_foreign,
+        best_color,
+    )
 
 
 
@@ -495,6 +622,15 @@ def derive_surface_identity(
     ``none`` is the explicit statement that no pass of this surface measured a
     swatch at all. The rule below never reads them: ``contradicted`` stays
     ``kits_differ AND not names_match``, whatever the provenance.
+
+    ADAAAA-8975 makes the printed-name channel a CONJUNCT for PRIOR-derived kit
+    references: a swatch inside a curated prior's bar corroborates the surface only
+    when it reads as that prior's colour family. A foreign-family fill inside the
+    bar (saturated orange inside the red bar) is not evidence on its own, so
+    ``consistent`` there needs a printed-name match; read-and-unmatched names make
+    it ``contradicted`` (the named refusal), unread names leave it ``absent``.
+    Observed ``kitColors`` references are untouched — a measured colour is this
+    match's kit, so the bar alone still corroborates it.
     """
     kits = dict(reading.get("kits") or {})
     names = list(reading.get("names") or [])
@@ -504,15 +640,21 @@ def derive_surface_identity(
     kits_present = bool(kits) and distance is not None
     kits_differ = bool(kits_present) and not kit.any_inside
     names_match = bool(matched)
+    # ADAAAA-8975: the only inside reading was a PRIOR whose swatch reads as a
+    # different colour family -> the kit channel did NOT corroborate this match.
+    prior_fill_refused = bool(kits_present) and not kit.corroborated
     # ADAAAA-8908: a CURATED reference (no observed kit colour on the job) is not a
     # measurement of this match's kit, so the kit channel alone may not contradict.
     # When every compared side used the prior, the printed names must have been
     # READ and unmatched — absence of a reading stays `absent` (the shipped rule's
     # "absence is not contradiction"), and no new recall path is created.
     names_unread_on_prior = reference == "prior" and not kit.observed_used and not names
-    if kits_differ and not names_match and not names_unread_on_prior:
+    kit_disagrees = kits_differ or prior_fill_refused
+    if names_match:
+        verdict = "consistent"
+    elif kit_disagrees and not names_unread_on_prior:
         verdict = "contradicted"
-    elif kit.any_inside or names_match:
+    elif kit.any_inside and not prior_fill_refused:
         verdict = "consistent"
     else:
         verdict = "absent"
@@ -523,6 +665,12 @@ def derive_surface_identity(
         "kitsPresent": bool(kits),
         "kitsDiffer": bool(kits_differ),
         "kitReference": reference,
+        # ADAAAA-8975: the additive proof the conjunct reads — whether the kit
+        # channel corroborated on its own, why not, and which colour the fill
+        # actually reads (published so a served record names the fill).
+        "kitCorroborated": bool(kit.corroborated),
+        "kitNameRefused": bool(prior_fill_refused),
+        "kitFillColor": kit.best_color if kits_present else None,
         "namesMatch": bool(names_match),
         "namesMatched": matched,
         "names": names[:_MAX_TOKENS],
@@ -541,11 +689,17 @@ def demotion_note(identity: Optional[dict[str, Any]]) -> str:
     """The operator-facing reason a score change did not attest (scope item 5).
 
     Names the measurement, not just the outcome, so the board can see WHY a
-    window was not accepted without a replay.
+    window was not accepted without a replay. ADAAAA-8975 adds the prior-name
+    refusal: the swatch is INSIDE the bar, so quoting "Δ > bar" would be a lie —
+    the note names the fill colour and the prior it matched instead.
     """
     if not identity or identity.get("verdict") != "contradicted":
         return ""
     d = identity.get("kitDistance")
-    kit = f"kits Δ={d:.2f} > {identity.get('threshold')}" if d is not None else "kits differ"
+    if identity.get("kitsDiffer") is False and identity.get("kitNameRefused"):
+        fill = identity.get("kitFillColor") or "another colour"
+        kit = f"swatch reads {fill}, not the prior's colour; Δ={'?' if d is None else f'{d:.2f}'} is inside {identity.get('threshold')}"
+    else:
+        kit = f"kits Δ={d:.2f} > {identity.get('threshold')}" if d is not None else "kits differ"
     names = ", ".join(identity.get("namesMatched") or []) or ", ".join(identity.get("names") or [])
     return f"score change on a contradicted score surface: ignored ({kit}; printed names {names or 'none'} unmatched)"
