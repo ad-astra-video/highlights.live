@@ -50,6 +50,7 @@ import {
   type StagedObserveDecide,
   type TriggerFamilyLatency,
 } from "./observe-loop";
+import type { AsrPrefetchResult } from "./asr-prefetch";
 import { decideStageRecorder } from "./decide-stage-timings";
 import {
   LiveRunShared,
@@ -222,6 +223,20 @@ export interface MediaRailObserverOptions {
   /** ADAAAA-7987: `OBSERVE_DECIDE_OFFLOOP=0` keeps the serial in-chain decide at
    *  depth 1 — byte-identical to the pre-7987 media rail. Default ON. */
   observeDecideOffLoop?: boolean;
+  /** ADAAAA-9049: the fire-time ASR side lane (see `AsrPrefetcher`). Built by
+   *  `buildLiveAsrPrefetchLane` so this rail runs the SAME lane as the analyzer
+   *  live pass.
+   *
+   *  Before this the rail was constructed without it, so `LiveObserver` had no
+   *  hook and EVERY window on a browser/screen share decided with inline ASR:
+   *  natural job `771f42de` reported `asrLane: "inline"` / `asrPrefetchMs: 0` on
+   *  all 14 promoted cards and `timings.asrSource: "inline"` on 819/819
+   *  `decide_audit` rows, while `ASR_URL` + `LIVE_DECIDE_ASR_PREFETCH=1` were
+   *  set and the file-sim rail (`d46c3788`) reported `prefetched` on 16/16. */
+  prefetchAsr?: (payload: ObserveDecidePayload) => Promise<AsrPrefetchResult | null> | null;
+  /** ADAAAA-9049: true when the lane is deliberately off
+   *  (`LIVE_DECIDE_ASR_PREFETCH=0`), so a skip line reads `lane-disabled`. */
+  asrLaneOff?: boolean;
 }
 
 /** Build the per-frame seed context handed to the decide window from one
@@ -529,6 +544,15 @@ export class MediaRailObserver {
       // slot as the rtmp/file-sim rail, so a screen share can never interleave
       // decides with another live job and stretch both past the budget.
       canDecide: () => liveDecideAdmission.admit(this.jobId),
+      // ADAAAA-9049: wire the ASR side lane HERE too. The analyzer live pass
+      // always had it; this rail never did, so every browser share transcribed
+      // inside each decide call instead of in the side lane. `prefetchAsr`
+      // carries `lane-unwired` reporting for a rail that has none, and `jobId`
+      // names it in the `[live-asr-skip:<job>]` line.
+      jobId: this.jobId,
+      ...(opts.prefetchAsr
+        ? { prefetchAsr: opts.prefetchAsr }
+        : { asrLaneOff: opts.asrLaneOff === true }),
     });
     // ADAAAA-8807: name a supply stall instead of going silent. The share keeps
     // `active` and its SERVED clock keeps running (that is the billing basis),

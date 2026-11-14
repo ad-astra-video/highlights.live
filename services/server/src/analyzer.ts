@@ -114,7 +114,7 @@ import {
 import type { TriggerFamilyLatency } from "./observe-loop";
 // ADAAAA-8081: the live ASR side lane (fire-time prefetch) + the observer's
 // non-enumerable payload key that carries its promise to the decide builder.
-import { AsrPrefetcher, type AsrPrefetchResult } from "./asr-prefetch";
+import { AsrPrefetcher, asrPrefetchSkipReason, formatAsrSkipLine, type AsrPrefetchResult } from "./asr-prefetch";
 import { ASR_PREFETCH, ASR_STAGE } from "./observe-loop";
 import { isStageBTrigger, triggerFamily, type WhistleFireBlock } from "./audio-trigger";
 import { isGoalRefutingReason } from "./highlight-postable";
@@ -9443,6 +9443,60 @@ export function windowAudioSlice(
   return { audioB64, levels, preS, postS };
 }
 
+/**
+ * ADAAAA-9049: build one live rail's ASR side lane (prefetcher + the fire-time
+ * hook), so BOTH rails wire the SAME lane from the SAME code.
+ *
+ * The analyzer live pass has always wired this; the browser/media rail
+ * (`MediaRailObserver`, constructed in `api.ts`) never did — it built its
+ * `LiveObserver` without `prefetchAsr` — so every natural browser share decided
+ * with INLINE ASR: job `771f42de` reported `asrLane: "inline"` /
+ * `asrPrefetchMs: 0` on 14/14 promoted cards and `timings.asrSource: "inline"`
+ * on 819/819 `decide_audit` rows (521 s of transcription inside the decide
+ * call) while `ASR_URL` and `LIVE_DECIDE_ASR_PREFETCH=1` were set on the box.
+ * That is the ADAAAA-8065/8074/8102/8431 class: a knob fed one rail while the
+ * shipped rail kept the default. A 100 %-uniform `inline` census is the shape of
+ * a lane that never started, not of an intermittently-empty audio slice.
+ *
+ * Every refusal emits ONE `[live-asr-skip:<job>] ... reason=...` line naming
+ * `no-asr-url` or `empty-slice`, and a rail that was never handed the hook
+ * reports `lane-unwired` from the observer, so "why is this job inline?" is
+ * answerable from `docker logs`.
+ *
+ * Returns null when the lane is configured OFF (`LIVE_DECIDE_ASR_PREFETCH=0`):
+ * the decide request is then byte-identical to the pre-8081 one.
+ */
+export function buildLiveAsrPrefetchLane(
+  cfg: AnalyzerConfig,
+  run: LiveRunShared
+): {
+  prefetcher: AsrPrefetcher;
+  prefetchAsr: (payload: ObserveDecidePayload) => Promise<AsrPrefetchResult | null> | null;
+} | null {
+  if (cfg.decideAsrPrefetch === false) return null;
+  const prefetcher = new AsrPrefetcher({
+    asrUrl: cfg.asrUrl,
+    timeoutMs: cfg.decideAsrPrefetchTimeoutMs,
+    // ADAAAA-8300: the lane's in-flight budget is a config value now; the
+    // prefetcher's own default (2) is unchanged when it is unset.
+    maxConcurrent: cfg.decideAsrPrefetchConcurrency,
+  });
+  return {
+    prefetcher,
+    prefetchAsr: (payload: ObserveDecidePayload) => {
+      // The clip is the SAME slice the decide payload carries
+      // (`windowAudioSlice`), so the transcript can never be of another span.
+      const slice = windowAudioSlice(cfg, run, payload);
+      const started = prefetcher.start(slice.audioB64);
+      if (!started) {
+        const reason = asrPrefetchSkipReason({ enabled: prefetcher.enabled, clipB64: slice.audioB64 });
+        if (reason) console.error(formatAsrSkipLine(cfg.jobId, payload.centerTs, reason));
+      }
+      return started;
+    },
+  };
+}
+
 /** Build the decide() evidence + opts for an observe window. The temporal
  * window frames + the perceive-seeded per-frame context are the primary
  * evidence; candidate triggers inside the window are folded as bias hints
@@ -11984,16 +12038,9 @@ export async function analyzeJob(
   // flight, so a re-decide of the same window (recall / confirm) reuses one
   // transcription. Undefined => no side lane and the decide service keeps its
   // inline ASR (byte-identical pre-8081 request).
-  const asrPrefetcher =
-    cfg.decideAsrPrefetch === false
-      ? null
-      : new AsrPrefetcher({
-          asrUrl: cfg.asrUrl,
-          timeoutMs: cfg.decideAsrPrefetchTimeoutMs,
-          // ADAAAA-8300: the lane's in-flight budget is a config value now; the
-          // prefetcher's own default (2) is unchanged when it is unset.
-          maxConcurrent: cfg.decideAsrPrefetchConcurrency,
-        });
+  // ADAAAA-9049: built by the shared factory, so the browser rail wires the
+  // SAME lane instead of silently deciding with inline ASR.
+  const asrLane = buildLiveAsrPrefetchLane(cfg, run);
   // ADAAAA-8425: the decide-capacity drop hook. The decide closures below are
   // built INSIDE the LiveObserver options (before the observer binding exists),
   // so they report a capacity drop through this indirection; it is bound the
@@ -12015,12 +12062,12 @@ export async function analyzeJob(
           // side lane, so it overlaps the decide already in flight instead of
           // serialising ahead of gemma inside the call. The clip is the SAME
           // slice the payload carries (`windowAudioSlice`).
-          ...(asrPrefetcher
-            ? {
-                prefetchAsr: (payload: ObserveDecidePayload) =>
-                  asrPrefetcher.start(windowAudioSlice(cfg, run, payload).audioB64),
-              }
-            : {}),
+          // ADAAAA-9049: the lane also names every skip (`no-asr-url` /
+          // `empty-slice`) and carries this rail's job id for the line.
+          jobId: cfg.jobId,
+          ...(asrLane
+            ? { prefetchAsr: asrLane.prefetchAsr }
+            : { asrLaneOff: cfg.decideAsrPrefetch === false }),
           stageA: run.stageAOutcomes,
           // ADAAAA-7707: the whistle family gets its own verdict ledger, so a
           // judged whistle window never lands in the Stage-A FP-rate.

@@ -25,6 +25,7 @@ import {
   highlightDedupKey,
   observeOnDecide,
   observeDecideOnly,
+  buildLiveAsrPrefetchLane,
   observeAcceptOnly,
   shapeMatchContextTeams,
   type AnalyzeEvent,
@@ -2984,6 +2985,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // the posture it priced (`cadenceSec` + `rateCapPer300s`); a record without a
     // stamp keeps the deploy-time cadence and fraction.
     const decideKnob = store.getJob(job.id)?.decideKnob;
+    // ADAAAA-9049: the ASR side lane on the BROWSER rail. Before this the rail
+    // was built without `prefetchAsr`, so `LiveObserver` had no hook and every
+    // natural browser share transcribed INSIDE each decide call: job `771f42de`
+    // reported `asrLane: "inline"` on 834/834 rows (521 s of ASR inside 819
+    // decide calls) while `ASR_URL` + `LIVE_DECIDE_ASR_PREFETCH=1` were set and
+    // the file-sim rail reported `prefetched`. Built by the shared factory, so
+    // this rail runs the same lane (and the same `[live-asr-skip:<job>]` line).
+    const asrLane = buildLiveAsrPrefetchLane(anaCfg, shared);
     const rail = new MediaRailObserver(
       {
         jobId: job.id,
@@ -3106,6 +3115,13 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         // exists: a browser share recorded no capacity posture at all).
         decideCapacityLatch: latchDecideCapacityAtStart(adapter),
         observeDecideOffLoop: cfg.observeDecideOffLoop,
+        // ADAAAA-9049: the fire-time ASR lane on this rail (see
+        // `buildLiveAsrPrefetchLane`). `asrLaneOff` only marks the deliberate
+        // `LIVE_DECIDE_ASR_PREFETCH=0` posture, so the skip line can tell a
+        // disabled lane from an unwired rail.
+        ...(asrLane
+          ? { prefetchAsr: asrLane.prefetchAsr }
+          : { asrLaneOff: anaCfg.decideAsrPrefetch === false }),
         // ADAAAA-8807: name a dead decide-supply lane on this share's log + its
         // record instead of leaving the cadence silently at zero. `<= 0` disables.
         supplyStallS: cfg.liveSupplyStallS,
