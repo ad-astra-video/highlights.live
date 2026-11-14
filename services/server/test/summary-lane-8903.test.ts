@@ -16,6 +16,11 @@
 // §15.4: both rows stored `summaryDroppedByReason: {gate: 1}` only, an aggregate
 // counter, so a `too-few-words` (depth-threshold) refusal could not be told from
 // a `too-few-facts` / `ungrounded-name` (compliance) refusal without a replay.
+//
+// ADAAAA-8941 (defect 1) SUPERSEDES this ticket's resolution: the sustained-play
+// credit below is refused on a row that measured no ball outcome, so these two
+// census rows are dry rather than served. The §15.4 half of this file (the
+// per-row refusal detail) is unaffected and still graded.
 import { describe, expect, it } from "vitest";
 import {
   SUMMARY_LIVE_BAND,
@@ -126,37 +131,47 @@ const cfg = (over: Record<string, unknown> = {}) => ({
 });
 
 // ---------------------------------------------------------------------------
-// 1. AC1-live falsifier: the two census bodies must SERVE, not refuse.
+// 1. AC1-live: the two census bodies are ATMOSPHERE, not facts.
+//
+// ADAAAA-8941 (defect 1, AC14.1/AC14.2) supersedes this ticket's resolution.
+// The live leg `e4c2fe29` served exactly this shape on 3 of 3 accepted rows —
+// "Barcelona maintains possession … the team continues their sustained play" —
+// and the rev-8 grade read it as filler, because a row that recorded no ball
+// outcome (`attestation.ballOutcome: null`) measured no possession, no pressure
+// and no ball-forward. AC14 credits an **attested** actor action, so the
+// sustained-play vocabulary is refused on those rows (`sustainedFactUnattested`).
+//
+// The row is therefore DRY, and that is the honest outcome: the lane may not
+// serve a body whose only fact is the clock. What stays asserted here is the
+// instrument's side — the row's fact MENU still offers `clock` + `action` (an
+// attested name exists), so the lane still asks for two kinds; the gate simply
+// may not invent one.
 // ---------------------------------------------------------------------------
-describe("ADAAAA-8903 — the two census replies serve instead of a bare card", () => {
-  it("credits sustained play as the row's second fact kind (row c3257097)", () => {
+describe("ADAAAA-8903 / ADAAAA-8941 — sustained play is not a fact on a no-outcome row", () => {
+  it("refuses sustained play as a fact kind (row c3257097)", () => {
     const evidence = evidenceFor(ROW_C3257097);
     // The row's own menu offers two kinds — eligibility is the instrument's rule.
     expect(attestedFactKinds(evidence).length).toBeGreaterThanOrEqual(SUMMARY_MIN_FACT_KINDS);
     expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
-    // The body relays BOTH: the anchored clock and Barcelona's sustained action.
-    expect(summaryFacts(STORED_RAW_C3257097).map((f) => f.kind)).toEqual(expect.arrayContaining(["clock", "action"]));
-    expect(attestedSummaryFactKinds(STORED_RAW_C3257097, evidence)).toEqual(
-      expect.arrayContaining(["clock", "action"])
-    );
+    // But the BODY cannot earn `action` from possession vocabulary: `summaryFacts`
+    // sees it, the attestation filter does not credit it.
+    expect(summaryFacts(STORED_RAW_C3257097).map((f) => f.kind)).toEqual(expect.arrayContaining(["action"]));
+    expect(attestedSummaryFactKinds(STORED_RAW_C3257097, evidence)).toEqual(["clock"]);
     const decision = gateSummaryDetail(STORED_RAW_C3257097, evidence);
-    // The falsifier at base: `summary: null`, `violations: ["too-few-facts"]`.
-    expect(decision.violations).toEqual([]);
-    expect(decision.summary).toBe(STORED_RAW_C3257097);
+    expect(decision.summary).toBeNull();
+    expect(decision.violations).toEqual(expect.arrayContaining(["unattested-sentence", "too-few-facts"]));
   });
 
-  it("credits sustained play as the row's second fact kind (row eaf1da9f)", () => {
+  it("refuses sustained play as a fact kind (row eaf1da9f)", () => {
     const evidence = evidenceFor(ROW_EAF1DA9F);
     expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
-    expect(attestedSummaryFactKinds(STORED_RAW_EAF1DA9F, evidence)).toEqual(
-      expect.arrayContaining(["clock", "action"])
-    );
+    expect(attestedSummaryFactKinds(STORED_RAW_EAF1DA9F, evidence)).toEqual(["clock"]);
     const decision = gateSummaryDetail(STORED_RAW_EAF1DA9F, evidence);
-    expect(decision.violations).toEqual([]);
-    expect(decision.summary).toBe(STORED_RAW_EAF1DA9F);
+    expect(decision.summary).toBeNull();
+    expect(decision.violations).toEqual(expect.arrayContaining(["unattested-sentence", "too-few-facts"]));
   });
 
-  it("serves on the FIRST call — the row no longer burns the retry slot", async () => {
+  it("serves nothing on the row, keeps the raw, and never stores a bare clock card", async () => {
     const { store, patches } = stubStore();
     const f = stubFetch([STORED_RAW_C3257097]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
@@ -164,11 +179,14 @@ describe("ADAAAA-8903 — the two census replies serve instead of a bare card", 
       highlightId: ROW_C3257097.id,
       evidence: evidenceFor(ROW_C3257097),
     });
-    expect(result.outcome).toBe("stored");
-    expect(f.calls()).toBe(1);
-    expect(result.calls).toBe(1);
-    expect(patches.at(-1)?.patch.summary).toBe(STORED_RAW_C3257097);
-    expect(patches.at(-1)?.patch.summaryDropped).toBe(0);
+    // The menu names two kinds, so the refusal is repairable and earns the one
+    // regeneration — but the same filler cannot clear it, so the row serves no copy.
+    expect(result.outcome).toBe("dropped");
+    expect(f.calls()).toBe(2);
+    const patch = patches.at(-1)?.patch as Record<string, unknown>;
+    expect(patch.summary).toBeUndefined();
+    expect(patch.summaryRaw).toBe(STORED_RAW_C3257097);
+    expect(patch.summaryGate).toMatch(/^dropped:/);
   });
 
   it("does not open the ball-outcome lane the prompt closes", () => {

@@ -60,10 +60,6 @@ const SAME_OPENING_B =
  *  "the midfielder" subject, and the repeat guard compares served openings. */
 const NEUTRALISED_A =
   "The move drives forward for Northbridge at 0:12 as the move builds through midfield. Northbridge keeps possession as the move builds on the left.";
-/** The SERVED form of `SAME_OPENING_B`: same AC10 neutralisation of the
- *  unattested "the midfielder" subject. */
-const NEUTRALISED_B =
-  "The move drives forward for Northbridge at 0:12 and the move opens up on the left. Northbridge keeps possession as the move opens up.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT_OPENING =
   "A low shot from the edge of the box is blocked by Northbridge at 0:12. Northbridge recycles the ball and switches play to the left.";
@@ -143,11 +139,11 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
     expect(f.seen[2].prompt).toContain("'the move drives forward'");
   });
 
-  it("serves a shared opening on a DIFFERENT instant (defect 3 — a template is not a repeat)", async () => {
-    // ADAAAA-8969 (increment 2, defect 3): a shared opening run is a TEMPLATE, not
-    // a repeat. Two promotions on different windows serve, and the prompt asked
-    // the second one not to reuse the opening (prompt-first), so no retry is
-    // spent: the guard is a backstop, not a gate on legitimate coverage.
+  it("keeps AC8 on a DIFFERENT instant: a shared opening is regenerated once, then the distinct body serves", async () => {
+    // ADAAAA-8941 (integration repair): AC8 is graded on the served COPY within
+    // one job, with no instant exception — two cards that open the same way read
+    // the same however far apart their windows are. So the shared opening spends
+    // the one regeneration (the prompt names it) and the distinct body serves.
     const { store, patches } = stubStore();
     const state = newSummaryJobState();
     const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B), ok(DISTINCT_OPENING)]);
@@ -160,16 +156,14 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
       state
     );
     expect(second.outcome).toBe("stored");
-    expect(second.calls).toBe(1);
-    // The served form is the AC10-neutralised body (the unattested "the
-    // midfielder" subject is dropped before storage).
-    expect(patches[1].patch.summary).toBe(NEUTRALISED_B);
-    // AC10 neutralised the unattested subject, and the gate names that.
-    expect(patches[1].patch.summaryGate).toBe("neutralised");
-    // The prompt still asked it to avoid the served opening.
-    expect(f.seen[1].prompt).toContain("'the move drives forward'");
-    // The job holds the one opening both bodies used.
-    expect([...state.servedOpenings]).toEqual(["the move drives forward"]);
+    expect(second.calls).toBe(2);
+    // The regenerated body is the one that served, not the repeated opening.
+    expect(patches[1].patch.summary).toBe(DISTINCT_OPENING);
+    expect(summaryOpeningRun(String(patches[1].patch.summary))).toBe("a low shot from");
+    // The prompt asked the regeneration not to reuse the served opening.
+    expect(f.seen[2].prompt).toContain("'the move drives forward'");
+    // The job holds both served openings; neither repeats.
+    expect([...state.servedOpenings].sort()).toEqual(["a low shot from", "the move drives forward"]);
   });
 
   it("serves a regeneration that lands on a different opening (same instant)", async () => {
@@ -179,11 +173,11 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
     const run = cfg({ fetchImpl: f.fn });
     await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: evidence() }, state);
     const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: evidence() }, state);
-    // Same window => same moment: one regeneration is allowed, but the window is
-    // already carried, so even a differently-worded body is dropped as a repeat.
-    expect(second.outcome).toBe("dropped");
-    expect(second.reason).toBe("repeat");
+    // AC8: the shared opening spends the one regeneration; the distinct body then
+    // serves. The instant plays no part — the bars are on the served copy.
+    expect(second.outcome).toBe("stored");
     expect(second.calls).toBe(2);
+    expect(patches[1].patch.summary).toBe(DISTINCT_OPENING);
   });
 
   it("is JOB-scoped: a different job may reuse the same opening", async () => {

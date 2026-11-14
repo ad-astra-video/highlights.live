@@ -13,7 +13,7 @@
 //     the vocabulary that caused them and the surviving word count on the row
 //     (§15.4 fields), and the row still bills at most two calls.
 import { describe, expect, it } from "vitest";
-import { SUMMARY_FEE_RATIO, SUMMARY_VOD_BAND } from "@highlights/events";
+import { SUMMARY_FEE_RATIO, SUMMARY_VOD_BAND, summaryOpeningRun } from "@highlights/events";
 import {
   newSummaryJobState,
   runSummaryForRow,
@@ -80,11 +80,49 @@ const ROW_5322 = {
   deferredAttestation: { scoreboardDelta: { from: "2-1", to: "2-2" } },
 };
 
+/** Live row `7b210c4d`: GOAL 2-2 -> 2-3, same job, window 257 s, match clock 25:40. */
+const ROW_7B21 = {
+  ...ROW_AED6,
+  id: "7b210c4d",
+  start: 257,
+  end: 272,
+  caption: "Scoreboard changes to 2-3.",
+  trigger: { timestamp: 257, durationS: 15 },
+  matchClock: { token: "25:40", seconds: 1540, shape: "mm:ss", period: null, legible: true, ts: 264 },
+  reason: "Scoreboard changes from 2-2 to 2-3; scoreboard score change confirmed",
+  deferredAttestation: { scoreboardDelta: { from: "2-2", to: "2-3" } },
+};
+
 const evidenceFor = (row: Record<string, unknown>, rail: "live" | "vod") =>
   summaryEvidenceForRow({ ...(row as any), matchContext: MATCH_CONTEXT }, rail, null);
 
-const FACT_BODY_AED6 =
-  "The scoreboard moves to 2-1 at the 1:35 mark of this clip. Real Madrid keeps possession and works the ball forward through midfield near the box.";
+/** A body the job already served, in the shape the repeat key reads. */
+const servedBodyOf = (row: Record<string, unknown>, body: string) => ({
+  highlightId: String(row.id),
+  windowTs: Number(row.start),
+  windowDurationS: 15,
+  clockToken: (row.matchClock as any)?.token ?? null,
+  body,
+  opening: summaryOpeningRun(body),
+});
+
+// ADAAAA-8941 (defect 1, AC14.1): the old live fixture body led with the clip
+// OFFSET ("at the 1:35 mark of this clip") and its second sentence was pure
+// possession ("keeps possession and works the ball forward through midfield").
+// Both are refused on a row that measured no ball outcome: the offset is not the
+// row's attested match clock (defect 2), and possession is atmosphere, not an
+// attested action. Each sentence below carries a fact the row's own evidence
+// attests — the score CHANGE (2-1 -> 2-2, from `deferredAttestation`) and the
+// match clock `22:19` — plus one attested-actor action sentence.
+const FACT_BODY_LIVE =
+  "The scoreboard changes from 2-1 to 2-2 at the 22:19 mark of the match. Barcelona turns the play over near the byline and drives the ball up the touchline.";
+/** The same shape on the sibling row `7b210c4d` (2-2 -> 2-3, clock `25:40`). */
+const FACT_BODY_7B21 =
+  "The scoreboard changes from 2-2 to 2-3 at the 25:40 mark of the match. Barcelona turns the play over near the byline and drives the ball up the touchline.";
+/** The one sentence the two live bodies share verbatim — an AC14.3 repeat. */
+const SHARED_ACTION_SENTENCE = "Barcelona turns the play over near the byline and drives the ball up the touchline.";
+/** A distinct action sentence: clears the gate, repeats nothing served. */
+const DISTINCT_ACTION_SENTENCE = "Barcelona turns the play over on the far side and drives the ball through the box.";
 
 const FILLER_VOD =
   "Barcelona finds the equalizer to level the score at 2-2. The crowd erupts in celebration as the team secures a vital point in this intense match. This scoring play shifts the momentum during the game. The atmosphere in the stadium is electric following this dramatic turn of events.";
@@ -128,7 +166,7 @@ describe("ADAAAA-8914 AC14.4 — the attested match clock is offered, and only i
   it("carries the row's matchClock token into the evidence and the prompt", () => {
     const evidence = evidenceFor(ROW_AED6, "live");
     expect(evidence.matchClock).toMatchObject({ token: "18:13", seconds: 1093, legible: true });
-    const f = stubFetch([FACT_BODY_AED6]);
+    const f = stubFetch([FACT_BODY_LIVE]);
     return runSummaryForRow(stubStore().store, cfg({ fetchImpl: f.fn }), {
       jobId: "9bed3bd7",
       highlightId: ROW_AED6.id,
@@ -158,43 +196,44 @@ describe("ADAAAA-8914 AC14.4 — the attested match clock is offered, and only i
 describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice", () => {
   it("shows the job's served sentences on the next row's prompt", async () => {
     const state = newSummaryJobState();
-    const first = stubFetch([FACT_BODY_AED6]);
+    const first = stubFetch([FACT_BODY_LIVE]);
     const stored = await runSummaryForRow(
       stubStore().store,
       cfg({ fetchImpl: first.fn }),
-      { jobId: "9bed3bd7", highlightId: ROW_AED6.id, evidence: evidenceFor(ROW_AED6, "live") },
+      { jobId: "9bed3bd7", highlightId: ROW_DC96.id, evidence: evidenceFor(ROW_DC96, "live") },
       state
     );
     expect(stored.outcome).toBe("stored");
     expect(state.servedSentences.length).toBe(2);
 
-    const second = stubFetch([FACT_BODY_AED6]);
+    const second = stubFetch([FACT_BODY_7B21]);
     await runSummaryForRow(
       stubStore().store,
       cfg({ fetchImpl: second.fn }),
-      { jobId: "9bed3bd7", highlightId: ROW_DC96.id, evidence: evidenceFor(ROW_DC96, "live") },
+      { jobId: "9bed3bd7", highlightId: ROW_7B21.id, evidence: evidenceFor(ROW_7B21, "live") },
       state
     );
     // The prompt NAMES the sentence the previous card already served.
     expect(second.prompts[0]).toContain("Do not reuse a sentence already served on another card in this job");
-    expect(second.prompts[0]).toContain("The scoreboard moves to 2-1 at the 1:35 mark of this clip.");
+    expect(second.prompts[0]).toContain(SHARED_ACTION_SENTENCE);
   });
 
   it("regenerates once with the repeat named, then drops `repeat`", async () => {
     const state = newSummaryJobState();
-    // The previous card served this (factual) sentence; the next row's reply
-    // reuses it, which is the AC14.3 defect one level below the template.
-    const servedSentence = "Real Madrid keeps possession and works the ball forward through midfield near the box.";
-    state.servedSentences.push(servedSentence);
-    const repeated = `The scoreboard moves to 2-2 at the 2:35 mark of this clip. ${servedSentence}`;
+    // The previous CARD served this (attested-action) sentence; the next row's
+    // reply reuses it, which is the AC14.3 defect one level below the template.
+    state.servedSentences.push(SHARED_ACTION_SENTENCE);
+    state.servedBodies.push(servedBodyOf(ROW_DC96, FACT_BODY_LIVE));
     const { store, patches } = stubStore();
-    const f = stubFetch([repeated, repeated]);
+    const f = stubFetch([FACT_BODY_7B21, FACT_BODY_7B21]);
     const result = await runSummaryForRow(
       store,
       cfg({ fetchImpl: f.fn }),
-      { jobId: "9bed3bd7", highlightId: ROW_DC96.id, evidence: evidenceFor(ROW_DC96, "live") },
+      { jobId: "9bed3bd7", highlightId: ROW_7B21.id, evidence: evidenceFor(ROW_7B21, "live") },
       state
     );
+    // ADAAAA-8941: the first sample CLEARS the gate (score + clock + attested
+    // action), so the drop is the repeat key's, not the filler lane's.
     expect(result.outcome).toBe("dropped");
     expect(result.reason).toBe("repeat");
     expect(result.calls).toBe(2); // one regeneration, never a third call
@@ -203,17 +242,19 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
     expect(last.summaryGate).toBe("dropped:repeat");
     expect(last.summaryDroppedByReason).toEqual({ repeat: 1 });
     // The repeated sentence never joins the job's served set.
-    expect(state.servedSentences).toEqual([servedSentence]);
+    expect(state.servedSentences).toEqual([SHARED_ACTION_SENTENCE]);
   });
 
   it("serves a body that repeats nothing", async () => {
     const state = newSummaryJobState();
-    state.servedSentences.push(...["Barcelona presses high to force a turnover near the wing."]);
-    const f = stubFetch([FACT_BODY_AED6]);
+    state.servedSentences.push(SHARED_ACTION_SENTENCE);
+    const f = stubFetch([
+      `The scoreboard changes from 2-1 to 2-2 at the 22:19 mark of the match. ${DISTINCT_ACTION_SENTENCE}`,
+    ]);
     const result = await runSummaryForRow(
       stubStore().store,
       cfg({ fetchImpl: f.fn }),
-      { jobId: "9bed3bd7", highlightId: ROW_AED6.id, evidence: evidenceFor(ROW_AED6, "live") },
+      { jobId: "9bed3bd7", highlightId: ROW_DC96.id, evidence: evidenceFor(ROW_DC96, "live") },
       state
     );
     expect(result.outcome).toBe("stored");
@@ -252,11 +293,14 @@ describe("ADAAAA-8914 AC14.5 — a filler reply drops as `filler`, cheaply", () 
   });
 
   it("serves the second sample when the retry repairs the clause", async () => {
+    // ADAAAA-8941 (defect 2): the repaired sample now anchors the row's own clip
+    // offset (`1:24`) and carries the attested score CHANGE in every sentence, so
+    // it clears the gate byte-for-byte (the old sample's "works the ball forward"
+    // and "recycles the ball" tails were possession filler and are refused).
     const repaired =
-      "Barcelona works the ball forward as the scoreboard changes from 2-1 to 2-2 at the 1:24 mark of the clip. " +
-      "Barcelona presses high to force a turnover near the byline. " +
-      "Real Madrid recycles the ball through midfield and looks to break forward. " +
-      "The scoreboard holds at 2-2 as the clip runs past 1:24.";
+      "The scoreboard changes from 2-1 to 2-2 at the 1:24 mark of the clip. " +
+      "Barcelona turns the play over near the byline and drives the ball up the touchline. " +
+      "The scoreboard holds at 2-2 as the clip runs past the 1:24 reading.";
     const { store, patches } = stubStore();
     const f = stubFetch([FILLER_VOD, repaired]);
     const result = await runSummaryForRow(

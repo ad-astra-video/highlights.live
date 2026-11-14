@@ -126,10 +126,11 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
     expect(f.seen[2].prompt).toContain("'northbridge shoot on the'");
   });
 
-  it("keeps one card per instant: a differently-worded body on the SAME window drops", async () => {
-    // ADAAAA-8969 (increment 2, defect 3): the scoped key reads the INSTANT, so a
-    // different window serves whatever the opening run is. The same pair of bodies
-    // on one window is still one moment (the drop test above).
+  it("regenerates once on a DIFFERENT window, then serves the distinct body (AC8 has no instant exception)", async () => {
+    // ADAAAA-8941 (integration repair): the scoped key briefly served a different
+    // window whatever the opening run was. AC8 grades the served copy within one
+    // job, so the repeat spends the one regeneration and the distinct body serves;
+    // the instant is census evidence, not a suppression.
     const { store, patches } = stubStore();
     const f = stubFetch([ok(CLOCK_A), ok(CLOCK_B), ok(DISTINCT)]);
     const run = cfg({ fetchImpl: f.fn });
@@ -141,8 +142,6 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
       {
         jobId: "j1",
         highlightId: "8b444000",
-        // A different window AND this row's own attested clock (`3:57`), so the
-        // gate credits the body's clock and the scoped key sees a different moment.
         evidence: teamContext({
           windowTs: 240,
           windowDurationS: 8,
@@ -152,10 +151,11 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
       state
     );
     expect(second.outcome).toBe("stored");
-    expect(second.calls).toBe(1);
-    expect(String(patches[1].patch.summary)).toContain("Northbridge shoot on the right");
+    expect(second.calls).toBe(2);
+    expect(patches[1].patch.summary).toBe(DISTINCT);
+    expect(summaryOpeningRun(String(patches[1].patch.summary))).toBe("a low drive from");
     expect(patches[1].patch.summaryGate).toBe("accepted");
-    expect([...state.servedOpenings]).toEqual(["northbridge shoot on the"]);
+    expect([...state.servedOpenings].sort()).toEqual(["a low drive from", "northbridge shoot on the"]);
   });
 });
 
