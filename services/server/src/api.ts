@@ -3299,6 +3299,22 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       confirmPumpTimers.delete(jobId);
     }
   }
+  /**
+   * ADAAAA-8894 (D4, Ruling B): the LIVE dive-density guard's clock.
+   *
+   * `nowTs` is the oldest DUE window's `hi` + the deferred lookahead, so the
+   * content the leg has actually judged is `nowTs - lookahead` — the same clock
+   * `liveWatchMinutes` reports for a live tap (it advances with the stream). VOD
+   * gets nothing: this helper is reached only from the LIVE confirm pump (the
+   * `file` rail dives inline through `confirmReconcile` and never enters
+   * `pumpConfirmDives`), and a `file` job has no stream-hour denominator, so the
+   * cap is a live-only rule and VOD admission stays byte-identical.
+   */
+  function confirmDensityCapFor(nowTs: number): { streamHours: number } | undefined {
+    if (cfg.liveObserveLoop !== true) return undefined;
+    if (!Number.isFinite(nowTs)) return undefined;
+    return { streamHours: Math.max(0, nowTs - LIVE_CONFIRM_LOOKAHEAD_S) / 3600 };
+  }
   /** AC3: one admission round. Never awaits a dive before the round's batch is
    *  admitted, so one stream can hold N dives in flight up to capacity. */
   async function pumpConfirmDives(
@@ -3348,13 +3364,14 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           drain: opts.drain,
           dispatcher: confirmDispatcher,
           queueWaitMs: cfg.liveConfirmQueueWaitMs ?? LIVE_CONFIRM_QUEUE_WAIT_MS,
+          densityCap: confirmDensityCapFor(nowTs),
           adopt: confirmDiveAdopter(jobId, deliveryOf),
         });
-        if (out.dives || out.queued || out.dropped || out.overflowDropped) {
+        if (out.dives || out.queued || out.dropped || out.overflowDropped || out.densitySuppressed) {
           console.log(
             `[live-confirm:${jobId}] pump (nowTs=${nowTs.toFixed(1)}s): dives=${out.dives} ` +
               `queued=${out.queued} promoted=${out.promoted} refuted=${out.refuted} ` +
-              `dropped=${out.dropped} overflow=${out.overflowDropped}`
+              `dropped=${out.dropped} overflow=${out.overflowDropped} density=${out.densitySuppressed}`
           );
         }
         // AC3: descriptors that found no free slot stay PENDING — take the next
@@ -3471,6 +3488,7 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         drain,
         dispatcher: confirmDispatcher,
         queueWaitMs: cfg.liveConfirmQueueWaitMs ?? LIVE_CONFIRM_QUEUE_WAIT_MS,
+        densityCap: confirmDensityCapFor(nowTs),
         adopt: confirmDiveAdopter(jobId, deliveryOf),
       });
     let dives = 0;

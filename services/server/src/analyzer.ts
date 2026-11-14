@@ -5364,7 +5364,7 @@ export class LiveRunShared {
    * (see `confirmedGoalNear`). */
   private readonly confirmedGoals = new Map<
     string,
-    { ts: number; outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } }
+    { ts: number; outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision; confirmAttestation?: InlineConfirmAttestation } }
   >();
   /** Rolling window of cached frames + their already-computed findings (plan
    * §A). Time-bounded to DECIDE_WINDOW_SECONDS and hard-capped at
@@ -6280,6 +6280,13 @@ export class LiveRunShared {
   private confirmDiveQueuedCount = 0;
   private confirmDiveMaxInFlightSeen = 0;
   private confirmDiveCapacitySeen = 0;
+  // ADAAAA-8894 (D4, Ruling B): the live density guard as admission last applied
+  // it, so the stored `diveAdmission` block answers "did the cap bind, and at what
+  // rate?" without re-deriving it from the pump's log.
+  private confirmDiveDensitySeen = false;
+  private confirmDiveDensityMax = 0;
+  private confirmDiveDensityHours = 0;
+  private confirmDiveDensitySuppressedCount = 0;
 
   /** ADAAAA-8205: hold a published provisional row's dive descriptor. */
   notePendingConfirmDive(entry: PendingConfirmDive): void {
@@ -6348,6 +6355,21 @@ export class LiveRunShared {
     const cap = Number.isFinite(capacity) && capacity >= 1 ? Math.floor(capacity) : 1;
     this.confirmDiveCapacitySeen = cap;
   }
+  /** ADAAAA-8894 (D4, Ruling B): record the LIVE density guard admission applied
+   *  (the cap + the leg's own stream clock) so `diveAdmission.densityCap` publishes
+   *  the rate it enforced. */
+  noteConfirmDiveDensitySeen(maxPerStreamHour: number, streamHours: number): void {
+    this.confirmDiveDensitySeen = true;
+    const max = Number(maxPerStreamHour);
+    if (Number.isFinite(max) && max >= 0) this.confirmDiveDensityMax = max;
+    const hours = Number(streamHours);
+    if (Number.isFinite(hours) && hours >= 0) this.confirmDiveDensityHours = hours;
+  }
+  /** ADAAAA-8894 (D4, Ruling B): count one due dive the density allowance
+   *  withheld (settled `density_cap`). */
+  noteConfirmDiveDensitySuppressed(): void {
+    this.confirmDiveDensitySuppressedCount++;
+  }
   /** ADAAAA-8205: forget a settled/dropped dive (the row no longer waits). */
   dropPendingConfirmDive(key: string): void {
     if (!key) return;
@@ -6385,6 +6407,20 @@ export class LiveRunShared {
       divesBilled: billed,
       // AC5: `decideFee x dives`; 0 when the run carried no fee (a $0 harness).
       diveCostUsd: Number(((fee ?? 0) * billed).toFixed(6)),
+      // ADAAAA-8894 (D4, Ruling B): the live density guard, present only when
+      // admission applied one (so a VOD row and a pre-D4 row stay byte-identical).
+      // `allowance` is recomputed from the STORED cap + clock rather than read off
+      // the pump, so the block can never disagree with its own inputs.
+      ...(this.confirmDiveDensitySeen
+        ? {
+            densityCap: {
+              maxPerStreamHour: this.confirmDiveDensityMax,
+              streamHours: Number(this.confirmDiveDensityHours.toFixed(6)),
+              allowance: Math.max(1, Math.floor(this.confirmDiveDensityMax * this.confirmDiveDensityHours)),
+              suppressed: this.confirmDiveDensitySuppressedCount,
+            },
+          }
+        : {}),
     };
   }
   /** ADAAAA-8205: count one settled dive (a confirm call was made). */
@@ -6985,7 +7021,7 @@ export class LiveRunShared {
    * Returns undefined when not yet processed (first observation of the goal). */
   confirmedGoalOutcome(
     key: string
-  ): { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } | undefined {
+  ): { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision; confirmAttestation?: InlineConfirmAttestation } | undefined {
     return this.confirmedGoals.get(key)?.outcome;
   }
   /** ADAAAA-7663: reuse an already-confirmed goal whose EVENT instant is within
@@ -6998,9 +7034,9 @@ export class LiveRunShared {
   confirmedGoalNear(
     goalEventTs: number,
     windowS: number
-  ): { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } | undefined {
+  ): { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision; confirmAttestation?: InlineConfirmAttestation } | undefined {
     if (!Number.isFinite(goalEventTs) || !(windowS > 0)) return undefined;
-    let best: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision } | undefined;
+    let best: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision; confirmAttestation?: InlineConfirmAttestation } | undefined;
     let bestDiff = Infinity;
     for (const v of this.confirmedGoals.values()) {
       if (!Number.isFinite(v.ts)) continue;
@@ -7019,7 +7055,7 @@ export class LiveRunShared {
    * Bounded to avoid growth on long streams. */
   rememberConfirmedGoal(
     key: string,
-    outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision },
+    outcome: { decision: DecisionResult; confirmRan: boolean; confirm?: ConfirmDecision; confirmAttestation?: InlineConfirmAttestation },
     goalEventTs?: number
   ): void {
     this.confirmedGoals.set(key, { ts: goalEventTs ?? NaN, outcome });
@@ -7816,12 +7852,17 @@ export async function acceptVideoDecision(
   // promoted row, and "the dive could not corroborate" says nothing about a big
   // play or a celebration — downgrading those to near_miss would DELETE coverage
   // in the name of confirming it.
+  // ADAAAA-8894 (D4): ...and never on a row that MEASURED its own goal. D4 dives
+  // those rows too; a failed dive is not a retraction of a measurement the accept
+  // already made, so downgrading here would delete a confirmed GOAL for the
+  // absence of a second opinion.
   let decision = confirmReconciled;
   if (
     cfg.confirmEnabled &&
     !asyncConfirmArmed &&
     confirmRan &&
     isGoalShaped(stage1) &&
+    !hasIndependentAttestation(candidate) &&
     !(confirm && confirm.goalConfirmed)
   ) {
     decision = downgradeUncorroborated(stage1);
@@ -8564,12 +8605,20 @@ export async function acceptVideoDecision(
   }
   const { clipUri } = clip;
 
-  // ADAAAA-8205: the async lane's descriptor, persisted WITH the row. Only a
-  // row that did NOT reach the scoring lane needs a dive (a measured accept is
-  // already attested), and only the live rail has a judged window to attribute
-  // the verdict to.
+  // ADAAAA-8205: the async lane's descriptor, persisted WITH the row, on the
+  // live rail only (it alone has a judged window to attribute the verdict to).
+  //
+  // ADAAAA-8894 (D4): the descriptor is published for EVERY promoted row,
+  // including one that already reached the scoring lane. D4 drops the
+  // measured-attestation skip, and this `decision.outcome !== "scoring_play"`
+  // gate was the LIVE arm of that very skip: a measured GOAL accept published
+  // its row with no descriptor, so `shouldRunConfirm()` saying "dive it" was
+  // never enough — no dive moment and no re-centered clip option. `liveWindow`
+  // is the only remaining condition. The precision guard in
+  // `confirmDiveAdoption` keeps such a row in the scoring lane and stamps
+  // `laneKeptByMeasurement`, so the descriptor adds coverage, never a rewrite.
   const pendingConfirmDive: PendingConfirmDive | undefined =
-    asyncConfirmArmed && liveWindow && decision.outcome !== "scoring_play"
+    asyncConfirmArmed && liveWindow
       ? {
           highlightId: "", // filled in once the row id exists (below)
           jobId: cfg.jobId ?? "",
@@ -8695,8 +8744,9 @@ export async function acceptVideoDecision(
     provisionalGoal: liveProvisionalGoal,
     // ADAAAA-8205: the pending Stage-2 dive this row publishes with. The dive
     // runs off the accept path once the judged window's lookahead closes, and
-    // its verdict moves THIS row in place (never an insert). Absent on every
-    // scoring row, the VOD rail, and the unarmed posture.
+    // its verdict moves THIS row in place (never an insert). ADAAAA-8894 (D4):
+    // now present on the scoring lane too (a measured accept is dived, not
+    // skipped) — absent only on the VOD rail and the unarmed posture.
     pendingConfirmDive: pendingConfirmDive ? { ...pendingConfirmDive, highlightId: "" } : undefined,
     // ADAAAA-8796 (D1): the INLINE dive's verdict record (VOD / unarmed live
     // posture). The live async lane stamps the same field later, in place, via
@@ -10920,28 +10970,39 @@ export function candidateHasMeasuredAttestation(c: {
   });
 }
 
-/** The Stage-2 trigger. ADAAAA-8796 (D1): the dive is a CONFIRMATION pass, not
- * a goal gate — the trigger is "a PROMOTED row with no measured attestation",
- * not "a goal-shaped row with no measured attestation".
+/** The Stage-2 trigger. ADAAAA-8796 (D1) made it a COVERAGE rule; ADAAAA-8894
+ * (D4) makes the coverage unconditional.
  *
  *  - `cfg.confirmEnabled` is the config gate; off is a strict no-op.
- *  - A row that already carries a MEASURED attestation is skipped: the measured
- *    lane is its own corroboration and the dive would only re-bill it (this is
- *    the cost bound, not a coverage bound).
- *  - An ACCEPTED highlight (a promoted row) is dived whatever its goal shape.
- *    Before D1 the `isGoalShaped()` early return meant a big play, celebration
- *    or crowd burst could never enter the dive lane — measured on leg `357a927d`
- *    only goal-shaped rows carried a verdict, which is exactly the "all
- *    identified highlights had no deep-dive confirmation" complaint. The verdict
- *    on a non-goal row can never create a GOAL by itself: {@link confirmReconcile}
- *    only adopts a dive verdict when the Stage-1 read was goal-shaped, and the
- *    live adoption writer (`confirmDiveAdoption`) keeps its own corroboration,
- *    citation and recap gates. So D1 changes COVERAGE, not the GOAL gate.
+ *  - ADAAAA-8894 (D4) DROPS the measured-attestation skip. Before D4 a row that
+ *    already carried a measured attestation was skipped ("the measured lane is
+ *    its own corroboration and the dive would only re-bill it"). That was the one
+ *    remaining class where a promoted card got no dive — no dive moment, no
+ *    re-centered clip option, and no answer to "did the dive run?" beyond a
+ *    skip reason. The board's clause is "the deep dive happens on all
+ *    highlight/notable/big play windows", so the skip set collapses to "has no
+ *    card": `not_promoted` / `merged_duplicate` / `alternative_not_highlight`
+ *    plus the closed drop list. Cost is bounded by the Ruling-B density guard
+ *    (`LIVE_CONFIRM_DENSITY_CAP_PER_STREAM_HOUR`, live rail), not by shrinking
+ *    the population.
+ *  - An ACCEPTED highlight (a promoted row) is dived whatever its goal shape
+ *    (D1) and whatever it measured (D4). The verdict on a non-goal row can never
+ *    create a GOAL by itself: {@link confirmReconcile} only adopts a dive verdict
+ *    when the Stage-1 read was goal-shaped, and the live adoption writer
+ *    (`confirmDiveAdoption`) keeps its own corroboration, citation and recap
+ *    gates. On a MEASURED row the dive may only add the moment and, inside the
+ *    existing goal rules, withhold a GOAL — it may not refute the measurement or
+ *    move the lane off `measured` (the D4 precision guard, enforced at the two
+ *    writers and the two readers, never here: a trigger that asked "may this
+ *    dive's verdict be adopted?" would be goal-gating coverage again).
  *  - A NON-accept still needs a goal-shaped read to be rescued (the
  *    delayed-corroboration bare-goal path, ADAAAA-7357). A plain non-goal
  *    non-accept was never promoted, so there is no row for a verdict to move.
  *
- * One predicate for the live and VOD rails, so the two do not diverge again. */
+ * One predicate for the live and VOD rails, so the two do not diverge again.
+ * `candidate` is kept in the signature (every call site and every stored
+ * descriptor already carries it) but the trigger no longer reads it: what a
+ * window measured decides its LANE, not whether it dives. */
 export function shouldRunConfirm(
   cfg: AnalyzerConfig,
   candidate: {
@@ -10955,18 +11016,9 @@ export function shouldRunConfirm(
   stage1Decision: DecisionResult
 ): boolean {
   if (!cfg.confirmEnabled) return false;
-  // ADAAAA-8506: on the LIVE rail the skip must agree with the row-level gate,
-  // so a noisy `scoreBoardChanged` cannot suppress the dive that checks it. VOD
-  // keeps the legacy flag read: its promote path is the inline dive verdict, not
-  // `liveGoalHasMeasuredEvidence`.
-  const liveRail = cfg.liveObserveLoop === true && cfg.decideWindowN === undefined;
-  if (liveRail ? candidateHasMeasuredAttestation(candidate) : hasIndependentAttestation(candidate)) return false;
-  // ADAAAA-8796 (D1): a PROMOTED row (an accepted highlight) is dived whatever
-  // its goal shape — a big play / celebration / crowd burst carries no measured
-  // attestation either, and it is the population that never entered the dive
-  // lane. The verdict cannot promote it past the GOAL gate: the inline path only
-  // adopts a dive verdict for a goal-shaped Stage-1 read, and the live adoption
-  // writer keeps its corroboration / citation / recap gates.
+  // ADAAAA-8894 (D4): a PROMOTED row (an accepted highlight) is dived whatever
+  // its goal shape AND whatever it measured. The verdict cannot promote it past
+  // the GOAL gate (see the doc above), and on a measured row it cannot demote it.
   if (stage1Decision.isHighlight) return true;
   // Non-accept: fire for a goal-shaped bare non-accept (the notable-only /
   // delayed-corroboration rescue, ADAAAA-7357). A plain non-goal non-accept was
@@ -11154,6 +11206,11 @@ export interface InlineConfirmAttestation {
    *  diverge on the contract. */
   momentTs?: number;
   momentConfidence?: number;
+  /** ADAAAA-8894 (D4): the dive ran on a row that already carried a MEASURED
+   *  attestation. The measurement stands and the lane stays `measured`; the dive
+   *  contributes its moment only. Stamped here so the VOD rail discloses the same
+   *  thing the live lane's `confirmDiveAdoption` does. */
+  laneKeptByMeasurement?: boolean;
 }
 
 /** ADAAAA-8796 (D1): which context signals the inline dive could not build.
@@ -11185,6 +11242,9 @@ function inlineConfirmAttestation(input: {
   diveAt: string;
   latencyMs: number;
   contextDegraded?: readonly string[];
+  /** ADAAAA-8894 (D4): the row measured its own goal, so the dive may not change
+   *  its lane. */
+  measured?: boolean;
 }): InlineConfirmAttestation {
   const verdict = input.confirm?.goalConfirmed;
   // ADAAAA-8820 (D2): the dive's named moment rides the same verdict field (the
@@ -11207,6 +11267,7 @@ function inlineConfirmAttestation(input: {
     contextDegraded: [...(input.contextDegraded ?? [])],
     ...(momentTs != null ? { momentTs: momentTs, ...(momentConfidence != null ? { momentConfidence } : {}) } : {}),
     ...(input.droppedReason ? { dropReason: input.droppedReason } : {}),
+    ...(input.measured ? { laneKeptByMeasurement: true } : {}),
   };
 }
 
@@ -11243,6 +11304,13 @@ export async function confirmReconcile(
   if (!shouldRunConfirm(cfg, candidate, stage1)) {
     return { decision: stage1, confirmRan: false };
   }
+  // ADAAAA-8894 (D4): did this window already MEASURE its own goal? D4 dives it
+  // anyway (coverage), but the dive may then only add the moment: the measurement
+  // is the accept's corroboration and it stands. Read with the same predicate the
+  // served lane uses (`measuredMeasurement` in confirmation-lane.ts reads the
+  // candidate's trigger flags), so "the guard applies" and "the card derives
+  // `measured`" are one condition and cannot drift apart.
+  const measuredLane = hasIndependentAttestation(candidate);
   // ADAAAA-7365: exactly-once. A genuine goal is re-produced by every overlapping
   // observe window that contains it (10 s window, 3 s cadence => ~5x re-fire on
   // the untouched base). Once a goal candidate has had its confirm dive, reuse the
@@ -11252,8 +11320,17 @@ export async function confirmReconcile(
   // VOD; the candidate trigger / window center on live).
   const eventTs = goalEventTs ?? candidate.timestamp;
   const key = confirmCandidateIdentity(cfg, eventTs);
+  // ADAAAA-8894 (D4): the reuse cache can answer with an attestation written for
+  // a DIFFERENT window of the same goal (a celebration read that corroborated
+  // before the scoring window accepted). On a window that measured its own goal
+  // that cached verdict must not become a lane move, so the flag is stamped on
+  // every reuse answer too — one dive per goal, still, and still `measured`.
+  const keepMeasuredLane = <T extends { confirmAttestation?: InlineConfirmAttestation }>(outcome: T): T =>
+    measuredLane && outcome.confirmAttestation
+      ? { ...outcome, confirmAttestation: { ...outcome.confirmAttestation, laneKeptByMeasurement: true } }
+      : outcome;
   const cached = shared.confirmedGoalOutcome(key);
-  if (cached) return cached;
+  if (cached) return keepMeasuredLane(cached);
   // ADAAAA-7663: the LIVE pass has no stable content-time identity — its rolling
   // window center slides by the cadence, so the same goal maps to a different
   // key per window. Reuse a goal confirmed within `confirmReuseWindowS` of this
@@ -11272,7 +11349,7 @@ export async function confirmReconcile(
   if (reuseWindowS && reuseWindowS > 0) {
     const near = shared.confirmedGoalNear(eventTs, reuseWindowS);
     const refutedByNearby = near ? near.confirm?.goalConfirmed !== "confirmed_goal" : false;
-    if (near && !(isGoalDecision(stage1) && refutedByNearby)) return near;
+    if (near && !(isGoalDecision(stage1) && refutedByNearby)) return keepMeasuredLane(near);
   }
   // ADAAAA-7543: center the deep dive's frame window on the goal EVENT instant —
   // the observe-window center can sit several seconds past the crossing, and a
@@ -11304,6 +11381,7 @@ export async function confirmReconcile(
       diveAt: new Date(confirmStartedAt).toISOString(),
       latencyMs: confirmElapsedMs,
       contextDegraded: inlineDegradedSignals(ctx),
+      measured: measuredLane,
     });
     // ADAAAA-7185: emit a decide-audit descriptor from the /confirm pass
     // (run_confirmation_pass) so the corroboration result for an accepted GOAL
@@ -11334,7 +11412,20 @@ export async function confirmReconcile(
     // may only corroborate or withhold inside the existing goal rules. The
     // verdict is still carried out on `confirmAttestation`, so the row records
     // what the dive said without changing its lane.
-    if (isGoalShaped(stage1) && confirm.goalConfirmed && confirm.decision && typeof confirm.decision === "object") {
+    // ADAAAA-8894 (D4): ...and it is not adopted at all on a MEASURED row. D4
+    // dives those rows, and the precision guard says the dive may add the moment
+    // but may not remove or contradict the measurement the accept already made
+    // for this window (a refuting dive here would demote a measured GOAL to a
+    // celebration). The verdict still rides `confirmAttestation` with
+    // `laneKeptByMeasurement`, so the card answers "the dive ran, and here is
+    // what it said" while the lane stays `measured`.
+    if (
+      !measuredLane &&
+      isGoalShaped(stage1) &&
+      confirm.goalConfirmed &&
+      confirm.decision &&
+      typeof confirm.decision === "object"
+    ) {
       const outcome = { decision: confirm.decision, confirmRan: true, confirm, confirmAttestation };
       shared.rememberConfirmedGoal(key, outcome, eventTs);
       return outcome;
@@ -11355,6 +11446,7 @@ export async function confirmReconcile(
         diveAt: new Date().toISOString(),
         latencyMs: 0,
         contextDegraded: [],
+        measured: measuredLane,
       }),
     };
     shared.rememberConfirmedGoal(key, outcome, eventTs);

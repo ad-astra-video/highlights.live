@@ -128,11 +128,18 @@ export interface ConfirmRecord {
 export type ConfirmationLane = "measured" | "dive" | "dive_disagreed" | "dive_held" | "unconfirmed";
 export type ConfirmationMeasurement = "goal_line" | "ball_in_net" | "score" | "ball_outcome" | "dive" | "none";
 /** ADAAAA-8721 (D3): why no Stage-2 dive ran. `dropped:<cause>` names the stored
- *  fail-closed cause (`budget` / `pool_busy` / `timeout` / ...). */
+ *  fail-closed cause (`budget` / `pool_busy` / `timeout` / ...).
+ *
+ *  ADAAAA-8894 (D4): `density_cap` names the live rail's own admission bound — the
+ *  leg had spent its 48-dives/stream-hour allowance, so the dive was withheld by
+ *  cost control, not by a failure. It is a bare entry (not `dropped:density_cap`)
+ *  because the card should not read as a transport/busy drop. `measured_attestation`
+ *  stays for rows written before D4, which still derive it honestly. */
 export type ConfirmationSkipReason =
   | "measured_attestation"
   | "not_goal_shaped"
   | "dive_disabled"
+  | "density_cap"
   | `dropped:${string}`;
 export interface ConfirmationFlags {
   scoreboardChanged: boolean | null;
@@ -1578,6 +1585,7 @@ export function confirmationSkipText(
   if (reason === "measured_attestation") return "No deep dive: this window already measured its own evidence";
   if (reason === "not_goal_shaped") return "No deep dive: not goal-shaped";
   if (reason === "dive_disabled") return "No deep dive: dive lane disabled";
+  if (reason === "density_cap") return "No deep dive: live dive-density cap reached (48 dives/stream-hour)";
   if (reason.startsWith("dropped:")) {
     const cause = reason.slice("dropped:".length);
     const causeText: Record<string, string> = {

@@ -115,6 +115,12 @@ export function hasRefutingDiveAttestation(
 ): boolean {
   const att = h.confirmAttestation;
   if (!att || att.corroborated === true) return false;
+  // ADAAAA-8894 (D4): a dive that ran on a row which MEASURED its own goal cannot
+  // refute it. The measurement is the accept's corroboration, so the row keeps its
+  // GOAL card and its lane; reading the verdict as a refutation here would demote
+  // a measured GOAL into the notable lane — the precise regression the D4
+  // precision guard exists to prevent.
+  if (att.laneKeptByMeasurement === true) return false;
   return (GOAL_VERDICTS as readonly string[]).includes(att.goalConfirmed);
 }
 
