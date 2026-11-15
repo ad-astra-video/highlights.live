@@ -62,6 +62,13 @@ export const ALLOWED_HOST_SUFFIXES = [
   "x.dev",
   "test.dev",
   "highlights.live", // published product site + privacy@/support@/legal@ contacts
+  // ADAAAA-9102 ruling R3: these two are PUBLIC edge origins, not secrets —
+  // public DNS behind Cloudflare, already in Certificate Transparency, and in
+  // users' address bars. Allowlisted (one-line reason each) so a later sweeper
+  // does not re-file them; LAN addresses, internal hostnames, ssh targets and
+  // operator home paths stay DENIED.
+  "highlights-server.dpn.gg", // public server edge: CT-logged DNS, customer-facing origin
+  "highlights-media.dpn.gg", // public media edge: CT-logged DNS, customer-facing media origin
   // public content sources cited by eval data
   "wikimedia.org",
   "wikipedia.org",

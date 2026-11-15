@@ -125,14 +125,15 @@ services:
       - PERCEIVE_LOG_LEVEL=${PERCEIVE_LOG_LEVEL:-INFO}
     volumes:
       # HF cache (token + downloaded weights). ADAAAA-9101: env-first — the
-      # host path is the box's own docker/.env value (HF_CACHE_DIR), and the
-      # tracked default is a compose-relative placeholder, never a real home
-      # path. The container path (HF_HOME) is unchanged.
-      - ${HF_CACHE_DIR:-./data/hf-cache}:/models/hf-cache
+      # host path is the box's own docker/.env value (HF_CACHE_DIR); there is no
+      # tracked default, so the tracked tree never carries a real home path. The
+      # substitution is fail-closed: a missing key aborts the recreate naming it.
+      # The container path (HF_HOME) is unchanged.
+      - ${HF_CACHE_DIR:?HF_CACHE_DIR is required (HF cache host path; set it in docker/.env)}:/models/hf-cache
       # ADAAAA-6414: staged fine-tuned Florence-2-base merged model dir (train's
       # LoRA merge output) served by the detector via FLORENCE_MODEL above.
       # Read-only; the container runs as root so it reads the staged weights.
-      - ${RUNS_DIR:-./runs}:/runs:ro
+      - ${RUNS_DIR:?RUNS_DIR is required (staged runs host path; set it in docker/.env)}:/runs:ro
       # VOD clips the SAM backend tracks across frames (PERCEIVE_SAM_CLIP).
       - ${CLIPS_DIR:-./clips}:/clips:ro
       # Shared with the server: perceive sees the server's dataDir at /data so
@@ -495,7 +496,9 @@ services:
     # docker/.env (untracked); an unset host is an explicit boot error.
     command: ["/bin/sh", "/opt/decide-router-entrypoint.sh"]
     environment:
-      - DECIDE_WORKER_HOST=${DECIDE_WORKER_HOST:-}
+      # ADAAAA-9101: fail-closed at BOTH layers — compose refuses to render an
+      # empty value, and the entrypoint refuses to boot without it.
+      - DECIDE_WORKER_HOST=${DECIDE_WORKER_HOST:?DECIDE_WORKER_HOST is required (decide worker host address; set it in docker/.env)}
       - DECIDE_WORKER_PORTS=${DECIDE_WORKER_PORTS:-8091,8092,8093}
     volumes:
       - ./decide-router.conf:/etc/nginx/nginx.conf:ro
@@ -745,7 +748,9 @@ services:
       # cannot resolve the docker-internal `media:4070` service name). config.ts
       # reads this as `mediaPublicBaseUrl`, falling back to MEDIA_SERVER_URL when
       # unset (local/dev, no LB). mediaPublicBaseUrl feeds api.ts provisionMedia().
-      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-http://localhost:4070}
+      # ADAAAA-9101: compose requires MEDIA_PUBLIC_BASE_URL (fail-closed), so a
+      # deploy cannot silently ship an empty public media origin.
+      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:?MEDIA_PUBLIC_BASE_URL is required (public media origin; set it in docker/.env)}
       # ADAAAA-6869 Phase 4: bearer for the media node's `GET /node` per-session
       # detail surface (leases). Must equal the media service's MEDIA_HEALTH_TOKEN.
       # Unset => `GET /media/node` still reports capacity/load + DB-derived cost.
@@ -988,10 +993,10 @@ services:
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
       - STRIPE_PRICE_PRO=${STRIPE_PRICE_PRO:-}
       - STRIPE_PRICE_USAGE=${STRIPE_PRICE_USAGE:-}
-      # ADAAAA-9101: env-first. The production origin lives only in the box's
-      # docker/.env (untracked); with an empty .env this resolves to the local
-      # dev origin, never a real host.
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:3000}
+      # ADAAAA-9101: env-first and fail-closed. The production origin lives only
+      # in the box's docker/.env (untracked); a missing key aborts the recreate
+      # with a readable error instead of publishing or silently dialling a host.
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required (public server origin; set it in docker/.env)}
       - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       # Transactional email: the server enqueues invites + password resets to
       # the email-sender container over its queue API (bearer-token auth).
@@ -1039,7 +1044,7 @@ services:
       - EMAIL_ALLOCATOR_INTERVAL_MS=${EMAIL_ALLOCATOR_INTERVAL_MS:-3600000}
       - EMAIL_ALLOCATOR_BATCH_SIZE=${EMAIL_ALLOCATOR_BATCH_SIZE:-50}
       - APP_PUBLIC_URL=${APP_PUBLIC_URL:-}
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:?PUBLIC_BASE_URL is required (public server origin; set it in docker/.env)}
       # Security hard gate: only accept enqueue/status requests whose source is
       # inside RFC1918 private space (the compose internal network / localhost) —
       # never from the public internet. Enforced in addition to the bearer token.
@@ -1122,7 +1127,7 @@ services:
       # Public LB / Cloudflare front for the media tier. The media server returns
       # this as the FULL ws ingest URL on provision so clients can be routed by
       # the load balancer rather than assuming a path on one node.
-      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-http://localhost:4070}
+      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:?MEDIA_PUBLIC_BASE_URL is required (public media origin; set it in docker/.env)}
       # Release a provisioned-but-never-used perceive slot after this long.
       - MEDIA_PROVISION_NO_CLIENT_MS=${MEDIA_PROVISION_NO_CLIENT_MS:-60000}
       # ADAAAA-7306: ICE/STUN/TURN servers for WebRTC screen-share ingest. The

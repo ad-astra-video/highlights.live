@@ -39,6 +39,7 @@ import { fileURLToPath } from "node:url";
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
 const conf = readFileSync(repoFile("docker/decide-router.conf"), "utf8");
 const entrypoint = repoFile("docker/decide-router-entrypoint.sh");
+const entrypointText = readFileSync(entrypoint, "utf8");
 
 /** Any private IPv4 literal, in any form (ADAAAA-9101: none may be tracked). */
 const PRIVATE_IPV4 = /\b(?:192\.168|10|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b/;
@@ -99,6 +100,36 @@ describe("decide router upstreams (ADAAAA-8083)", () => {
       "    server worker.example:8091 max_fails=2 fail_timeout=10s;",
       "    server worker.example:8092 max_fails=2 fail_timeout=10s;",
     ]);
+  });
+
+  it("validates the rendered config with `nginx -t` before it serves", () => {
+    // ADAAAA-9102 ruling: the entrypoint must FAIL CLOSED. Rendering an empty or
+    // broken upstream set and starting anyway would silently drop every decide
+    // worker, so the config is validated first and a failure aborts the boot.
+    const order = ["nginx -t", "exec nginx"];
+    const positions = order.map((needle) => entrypointText.indexOf(needle));
+    expect(positions[0]).toBeGreaterThanOrEqual(0);
+    expect(positions[1]).toBeGreaterThan(positions[0]);
+    expect(entrypointText).toMatch(/refusing to start/);
+  });
+
+  it("exits non-zero when `nginx -t` rejects the rendered config", () => {
+    const bin = mkdtempSync(join(tmpdir(), "decide-router-bin-"));
+    const nginx = join(bin, "nginx");
+    // `-t` fails, the serving invocation would succeed: only the check saves us.
+    writeFileSync(nginx, '#!/bin/sh\n[ "$1" = "-t" ] && exit 1\nexit 0\n');
+    chmodSync(nginx, 0o755);
+    const run = spawnSync("sh", [entrypoint], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        DECIDE_WORKER_HOST: "worker.example",
+        DECIDE_WORKER_PORTS: "8091,8092,8093",
+      },
+      encoding: "utf8",
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("refusing to start");
   });
 
   it("is an explicit boot error when DECIDE_WORKER_HOST is unset", () => {

@@ -37,6 +37,10 @@ describe("public-tree hygiene guard (ADAAAA-9101)", () => {
       "MEDIA_URL=http://media:4070",
       "admin@highlights.local",
       "https://github.com/ad-astra-video/highlights.live",
+      // ADAAAA-9102 ruling R3: the two public edge origins are allowlisted with a
+      // documented reason (CT-logged, customer-facing), while LAN/ssh/home stay denied.
+      "PUBLIC_BASE_URL=https://highlights-server.dpn.gg",
+      "MEDIA_PUBLIC_BASE_URL=https://highlights-media.dpn.gg",
     ].join("\n");
     expect(scanText(text, "ok.txt")).toEqual([]);
   });

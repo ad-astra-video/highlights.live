@@ -31,4 +31,13 @@ for port in $(printf '%s' "$ports" | tr ',' ' '); do
 done
 echo "decide-router: rendered $n primary upstream(s) from DECIDE_WORKER_HOST"
 
+# ADAAAA-9101: fail closed. Validate the rendered config before serving: a syntax
+# error, an unreachable include, or an empty upstream set must abort the container
+# with a readable error instead of starting a router that silently drops the
+# decide workers.
+if ! nginx -t; then
+  echo "decide-router: rendered config failed 'nginx -t' — refusing to start (check DECIDE_WORKER_HOST/DECIDE_WORKER_PORTS in docker/.env, ADAAAA-9101)" >&2
+  exit 1
+fi
+
 exec nginx -g 'daemon off;'
