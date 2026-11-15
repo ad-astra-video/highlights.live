@@ -3268,9 +3268,14 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
         // this job already carries, so the second sample changes the FACT rather than
         // the clock token inside the same template. The clause repair would otherwise
         // delete the regenerated sentence too and the row would drop on depth.
+        // ADAAAA-9089 (writer lever): the rev-13 VOD job measured the model ignoring
+        // "do not swap only their clock" (it re-emitted `This scoring sequence occurs
+        // at 12:00 …` against a served copy at 11:15), so the retry now also says
+        // what the replacement has to BE — an actor as the sentence's subject — not
+        // only what it must not be.
         ...(retryRepeated.length > 0
           ? [
-              `- These sentences REPEAT a sentence a card in this job already carries: ${retryRepeated.map((line) => `"${line.trim()}"`).join(" ")} Do not reuse or paraphrase them, and do not swap only their clock: write a different sentence that carries a different fact from ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}.`,
+              `- These sentences REPEAT a sentence a card in this job already carries: ${retryRepeated.map((line) => `"${line.trim()}"`).join(" ")} Do not reuse or paraphrase them, and do not swap only their clock: write a different sentence that carries a different fact from ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}. Each replacement sentence must name an attested actor as its SUBJECT and say what that actor did, with the clip offset riding on that act. A frame sentence shape ('The clip carries this sequence at …', 'This scoring sequence occurs at …') is the exact thing being refused here.`,
             ]
           : []),
         `- Do NOT spend a whole sentence on the clip clock: the \`Window:\` label (${typeof input.windowTs === "number" && Number.isFinite(input.windowTs) ? clockLabel(input.windowTs) : "the offset"}) must sit INSIDE a sentence that also carries another fact. A sentence that only says when the clip moment occurs adds no depth and does not count toward the two-fact rule.`,
@@ -3331,7 +3336,19 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     // copy (AC14.3 measured 0.961). The rule below was previously stated only on
     // the RETRY pass; it belongs on the FIRST pass, which is where the defect was
     // generated.
-    "- Never spend a whole sentence on the clip clock. The `Window:` offset must sit INSIDE a sentence that also carries another fact (an attested actor's act, the score line, or the competition). Never write 'This scoring play occurs at 0:24 into the clip', 'The clip carries this sequence at …', 'X is in the passage at …', 'The window runs at …' or 'This action occurs at …': those sentences say only WHEN, and a body made of them is deleted.",
+    //
+    // ADAAAA-9089 (writer lever): on the rev-13 VOD job `54537ffa` the writer kept
+    // the rule and lost the frame anyway — it bolted a clause onto the shared
+    // template ("This scoring sequence occurs at 11:15 into the clip as the ball
+    // crosses the line.", similarity 1.000 against `e9b8e239`'s copy at 5:42). A
+    // rule about WHEN-only sentences cannot stop that, because the sentence is no
+    // longer WHEN-only. So the banned thing is now the SHAPE itself: job-wide,
+    // with the clock swapped, the actor swapped, or a clause appended. Every shape
+    // below is a template this job already serves (four from the repair's pool,
+    // plus the two the writer itself re-emitted), so banning them costs the writer
+    // nothing it does not already have. The offsets stay `…`: a banned shape is
+    // never rendered filled-in, because AC14 copies a filled sentence.
+    "- Never spend a whole sentence on the clip clock. The `Window:` offset must sit INSIDE a sentence that also carries another fact (an attested actor's act, the score line, or the competition). BANNED FRAME SHAPES — never write one of these, and never write one with a clause bolted onto it: 'The clip carries this sequence at …', 'This passage sits at … of the clip', 'The window runs at … into the clip', 'This scoring sequence occurs at …', 'This scoring play occurs at …', 'X is in the passage at … into the clip', 'The ball crosses the goal line into the net at … into the clip'. Each one is a template another card in this job already serves. Swapping the clock, swapping the actor or appending 'as the ball crosses the line' does NOT make it a new sentence: it is the same sentence, and it is deleted from your copy.",
     // ADAAAA-9031 (AC14.3): distinctness is per SENTENCE, not per body — a body
     // whose sentences all restate the same clock reads as one template.
     "- Each sentence must carry a DIFFERENT fact from the sentence before it: do not restate the same clock, the same score line or the same actor's act in two sentences. Two sentences that differ only by a clock token count as the same sentence.",
@@ -3370,9 +3387,17 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
         ]
       : []),
     "- A name is optional. If the evidence names nobody, carry the depth with the clock plus the competition/venue when the match context carries one. An action fact counts ONLY when you NAME an attested team or player from the evidence: a bare verb with no named actor is not a fact.",
+    // ADAAAA-9089 (writer lever): "NAME at least one of them" was satisfied ONCE
+    // and the rest of the body fell back to the frame template. On the rev-13 VOD
+    // job that is the whole residual class: the draft names an actor in its first
+    // sentence and then writes `This scoring sequence occurs at …` /
+    // `The clip carries this sequence at …` for the remainder, which is the copy
+    // another card already carries. The rule is per SENTENCE, and the actor is the
+    // sentence's SUBJECT so the offset attaches to that actor's act — which is also
+    // what makes two cards' sentences differ by more than a clock token.
     ...(attestedActors.length > 0
       ? [
-          `- The evidence attests these actors: ${attestedActors.slice(0, 8).join(", ")}. NAME at least one of them and say what they did — that is the second fact type your copy needs, and the headline is not allowed to carry a name so this is where it belongs.`,
+          `- The evidence attests these actors: ${attestedActors.slice(0, 8).join(", ")}. This list is not empty, so a name is NOT optional on this row: EVERY sentence must name one of them as its SUBJECT and say what that actor did, with the clip offset riding on that act ('X drives forward at … into the clip'). Naming an actor once and then falling back to a frame sentence for the rest of the body is the defect; every sentence needs its own actor and its own fact about that actor. And the act has to be what THIS window's own evidence shows: never write the same actor-and-act sentence you would write on another card with only the clock changed — two cards that differ only by their clock carry the same sentence, and it is deleted.`,
         ]
       : []),
     ...(ballActionAttested === false
@@ -3409,10 +3434,15 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       : []),
     ...(input.avoidSentences && input.avoidSentences.length > 0
       ? [
+          // ADAAAA-9089 (writer lever): the rev-13 VOD drafts were clock-swapped
+          // copies of sentences this list renders (`The clip carries this sequence
+          // at 12:00 into the clip.` against the `1:57` copy served earlier), so the
+          // list is now framed as SHAPES to avoid rather than sentences to edit.
+          // The list itself is unchanged (ADAAAA-8914's prompt-first AC14.3 rule).
           `- Do not reuse a sentence already served on another card in this job: ${input.avoidSentences
             .slice(0, 6)
             .map((s) => `'${s.length > 90 ? `${s.slice(0, 87)}…` : s}'`)
-            .join(", ")}. Write a different sentence with a different fact in it.`,
+            .join(", ")}. Write a different sentence with a different fact in it. These are shapes to avoid, not sentences to edit: changing the clock, the actor name or a trailing clause inside one of them still serves the same sentence.`,
         ]
       : []),
     ...(() => {
