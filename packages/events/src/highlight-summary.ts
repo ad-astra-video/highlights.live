@@ -2240,13 +2240,25 @@ export function summaryFactCandidates(evidence: SummaryEvidence): SummaryFactCan
     if (entity) out.push(`${entity} is in the sequence as the scoreline moves from ${from} to ${to}.`);
   }
   if (clock) {
+    // ONE actor phrasing, as before. ADAAAA-9085 measured a tempting extension here —
+    // one template per attested actor, so a job that serves more clock-only rows has
+    // more distinct slots to draw on — and rejected it: alternate phrasings of ONE
+    // fact are padding, and they re-open two pins (`summary-lane-9052`: a one-fact
+    // row may not be grown to its floor by restating it; `highlight-summary-8735`: a
+    // team-named sentence credits `action` body-wide and launders a fact-poor body).
+    // Diversity of that kind belongs to the WRITER (the prompt), not to the repair.
     if (windowActor) out.push(`${windowActor} is in the passage at ${clock} into the clip.`);
     out.push(`The clip carries this sequence at ${clock} into the clip.`);
     out.push(`This passage sits at ${clock} of the clip.`);
     out.push(`The window runs at ${clock} into the clip.`);
   }
   if (venue) out.push(`The clip comes from the ${venue}.`);
-  return out
+  /** One body may not serve two near-identical substitutions: keep the first of a
+   *  colliding pair so the pool itself can never trip the AC14.3 in-body bar. */
+  const distinct = out.filter(
+    (sentence, index) => out.findIndex((other) => sentenceSimilarity(other, sentence) >= SUMMARY_SENTENCE_REPEAT_THRESHOLD) === index
+  );
+  return distinct
     .map((sentence) => ({ sentence, kinds: sentenceFactKinds(sentence, evidence) }))
     .filter((candidate) => candidate.kinds.length > 0)
     .filter((candidate) => unattestedAtmosphereClaims(candidate.sentence).length === 0)
@@ -2302,7 +2314,11 @@ function summaryClearsBand(sentences: readonly string[], band: SummaryDepthBand)
   );
 }
 
-export function dropFillerSentences(text: string, evidence: SummaryEvidence): SummaryFillerDrop {
+export function dropFillerSentences(
+  text: string,
+  evidence: SummaryEvidence,
+  avoidSentences: readonly string[] = []
+): SummaryFillerDrop {
   const reports = summarySentenceFacts(text, evidence);
   const dropped: string[] = [];
   const claims: string[] = [];
@@ -2339,7 +2355,7 @@ export function dropFillerSentences(text: string, evidence: SummaryEvidence): Su
   // the repair is extractive unless the extraction cost the card its copy.
   if (summaryClearsBand(filled(), band)) return { text: filled().join(" ").trim(), dropped, claims, substituted: [] };
 
-  const grown = substituteSummaryFacts(slots, evidence, survivors);
+  const grown = substituteSummaryFacts(slots, evidence, survivors, avoidSentences);
   return { text: grown.text, dropped, claims, substituted: grown.substituted };
 }
 
@@ -2884,7 +2900,19 @@ export interface SummaryGateDecision {
  * a refused claim/name survives the clamp and is still refused — repair never
  * launders evidence.
  */
-export function gateSummaryDetail(raw: string | null | undefined, evidence: SummaryEvidence): SummaryGateDecision {
+export function gateSummaryDetail(
+  raw: string | null | undefined,
+  evidence: SummaryEvidence,
+  /** ADAAAA-9085: the sentences THIS job has already served. The AC14.5 filler
+   *  repair substitutes fact sentences into the holes its deletions leave, and its
+   *  pool is deterministic — so without this bar the repair re-served a sentence
+   *  another card in the same job already carries (`The clip carries this sequence
+   *  at 10:00 into the clip.`), the lane's repeat key then flagged the gate's own
+   *  repair, the AC14 prune undid it, and the row dropped as `dropped:repeat` with
+   *  a PRE-repair refusal on it. Measured on the rev-13 served VOD job `54537ffa`:
+   *  3 of its 20 rows (all three `repeat-sentence`) died exactly that way. */
+  options?: { avoidSentences?: readonly string[] }
+): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
   if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], substitutedClauses: [], repairedWords: 0, raw: "", captionOverlap: 0 };
@@ -2924,7 +2952,7 @@ export function gateSummaryDetail(raw: string | null | undefined, evidence: Summ
     // contract allows. A body that keeps its facts in band still serves; one that
     // does not is judged as the WRITER wrote it, so the refusal names the bars the
     // writer failed instead of the ones a shortened body trips.
-    const filler = dropFillerSentences(clockServed.text, evidence);
+    const filler = dropFillerSentences(clockServed.text, evidence, options?.avoidSentences ?? []);
     const repaired = filler.text && filler.text !== clockServed.text ? filler.text : "";
     const judgedCandidates = repaired ? [repaired, clockServed.text] : [clockServed.text];
     let candidateRefused: SummaryViolation[] | null = null;

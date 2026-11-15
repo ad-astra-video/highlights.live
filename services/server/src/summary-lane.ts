@@ -394,6 +394,28 @@ export async function runSummaryForRow(
    *  census could not tell an AC8 repeat from a depth retry. Every row that bills
    *  two calls now carries the reason it did. */
   let retryReason: SummaryRetryReason | null = null;
+  /** ADAAAA-9085: the AC14 prune ran and its OWN re-gate is what refused the row.
+   *  The drop path used to persist `lastGate = decision` (the PRE-prune body), so a
+   *  row that died inside the repair read as a clean body dropped for repeating:
+   *  `summaryViolations: []` and a word count from a body that measured nothing. */
+  let repairRefused: {
+    token: string;
+    /** The drop NAME the repair's own refusal earns (`filler` for a remainder the
+     *  clause drop took under the band floor, `gate` for a content bar the repair
+     *  cannot fix). The row is named by the repair, not by the repeat that started
+     *  it: AC14.3's own order is "regenerate once, then drop the clause", and the
+     *  clause drop is what the copy died of. */
+    name: Extract<SummaryDropReason, "filler" | "gate">;
+    decision: ReturnType<typeof gateSummaryDetail>;
+    dropped: number;
+    substituted: number;
+    survivors: number;
+  } | null = null;
+  /** ADAAAA-9085: the AC14.5 filler repair substitutes from a deterministic pool,
+   *  so it must not re-serve a sentence this JOB already carries — that insert is
+   *  what tripped the repeat key on 3 of the rev-13 VOD job's 20 rows. */
+  const gateOptions =
+    state && state.servedSentences.length > 0 ? { avoidSentences: [...state.servedSentences] } : undefined;
   const started = now();
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
     // AC8 prompt-first: the regeneration (and any retry) is asked to avoid the
@@ -424,7 +446,7 @@ export async function runSummaryForRow(
       if (reply.reason === "parse" || reply.reason === "pool_busy") break;
       continue;
     }
-    const decision = gateSummaryDetail(reply.text, evidence);
+    const decision = gateSummaryDetail(reply.text, evidence, gateOptions);
     if (!decision.summary) {
       lastGate = decision;
       // ADAAAA-8914 (AC14.5): when the clause repair is what took the body under
@@ -554,29 +576,69 @@ export async function runSummaryForRow(
       // dropped as `repeat` with fact-bearing survivors). The substitution may
       // not repeat a sentence the job already served, so the repair cannot
       // re-break AC14.3.
-      if (repeat.key === "sentence" && repeat.repeatedSentences.length > 0) {
+      // ADAAAA-9085: the clause drop is reachable on EVERY repeat key, not only
+      // `sentence`. An `opening` repeat names the body's FIRST sentence in
+      // `repeatedSentences` — the shared 4-word run IS that sentence — so the same
+      // repair applies and removing it fixes AC8 by construction. Gating the repair
+      // on `key === "sentence"` made ADAAAA-9052's repair unreachable for the class
+      // and the row dropped with the pre-prune decision on it (rev-13 VOD row
+      // `369ff147`, `repeat-opening`).
+      if (repeat.repeatedSentences.length > 0) {
         const prune = pruneRepeatedSentences(
           decision.summary,
           repeat.repeatedSentences,
           evidence,
           state?.servedSentences ?? []
         );
-        const prunedDecision = gateSummaryDetail(prune.text, evidence);
+        const prunedDecision = gateSummaryDetail(prune.text, evidence, gateOptions);
         if (prunedDecision.summary) {
           accepted = prunedDecision;
           prunedSentences = repeat.repeatedSentences;
           prunedSubstituted = prune.substituted.length;
-          retryReason = retryReason ?? "repeat-sentence";
+          retryReason = retryReason ?? (repeat.key === "opening" ? "repeat-opening" : "repeat-sentence");
           log(
             `[summary:${descriptor.jobId}] repeat-clause-drop highlight=${descriptor.highlightId} dropped=${repeat.repeatedSentences.length} substituted=${prune.substituted.length} words=${prunedDecision.words} ${inputs}`
+          );
+        } else {
+          // ADAAAA-9085: keep the REPAIR's own refusal, not the pre-prune decision.
+          // `summaryRepairRefused` names the mechanism so a served-row census can
+          // separate "the row's evidence offered no admissible fact" from "the
+          // writer's body violated a bar"; the drop path below then persists this
+          // decision's violations / words / droppedClauses.
+          const survivors = (decision.sentences ?? 0) - repeat.repeatedSentences.length;
+          const depthOnly = prunedDecision.violations.every(
+            (violation) => violation === "too-few-words" || violation === "too-few-sentences"
+          );
+          const repairName: Extract<SummaryDropReason, "filler" | "gate"> =
+            prunedDecision.violations.length > 0 && depthOnly
+              ? "filler"
+              : summaryDropReasonName(prunedDecision, evidence);
+          repairRefused = {
+            token: `prune:${repairName}`,
+            name: repairName,
+            decision: prunedDecision,
+            dropped: repeat.repeatedSentences.length,
+            substituted: prune.substituted.length,
+            survivors: survivors > 0 ? survivors : 0,
+          };
+          log(
+            `[summary:${descriptor.jobId}] repeat-prune-refused highlight=${descriptor.highlightId} reason=prune:${repairName} dropped=${repeat.repeatedSentences.length} substituted=${prune.substituted.length} survivors=${survivors > 0 ? survivors : 0} words=${prunedDecision.words} violations=${prunedDecision.violations.join(",")} ${inputs}`
           );
         }
       }
       if (accepted === decision) {
-        lastGate = decision;
-        lastReason = "repeat";
+        // ADAAAA-9085: a row that died inside the repair carries the repair's own
+        // post-prune refusal; a row with no admissible clause repair keeps the
+        // pre-prune decision (there is no repair result to speak of).
+        lastGate = repairRefused ? repairRefused.decision : decision;
+        // ADAAAA-9085: a row whose clause drop left a body under the band floor is
+        // a FLOOR drop, not a repeat drop — AC14.3's own order ends there, and the
+        // row keeps the repeat evidence (`summaryRetryReason`, `summaryRepairRefused`,
+        // the dropped-sentence count). A repair refused on a CONTENT bar keeps
+        // `gate`; a row that never reached a repair keeps `repeat`.
+        lastReason = repairRefused ? repairRefused.name : "repeat";
         log(
-          `[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — drop (repeat) raw=${JSON.stringify(decision.raw.slice(0, 200))}`
+          `[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — drop (repeat)${repairRefused ? ` repairRefused=${repairRefused.token}` : ""} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
         );
         break;
       }
@@ -655,6 +717,15 @@ export async function runSummaryForRow(
     summaryDroppedByReason: { [reason]: 1 },
     summaryP95Ms: latencyMs,
     ...(retryReason ? { summaryRetryReason: retryReason } : {}),
+    // ADAAAA-9085: the repair's own outcome rides the row. Without it a census
+    // reads a repaired-then-refused row as a clean body dropped for repeating.
+    ...(repairRefused
+      ? {
+          summaryRepairRefused: repairRefused.token,
+          summaryRepairDroppedSentences: repairRefused.dropped,
+          summaryRepairSubstitutedSentences: repairRefused.substituted,
+        }
+      : {}),
   });
   // ADAAAA-8903 (AC1-live): a `too-few-facts` refusal on a row whose OWN evidence
   // offers two fact kinds AND whose judged body names an attested actor is the

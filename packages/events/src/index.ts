@@ -2518,6 +2518,20 @@ export const HighlightRecordSchema = z.object({
    *  or `filler-repair` (the AC14 regeneration). Absent on a one-call row, so the
    *  meter can prove every 2-call row was on a permitted path. */
   summaryRetryReason: z.enum(["repeat-opening", "repeat-sentence", "filler-repair"]).optional(),
+  /** ADAAAA-9085: the AC14 clause repair RAN and its own re-gate refused the row,
+   *  named as `prune:<drop name>` (e.g. `prune:filler`, `prune:gate`). Absent when
+   *  the row never reached a repair. `summaryViolations` / `summaryWordCount` /
+   *  `summaryDroppedClauses` beside it are then the POST-prune measurement, so a
+   *  served-row census can tell "the row's evidence offered no admissible fact"
+   *  from "the writer's body violated a bar" instead of reading the pre-prune
+   *  decision, which said nothing (rev-13 VOD rows `c1a78055`, `3b8ff4f5`,
+   *  `b45fc105` all read `summaryViolations: []`). */
+  summaryRepairRefused: z.string().optional(),
+  /** Sentences the repair dropped (the repeated clauses) and the fact sentences it
+   *  substituted to try to restore the band. Zero substitutions beside a named
+   *  refusal is the "no admissible fact left" class. */
+  summaryRepairDroppedSentences: z.number().int().min(0).optional(),
+  summaryRepairSubstitutedSentences: z.number().int().min(0).optional(),
   // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
   // `reason` was derived from, with the frame that confirms it.
   colour: ColourSignalSchema.optional(),

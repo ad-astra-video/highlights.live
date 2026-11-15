@@ -166,7 +166,10 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     // row and the retry ends in the `repeat` drop — the assertion under test is
     // that the repeat retry carries no depth directive.
     expect(result.outcome).toBe("dropped");
-    expect(result.reason).toBe("repeat");
+    // ADAAAA-9085: the opening repeat now reaches the clause drop, and the drop is
+    // named by the repair's own refusal (`gate`: the pruned remainder could not relay
+    // the facts) instead of the pre-prune `repeat`.
+    expect(result.reason).toBe("gate");
     expect(result.calls).toBe(2);
     expect(f.bodies[1]).toContain("Do not open with any of these already-served runs");
     // The repeat retry names the repeated sentence, and carries no DEPTH directive

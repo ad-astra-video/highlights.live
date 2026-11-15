@@ -188,11 +188,19 @@ describe("ADAAAA-9052 — a row with no other attested fact still drops `repeat`
       stateWith(SERVED_9052, "0:24")
     );
     expect(result.outcome).toBe("dropped");
-    expect(result.reason).toBe("repeat");
+    // ADAAAA-9085: the row still drops on its own evidence (the repair substitutes one
+    // admissible sentence and the remainder stays under the floor) — but it is named by
+    // what the repair measured (`filler`: a remainder under the band floor) and carries
+    // the repair's own post-prune numbers, instead of the pre-prune `repeat`.
+    expect(result.reason).toBe("filler");
     expect(result.calls).toBe(2);
     const patch = patches.at(-1)!.patch;
-    expect(String(patch.summaryGate)).toBe("dropped:repeat");
+    expect(String(patch.summaryGate)).toBe("dropped:filler");
     expect(patch.summary).toBeUndefined();
+    expect(patch.summaryRepairRefused).toBe("prune:filler");
+    expect(patch.summaryViolations as string[]).toContain("too-few-words");
+    // The body was never padded to the floor: the post-prune count is under it.
+    expect(patch.summaryWordCount as number).toBeLessThan(SUMMARY_VOD_BAND.floorWords);
   });
 });
 

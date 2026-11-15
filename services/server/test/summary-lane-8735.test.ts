@@ -103,13 +103,22 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
 
     const second = await runSummaryForRow(store, run, { jobId: "9891ff33", highlightId: "8b444000", evidence: teamContext() }, state);
     expect(second.outcome).toBe("dropped");
-    expect(second.reason).toBe("repeat");
+    // ADAAAA-9085: the clause drop now RUNS for an opening repeat too, and the row
+    // is named by the repair's own refusal — here the pruned remainder (one sentence)
+    // cannot relay two fact kinds, so the repair refuses on a CONTENT bar (`gate`).
+    // Before, the repair was unreachable for `key === "opening"` and the row kept the
+    // pre-prune decision under the name `repeat`.
+    expect(second.reason).toBe("gate");
     expect(second.calls).toBe(2);
 
     expect(patches[1].id).toBe("8b444000");
     expect(patches[1].patch.summary).toBeUndefined();
-    expect(patches[1].patch.summaryGate).toBe("dropped:repeat");
-    expect(patches[1].patch.summaryDroppedByReason).toEqual({ repeat: 1 });
+    expect(patches[1].patch.summaryGate).toBe("dropped:gate");
+    expect(patches[1].patch.summaryDroppedByReason).toEqual({ gate: 1 });
+    expect(patches[1].patch.summaryRepairRefused).toBe("prune:gate");
+    // CLOCK_B differs from CLOCK_A only by the leading clock (AC14.3 masks the token),
+    // so BOTH of its sentences are the repeated clauses the repair drops.
+    expect((patches[1].patch.summaryRepairDroppedSentences as number) ?? 0).toBe(2);
     expect(patches[1].patch.summaryRaw).toBe(CLOCK_B);
     // Only ONE body in the job carries that opening.
     const served = patches.map((p) => p.patch.summary).filter(Boolean).map(String);
