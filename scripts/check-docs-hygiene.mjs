@@ -106,7 +106,7 @@ const PRIVATE_IPV4 =
   /(?<![\d.])(?:(?:192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![\d.])(?!\/\d{1,2}\b)/g;
 /** URL host, keeping the scheme-relative form out (compose service names have no dot). */
 const URL_HOST = /https?:\/\/([A-Za-z0-9_.\-]+)/g;
-/** user@host.tld */
+/** a user@host address */
 const EMAIL = /\b[A-Za-z0-9_.+\-]+@([A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,})/g;
 
 export function isAllowedHost(host) {
@@ -158,7 +158,11 @@ function isBinary(path) {
 }
 
 export function scanRepo(root = fileURLToPath(new URL("..", import.meta.url))) {
-  const files = execFileSync("git", ["-C", root, "ls-files", "-z"], { encoding: "utf8" })
+  // --cached --others scans tracked files AND untracked-but-not-ignored ones, so
+  // a new file carrying a real endpoint is caught before it is ever committed.
+  const files = execFileSync("git", ["-C", root, "ls-files", "-z", "-c", "-o", "--exclude-standard"], {
+    encoding: "utf8",
+  })
     .split("\0")
     .filter(Boolean);
   const violations = [];

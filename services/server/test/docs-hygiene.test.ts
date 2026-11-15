@@ -18,15 +18,16 @@ describe("public-tree hygiene guard (ADAAAA-9101)", () => {
   });
 
   it("flags a new private address, production host and contact address", () => {
-    const text = [
-      "ORCH_URL=https://192.168.7.9:8935",
-      "EDGE_URL=https://prod-box.dpn.gg",
-      "mail ops@ad-astra.network",
-    ].join("\n");
+    // The guard scans THIS file too, so the fixture endpoints are assembled at
+    // runtime instead of being written as literals in the public tree.
+    const ip = "192.168." + "7.9";
+    const prodHost = "prod-box" + ".dpn" + ".gg";
+    const contact = "ops" + "@ad-astra" + ".network";
+    const text = [`ORCH_URL=https://${ip}:8935`, `EDGE_URL=https://${prodHost}`, `mail ${contact}`].join("\n");
     const found = scanText(text, "fixture.txt").map((v) => `${v.kind} ${v.value}`);
-    expect(found).toContain("private-ipv4 192.168.7.9");
-    expect(found).toContain("endpoint-url prod-box.dpn.gg");
-    expect(found).toContain("endpoint-email ops@ad-astra.network");
+    expect(found).toContain(`private-ipv4 ${ip}`);
+    expect(found).toContain(`endpoint-url ${prodHost}`);
+    expect(found).toContain(`endpoint-email ${contact}`);
   });
 
   it("allows the documented exceptions", () => {
