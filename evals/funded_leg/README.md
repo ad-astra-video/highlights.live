@@ -104,13 +104,16 @@ exits `8`. `--dry-run` records `skipped_dry_run` instead (the stub job lives
 inside the harness process, so there is nothing external to stop);
 `--deadline-guard none` is the explicit opt-out and says so in `arm.json`.
 
-Read the arm proof as five artifacts, not one: launcher rc `0`,
+Read the arm proof as seven artifacts, not one: launcher rc `0`,
 `arm.json.outcome == "armed"`, `harness.log`'s `[leg] arm pid= job=` line,
-`heartbeat.json` naming that pid+job with `deadlineEpoch`, and
+`heartbeat.json` naming that pid+job with `deadlineEpoch`,
 `arm.json.deadlineGuard.durable: true` with `deadlineGuard.activeState:
-"active"` (a read-back from `systemctl show`, not the `systemd-run` exit code).
-A real leg whose `deadlineGuard.durable` is false ran with no layer that
-survives both guards — treat it as ungradable.
+"active"` (a read-back from `systemctl show`, not the `systemd-run` exit code),
+`arm.json.supervisor.pid` with the supervisor's own-clock deadline logged at
+start, and — ADAAAA-9012 — `arm.json.watchdog.pid` live with
+`arm.json.watch.deadlineStopEpoch` set. A real leg whose `deadlineGuard.durable`
+is false ran with no layer that survives both guards — treat it as ungradable;
+a leg with no watchdog pid is watched only by the supervisor.
 
 `$0` proof, in order (all of it runs in ~2 min, no box, no job):
 
