@@ -356,8 +356,13 @@ export function summaryDropReasonName(
 ): Extract<SummaryDropReason, "filler" | "gate"> {
   const unrepairableClaim = decision.violations.some((v) => !summaryRefusalIsRepairable(v, evidence));
   if (unrepairableClaim) return "gate";
+  // ADAAAA-9083 (AC15): a frame-narration lead the strip deleted is the same
+  // diagnostic class as a filler clause — copy that carried no fact was removed and
+  // the remainder fell under the floor — so it takes the `filler` name (the AC4
+  // "named reason"), never a new drop class.
   const fillerDrop =
-    decision.droppedClauses.length > 0 && decision.repairedWords < summaryBand(evidence.rail).floorWords;
+    (decision.droppedClauses.length > 0 || decision.frameOpeners.length > 0) &&
+    decision.repairedWords < summaryBand(evidence.rail).floorWords;
   return fillerDrop ? "filler" : "gate";
 }
 
@@ -469,7 +474,13 @@ export async function runSummaryForRow(
       // refusal. The fix for a fact-poor FIRST sample is upstream (the prompt and
       // the row's own attestation), not a second paid call.
       const factPoor = decision.violations.includes("too-few-facts");
-      const fillerRepair = !factPoor && decision.droppedClauses.length > 0;
+      // ADAAAA-9083 (AC15/AC4): a frame-narration lead the strip deleted is the
+      // same repairable shape as a filler clause — the body lost copy that carried
+      // no fact and fell under the floor — so the ONE regeneration the contract
+      // allows is the AC5 slot it already had (no new retry class). The retry is
+      // told which lead was deleted, so the second sample opens on the action.
+      const fillerRepair =
+        !factPoor && (decision.droppedClauses.length > 0 || decision.frameOpeners.length > 0);
       if (!fillerRepair) {
         log(
           `[summary:${descriptor.jobId}] one-call drop highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} words=${decision.words} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
@@ -619,7 +630,9 @@ export async function runSummaryForRow(
         accepted.droppedClauses.length > 0
           ? ` droppedClauses=${accepted.droppedClauses.length} substitutedClauses=${accepted.substitutedClauses.length} repairedWords=${accepted.repairedWords}`
           : ""
-      }${prunedSentences.length > 0 ? ` droppedRepeatedSentences=${prunedSentences.length} repairedSentences=${prunedSubstituted}` : ""}`
+      }${prunedSentences.length > 0 ? ` droppedRepeatedSentences=${prunedSentences.length} repairedSentences=${prunedSubstituted}` : ""}${
+        accepted.frameOpeners.length > 0 ? ` frameOpeners=${JSON.stringify(accepted.frameOpeners)}` : ""
+      }`
     );
     return { outcome: "stored", gate: accepted.gate, calls, latencyMs };
   }

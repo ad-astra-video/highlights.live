@@ -28,6 +28,7 @@ import {
   regateServedSentence,
   restoreTerminalPunctuation,
   suppressScoreClaims,
+  stripFrameOpener,
   type CaptionGroundingContext,
 } from "@highlights/events";
 import type { Store } from "./store";
@@ -277,6 +278,19 @@ export function appendSummaryEntry(
     // VOD path has no grounding context, so a read-time gate there would be the
     // same "page may differ from the store" hole.
     const scoredLine = suppressScoreClaims(deliveredLine);
+    // ADAAAA-9083 (AC15, rev 14): the frame-narration LEAD is stripped at WRITE,
+    // for the same reason as the scoreline above — the "Video Summary" section
+    // renders the STORED line, so a lead that names the scene / the clip / the
+    // camera must not survive into the store. The board read that surface on a
+    // served VOD job (ADAAAA-8665 comment `96560fed`) and every item began "The
+    // scene opens on …": the story ladder strips stock openers on its READ path
+    // (`gateNarrative` -> `normalizeLog`), which never touched the append seam, so
+    // the stored-and-served item kept the formula. Deletion only, both rails, and
+    // the same closed list the per-row summary body uses
+    // (`SUMMARY_FRAME_OPENERS`), so the two channels cannot drift.
+    const frame = stripFrameOpener(scoredLine);
+    const leadLine = frame.stripped.length > 0 ? frame.text : scoredLine;
+    if (!leadLine) continue;
     // ADAAAA-7956 (contract v3 rule 2) + ADAAAA-7962 (v4 §3.7): a line the job
     // has already emitted is not appended again, capped at the contract's max (2
     // identical delivered lines per job) — not "drop every repeat". De-dup reads
@@ -285,8 +299,8 @@ export function appendSummaryEntry(
     // set and the served set agree about what "the same line" is.
     const priorKept = keptRows.map((r) => r.text);
     const deduped = grounding
-      ? dedupeStoredLines(scoredLine, [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES)
-      : scoredLine;
+      ? dedupeStoredLines(leadLine, [...storedTexts, ...priorKept], MAX_LINE_OCCURRENCES)
+      : leadLine;
     if (!deduped) continue;
     keptRows.push({
       seq: seq + keptRows.length,

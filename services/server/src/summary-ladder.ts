@@ -40,6 +40,7 @@ import {
   gateUncorroboratedGoal,
   isQuietVerdict,
   isCorroboratedHighlight,
+  NARRATIVE_FRAME_OPENERS,
   repairDanglingTail,
   servedShape,
   servedShapeViolations,
@@ -119,10 +120,14 @@ const STOCK_OPENERS: RegExp[] = [
   /^the match is (?:heating up|coming alive|hotting up)\s+as\s+/i,
   // "The match between Real Madrid and FC Barcelona is heating up as …"
   /^the match between\b[^.!?]{0,90}?\b(?:as|while)\s+/i,
-  /^the scene opens\s+(?:on|with)\s+/i,
   /^the atmosphere is building\s+as\s+/i,
-  /^the video\s+(?:begins|starts|opens)\s+(?:with|on|by)\s+/i,
-  /^the (?:sequence|clip|footage)\s+(?:begins|starts|opens|shows)\s+(?:with|on|by)\s+/i,
+  // ADAAAA-9083 (AC15): the frame-narration patterns the story ladder already
+  // stripped are factored into `@highlights/events` (`NARRATIVE_FRAME_OPENERS`)
+  // so the ladder and the summary-body write seam read ONE list. Only the shapes
+  // the ladder already had are composed here: the summary seam applies the
+  // EXTENDED list (`SUMMARY_FRAME_OPENERS`) inside `gateSummaryDetail`, and
+  // `gateNarrative`'s behaviour is deliberately unchanged by ADAAAA-9083.
+  ...NARRATIVE_FRAME_OPENERS,
 ];
 
 /** True when the text opens with a stock template phrase. */
