@@ -12,7 +12,7 @@
 #   2. run docker/deploy-gate.sh fail-closed and PRINT its decision line,
 #   3. only then rebuild + recreate.
 #
-# Usage (from the box repo root, e.g. /home/operator/highlights.live):
+# Usage (from the box repo root, i.e. the deploy checkout):
 #   ./docker/deploy.sh                 # whole stack
 #   ./docker/deploy.sh media server    # named services only
 #

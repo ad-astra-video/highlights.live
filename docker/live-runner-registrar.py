@@ -7,9 +7,9 @@ sidecar with a distinct `RUNNER_ID`, its own health probe and its own
 registration lifetime, so the registry — not the nginx router — owns decide
 readiness, capacity and failover:
 
-    highlights-decide-5090-1   http://192.0.2.151:8091  capacity 4  tier=5090
-    highlights-decide-5090-2   http://192.0.2.151:8092  capacity 4  tier=5090
-    highlights-decide-5090-3   http://192.0.2.151:8093  capacity 4  tier=5090
+    highlights-decide-5090-1   http://<DECIDE_WORKER_HOST>:8091  capacity 4  tier=5090
+    highlights-decide-5090-2   http://<DECIDE_WORKER_HOST>:8092  capacity 4  tier=5090
+    highlights-decide-5090-3   http://<DECIDE_WORKER_HOST>:8093  capacity 4  tier=5090
     highlights-decide-x99      http://decide:8081         capacity 2  tier=x99-fallback
     highlights-decide-x99-b    http://decide-b:8081       capacity 2  tier=x99-fallback
 
@@ -50,13 +50,13 @@ Modes (used by the test suite, so the config assertions run the real parser):
 Environment (all required unless noted):
     ORCH_URL              https://orchestrator:8935       go-livepeer rpc base URL
                                                           (on the 5090 host:
-                                                          https://192.0.2.6:8935)
+                                                          <ORCH_HOST>)
     ORCH_SECRET           orchestrator secret for first registration
     RUNNER_ID             e.g. highlights-decide-5090-1   MUST be unique per
                                                           container; a client calls
                                                           `/apps/<id>/app/...`
     RUNNER_APP            e.g. highlights-live/decide
-    RUNNER_URL            http://192.0.2.151:8091        THAT container, reachable
+    RUNNER_URL            http://<DECIDE_WORKER_HOST>:8091 THAT container, reachable
                                                           from the orchestrator
     RUNNER_HEALTH_URL     /health (relative joins onto RUNNER_URL)
     RUNNER_MODE           persistent | single-shot       (default persistent)

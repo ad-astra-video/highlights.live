@@ -39,9 +39,9 @@ interface Runner {
 
 // The registration set the ticket lands (plan §4).
 const FIVE: Runner[] = [
-  { id: "highlights-decide-5090-1", url: "http://192.0.2.151:8091", capacity: 4, tier: "5090", seqs: 4 },
-  { id: "highlights-decide-5090-2", url: "http://192.0.2.151:8092", capacity: 4, tier: "5090", seqs: 4 },
-  { id: "highlights-decide-5090-3", url: "http://192.0.2.151:8093", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-1", url: "http://decide-worker.example:8091", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-2", url: "http://decide-worker.example:8092", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-3", url: "http://decide-worker.example:8093", capacity: 4, tier: "5090", seqs: 4 },
   { id: "highlights-decide-x99", url: "http://decide:8081", capacity: 2, tier: "x99-fallback", seqs: 2 },
   { id: "highlights-decide-x99-b", url: "http://decide-b:8081", capacity: 2, tier: "x99-fallback", seqs: 2 },
 ];
@@ -172,13 +172,20 @@ describe("per-container decide registrations (ADAAAA-8553 S1)", () => {
     expect(compose).not.toContain("RUNNER_AUTO_CONF=");
   });
 
-  it("the 5090 host script starts one registrar per worker with the S0-proven LAN addresses", () => {
+  it("the 5090 host script starts one registrar per worker and takes its addresses from env", () => {
     expect(runScript).toMatch(/for i in 1 2 3/);
     expect(runScript).toContain('RUNNER_ID="highlights-decide-5090-$i"');
     expect(runScript).toMatch(/port=\$\(\(8090 \+ i\)\)/);
     expect(runScript).toContain('RUNNER_URL="$runner_url"');
-    expect(runScript).toContain('ORCH_URL=${ORCH_URL:-https://192.0.2.6:8935}');
-    expect(runScript).toContain('WORKER_HOST=${WORKER_HOST:-192.0.2.151}');
+    // ADAAAA-9101: the orchestrator URL and the worker address are NOT tracked.
+    // They resolve env -> docker/.env -> explicit error, so no real address can
+    // reach the public tree and a missing value fails loudly.
+    expect(runScript).toContain("ORCH_URL=$(env_file_value ORCH_URL)");
+    expect(runScript).toContain("WORKER_HOST=$(env_file_value WORKER_HOST)");
+    expect(runScript).toContain("ORCH_URL is unset");
+    expect(runScript).toContain("WORKER_HOST is unset");
+    expect(runScript).not.toMatch(/\b192\.168\./);
+    expect(runScript).not.toMatch(/https:\/\/[a-z0-9-]+\.[a-z]{2,}:8935/);
     expect(runScript).toContain('CAPACITY=${RUNNER_CAPACITY_5090:-4}');
     expect(runScript).toContain('-e RUNNER_HEALTH_URL=/health');
     expect(runScript).toContain('"tier": "5090"');
@@ -209,7 +216,7 @@ def cfg(rid, url, cap):
         "RUNNER_MODE": "single-shot", "RUNNER_CAPACITY": str(cap),
     })
 
-a = m.Registrar(cfg("highlights-decide-5090-1", "http://192.0.2.151:8091", 4))
+a = m.Registrar(cfg("highlights-decide-5090-1", "http://decide-worker.example:8091", 4))
 b = m.Registrar(cfg("highlights-decide-x99-b", "http://decide-b:8081", 2))
 calls = []
 
@@ -258,11 +265,11 @@ print(json.dumps({
       expect(hb.runner_id).toBe("highlights-decide-5090-1");
       expect(hb.capacity).toBe(4);
       expect(hb.status).toBe("ready");
-      expect(hb.url).toBe("http://192.0.2.151:8091");
+      expect(hb.url).toBe("http://decide-worker.example:8091");
     }
 
     // Each registrar probes ITS OWN container, never a shared/router probe.
-    expect(result.healthA).toBe("http://192.0.2.151:8091/health");
+    expect(result.healthA).toBe("http://decide-worker.example:8091/health");
     expect(result.healthB).toBe("http://decide-b:8081/health");
     expect(result.healthA).not.toBe(result.healthB);
     expect(result.registeredA).toBe(true);
@@ -436,9 +443,9 @@ registry = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Registry)
 threading.Thread(target=registry.serve_forever, daemon=True).start()
 
 FIVE = [
-    ("highlights-decide-5090-1", "http://192.0.2.151:8091", 4),
-    ("highlights-decide-5090-2", "http://192.0.2.151:8092", 4),
-    ("highlights-decide-5090-3", "http://192.0.2.151:8093", 4),
+    ("highlights-decide-5090-1", "http://decide-worker.example:8091", 4),
+    ("highlights-decide-5090-2", "http://decide-worker.example:8092", 4),
+    ("highlights-decide-5090-3", "http://decide-worker.example:8093", 4),
     ("highlights-decide-x99", "http://decide:8081", 2),
     ("highlights-decide-x99-b", "http://decide-b:8081", 2),
 ]

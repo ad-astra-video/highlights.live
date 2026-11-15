@@ -30,11 +30,18 @@
 // the per-container registrar payloads and health/unregister behaviour are
 // pinned in `live-runner-registrar.test.ts`.
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoFile = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url));
 const conf = readFileSync(repoFile("docker/decide-router.conf"), "utf8");
+const entrypoint = repoFile("docker/decide-router-entrypoint.sh");
+
+/** Any private IPv4 literal, in any form (ADAAAA-9101: none may be tracked). */
+const PRIVATE_IPV4 = /\b(?:192\.168|10|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b/;
 
 /** The body of one `upstream <name> { ... }` block. */
 function upstreamBlock(name: string): string {
@@ -57,26 +64,50 @@ describe("decide router upstreams (ADAAAA-8083)", () => {
     expect(block).toMatch(/zone\s+decide_pool\s+\d+k/);
   });
 
-  it("balances across the three 5090 decide workers as the PRIMARY set", () => {
-    // ADAAAA-8281 (L1): the 5090 trio is the primary term — it measured decide
+  it("takes the three 5090 worker upstreams from env, never from the tracked conf", () => {
+    // ADAAAA-8281 (L1): the 5090 trio is the PRIMARY term — it measured decide
     // p50 2.02 s vs ~3.7 s blended on the x99 pair at the same cell (04:32Z leg,
     // ADAAAA-8258/8259) and is the cheaper/faster GPU term.
+    //
+    // ADAAAA-9101: the repository is public, so the conf cannot name the worker
+    // host. The PRIMARY set is rendered at container start by
+    // docker/decide-router-entrypoint.sh from DECIDE_WORKER_HOST (+
+    // DECIDE_WORKER_PORTS) into the file this block includes.
     const block = upstreamBlock("decide_pool");
-    const servers = block.split("\n").filter((l) => /^\s*server\s+\S+:\d+/.test(l));
-    const primary = servers.filter((l) => !/\bbackup\b/.test(l));
-    expect(primary.length).toBe(3);
-    expect(primary.map((l) => l.trim().split(/\s+/)[1]).sort()).toEqual([
-      "192.0.2.151:8091",
-      "192.0.2.151:8092",
-      "192.0.2.151:8093",
+    expect(block).toMatch(/include\s+\/tmp\/decide-workers\.conf;/);
+    expect(conf).not.toMatch(PRIVATE_IPV4);
+    // The x99 fallbacks stay compose service names, which resolve on the network.
+  });
+
+  it("renders one literal upstream per DECIDE_WORKER_PORT without logging the address", () => {
+    const bin = mkdtempSync(join(tmpdir(), "decide-router-bin-"));
+    const nginx = join(bin, "nginx");
+    writeFileSync(nginx, "#!/bin/sh\nexit 0\n");
+    chmodSync(nginx, 0o755);
+    const run = spawnSync("sh", [entrypoint], {
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH ?? ""}`,
+        DECIDE_WORKER_HOST: "worker.example",
+        DECIDE_WORKER_PORTS: "8091,8092",
+      },
+      encoding: "utf8",
+    });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).not.toContain("worker.example");
+    expect(readFileSync("/tmp/decide-workers.conf", "utf8").trimEnd().split("\n")).toEqual([
+      "    server worker.example:8091 max_fails=2 fail_timeout=10s;",
+      "    server worker.example:8092 max_fails=2 fail_timeout=10s;",
     ]);
-    for (const line of primary) {
-      // Literal host:port, never `resolve`: the 5090 workers are `docker run`
-      // containers on decide-pool-box with PUBLISHED ports, which Docker's
-      // embedded DNS cannot resolve, and a literal IP cannot go stale.
-      expect(line, `5090 primary must not use resolve: ${line.trim()}`).not.toMatch(/\bresolve\b/);
-      expect(line).toMatch(/max_fails=\d+/);
-    }
+  });
+
+  it("is an explicit boot error when DECIDE_WORKER_HOST is unset", () => {
+    const run = spawnSync("sh", [entrypoint], {
+      env: { ...process.env, DECIDE_WORKER_HOST: "" },
+      encoding: "utf8",
+    });
+    expect(run.status).not.toBe(0);
+    expect(run.stderr).toContain("DECIDE_WORKER_HOST is unset");
   });
 
   it("keeps the x99 pair as `backup`, re-resolved, so failover survives", () => {

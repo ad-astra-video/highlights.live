@@ -18,7 +18,7 @@
 #
 #   ./docker/admin-readout.sh
 #   ./docker/admin-readout.sh --json          # raw funnel + spend payloads
-#   HIGHLIGHTS_API_BASE=https://highlights-server.dpn.gg ./docker/admin-readout.sh
+#   HIGHLIGHTS_API_BASE=https://<PUBLIC_HOST> ./docker/admin-readout.sh
 #
 # Env:
 #   HIGHLIGHTS_API_BASE          server base URL (default http://localhost:3000)

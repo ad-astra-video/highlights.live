@@ -51,7 +51,8 @@ own bridge IPs — the deployed compose network is `highlights-live`, not `hl`:
 
     python3 /tmp/mg8122/drive_decide_cycle.py \
       --manifest /tmp/mg8122/label-manifest.json \
-      --perceive http://172.20.0.5:8080 --decide http://172.20.0.12:8081 \
+      --perceive http://<PERCEIVE_CONTAINER_IP>:8080 \
+      --decide http://<DECIDE_CONTAINER_IP>:8081 \
       --clip-root /home/operator/highlights.live/docker/data/clips \
       --cadence 5 --window 7 --max-frames 4 --fps 1 \
       --out /tmp/mg8122/trace-8122.json

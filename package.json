@@ -12,7 +12,8 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "check:pathways": "node scripts/check-highlight-pathways.mjs"
+    "check:pathways": "node scripts/check-highlight-pathways.mjs",
+    "check:docs-hygiene": "node scripts/check-docs-hygiene.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.5.0",

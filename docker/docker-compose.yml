@@ -124,13 +124,15 @@ services:
       # processing detail. Set it via docker/.env on the box — no rebuild.
       - PERCEIVE_LOG_LEVEL=${PERCEIVE_LOG_LEVEL:-INFO}
     volumes:
-      # HF cache (token + downloaded weights). Warm on the box at
-      # /home/operator/.cache/huggingface, so a redeploy reuses cached weights.
-      - ${HF_CACHE_DIR:-/home/operator/.cache/huggingface}:/models/hf-cache
+      # HF cache (token + downloaded weights). ADAAAA-9101: env-first — the
+      # host path is the box's own docker/.env value (HF_CACHE_DIR), and the
+      # tracked default is a compose-relative placeholder, never a real home
+      # path. The container path (HF_HOME) is unchanged.
+      - ${HF_CACHE_DIR:-./data/hf-cache}:/models/hf-cache
       # ADAAAA-6414: staged fine-tuned Florence-2-base merged model dir (train's
       # LoRA merge output) served by the detector via FLORENCE_MODEL above.
       # Read-only; the container runs as root so it reads the staged weights.
-      - ${RUNS_DIR:-/home/operator/highlights.live/docker/runs}:/runs:ro
+      - ${RUNS_DIR:-./runs}:/runs:ro
       # VOD clips the SAM backend tracks across frames (PERCEIVE_SAM_CLIP).
       - ${CLIPS_DIR:-./clips}:/clips:ro
       # Shared with the server: perceive sees the server's dataDir at /data so
@@ -487,8 +489,17 @@ services:
   decide-router:
     image: ${DECIDE_ROUTER_IMAGE:-nginx:alpine}
     container_name: highlights-decide-router
+    # ADAAAA-9101: env-first. The tracked conf has no worker address; the
+    # entrypoint renders the PRIMARY upstream lines from DECIDE_WORKER_HOST
+    # (+ DECIDE_WORKER_PORTS) before nginx starts. Both values live in the box
+    # docker/.env (untracked); an unset host is an explicit boot error.
+    command: ["/bin/sh", "/opt/decide-router-entrypoint.sh"]
+    environment:
+      - DECIDE_WORKER_HOST=${DECIDE_WORKER_HOST:-}
+      - DECIDE_WORKER_PORTS=${DECIDE_WORKER_PORTS:-8091,8092,8093}
     volumes:
       - ./decide-router.conf:/etc/nginx/nginx.conf:ro
+      - ./decide-router-entrypoint.sh:/opt/decide-router-entrypoint.sh:ro
     expose: ["8081"]
     depends_on:
       decide:
@@ -553,7 +564,7 @@ services:
     networks: [hl]
 
   # ADAAAA-8553 S1: the x99 pair registers PER CONTAINER. These two sidecars
-  # live on this host; the three 5090 workers register from decide-pool-box
+  # live on this host; the three 5090 workers register from the worker host
   # with docker/registrar-5090.sh (they are plain `docker run` containers, not
   # compose services here). Each sidecar probes ONLY its own container's
   # `/health` and unregisters ONLY its own id, so one dead worker releases only
@@ -734,7 +745,7 @@ services:
       # cannot resolve the docker-internal `media:4070` service name). config.ts
       # reads this as `mediaPublicBaseUrl`, falling back to MEDIA_SERVER_URL when
       # unset (local/dev, no LB). mediaPublicBaseUrl feeds api.ts provisionMedia().
-      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
+      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-http://localhost:4070}
       # ADAAAA-6869 Phase 4: bearer for the media node's `GET /node` per-session
       # detail surface (leases). Must equal the media service's MEDIA_HEALTH_TOKEN.
       # Unset => `GET /media/node` still reports capacity/load + DB-derived cost.
@@ -977,7 +988,10 @@ services:
       - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
       - STRIPE_PRICE_PRO=${STRIPE_PRICE_PRO:-}
       - STRIPE_PRICE_USAGE=${STRIPE_PRICE_USAGE:-}
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-https://highlights-server.dpn.gg}
+      # ADAAAA-9101: env-first. The production origin lives only in the box's
+      # docker/.env (untracked); with an empty .env this resolves to the local
+      # dev origin, never a real host.
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-http://localhost:3000}
       - SIGNER_AUTH_TOKEN=${SIGNER_AUTH_TOKEN:-}
       # Transactional email: the server enqueues invites + password resets to
       # the email-sender container over its queue API (bearer-token auth).
@@ -1108,7 +1122,7 @@ services:
       # Public LB / Cloudflare front for the media tier. The media server returns
       # this as the FULL ws ingest URL on provision so clients can be routed by
       # the load balancer rather than assuming a path on one node.
-      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-https://highlights-media.dpn.gg}
+      - MEDIA_PUBLIC_BASE_URL=${MEDIA_PUBLIC_BASE_URL:-http://localhost:4070}
       # Release a provisioned-but-never-used perceive slot after this long.
       - MEDIA_PROVISION_NO_CLIENT_MS=${MEDIA_PROVISION_NO_CLIENT_MS:-60000}
       # ADAAAA-7306: ICE/STUN/TURN servers for WebRTC screen-share ingest. The

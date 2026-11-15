@@ -446,7 +446,7 @@ Two things follow for AC-1, and neither is a second voter problem:
    cannot lift the 5/10 the primary layer reproduces — the primary read has to
    get better, not another vote;
 2. the issue's fallback mechanism (a different prompt family / multi-frame strip
-   as a separate layer) needs `SCAN_KEY` for `https://vllm.dpn.chat`, which was
+   as a separate layer) needs `SCAN_KEY` for `<SCAN_API>`, which was
    not present in this run's environment and is not in
    `GET /api/agents/me/secrets`. Until that key is provisioned as a Paperclip
    secret, no prompt-family layer can be calibrated — the deterministic path is
@@ -1000,7 +1000,7 @@ temporal density inside the measured sheet budget does not create ball evidence.
 ## Reproduction
 
 ```bash
-curl -sS "https://highlights-server.dpn.gg/jobs/ac6bf37f-6a03-4d14-a307-de5b9e200405/detail" \
+curl -sS "https://<PUBLIC_HOST>/jobs/ac6bf37f-6a03-4d14-a307-de5b9e200405/detail" \
   -H "Authorization: Bearer <admin token>" -o /tmp/detail_da2d21a.json
 python3 evals/kids_soccer_near_miss/score_goal_precision.py \
   --manifest evals/kids_soccer_near_miss/label-manifest.json \

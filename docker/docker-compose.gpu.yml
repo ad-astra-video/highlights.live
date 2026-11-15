@@ -29,7 +29,7 @@ services:
     volumes:
       # HF cache (holds both the token and downloaded weights). Defaults to the
       # deploying host's local HF cache so a warm cache is reused across runs.
-      - ${HF_CACHE_DIR:-/home/operator/.cache/huggingface}:/models/hf-cache
+      - ${HF_CACHE_DIR:-./data/hf-cache}:/models/hf-cache
       # VOD clips the SAM backend tracks across frames (PERCEIVE_SAM_CLIP).
       - ${CLIPS_DIR:-./clips}:/clips:ro
       # Shared with the server: perceive sees the server's dataDir at /data so
@@ -65,7 +65,7 @@ services:
     volumes:
       # HF cache (holds both the token and downloaded/base weights) — shared
       # with perceive so a warm cache is reused across fine-tunes.
-      - ${HF_CACHE_DIR:-/home/operator/.cache/huggingface}:/models/hf-cache
+      - ${HF_CACHE_DIR:-./data/hf-cache}:/models/hf-cache
       # Produced LoRA adapter + merged model + eval reports (TRAIN_OUT).
       - ${RUNS_DIR:-./runs}:/runs
     expose: ["8083"] # only on the private hl network (orchestrator proxy -> train:8083)

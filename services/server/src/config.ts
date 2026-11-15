@@ -79,7 +79,7 @@ export interface ServerConfig {
    * frames route browser -> media-server WS -> orchestrator video-in instead of
    * the server's /jobs/:id/ingest HTTP rail. */
   mediaServerUrl?: string;
-  /** Public media origin (scheme + host, e.g. `https://highlights-media.dpn.gg`)
+  /** Public media origin (scheme + host, e.g. `https://media.example.com`)
    * the BROWSER reaches for WebRTC screen-share signaling. The docker-internal
    * `mediaServerUrl` (`media:4070`) is what the control plane uses to provision
    * and health-check a media node, but a browser cannot resolve that service

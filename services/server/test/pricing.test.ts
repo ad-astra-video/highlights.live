@@ -49,7 +49,7 @@ describe("canonical beta pricing + quota numbers (Gate X F3)", () => {
       expect(res.json().clipQuotaLimit).toBe(10);
     } else {
       // /billing/status requires auth; obtain a token to assert quota enforcement.
-      const reg = await app.inject({ method: "POST", url: "/auth/register", payload: { email: "q@t.dev", password: "password123" } });
+      const reg = await app.inject({ method: "POST", url: "/auth/register", payload: { email: "q@t.example", password: "password123" } });
       const token = reg.json().token as string;
       const authed = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
       expect(authed.json().clipQuotaLimit).toBe(10);

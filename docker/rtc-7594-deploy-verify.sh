@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ADAAAA-7594 — one-shot deploy + verification for the media RTC rail.
 #
-# Run this ON the box (gpu-box) once the fleet exec path is up, e.g.
+# Run this ON the GPU box once the fleet exec path is up, e.g.
 #   bash docker/rtc-7594-deploy-verify.sh            # deploy + prove the image
 #   bash docker/rtc-7594-deploy-verify.sh --fault    # + mid-stream decode-failure proof (AC3)
 #   bash docker/rtc-7594-deploy-verify.sh --report   # only print the counters

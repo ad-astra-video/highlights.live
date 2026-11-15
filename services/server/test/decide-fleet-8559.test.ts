@@ -33,7 +33,7 @@ const baseObserveMetrics = {
 /** The five registrations S1 creates, exactly as go-livepeer renders them:
  * the runner id is the `/apps/<id>/app` route and the tier rides `metadata`. */
 const fifoRegistration = (id: string, capacity: number, tier: string): DiscoveredRunner => ({
-  url: `https://192.0.2.6:8935/apps/${id}/app`,
+  url: `https://orchestrator.example:8935/apps/${id}/app`,
   app: "highlights-live/decide",
   capacity,
   capacity_available: capacity,

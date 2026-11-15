@@ -45,7 +45,8 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import drive_decide_cycle as D  # noqa: E402  (shipped alongside)
 
-GEMMA = os.environ.get("GEMMA_HOST", "172.20.0.14")
+# ADAAAA-9101: no tracked container address; set GEMMA_HOST on the box.
+GEMMA = os.environ.get("GEMMA_HOST", "")
 GEMMA_PORT = int(os.environ.get("GEMMA_PORT", "8088"))
 MODEL = "cyankiwi/gemma-4-12B-it-qat-AWQ-INT4"
 
@@ -261,8 +262,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifest", required=True)
     ap.add_argument("--clip", default="/home/operator/videojev-pilot/clips/kids-soccer.mp4")
-    ap.add_argument("--perceive", default="http://172.20.0.5:8080")
-    ap.add_argument("--decide", default="http://172.20.0.12:8081")
+    # ADAAAA-9101: no tracked container addresses; pass them explicitly.
+    ap.add_argument("--perceive", required=True)
+    ap.add_argument("--decide", required=True)
     ap.add_argument("--game-hint", default="soccer")
     ap.add_argument("--cache", required=True)
     ap.add_argument("--out", required=True)
