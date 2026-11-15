@@ -1682,6 +1682,17 @@ export const JobSchema = z.object({
   // actually cropped (see ScoreboardSurfaceSchema). Additive optional — absent
   // before the first reported crop and on records that predate it.
   scoreboardSurface: ScoreboardSurfaceSchema.optional(),
+  // ADAAAA-9084: the QA DELIVERED-TEAMS lever. When present (and only an
+  // operator/QA session may submit it — `POST /jobs` 403s anyone else) these are
+  // the teams the pipeline delivers for this ONE job: the row carries the guard
+  // teams as `qaMatchContextTeams`, the seeded `matchContext` below delivers them
+  // on every `/analyze`, and the VOD match-context resolver is SKIPPED so it
+  // cannot overwrite the pin at its 25/50/90 % re-checks. It exists so a
+  // `contradicted` score surface (a score change demoted because the delivered
+  // teams are not the ones the bug prints, ADAAAA-8844) can be captured on a
+  // served job without a foreign PIP clip. Inert by default: absent on every
+  // row that predates it and on every normal submit (request byte-identical).
+  qaMatchContextTeams: z.array(MatchContextTeamSchema).optional(),
   // ADAAAA-8544: the per-stream decide cost knob, resolved ONCE at job start and
   // FROZEN — never rewritten mid-stream (a mid-stream change would alter the
   // latency/spend profile of a stream already being measured; the user restarts

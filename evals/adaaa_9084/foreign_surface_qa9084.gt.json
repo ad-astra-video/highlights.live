@@ -1,0 +1,92 @@
+{
+  "fixture": "foreign_surface_qa9084.mp4",
+  "issue": "ADAAAA-9084",
+  "purpose": "A served-clip fixture whose DELIVERED teams are deliberately not the ones the printed score bug shows, so the score-surface rule can persist verdict=contradicted (a foreign score change demoted) on a real source=file job, without a PIP composite clip.",
+  "sourceClip": "kids95_8483.mp4",
+  "byteIdentical": true,
+  "bytes": 52182616,
+  "sha256": "434fdda9faacc4899c1e24a2d6f6370f67dd7195a174117cd8a1f3ade4dd89fd",
+  "durationS": 285,
+  "gameHint": "soccer",
+  "scoreboardRoi": [0, 0, 1, 0.25],
+  "printedBug": {
+    "names": ["RMA", "BAR"],
+    "scoreReads": ["RMA 1-1 BAR", "RMA 2-1 BAR"],
+    "plates": { "home": [81, 61, 98], "away": [97, 105, 163] },
+    "note": "the served broadcast bug: printed names are Real Madrid / Barcelona codes and the plates read blue/purple, i.e. INSIDE the Barcelona (blue 0.44) and purple references"
+  },
+  "deliveredTeams": [
+    { "side": "home", "name": "Juventus", "kitColors": [{ "primary": "red" }] },
+    { "side": "away", "name": "Liverpool", "kitColors": [{ "primary": "red" }] }
+  ],
+  "deliveredTeamsWhy": "Neither 'RMA' nor 'BAR' token-matches Juventus/Liverpool (checked against the shipped token_matches_team), and a red reference sits 0.4992 (home plate) / 0.5859 (away plate) OUTSIDE the measured red bar 0.43. A name-only lever is NOT enough: home=Juventus white measured 0.1091, INSIDE the bar -> verdict stayed consistent, which is why the lever must deliver kit colours too.",
+  "expected": {
+    "verdict": "contradicted",
+    "kitsDiffer": true,
+    "kitDistance": 0.4992,
+    "threshold": 0.43,
+    "kitReference": "observed",
+    "namesMatch": false,
+    "namesMatched": [],
+    "names": ["RMA", "BAR"],
+    "kitFillColor": "purple",
+    "demotionNote": "score change on a contradicted score surface: ignored (kits Δ=0.50 > 0.43; printed names RMA, BAR unmatched)",
+    "measuredOn": "served highlights-perceive container, derive_surface_identity + kit_prior_table('soccer') over the stored row's own reading (job ad4dfd77), $0"
+  },
+  "gt": [
+    {
+      "event": "goal",
+      "windowS": [17, 32],
+      "localizedTsS": 24,
+      "clipGoalOffsetS": 7,
+      "clipWindowS": 15,
+      "celebration": "inside the window tail (anchor 24 + clipGoalOffset 7 = 31 s, window ends 32 s)"
+    },
+    {
+      "event": "goal",
+      "windowS": [20, 35],
+      "localizedTsS": 27,
+      "clipGoalOffsetS": 7,
+      "clipWindowS": 15,
+      "celebration": "inside the window tail (27 + 7 = 34 s, window ends 35 s)"
+    },
+    {
+      "event": "goal",
+      "windowS": [77, 92],
+      "localizedTsS": 84,
+      "clipGoalOffsetS": 7,
+      "clipWindowS": 15,
+      "celebration": "inside the window tail (84 + 7 = 91 s, window ends 92 s)"
+    },
+    {
+      "event": "big_play",
+      "windowS": [74, 89],
+      "localizedTsS": 81,
+      "clipGoalOffsetS": 7,
+      "clipWindowS": 15,
+      "celebration": "celebration/replay tail, not a goal"
+    }
+  ],
+  "gtSource": "the clip's own stored accepted highlight rows on byte-identical bytes — jobs ad4dfd77-12d9-4ee2-9d38-85eb1f0a31c2 and c5dac977-e801-4511-b6fd-97dffffa5965 (both status=done, source=file, sourceUrl=/data/clips/kids95_8483.mp4). The copy is byte-identical, so every instant carries unchanged.",
+  "controlArm": {
+    "deliveredTeams": [{ "side": "away", "name": "Barcelona", "kitColors": [{ "primary": "blue" }] }],
+    "expected": { "verdict": "consistent", "kitDistance": 0.3539, "namesMatched": ["Barcelona"] },
+    "why": "the same clip with the RESOLVED teams still reads consistent, so a contradicted row cannot come from a disabled rule (D3-f)"
+  },
+  "submit": {
+    "method": "POST /jobs",
+    "auth": "box admin session (role=admin) — the lever is operator/QA only; a normal user gets 403 qa_match_context_not_authorized",
+    "body": {
+      "source": "file",
+      "videoPath": "/data/clips/foreign_surface_qa9084.mp4",
+      "gameHint": "soccer",
+      "sampleFps": 3,
+      "scoreboardRoi": [0, 0, 1, 0.25],
+      "qaMatchContextTeams": [
+        { "side": "home", "name": "Juventus", "kitColors": [{ "primary": "red" }] },
+        { "side": "away", "name": "Liverpool", "kitColors": [{ "primary": "red" }] }
+      ]
+    },
+    "expectedPrice": "~$0.1246 (measured kids95 shape: decideCalls 33, summaryCalls 3, perceiveSessionS 304.5; the armed job also skips the CPU match-context resolver)"
+  }
+}

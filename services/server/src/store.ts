@@ -9,6 +9,8 @@ import {
   type Job,
   type JobCandidate,
   type ClipChoice,
+  type MatchContext,
+  type MatchContextTeam,
   type ReplayEvidence,
   type TrackObservation,
 } from "@highlights/events";
@@ -141,7 +143,11 @@ export class Store {
   async createJob(input: { id?: string; ownerId?: string; source: "file" | "rtmp" | "webrtc" | "screenshare" | "browser"; sourceUrl?: string; gameHint?: string; preferLabels?: string[]; sampleFps?: number;
     /** ADAAAA-8835 (Inc 1): the per-job score-bug pin + its declared provenance block. */
     scoreboardRoi?: [number, number, number, number];
-    scoreboardSurface?: ScoreboardSurfaceBlock }): Promise<Job> {
+    scoreboardSurface?: ScoreboardSurfaceBlock;
+    /** ADAAAA-9084: the QA delivered-teams lever — the pinned teams on the row and
+     *  the seeded `matchContext` that delivers them on every `/analyze`. */
+    qaMatchContextTeams?: MatchContextTeam[];
+    matchContext?: MatchContext }): Promise<Job> {
     const id = input.id ?? randomUUID();
     const job: Job = JobSchema.parse({
       id,
@@ -153,6 +159,8 @@ export class Store {
       sampleFps: input.sampleFps,
       ...(input.scoreboardRoi ? { scoreboardRoi: input.scoreboardRoi } : {}),
       ...(input.scoreboardSurface ? { scoreboardSurface: input.scoreboardSurface } : {}),
+      ...(input.qaMatchContextTeams ? { qaMatchContextTeams: input.qaMatchContextTeams } : {}),
+      ...(input.matchContext ? { matchContext: input.matchContext } : {}),
       status: "queued",
       createdAt: new Date().toISOString(),
     });

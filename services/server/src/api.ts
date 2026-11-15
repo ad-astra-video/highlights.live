@@ -194,6 +194,7 @@ import {
   type LiveMatchContextWriter,
   type MatchContextResolver,
 } from "./match-context";
+import { qaMatchContextArmed, qaMatchContextAuthorized, qaMatchContextSeed, parseQaMatchContextTeams } from "./qa-match-context";
 import type { Db, MediaSession, AnalyticsSnapshot, Subscription, User } from "./db";
 import { acceptanceLaneRow, acceptanceLaneCounts, buildDeletedJobTombstone, deliveredAuthorityByCandidate } from "./acceptance-lane";
 import { attributionFrom, recordJobFunnel, recordGenerateFunnel, recordSubscribeFunnel, recordSignupFunnel } from "./funnel";
@@ -5050,30 +5051,43 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     // are bounded to job start / >=25% / >=50% and every write is best-effort —
     // a resolver failure leaves the job without `matchContext` (pre-feature
     // behaviour) and never fails the job (AC6).
-    matchCtxRef.current = matchContextEnabled()
-      ? createVodMatchContextResolver({
-          jobId,
-          videoPath,
-          sessionId: initial.sessionId,
-          // ADAAAA-7861: follow the LIVE session — `analyzeJob` re-reserves on a
-          // SessionLostError and the re-check must not post at the dead one.
-          getSessionId: () => slot.current.sessionId,
-          hints: {
-            title: store.getJob(jobId)?.title,
-            gameHint: anaCfg.gameHint,
-            filename: path.basename(videoPath),
-          },
-          cfg: {
-            ffmpegPath: cfg.ffmpegPath,
-            asrUrl: cfg.asrUrl,
-            asrSeconds: cfg.matchContextAsrSeconds,
-            asrMaxBytes: cfg.matchContextAsrMaxBytes,
-          },
-          client: adapter,
-          getJob: (id) => store.getJob(id),
-          patchJob: (id, patch) => store.patchJob(id, patch),
-        })
-      : null;
+    // ADAAAA-9084: a QA-armed job's teams are PINNED on the row and delivered
+    // from the seeded `matchContext`. Starting the resolver would overwrite that
+    // reference at its 0/25/50/90 % folds and turn the proving job back into a
+    // resolved (`consistent`) surface — so an armed job skips it entirely and
+    // says so in the log.
+    const qaArmed = qaMatchContextArmed(store.getJob(jobId));
+    if (qaArmed) {
+      const pinned = (store.getJob(jobId)?.matchContext?.teams ?? [])
+        .map((t) => `${t.side}=${t.name}`)
+        .join(" ");
+      console.log(`[match-context:${jobId}] QA delivered-teams lever armed (ADAAAA-9084): ${pinned} — resolver skipped`);
+    }
+    matchCtxRef.current =
+      !qaArmed && matchContextEnabled()
+        ? createVodMatchContextResolver({
+            jobId,
+            videoPath,
+            sessionId: initial.sessionId,
+            // ADAAAA-7861: follow the LIVE session — `analyzeJob` re-reserves on a
+            // SessionLostError and the re-check must not post at the dead one.
+            getSessionId: () => slot.current.sessionId,
+            hints: {
+              title: store.getJob(jobId)?.title,
+              gameHint: anaCfg.gameHint,
+              filename: path.basename(videoPath),
+            },
+            cfg: {
+              ffmpegPath: cfg.ffmpegPath,
+              asrUrl: cfg.asrUrl,
+              asrSeconds: cfg.matchContextAsrSeconds,
+              asrMaxBytes: cfg.matchContextAsrMaxBytes,
+            },
+            client: adapter,
+            getJob: (id) => store.getJob(id),
+            patchJob: (id, patch) => store.patchJob(id, patch),
+          })
+        : null;
     matchCtxRef.current?.begin();
     // Drive the Stage-A audio tap from the VOD file's audio track in parallel
     // with the video pass. Best-effort: no audio track or a dropped chunk never
@@ -6415,6 +6429,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       /** ADAAAA-8835 (Inc 1): the per-job score-bug PIN, normalized 0..1
        *  `[x0, y0, x1, y1]`. Absent => today's behaviour, request byte-identical. */
       scoreboardRoi?: number[];
+      /** ADAAAA-9084: the QA DELIVERED-TEAMS lever. Operator/QA only (403 for
+       *  anyone else), VOD rail only. Sets the teams this ONE job delivers so the
+       *  score-surface rule can be proven end to end on a foreign-bug fixture.
+       *  Absent => today's behaviour, request byte-identical. */
+      qaMatchContextTeams?: unknown;
     };
   }>(
     "/jobs",
@@ -6442,6 +6461,25 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         return reply.code(422).send({ error: roiInput.message, code: roiInput.code });
       }
       const scoreboardRoi = roiInput.roi;
+      // ADAAAA-9084: validate AND authorize the QA delivered-teams lever before
+      // any gate that spends quota or schedules compute. A malformed lever is a
+      // 422 and an unauthorised one is a 403 — never a silent drop: the whole
+      // point of the field is that the delivered teams CHANGE, so a lever that
+      // quietly did nothing would produce a "consistent" row that looks like a
+      // rule failure (the shape this ticket was filed for). Absent input is
+      // `{ ok: true, teams: undefined }`, so a normal submit is unchanged.
+      const qaTeamsInput = parseQaMatchContextTeams(req.body?.qaMatchContextTeams);
+      if (!qaTeamsInput.ok) {
+        return reply.code(422).send({ error: qaTeamsInput.message, code: qaTeamsInput.code });
+      }
+      const qaMatchContextTeams = qaTeamsInput.teams;
+      if (qaMatchContextTeams && !qaMatchContextAuthorized(user)) {
+        return reply.code(403).send({
+          error:
+            "qaMatchContextTeams is operator/QA only (it asserts the teams a job is captioned and metered on)",
+          code: "qa_match_context_not_authorized",
+        });
+      }
       const sub = await db.getSubscription(user.id);
       // Budget hard-stop: reject at submission time as soon as the month's clip
       // quota is exhausted. This runs BEFORE any job is created or any compute
@@ -6474,6 +6512,15 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const live = !!req.body.source && req.body.source !== "file";
       if (!videoPath && !(live && (req.body.source === "screen" || req.body.source === "browser")))
         return reply.code(400).send({ error: "videoPath required for this source" });
+      // ADAAAA-9084: the lever pins the teams the VOD resolver would resolve per
+      // pass, so it is VOD-only. Refuse it on a live/ingest source rather than
+      // silently applying it to a rail whose live writer would re-resolve.
+      if (qaMatchContextTeams && live) {
+        return reply.code(422).send({
+          error: "qaMatchContextTeams applies to source=file VOD jobs only (the live rail re-resolves its own teams)",
+          code: "qa_match_context_live_unsupported",
+        });
+      }
       // Funnel activate/retain detection: read the user's prior-job state BEFORE
       // this job is persisted so the new job cannot consume the "first job" slot.
       const priorJobs = await db.countJobsForUser(user.id);
@@ -6492,6 +6539,18 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           ? {
               scoreboardRoi,
               scoreboardSurface: declaredScoreboardSurface(scoreboardRoi),
+            }
+          : {}),
+        // ADAAAA-9084: an armed QA lever carries its teams on the row AND seeds
+        // the `matchContext` those teams are delivered from — before the job is
+        // queued, so the very first `/analyze` carries the pin and the VOD
+        // resolver (skipped for armed jobs) has nothing to overwrite.
+        ...(qaMatchContextTeams
+          ? {
+              qaMatchContextTeams,
+              matchContext: qaMatchContextSeed(qaMatchContextTeams, {
+                sport: req.body.gameHint || cfg.gameHintDefault,
+              }),
             }
           : {}),
       });
