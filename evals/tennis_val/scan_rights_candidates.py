@@ -39,7 +39,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "highlights-eval-labeller/1.0 (ADAAAA-7766; https://ad-astra.network)"
+USER_AGENT = "highlights-eval-labeller/1.0 (ADAAAA-7766)"
 
 # Coverage floor: >= 5 minutes of continuous real match play.
 MIN_CLIP_S = 300.0

@@ -927,7 +927,12 @@ export type SummaryViolation =
   /** ADAAAA-8914 (AC14.4): a match-time frame on a clock token that is not the
    *  row's attested `matchClock.token`. ADAAAA-8910's repair renames the frame
    *  first, so this fires only on a shape the repair cannot reach. */
-  | "match-clock-frame";
+  | "match-clock-frame"
+  /** ADAAAA-9083 (AC15): the body opens on the frame ("The scene opens with …",
+   *  "The clip shows …", "In this clip …", "We see …"). The write seam STRIPS the
+   *  opener before judging (`stripFrameOpener`), so this is the backstop for a
+   *  lead the closed-list strip could not repair — the served bar is 0. */
+  | "frame-opener";
 
 /**
  * ADAAAA-8773 / spec §13.2 (rev 7): the refusals a SECOND sample cannot repair.
@@ -2789,6 +2794,178 @@ export function internalLabelPhrases(text: string): string[] {
   return hits;
 }
 
+// --- AC15 (ADAAAA-9083): frame narration ------------------------------------
+
+/** The clip-as-subject nouns the AC15 opener list closes over. */
+const FRAME_NOUN_SRC = String.raw`(?:clip|video|footage|sequence|broadcast|window|segment)`;
+
+/**
+ * AC15: the frame-narration openers the story ladder already strips, factored out
+ * of `services/server/src/summary-ladder.ts` so the narrative lane and the
+ * summary-body seam read ONE list and cannot drift. Byte-compatible with the
+ * ladder's historic three patterns: the narrative lane keeps exactly the shapes
+ * it had (`gateNarrative` behaviour is unchanged by this ticket).
+ */
+export const NARRATIVE_FRAME_OPENERS: readonly RegExp[] = [
+  /^the scene opens\s+(?:on|with)\s+/i,
+  /^the video\s+(?:begins|starts|opens)\s+(?:with|on|by)\s+/i,
+  /^the (?:sequence|clip|footage)\s+(?:begins|starts|opens|shows)\s+(?:with|on|by)\s+/i,
+];
+
+/**
+ * AC15 (ADAAAA-9083): the EXTENDED frame-narration opener list applied at the
+ * summary-body write seam.
+ *
+ * The defect (measured by the board on the served VOD rail, ADAAAA-8665 comment
+ * `96560fed`, 2026-11-15T14:27:41Z): every Video Summary body opened on a
+ * frame-narration formula — "The scene opens …" — which adds no detail to the
+ * card. The rule already existed on the caption channel (`services/decide/app/
+ * gemma.py` names "The video shows", "The scene opens on", …) and never reached
+ * the summary channel; the per-sentence AC14 vocabulary (atmosphere / reaction /
+ * value filler) does not match a frame noun, so such a body carried an attested
+ * name, earned an AC9 fact and survived AC14. AC8's key is the first normalized
+ * FOUR words, so "opens with X" and "opens on X" are distinct openings and
+ * intra-job distinctness passed while every body still opened on the frame.
+ *
+ * Each pattern consumes the opener AND its connector, so the strip keeps the
+ * concrete content that followed it — deletion only, never a rewrite, so the
+ * repair can never add a fact. Every entry is a closed-list member of AC1:
+ * `the scene opens|begins|shows`; `the clip|video|footage|sequence|broadcast|
+ * window opens|begins|starts|shows|cuts to|shows us`; `in this clip|segment|
+ * window|footage|video`; `we see` / `here we see` / `the camera`; and any lead
+ * whose grammatical subject is the clip itself.
+ */
+export const SUMMARY_FRAME_OPENERS: readonly RegExp[] = [
+  // "The scene opens with …" / "The scene begins on …" / "The scene opens."
+  new RegExp(String.raw`^the scene\s+(?:opens|begins|starts)\s+(?:on|with|in|by|as)\s+`, "i"),
+  new RegExp(String.raw`^the scene\s+(?:shows\s+us|shows|unfolds|cuts\s+to)\s+`, "i"),
+  // "The clip/video/footage/sequence/broadcast/window opens with …"
+  new RegExp(String.raw`^the ${FRAME_NOUN_SRC}\s+(?:opens|begins|starts|unfolds)\s+(?:on|with|in|by|as)\s+`, "i"),
+  // "… shows us …" / "… cuts to …" / "… carries …"
+  new RegExp(String.raw`^the ${FRAME_NOUN_SRC}\s+(?:shows\s+us|shows|cuts\s+to|features|carries|pans\s+to|follows)\s+`, "i"),
+  // "The clip's opening shows …" — the clip is still the grammatical subject.
+  new RegExp(String.raw`^the ${FRAME_NOUN_SRC}(?:'s)?\s+(?:opening|opening moment|first seconds|start)\b[^.,;:]{0,30}?\s+(?:shows|carries|reveals|holds)\s+`, "i"),
+  // "This clip opens with …" — the clip itself is the lead.
+  new RegExp(String.raw`^this ${FRAME_NOUN_SRC}\s+(?:opens|begins|starts|unfolds)\s+(?:on|with|in|by|as)\s+`, "i"),
+  new RegExp(String.raw`^this ${FRAME_NOUN_SRC}\s+(?:shows\s+us|shows|cuts\s+to|features|carries)\s+`, "i"),
+  // "In this clip, Barcelona …" — the prepositional form AC1 names.
+  /^in this\s+(?:clip|segment|window|footage|video)\s*,?\s*/i,
+  // "We see …" / "Here we see …" / "Here we watch …"
+  /^(?:here\s+)?we\s+(?:see|watch|get)\s+/i,
+  // "The camera follows/pans to/catches …"
+  /^the camera\s+(?:follows|pans(?:\s+to)?|catches|shows|reveals|frames|cuts\s+to|tracks|opens\s+on)\s+/i,
+];
+
+/** AC15 detection: does the lead open on the FRAME instead of on the concrete
+ *  action? Reads the FIRST sentence only — a frame noun in sentence two is a
+ *  detail sentence, not an opener. This is a SUPERSET of the strip list above,
+ *  because a frame-only lead ("The scene opens.") has no content tail to slice. */
+const FRAME_OPENER_DETECT: readonly RegExp[] = [
+  /^the scene\s+(?:opens|begins|starts|shows|unfolds|cuts\s+to)\b/i,
+  new RegExp(String.raw`^the ${FRAME_NOUN_SRC}\s+(?:opens|begins|starts|shows|unfolds|cuts\s+to|features|carries|pans)\b`, "i"),
+  new RegExp(String.raw`^the ${FRAME_NOUN_SRC}'s\b`, "i"),
+  new RegExp(String.raw`^this ${FRAME_NOUN_SRC}\b`, "i"),
+  /^in this\s+(?:clip|segment|window|footage|video)\b/i,
+  /^(?:here\s+)?we\s+(?:see|watch)\b/i,
+  /^the camera\b/i,
+  ...NARRATIVE_FRAME_OPENERS,
+];
+
+/** The lead sentence of `text` (the AC15 bar's scope). */
+function summaryLeadSentence(text: string): string {
+  const sentences = summarySentencesOf(text);
+  return sentences.length > 0 ? sentences[0] : (text ?? "").trim();
+}
+
+/** The frame-narration opener this body opens on, or null. */
+export function frameOpenerOf(text: string): string | null {
+  const lead = summaryLeadSentence(text);
+  if (!lead) return null;
+  for (const re of FRAME_OPENER_DETECT) {
+    const m = re.exec(lead);
+    if (m) return m[0].trim();
+  }
+  return null;
+}
+
+/** AC15 bar: true when the body still opens on the frame. */
+export function hasFrameOpener(text: string): boolean {
+  return frameOpenerOf(text) !== null;
+}
+
+/** What the AC15 lead repair did. `stripped`/`droppedSentences` are the audit
+ *  trail; `text` is the body to judge. */
+export interface SummaryFrameStrip {
+  /** The body after the lead repair — deletion only, never a new fact. */
+  text: string;
+  /** Openers deleted from the lead, in order (empty => nothing was stripped). */
+  stripped: string[];
+  /** Whole lead sentences deleted because the opener was all they carried. */
+  droppedSentences: string[];
+}
+
+/** A tail that would read as a fragment once its subject is gone ("is unavailable
+ *  from this angle") — such a lead is deleted rather than spliced. */
+const DANGLING_TAIL_RE =
+  /^(?:is|was|are|were|has|had|will|would|can|could|does|did|has|have|begins|starts)\b/i;
+
+function capitaliseLead(text: string): string {
+  const out = text.trim();
+  if (!out) return out;
+  return out.charAt(0).toUpperCase() + out.slice(1);
+}
+
+/**
+ * AC15 write-seam repair (ADAAAA-9083): strip the frame-narration opener from the
+ * summary body's lead by DELETION.
+ *
+ * Used by `gateSummaryDetail` BEFORE the depth floor is re-checked, on both
+ * rails. It repeats (up to three passes, like the ladder's `stripStockOpener`)
+ * because deleting one opener can expose another underneath it, and it drops a
+ * whole lead sentence when the opener was the entire sentence — the delete-only
+ * contract means the repair never writes a fact the writer did not write.
+ */
+export function stripFrameOpener(text: string): SummaryFrameStrip {
+  const body = (text ?? "").trim();
+  if (!body) return { text: body, stripped: [], droppedSentences: [] };
+  const stripped: string[] = [];
+  const droppedSentences: string[] = [];
+  let sentences = summarySentencesOf(body);
+  let changed = false;
+  for (let pass = 0; pass < 3; pass += 1) {
+    if (sentences.length === 0) break;
+    const lead = sentences[0];
+    if (!hasFrameOpener(lead)) break;
+    let cut: string | null = null;
+    for (const re of SUMMARY_FRAME_OPENERS) {
+      const m = re.exec(lead);
+      if (m) {
+        cut = m[0];
+        break;
+      }
+    }
+    if (cut !== null) {
+      const tail = lead.slice(cut.length).trim();
+      const words = tail.split(/\s+/).filter((word) => /[A-Za-z0-9À-ÿ]/.test(word));
+      // Keep the concrete content when it can stand as a sentence; a one- or
+      // two-word tail, or a tail that opens on a copula whose subject we just
+      // deleted, is a fragment — the lead goes with the opener.
+      if (words.length >= 3 && !DANGLING_TAIL_RE.test(tail)) {
+        sentences[0] = capitaliseLead(tail);
+        stripped.push(cut.trim());
+        changed = true;
+        continue;
+      }
+    }
+    droppedSentences.push(lead);
+    stripped.push((cut ?? lead).trim());
+    sentences = sentences.slice(1);
+    changed = true;
+  }
+  if (!changed) return { text: body, stripped: [], droppedSentences: [] };
+  return { text: sentences.join(" ").trim(), stripped, droppedSentences };
+}
+
 /** Every bar THIS candidate fails. Shape first, then the composed grounding
  *  gates, then the two lane-specific bars (depth facts + caption overlap). */
 export function summaryViolations(summary: string, evidence: SummaryEvidence): SummaryViolation[] {
@@ -2855,6 +3032,10 @@ export function summaryViolations(summary: string, evidence: SummaryEvidence): S
   if (unattestedAtmosphereClaims(body, evidence).length > 0) out.push("unattested-atmosphere");
   if (internalSentenceRepeats(body).length > 0) out.push("repeat-sentence");
   if (matchClockFrameClaims(body, evidence).length > 0) out.push("match-clock-frame");
+  // ADAAAA-9083 (AC15). The lead repair runs BEFORE this function is reached
+  // (`gateSummaryDetail` -> `stripFrameOpener`), so this is the backstop for a
+  // frame lead the closed-list strip could not repair.
+  if (hasFrameOpener(body)) out.push("frame-opener");
   return out;
 }
 
@@ -2892,6 +3073,12 @@ export interface SummaryGateDecision {
    *  still cleared the band on its own bytes (extractive purity) or when the
    *  row's evidence offered no further fact. */
   substitutedClauses: string[];
+  /** ADAAAA-9083 (AC15): the frame-narration openers the LEAD repair deleted
+   *  before judging ("the scene opens with", "in this clip,"). Deletion only, so
+   *  the fact set never changes; a body that lost its whole lead sentence also
+   *  records that sentence in `droppedClauses`, which is what the AC5 retry is
+   *  told about. Empty when the body did not open on the frame. */
+  frameOpeners: string[];
   /** ADAAAA-8914 (AC14.5): words left in the body AFTER the clause repair (0 when
    *  the repair left nothing, and the judged word count when it deleted nothing).
    *  This is the number the floor check reads, so a `dropped:filler` row shows the
@@ -2931,7 +3118,7 @@ export function gateSummaryDetail(
 ): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
-  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], substitutedClauses: [], repairedWords: 0, raw: "", captionOverlap: 0 };
+  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], substitutedClauses: [], frameOpeners: [], repairedWords: 0, raw: "", captionOverlap: 0 };
   const clamped = clampSummaryDepth(stripped, evidence.rail);
   const candidates: { text: string; trimmed: boolean }[] =
     clamped && clamped !== stripped ? [{ text: stripped, trimmed: false }, { text: clamped, trimmed: true }] : [{ text: stripped, trimmed: false }];
@@ -2946,6 +3133,8 @@ export function gateSummaryDetail(
   let clauseClaims: string[] = [];
   /** ADAAAA-8934: the fact sentences the repair ADDED to restore the band. */
   let substitutedClauses: string[] = [];
+  /** ADAAAA-9083 (AC15): the frame-narration openers the lead repair deleted. */
+  let frameOpeners: string[] = [];
   /** Words left after the clause repair — the number AC14.5's floor check reads. */
   let repairedWords = 0;
   for (const candidate of candidates) {
@@ -2963,14 +3152,40 @@ export function gateSummaryDetail(
     // clock, so the card's stamp matches the scorebug reading the row persists
     // ("at 1:42 into the clip" on a 102.7 s window -> "at 18:12 of the match").
     const clockServed = serveAttestedMatchClock(clockFrame.text, evidence);
+    // ADAAAA-9083 (AC15): the frame-narration LEAD is stripped by deletion BEFORE
+    // the depth floor is re-checked, on both rails. It runs after the three
+    // rewriters above so it judges the body the card would actually serve, and
+    // before the filler clause repair so a body whose lead was the only frame
+    // narration still gets its fact sentences judged. Deletion only: the strip can
+    // never add a fact, so it cannot launder a body past another bar.
+    const frame = stripFrameOpener(clockServed.text);
+    const frameStripped = frame.stripped.length > 0 ? frame.text : clockServed.text;
     // ADAAAA-8914 (AC14.1/AC14.2/AC14.5): the FILLER clause is deleted BEFORE
     // judging, extractively and on the first sample — the one cheap repair the
     // contract allows. A body that keeps its facts in band still serves; one that
     // does not is judged as the WRITER wrote it, so the refusal names the bars the
     // writer failed instead of the ones a shortened body trips.
-    const filler = dropFillerSentences(clockServed.text, evidence, options?.avoidSentences ?? []);
-    const repaired = filler.text && filler.text !== clockServed.text ? filler.text : "";
-    const judgedCandidates = repaired ? [repaired, clockServed.text] : [clockServed.text];
+    // ADAAAA-9083 (AC15) runs the filter on the frame-STRIPPED body so a stripped
+    // lead never attributes its depth loss to the writer; ADAAAA-9085 supplies the
+    // sentences this job already served, so the repair's substitution pool cannot
+    // re-serve another card's sentence.
+    const filler = dropFillerSentences(frameStripped, evidence, options?.avoidSentences ?? []);
+    const fillerText = filler.text && filler.text !== frameStripped ? filler.text : "";
+    // The repair under test: the filler repair when it fired, else the frame strip.
+    // `repairText` can be "" (the strip deleted a frame-only body), and
+    // `hasRepair` stays true so the refusal measures 0 words rather than the
+    // writer's pre-strip count.
+    const frameRepaired = frameStripped !== clockServed.text;
+    const repairText = fillerText || (frameRepaired ? frameStripped : "");
+    // `hasRepair` is true whenever a repair FIRED, including the case where the
+    // clause repair emptied the body (`fillerText` is "" then): the refusal must
+    // measure 0 words rather than the writer's pre-repair count.
+    const hasRepair = frameRepaired || filler.dropped.length > 0;
+    // ADAAAA-9083: the fallback candidate is the frame-STRIPPED body, not
+    // `clockServed.text` — the closed-list lead deletion is deterministic, so
+    // judging the pre-strip body would fail AC15 every time and attribute a
+    // stripped body's depth to the writer.
+    const judgedCandidates = hasRepair ? [repairText, frameStripped] : [frameStripped];
     let candidateRefused: SummaryViolation[] | null = null;
     for (const judged of judgedCandidates) {
       if (!judged) continue;
@@ -2978,17 +3193,19 @@ export function gateSummaryDetail(
       if (violations.length === 0) {
         lastJudged = judged;
         droppedSentences = neutralised.droppedSentences;
-        droppedClauses = filler.dropped;
+        droppedClauses = [...frame.droppedSentences, ...filler.dropped];
         clauseClaims = filler.claims;
         substitutedClauses = filler.substituted;
-        repairedWords = repaired ? summaryWordCount(repaired) : summaryWordCount(judged);
+        frameOpeners = frame.stripped;
+        repairedWords = hasRepair ? summaryWordCount(repairText) : summaryWordCount(judged);
         return {
           summary: judged,
           gate:
             neutralised.neutralised.length > 0 ||
             clockFrame.neutralised.length > 0 ||
             clockServed.served.length > 0 ||
-            filler.dropped.length > 0
+            filler.dropped.length > 0 ||
+            frame.stripped.length > 0
               ? "neutralised"
               : candidate.trimmed
                 ? "trimmed"
@@ -3000,6 +3217,7 @@ export function gateSummaryDetail(
           droppedClauses,
           clauseClaims,
           substitutedClauses,
+          frameOpeners,
           repairedWords,
           raw: stripped,
           captionOverlap: captionTokenOverlap(judged, evidence.caption),
@@ -3012,20 +3230,23 @@ export function gateSummaryDetail(
     // The repair was applied and did not stand on its own: report the refusal the
     // writer's own body earns, and keep the repair numbers as evidence.
     const refusedHere = candidateRefused ?? [];
-    lastJudged = clockServed.text;
+    lastJudged = frameStripped || clockServed.text;
     droppedSentences = neutralised.droppedSentences;
-    droppedClauses = filler.dropped;
+    droppedClauses = [...frame.droppedSentences, ...filler.dropped];
     clauseClaims = filler.claims;
     substitutedClauses = filler.substituted;
+    frameOpeners = frame.stripped;
     // ADAAAA-8941: `clockServed` is the adjudicated text (the 8941 branch renamed
     // the neutralised frame); keep the 8984 `substitutedClauses` read beside it.
-    repairedWords = filler.dropped.length > 0 ? (repaired ? summaryWordCount(repaired) : 0) : summaryWordCount(clockServed.text);
-    if (repaired) {
+    // ADAAAA-9083: a body the frame strip shortened measures on the STRIPPED text,
+    // so a frame-lead body that fell under the floor reads as a filler drop.
+    repairedWords = hasRepair ? summaryWordCount(repairText) : summaryWordCount(clockServed.text);
+    if (repairText) {
       // A repaired body that fell under the floor is AC14.5's case: the DROP is
       // measured on the repaired text, so only the depth bars it earns are added
       // (every other bar is a property of the writer's own body, judged above —
       // adding them here would attribute a shortened body's novelty to the writer).
-      for (const v of summaryViolations(repaired, evidence)) {
+      for (const v of summaryViolations(repairText, evidence)) {
         if (v !== "too-few-words" && v !== "too-few-sentences") continue;
         if (!refused.includes(v)) refused.push(v);
       }
@@ -3044,6 +3265,7 @@ export function gateSummaryDetail(
     droppedClauses,
     clauseClaims,
     substitutedClauses,
+    frameOpeners,
     repairedWords,
     raw: stripped,
     captionOverlap: captionTokenOverlap(stripped, evidence.caption),
@@ -3482,6 +3704,12 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       ? []
       : [`- Name the clock in your copy (the window label, e.g. \`0:12\`), but the clock alone is not enough: pair it with ${attestsVenue ? "the competition/venue or " : ""}an attested action.`]),
     "- Do not open with the same words as another card in this job: vary your first four words.",
+    // ADAAAA-9083 (AC15, rev 14): the frame-narration lead. The rule already
+    // existed on the caption channel (`services/decide/app/gemma.py`) and never
+    // reached this one, so every Video Summary body on both rails opened on it
+    // ("The scene opens …"). The write seam DELETES that lead before the card
+    // serves, so a body that spends its opening on the clip's own frame loses it.
+    "- Never open on the frame, on either rail (live and VOD): no 'The scene opens with …', 'The clip/video/footage begins with …', 'In this clip …', 'We see …', 'Here we see …', 'The camera …' and never make the clip the subject of your first sentence. Open on the concrete action itself — the attested actor's act, the score line, or the clock inside a sentence that names one. A lead that names the scene, the clip or the camera is deleted before the card serves.",
     ...(input.avoidOpenings && input.avoidOpenings.length > 0
       ? [`- Do not open with any of these already-served runs: ${input.avoidOpenings.slice(0, 8).map((o) => `'${o}'`).join(", ")}.`]
       : []),

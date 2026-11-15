@@ -29,9 +29,9 @@ const compose = readFileSync(repoFile("docker/docker-compose.yml"), "utf8");
 const registrar = repoFile("docker/live-runner-registrar.py");
 
 const DECIDE_RUNNERS = [
-  { id: "highlights-decide-5090-1", url: "http://192.0.2.151:8091", capacity: 4, tier: "5090", seqs: 4 },
-  { id: "highlights-decide-5090-2", url: "http://192.0.2.151:8092", capacity: 4, tier: "5090", seqs: 4 },
-  { id: "highlights-decide-5090-3", url: "http://192.0.2.151:8093", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-1", url: "http://decide-worker.example:8091", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-2", url: "http://decide-worker.example:8092", capacity: 4, tier: "5090", seqs: 4 },
+  { id: "highlights-decide-5090-3", url: "http://decide-worker.example:8093", capacity: 4, tier: "5090", seqs: 4 },
   { id: "highlights-decide-x99", url: "http://decide:8081", capacity: 2, tier: "x99-fallback", seqs: 2 },
   { id: "highlights-decide-x99-b", url: "http://decide-b:8081", capacity: 2, tier: "x99-fallback", seqs: 2 },
 ];

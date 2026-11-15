@@ -1,14 +1,14 @@
 #!/bin/sh
 # ADAAAA-8553 S1: run ONE dynamic registrar per decide container on the 5090 host.
 #
-# The three 5090 decide workers are plain `docker run` containers on
-# decide-pool-box (192.0.2.151, published ports 8091-8093), not compose
-# services, so they cannot be covered by docker/docker-compose.yml. This script
-# starts one `python:3.12-alpine` registrar per worker with a distinct
-# RUNNER_ID and the worker's OWN literal capacity (4).
+# The three 5090 decide workers are plain `docker run` containers on the worker
+# host (<DECIDE_WORKER_HOST>, published ports 8091-8093), not compose services,
+# so they cannot be covered by docker/docker-compose.yml. This script starts one
+# `python:3.12-alpine` registrar per worker with a distinct RUNNER_ID and the
+# worker's OWN literal capacity (4).
 #
-# S0 (ADAAAA-8557) proved from this host: OUTBOUND to the x99 orchestrator at
-# https://192.0.2.6:8935 (self-signed TLS, skipped by the registrar), the
+# S0 (ADAAAA-8557) proved from this host: OUTBOUND to the orchestrator
+# (<ORCH_HOST>, self-signed TLS, skipped by the registrar), the
 # bootstrap heartbeat/unregister round-trip, and that the registrar image pulls.
 # The in-container name `https://orchestrator:8935` is NOT reachable off-box.
 #
@@ -19,19 +19,48 @@
 # that compose already knows. Only the SOURCE is printed; the value only ever
 # reaches the container by NAME (`-e ORCH_SECRET`), never on a command line.
 #
-# Usage (on decide-pool-box, from the highlights.live checkout):
+# Usage (on the worker host, from the highlights.live checkout):
 #   ./docker/registrar-5090.sh                  # secret resolved automatically
 #   ./docker/registrar-5090.sh down
 #   ./docker/registrar-5090.sh --secret-source  # print WHERE it came from only
 #
+# ADAAAA-9101: ORCH_URL and WORKER_HOST are NOT tracked — they resolve from the
+# environment, then docker/.env, then fail with an explicit error.
 # Overridable: ORCH_URL, WORKER_HOST, RUNNER_CAPACITY_5090, REGISTRAR_INTERVAL_S,
 #              LIVE_RUNNER_REGISTRAR_IMAGE, REGISTRAR_SCRIPT, ENV_FILE,
 #              COMPOSE_FILE.
 set -eu
 
 PREFIX=highlights-registrar-decide-5090
-ORCH_URL=${ORCH_URL:-https://192.0.2.6:8935}
-WORKER_HOST=${WORKER_HOST:-192.0.2.151}
+
+ENV_FILE=${ENV_FILE:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/.env}
+COMPOSE_FILE=${COMPOSE_FILE:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/docker-compose.yml}
+
+# Last assignment wins; strip CR and one layer of surrounding quotes.
+env_file_value() {
+  [ -f "$ENV_FILE" ] || return 1
+  line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?$1=" "$ENV_FILE" 2>/dev/null | tail -n 1)
+  [ -n "$line" ] || return 1
+  value=${line#*=}
+  value=$(printf '%s' "$value" | tr -d '\r')
+  case $value in
+    \"*\") value=${value#\"}; value=${value%\"} ;;
+    \'*\') value=${value#\'}; value=${value%\'} ;;
+  esac
+  [ -n "$value" ] || return 1
+  printf '%s' "$value"
+}
+
+# ADAAAA-9101: the orchestrator URL and this host's LAN address are NOT tracked.
+# Resolve env -> box .env -> explicit error. The production values live only in
+# the untracked docker/.env, so a missing value fails loudly instead of silently
+# dialling an address baked into a public file.
+if [ -z "${ORCH_URL:-}" ]; then
+  ORCH_URL=$(env_file_value ORCH_URL) || ORCH_URL=
+fi
+if [ -z "${WORKER_HOST:-}" ]; then
+  WORKER_HOST=$(env_file_value WORKER_HOST) || WORKER_HOST=
+fi
 CAPACITY=${RUNNER_CAPACITY_5090:-4}
 INTERVAL=${REGISTRAR_INTERVAL_S:-5}
 IMAGE=${LIVE_RUNNER_REGISTRAR_IMAGE:-python:3.12-alpine}
@@ -52,24 +81,6 @@ fi
 
 if [ -z "${ORCH_SECRET:-}" ]; then
   # Same resolution order as compose: env -> .env -> compose default.
-  ENV_FILE=${ENV_FILE:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/.env}
-  COMPOSE_FILE=${COMPOSE_FILE:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/docker-compose.yml}
-
-  # Last assignment wins; strip CR and one layer of surrounding quotes.
-  env_file_value() {
-    [ -f "$ENV_FILE" ] || return 1
-    line=$(grep -E "^[[:space:]]*(export[[:space:]]+)?$1=" "$ENV_FILE" 2>/dev/null | tail -n 1)
-    [ -n "$line" ] || return 1
-    value=${line#*=}
-    value=$(printf '%s' "$value" | tr -d '\r')
-    case $value in
-      \"*\") value=${value#\"}; value=${value%\"} ;;
-      \'*\') value=${value#\'}; value=${value%\'} ;;
-    esac
-    [ -n "$value" ] || return 1
-    printf '%s' "$value"
-  }
-
   SECRET_SOURCE=
   if [ -n "${ORCHESTRATOR_SECRET:-}" ]; then
     ORCH_SECRET=$ORCHESTRATOR_SECRET
@@ -106,6 +117,17 @@ if [ -z "${ORCH_SECRET:-}" ]; then
   echo "It is passed by name with -e ORCH_SECRET, so it never appears on a command line." >&2
   exit 2
 fi
+# ADAAAA-9101: validate the addresses only on the paths that dial them (a launch
+# or --print-* payload). `down` and `--secret-source` need neither.
+if [ -z "$ORCH_URL" ]; then
+  echo "ORCH_URL is unset: export it, or put ORCH_URL=<orchestrator base URL> in ${ENV_FILE} (ADAAAA-9101)" >&2
+  exit 2
+fi
+if [ -z "$WORKER_HOST" ]; then
+  echo "WORKER_HOST is unset: export it, or put WORKER_HOST=<LAN address publishing 8091-8093> in ${ENV_FILE} (ADAAAA-9101)" >&2
+  exit 2
+fi
+
 export ORCH_SECRET
 echo "orchestrator secret source: ${SECRET_SOURCE:-env:ORCH_SECRET} (value not printed)"
 if [ ! -f "$SCRIPT" ]; then

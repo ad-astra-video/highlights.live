@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
-cd /home/operator/highlights.live
+# ADAAAA-9101: no tracked home path. Set HIGHLIGHTS_DIR (or run from the
+# checkout root, which is the default).
+cd "${HIGHLIGHTS_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
 echo "=== deploy start $(date -u +%FT%TZ)"
 git fetch origin
 git reset --hard origin/master

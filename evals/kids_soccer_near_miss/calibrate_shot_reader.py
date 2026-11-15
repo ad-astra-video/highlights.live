@@ -41,7 +41,9 @@ import subprocess
 import sys
 import time
 
-API_DEFAULT = "https://vllm.dpn.chat/v1/chat/completions"
+# ADAAAA-9101: no tracked endpoint. The OpenAI-compatible chat-completions URL is
+# deployment config; set SCAN_API (the real value lives in the box .env).
+API_DEFAULT = ""
 MODEL_DEFAULT = "deepseek-v4.1-flash"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -216,6 +218,8 @@ def main():
     if not key:
         sys.exit("SCAN_KEY is required (no key is stored in the repo)")
     api = os.environ.get("SCAN_API", API_DEFAULT)
+    if not api:
+        sys.exit("SCAN_API is required: set it to the chat-completions URL (ADAAAA-9101)")
     model = os.environ.get("SCAN_MODEL", MODEL_DEFAULT)
 
     manifest = json.load(open(args.manifest))

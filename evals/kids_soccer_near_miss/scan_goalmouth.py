@@ -80,7 +80,10 @@ def main():
     if bool(args.seconds) == (args.t0 is not None and args.t1 is not None):
         sys.exit('pass either --seconds or --from/--to')
 
-    api = os.environ.get('SCAN_API', 'https://vllm.dpn.chat/v1/chat/completions')
+    # ADAAAA-9101: no tracked endpoint; deployment config only.
+    api = os.environ.get('SCAN_API', '')
+    if not api:
+        sys.exit('SCAN_API is required: the chat-completions URL (ADAAAA-9101)')
     key = os.environ.get('SCAN_KEY')
     model = os.environ.get('SCAN_MODEL', 'deepseek-v4.1-flash')
     if not key:

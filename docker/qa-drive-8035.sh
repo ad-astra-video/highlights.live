@@ -55,6 +55,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 DRIVER="${DRIVER:-$HERE/../services/media/drive-8035.mjs}"
 CTR_DIR="/app/services/media"
 MEDIA_BASE="${MEDIA_BASE:-http://127.0.0.1:4070}"
+# ADAAAA-9101: the driver's browser-origin (CORS) value is not tracked. It is
+# the public app origin; MEDIA_PUBLIC_ORIGIN wins, else PUBLIC_BASE_URL from the
+# box docker/.env (both are the same origin). An empty value is a launch error.
+ORIGIN="${MEDIA_PUBLIC_ORIGIN:-${PUBLIC_BASE_URL:-}}"
 # ADAAAA-8163: where the leg's boot evidence goes. Empty = derive it (see
 # evidence_dir): the host dir the media container mounts at /state, otherwise
 # a /tmp fallback. Overridable with --evidence-dir or $EVIDENCE_DIR.
@@ -323,7 +327,11 @@ trap cleanup EXIT INT TERM HUP
 # 2. Launch detached; the container shell records its own pid, then execs node
 #    (exec preserves the pid, so the pid file names the driver itself).
 ctr_exec "rm -f $PIDFILE" >/dev/null 2>&1 || true
-docker exec -d "$CONTAINER" sh -c "cd $CTR_DIR && echo \$\$ > $PIDFILE && exec env MEDIA_BASE=$MEDIA_BASE SID=$SID IVF=$IVF FPS=$FPS SECONDS=$SECONDS_REPLAY AUDIO_SRC=$AUDIO_SRC AUDIO_PORT=$AUDIO_PORT node drive-8035.mjs > $LOG 2>&1" \
+if [ -z "$ORIGIN" ]; then
+  echo "qa-drive: set MEDIA_PUBLIC_ORIGIN (public app origin) for the RTC signaling Origin header" >&2
+  exit 2
+fi
+docker exec -d "$CONTAINER" sh -c "cd $CTR_DIR && echo \$\$ > $PIDFILE && exec env MEDIA_BASE=$MEDIA_BASE MEDIA_PUBLIC_ORIGIN=$ORIGIN SID=$SID IVF=$IVF FPS=$FPS SECONDS=$SECONDS_REPLAY AUDIO_SRC=$AUDIO_SRC AUDIO_PORT=$AUDIO_PORT node drive-8035.mjs > $LOG 2>&1" \
   || { echo "qa-drive: docker exec failed" >&2; exit 2; }
 
 for _ in $(seq 1 20); do

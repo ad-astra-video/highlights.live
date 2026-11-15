@@ -251,7 +251,7 @@ describe("funnel + CAC admin readout (api-level)", () => {
     // Writes are rejected with 403 (read-only principal has no write grant).
     const writeSpend = await app.app.inject({ method: "POST", url: "/admin/spend", headers: ro, payload: { channel: "meta", spendUsd: 50 } });
     expect(writeSpend.statusCode).toBe(403);
-    const invite = await app.app.inject({ method: "POST", url: "/admin/invite-codes", headers: ro, payload: { email: "x@y.dev" } });
+    const invite = await app.app.inject({ method: "POST", url: "/admin/invite-codes", headers: ro, payload: { email: "x@y.example" } });
     expect(invite.statusCode).toBe(403);
     const revoke = await app.app.inject({ method: "POST", url: "/admin/invite-codes/revoke", headers: ro, payload: { code: "abc123" } });
     expect(revoke.statusCode).toBe(403);

@@ -30,7 +30,7 @@ export interface MediaConfig {
   paymentIntervalMs?: number;
   /** Public origin (scheme, host, optional base) the browser should ingest to —
    * normally the load-balancer / Cloudflare front, e.g.
-   * `https://highlights-media.dpn.gg`. Used to return the FULL ws ingest URL
+   * `https://media.example.com`. Used to return the FULL ws ingest URL
    * from POST /sessions so clients can be routed by the LB rather than assuming
    * a path on one node. When unset, no wsUrl is returned (clients fall back to
    * deriving it from the control server's MEDIA_SERVER_URL + wsPath).

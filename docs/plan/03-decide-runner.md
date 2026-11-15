@@ -95,7 +95,7 @@ The measurement/report surface (cadence + gemma end-to-end per invocation, the
 in [`09-live-observer-latency-report.md`](09-live-observer-latency-report.md).
 
 ## Deployment requirement (user criterion)
-Deploy a vLLM OpenAI server for the decide model on 192.0.2.6 (GPU 1 / RTX 5070 Ti, 16 GB).
+Deploy a vLLM OpenAI server for the decide model on `<GPU_BOX_LAN_IP>` (GPU 1 / RTX 5070 Ti, 16 GB).
 INT4 weights ≈ 10.45 GB; the decide pass sends up to ~30 frames (~8.4K KV tokens/req)
 plus audio, so 4 TRULY-concurrent sequences only fit with the fp8 KV cache
 quantization (halves KV bytes vs f16) and a bounded `--max-model-len`. Verify the

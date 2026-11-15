@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # box-health-check.sh — per-service container health check for the
-# highlights.live GPU box (gpu-box) and the public edge.
+# highlights.live GPU box and the public edge.
 #
 # Closes the ADAAAA-3248 monitoring gap: the prior box-health monitor only
-# checked the PUBLIC EDGE (highlights-server.dpn.gg /health + /admin/analytics),
+# checked the PUBLIC EDGE (<PUBLIC_HOST> /health + /admin/analytics),
 # which stays Up even when an internal service (e.g. decide) is dead or stranded
 # in a non-running container state. This script ALSO checks per-service container
 # state on the GPU box and FAILS (exit 1) when any monitored service is NOT
@@ -21,7 +21,7 @@
 # Restarting/Dead) container still FAILs when it is the only one present.
 #
 # Usage:
-#   box-health-check.sh                # check gpu-box + public edge
+#   box-health-check.sh                # check $BOX_HOST + public edge
 #   box-health-check.sh <server>       # override the GPU box name
 #   box-health-check.sh <server> --no-edge   # skip the public-edge HTTP check
 #   box-health-check.sh --self-test    # dry-run: simulate a stranded service and
@@ -40,7 +40,9 @@
 
 set -u
 
-SERVER="${1:-gpu-box}"
+# ADAAAA-9101: the GPU box name is NOT tracked. Pass it as $1 or set BOX_HOST;
+# the live path fails loudly when neither is present (--self-test needs neither).
+SERVER="${1:-${BOX_HOST:-}}"
 EDGE_CHECK=1
 # --self-test: dry-run that exercises the REAL classification loop with a mocked
 # container state (no live box contacted). It proves BOTH paths end to end:
@@ -60,7 +62,19 @@ fi
 
 # Paths / helpers.
 KOMODO="/paperclip/.hermes/skills/komodo/scripts/komodo.py"
-EDGE_URL="${EDGE_URL:-https://highlights-server.dpn.gg}"
+# ADAAAA-9101: the public edge origin is NOT tracked. Resolve it from the
+# environment, then docker/.env, then fail loudly — the production value lives
+# only in the untracked box .env.
+EDGE_ENV_FILE=${EDGE_ENV_FILE:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)/.env}
+if [ -z "${EDGE_URL:-}" ] && [ -f "$EDGE_ENV_FILE" ]; then
+  EDGE_URL=$(grep -E '^[[:space:]]*(export[[:space:]]+)?EDGE_URL=' "$EDGE_ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\r')
+fi
+if [ "$EDGE_CHECK" = "1" ]; then
+  : "${EDGE_URL:?set EDGE_URL (public edge origin, e.g. https://app.example.com) in the environment or docker/.env}"
+fi
+if [ "$SELF_TEST" != "1" ]; then
+  : "${SERVER:?pass the GPU box name as $1 or set BOX_HOST (ADAAAA-9101)}"
+fi
 # GPU-box services that MUST be Up (healthy) for the decision pipeline.
 # asr (transcription) added in ADAAAA-6397: its running container is
 # 7b16e1195db4_highlights-asr (Up, healthy) under the hashed Compose name.

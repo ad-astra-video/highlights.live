@@ -335,7 +335,11 @@ async ({ base, sid, rtcOrigin, iceServers, codec, durationMs }) => {
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--base", default="https://highlights-media.dpn.gg", help="media node origin")
+    ap.add_argument(
+        "--base",
+        required=True,
+        help="media node origin (e.g. https://<MEDIA_PUBLIC_HOST>); required — no tracked host default",
+    )
     ap.add_argument("--codec", choices=["vp8", "h264"], default="vp8")
     ap.add_argument(
         "--job-id",

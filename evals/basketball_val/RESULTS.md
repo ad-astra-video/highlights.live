@@ -1,7 +1,7 @@
 # Basketball measurement results — ADAAAA-7765 (per-type step 2)
 
 **Revision 2** — the label set was corrected after QA's frame re-read on
-[ADAAAA-7770](https://agent.ad-astra.network/ADAAAA/issues/ADAAAA-7770) found the
+[ADAAAA-7770](/ADAAAA/issues/ADAAAA-7770) found the
 recorded instants were the *last* frame of a score state rather than the *first*
 frame showing the new digits. Every number below is re-measured against the
 corrected set; revision-1 numbers are superseded and are listed only in §1a so
@@ -119,7 +119,7 @@ explicitly out of scope here.
 **Stated FP-rate ceiling for basketball (justified by the measurement).** The
 apples-to-apples reference on the same harness is soccer's reproducible operating
 point at `stageA/burst/1.3x/0.3s`: recall 0.875, candidate FP rate 0.0952
-([ADAAAA-7674](https://agent.ad-astra.network/ADAAAA/issues/ADAAAA-7674)).
+([ADAAAA-7674](/ADAAAA/issues/ADAAAA-7674)).
 Basketball is judged against the same **candidate FP rate ceiling of ≤ 0.10**,
 i.e. the type may not fire on more than one candidate in ten, because that is the
 rate at which the survivor budget the loop was priced on still holds.
@@ -131,7 +131,7 @@ basketball deployment/UI enablement may follow from this pass.
 
 The INC-9 36.7% noise-trigger FP figure is deliberately not used as a bar: it
 predates ADAAAA-7108 and QA confirmed on
-[ADAAAA-7755](https://agent.ad-astra.network/ADAAAA/issues/ADAAAA-7755) that it
+[ADAAAA-7755](/ADAAAA/issues/ADAAAA-7755) that it
 is not reproducible from HEAD.
 
 ## 2. Detection precision — `not_captured`

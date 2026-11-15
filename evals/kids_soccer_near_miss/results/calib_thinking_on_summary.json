@@ -5,7 +5,7 @@
   "temperature": 0,
   "enable_thinking": true,
   "frame": "2x (1280x720)",
-  "api": "https://vllm.dpn.chat/v1/chat/completions"
+  "api": "<SCAN_API>/v1/chat/completions"
  },
  "records": 74,
  "finish_reasons": {

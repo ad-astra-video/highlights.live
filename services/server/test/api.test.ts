@@ -1015,7 +1015,7 @@ describe("media session reroute (DB-tracked)", () => {
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
     const port = (srv.address() as any).port;
 
-    const PUBLIC = "https://highlights-media.dpn.gg";
+    const PUBLIC = "https://media.example.com";
     const { app, db } = await buildTestApp({ MEDIA_SERVER_URL: `http://127.0.0.1:${port}`, MEDIA_PUBLIC_BASE_URL: PUBLIC });
     const token = await register(app, "m@test.dev", "password123");
     const jr = await app.inject({ method: "POST", url: "/jobs", headers: { authorization: `Bearer ${token}` }, payload: { source: "browser", gameHint: "x" } });

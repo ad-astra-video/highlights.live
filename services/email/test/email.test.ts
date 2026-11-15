@@ -56,7 +56,7 @@ describe("email sender: queue API", () => {
     await app.ready();
 
     // No token -> 401.
-    const noAuth = await app.inject({ method: "POST", url: "/emails", payload: { to: "a@b.co", subject: "s", body: "b" } });
+    const noAuth = await app.inject({ method: "POST", url: "/emails", payload: { to: "a@b.example", subject: "s", body: "b" } });
     expect(noAuth.statusCode).toBe(401);
 
     // Bad email -> 400.
@@ -109,14 +109,14 @@ describe("email sender: security gate (ADAAAA-2475)", () => {
     const db = await testDb();
 
     // Source outside the allow-list is refused (403) even before the token.
-    const locked = buildEmailApp({ cfg: { ...baseCfg, allowlistIps: ["10.0.0.1"] }, db });
+    const locked = buildEmailApp({ cfg: { ...baseCfg, allowlistIps: ["192.0.2.1"] }, db });
     await locked.ready();
     const denied = await locked.inject({
       method: "POST",
       url: "/emails",
-      // inject() defaults remoteAddress to 127.0.0.1, which is NOT 10.0.0.1
+      // inject() defaults remoteAddress to 127.0.0.1, which is NOT 192.0.2.1
       headers: { authorization: `Bearer ${baseCfg.queueToken}` },
-      payload: { to: "a@b.co", subject: "s", body: "b" },
+      payload: { to: "a@b.example", subject: "s", body: "b" },
     });
     expect(denied.statusCode).toBe(403);
     await locked.close();
@@ -125,23 +125,25 @@ describe("email sender: security gate (ADAAAA-2475)", () => {
     // and the same source WITHOUT the secret is rejected (401).
     const open = buildEmailApp({ cfg: { ...baseCfg, allowlistIps: ["127.0.0.1"] }, db });
     await open.ready();
-    const noSecret = await open.inject({ method: "POST", url: "/emails", payload: { to: "a@b.co", subject: "s", body: "b" } });
+    const noSecret = await open.inject({ method: "POST", url: "/emails", payload: { to: "a@b.example", subject: "s", body: "b" } });
     expect(noSecret.statusCode).toBe(401);
     const ok = await open.inject({
       method: "POST",
       url: "/emails",
       headers: { authorization: `Bearer ${baseCfg.queueToken}` },
-      payload: { to: "a@b.co", subject: "s", body: "b" },
+      payload: { to: "a@b.example", subject: "s", body: "b" },
     });
     expect(ok.statusCode).toBe(202);
     await open.close();
   });
 
   it("ipInAllowlist matches exact IPs and CIDRs", () => {
-    expect(ipInAllowlist("10.1.2.3", ["10.0.0.0/8", "127.0.0.1"])).toBe(true);
-    expect(ipInAllowlist("11.1.2.3", ["10.0.0.0/8"])).toBe(false);
+    // Documentation ranges (TEST-NET-1) instead of private literals: the
+    // public tree must not carry a real LAN address (ADAAAA-9101).
+    expect(ipInAllowlist("192.0.2.3", ["192.0.2.0/24", "127.0.0.1"])).toBe(true);
+    expect(ipInAllowlist("198.51.100.3", ["192.0.2.0/24"])).toBe(false);
     expect(ipInAllowlist("127.0.0.1", ["127.0.0.1"])).toBe(true);
-    expect(ipInAllowlist("8.8.8.8", ["10.0.0.0/8"])).toBe(false);
+    expect(ipInAllowlist("8.8.8.8", ["192.0.2.0/24"])).toBe(false);
   });
 });
 
@@ -152,7 +154,7 @@ describe("email sender: worker delivers and persists status", () => {
     const worker = new EmailWorker({ db, transport, ...baseCfg });
     const t = await db.enqueueEmailSend({
       id: "e1",
-      toEmail: "a@b.co",
+      toEmail: "a@b.example",
       subject: "Hi",
       body: "Body",
       createdAt: new Date().toISOString(),
@@ -168,7 +170,7 @@ describe("email sender: worker delivers and persists status", () => {
     expect(row.attempts).toBe(0);
     expect(row.sentAt).toBeTruthy();
     expect(transport.sent[0].from).toBe("onboarding@highlights.live");
-    expect(transport.sent[0].to).toBe("a@b.co");
+    expect(transport.sent[0].to).toBe("a@b.example");
   });
 
   it("retries a failed send, then marks it failed after maxAttempts", async () => {
@@ -178,7 +180,7 @@ describe("email sender: worker delivers and persists status", () => {
     const worker = new EmailWorker({ db, transport, ...baseCfg, maxAttempts: 2 });
     await db.enqueueEmailSend({
       id: "e1",
-      toEmail: "a@b.co",
+      toEmail: "a@b.example",
       subject: "Hi",
       body: "Body",
       createdAt: new Date().toISOString(),
@@ -217,7 +219,7 @@ describe("email sender: worker delivers and persists status", () => {
     const db = await testDb();
     await db.enqueueEmailSend({
       id: "e1",
-      toEmail: "a@b.co",
+      toEmail: "a@b.example",
       subject: "Hi",
       body: "Body",
       createdAt: new Date().toISOString(),

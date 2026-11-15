@@ -24,7 +24,10 @@ const FPS = Number(process.env.FPS || 30);
 const SECONDS = Number(process.env.SECONDS || 35);
 const AUDIO_SRC = process.env.AUDIO_SRC || "";
 const AUDIO_PORT = Number(process.env.AUDIO_PORT || 0);
-const ORIGIN = "https://highlights-server.dpn.gg";
+// ADAAAA-9101: the browser-origin value for the RTC signaling POSTs is not
+// tracked. Set MEDIA_PUBLIC_ORIGIN to the public app origin on the box (the
+// real value lives in docker/.env); an empty value sends no Origin header.
+const ORIGIN = process.env.MEDIA_PUBLIC_ORIGIN || "";
 // Watchdog slack past SECONDS, and how often the session is polled for liveness.
 const EXIT_GRACE_MS = Number(process.env.EXIT_GRACE_MS || 15000);
 const SESSION_POLL_MS = Number(process.env.SESSION_POLL_MS || 3000);

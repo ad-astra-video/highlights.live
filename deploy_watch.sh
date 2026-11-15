@@ -1,6 +1,8 @@
 #!/bin/sh
 set -u
-cd /home/operator/highlights.live
+# ADAAAA-9101: no tracked home path. Set HIGHLIGHTS_DIR (or run from the
+# checkout root, which is the default).
+cd "${HIGHLIGHTS_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}"
 for i in $(seq 1 90); do
   n=$(docker exec highlights-postgres psql -U highlights -d highlights -tAc \
       "select count(*) from jobs where record::jsonb->>'status' in ('analyzing','queued','starting')" | tr -d ' \n')

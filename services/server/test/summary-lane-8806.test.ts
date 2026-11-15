@@ -104,7 +104,7 @@ describe("ADAAAA-8806 — a repairable refusal earns the retry slot", () => {
   it("names a facts-only reply on a relayable row `gate`, still on ONE call", async () => {
     const { store, patches } = stubStore();
     const CLOCK_FACTS_ONLY =
-      "The clip carries this sequence at 0:25 into the clip. This passage sits at 0:25 of the clip.";
+      "This passage sits at 0:25 into the clip. The move reaches the wing at 0:25 of the clip.";
     const { fn, calls } = stubFetch([CLOCK_FACTS_ONLY, NAMED]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: fn }) as any, {
       jobId: "3740585f",

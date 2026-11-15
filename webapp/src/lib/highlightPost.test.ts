@@ -39,8 +39,8 @@ function entry(seq: number, windowTs: number, text: string): SummaryLogEntry {
 
 describe("clipUrl — public, absolute, no auth (ADAAAA-7622)", () => {
   it("resolves a relative clipUri against the page origin", () => {
-    expect(clipUrl("/clips/abc.mp4", "https://highlights-server.dpn.gg")).toBe(
-      "https://highlights-server.dpn.gg/clips/abc.mp4"
+    expect(clipUrl("/clips/abc.mp4", "https://app.example.com")).toBe(
+      "https://app.example.com/clips/abc.mp4"
     );
   });
 

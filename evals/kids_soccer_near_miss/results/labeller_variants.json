@@ -8,7 +8,7 @@
  },
  "provenance": {
   "host": "gpu-box",
-  "runner": "host python3 (gemma reached at container IP 172.20.0.6:8088)",
+  "runner": "host python3 (gemma reached at container IP <CONTAINER_IP>:8088)",
   "frames": "ffmpeg fps=1,scale=960:540 from the 1280x720 upload",
   "read_s": "~0.5 s/frame (1225 reads in ~10 min)"
  },

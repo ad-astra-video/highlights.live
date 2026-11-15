@@ -312,7 +312,7 @@ export class MediaServer {
   async build() {
     const app = Fastify({ logger: false });
     // Browser cross-origin RTC signaling (ADAAAA-7294): the webapp origin
-    // (https://highlights-server.dpn.gg) POSTs /sessions/:sid/rtc/offer and
+    // (the public app origin) POSTs /sessions/:sid/rtc/offer and
     // /rtc/ice/:pcId to the PUBLIC media origin. Without CORS the browser
     // blocks the preflight (OPTIONS -> 404, no access-control headers) and
     // the offer never round-trips, so a real screen share silently falls back
