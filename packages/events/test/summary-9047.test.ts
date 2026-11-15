@@ -74,15 +74,18 @@ const serves = (text: string, evidence: SummaryEvidence) => gateSummaryDetail(te
 describe("ADAAAA-9047 — the first pass is told the depth arithmetic", () => {
   it("renders the live band as a per-sentence length, not only a body range", () => {
     const prompt = buildSummaryPrompt(liveRow());
-    expect(prompt).toContain("aim for 25-55 words, and never fewer than 25");
-    expect(prompt).toContain("Write 2-3 sentences of at least 13 words each: 2 sentences at 13 words is 26 words");
-    expect(prompt).toContain("a body that stops at 20 words or fewer is short");
+    expect(prompt).toContain("aim for 25-55 words and never fewer than 25");
+    // ADAAAA-9106: the ask is the band arithmetic PLUS the sentence margin (15 w x
+    // 2 = 30), because a draft written to the exact 13-word minimum serves under
+    // the bar once the fact clauses are trimmed.
+    expect(prompt).toContain("Write 2-3 sentences of at least 15 words each: 2 sentences at 15 words is 30 words");
+    expect(prompt).toContain("a draft that stops below 25 words is a FAILED draft");
   });
 
-  it("resolves the same arithmetic on the VOD band (3 sentences x 15 = 45)", () => {
+  it("resolves the same arithmetic on the VOD band (3 sentences x 17 = 51)", () => {
     const prompt = buildSummaryPrompt(liveRow({ rail: "vod" }));
-    expect(prompt).toContain("aim for 45-55 words, and never fewer than 45");
-    expect(prompt).toContain("Write 3-5 sentences of at least 15 words each: 3 sentences at 15 words is 45 words");
+    expect(prompt).toContain("aim for 45-55 words and never fewer than 45");
+    expect(prompt).toContain("Write 3-5 sentences of at least 17 words each: 3 sentences at 17 words is 51 words");
   });
 
   it("asks the writer to pack two facts into one sentence instead of adding filler", () => {

@@ -126,6 +126,22 @@ export function summaryRetryMinWords(band: SummaryDepthBand): number {
   return Math.max(band.targetMinWords, band.floorWords + SUMMARY_RETRY_DEPTH_MARGIN_WORDS);
 }
 
+/** ADAAAA-9106 (writer round 2): the words per sentence the FIRST pass asks for
+ *  above the band arithmetic, so a draft clears the depth bar before the clause
+ *  repair touches it.
+ *
+ *  `ceil(targetMinWords / minSentences)` is the exact minimum a compliant draft
+ *  needs (`13` live, `15` VOD), and the writer answers it literally: the rev-12
+ *  grade of the served block `68aa5f97` (job `06aabcd9`) served 22 / 24 / 26
+ *  words — p50 **24.0** against AC1's 25 — where 24 and 26 are exactly two
+ *  13-word sentences. The repair then DELETES filler sentences after the writer
+ *  answers (`dropFillerSentences`), so a draft written to the exact minimum serves
+ *  under it. This margin moves the ASK, not the bar: `summaryBand`,
+ *  `SUMMARY_MIN_FACT_KINDS`, the 18-word serve floor and the AC5 call ceiling are
+ *  untouched, and the retry margin above (`SUMMARY_RETRY_DEPTH_MARGIN_WORDS`) is
+ *  a different number because a retry already bills a second call. */
+export const SUMMARY_WRITER_SENTENCE_MARGIN_WORDS = 2;
+
 /** R4 (rev 2, ADAAAA-8687): the caption-token coverage figure, kept ONLY as a
  *  per-row OBSERVATION. Rev 1 gated on it (`>= 0.5` => refused) and that refused
  *  100% of the promoted rows on the short-caption rail, so it is metered
@@ -3218,6 +3234,12 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // prompt asking for an invented fact.
   const attestsVenue = matchContextVenueText(input.matchContext).length > 0;
   const factMenu = summaryFactMenu(input).join(", ");
+  // ADAAAA-9106 (writer round 2): the score-line relay is read off the SAME set
+  // the menu and the gate use (`attestedFactKinds`), so the requirement below can
+  // never ask for a score the row did not measure (the rev-8 failure mode).
+  const attestsScore = new Set(attestedFactKinds(input)).has("score");
+  const scoreFrom = (input.scoreTransition?.from ?? "").trim();
+  const scoreTo = (input.scoreTransition?.to ?? "").trim();
   // ADAAAA-9047 (writer round): the menu above names CATEGORIES; the first pass
   // also needs the row's own measured VALUES beside them, because on the live
   // rail the only attested kinds are usually `clock` + `action` and the model has
@@ -3232,6 +3254,17 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // AC1's 25. Nothing here is a bar: the serve floor stays at `band.floorWords`
   // and the target band stays exactly `band.targetMinWords..targetMaxWords`.
   const perSentenceMin = Math.ceil(band.targetMinWords / band.minSentences);
+  // ADAAAA-9106 (writer round 2): the first pass asks for the band MINIMUM plus a
+  // margin, because the exact-minimum arithmetic is what the served copy answers.
+  // The rev-12 grade of the served block `68aa5f97` (job `06aabcd9`) served three
+  // bodies at 22 / 24 / 26 words — p50 24.0 against AC1's 25 — and the 24/26 pair
+  // is exactly `ceil(25/2)=13` words per sentence in two sentences. The writer
+  // obeyed the arithmetic it was given and landed under the bar, so the ask moves
+  // up by a sentence margin (2 words per sentence -> 30 words on the two-sentence
+  // shape) instead of the bar moving down. Measured on the same stored rows: the
+  // clause repair deletes filler AFTER the writer answers, so a body written to
+  // the exact minimum loses ~8-10 words and serves under it.
+  const perSentenceAsk = perSentenceMin + SUMMARY_WRITER_SENTENCE_MARGIN_WORDS;
   // ADAAAA-8803: the depth instruction is a BAND, and the RETRY is told what the
   // refused draft measured. Both fixes answer the same measured defect on the
   // served VOD leg of job `4e5ddf8d`: a compliant draft landed on 41 words
@@ -3295,7 +3328,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words, and never fewer than ${band.targetMinWords}. Write ${band.minSentences}-${band.maxSentences} sentences of at least ${perSentenceMin} words each: ${band.minSentences} sentences at ${perSentenceMin} words is ${band.minSentences * perSentenceMin} words, which clears the band. Count the words before you answer — a body that stops at ${band.targetMinWords - 5} words or fewer is short, even though a shorter body can still serve.`,
+    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words and never fewer than ${band.targetMinWords}. Write ${band.minSentences}-${band.maxSentences} sentences of at least ${perSentenceAsk} words each: ${band.minSentences} sentences at ${perSentenceAsk} words is ${band.minSentences * perSentenceAsk} words, which clears the band with room. Count the words before you answer — a draft that stops below ${band.targetMinWords} words is a FAILED draft on a card graded on its depth, so add the fact that sentence is missing instead of answering short; only a body written to ${band.targetMinWords}+ words survives the fact clauses being trimmed.`,
     ...retryLines,
     // ADAAAA-8971 (AC5): a row whose evidence attests NO fact kind has an empty
     // menu. Asking it to "carry two facts from the list" would be an instruction
@@ -3320,6 +3353,26 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
                 `- This row attests ${factValues.length} fact kinds: use every one of them, in ${Math.min(band.maxSentences, Math.max(band.minSentences, factValues.length))} sentences. ${band.maxSentences} sentences of ${Math.ceil(band.targetMinWords / band.maxSentences)} words already clear the band.`,
               ]
             : []),
+        ]
+      : []),
+    // ADAAAA-9106 (writer round 2): a MEASURED score change is the card's own
+    // headline fact, and the rev-12 grade read it as AC11 FAIL 2/3. Row
+    // `c2c7a982` measured `scoreTransition 2-1>2-2` (`scoreBoardChanged true`,
+    // `authority scoreboard`, `scoreReads 12`, `need 2` — the change is attested
+    // twice over) and its served body carried NO score line: "Real Madrid drives
+    // forward at 22:13 of the match to advance the play." The menu above offered
+    // "the score line" as one kind among several and the depth rules are all
+    // satisfied without it, so the writer spent both sentences on the clock and
+    // the act. The relay is now a REQUIREMENT on a row that measured the change,
+    // and it is a free depth lever too: the score line rides inside the sentence
+    // that names an attested actor's act (two facts, one sentence).
+    //
+    // The digits are the row's OWN measured values and no actor is rendered, so
+    // this is not a sample line a second card can copy (AC14): two scoring cards
+    // differ in their own score digits, and the shape alone carries no actor.
+    ...(attestsScore && scoreFrom && scoreTo
+      ? [
+          `- The evidence MEASURED a score change on this row: ${scoreFrom} -> ${scoreTo}, measured by the scoreboard. The body MUST state it — a draft that leaves this measured score line out is a FAILED draft, because the score is the one fact this card exists to carry. State it as the scoreboard shows it ('the scoreboard moves from ${scoreFrom} to ${scoreTo}') and put an attested actor's act in the SAME sentence, with that actor as the subject and the score line riding on it. Never say which side scored, never restate the same score line in a second sentence, and never word it as a goal, a shot or a save when the evidence measured no ball outcome.`,
         ]
       : []),
     // ADAAAA-8914 (AC14.1/AC14.2): the depth bars were BODY bars, so a 46-word
