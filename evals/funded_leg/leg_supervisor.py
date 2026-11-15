@@ -18,6 +18,16 @@ make it act, and both are cases where no harness process can act:
   * the heartbeat's absolute `deadlineEpoch` passed by more than `--slack-s` and
     the leg has not reported `finished`: the stop thread did not fire in time.
 
+ADAAAA-9012: those two conditions were still read off the heartbeat. On the
+ADAAAA-8998 leg the heartbeat FROZE at 793.8 s, the supervisor exited with
+nothing to supervise, and the job billed 372 s past its authorization. So the
+launcher now hands this process its own clock on the argv — `--job-id`,
+`--deadline-epoch`, `--hard-stop-slack-s` — and the deadline trip is
+`now > deadline-epoch + hard-stop-slack-s` on this process's own clock, which no
+frozen, truncated or deleted heartbeat can disable. Heartbeat staleness stays a
+second trigger; a heartbeat that vanishes after arming is treated as stale by
+the last beat this process saw.
+
 A heartbeat whose phase is `finished` ends the supervisor with no stop: the
 harness ended the leg itself. The supervisor never stops a job it cannot name
 from a heartbeat, and it never stops twice.
@@ -77,6 +87,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import funded_leg as harness_mod  # noqa: E402
+import leg_watchdog as watchdog_mod  # noqa: E402
 
 EXIT_OK = 0
 EXIT_STOP_UNCONFIRMED = 2
@@ -96,6 +107,10 @@ ACTING_ACTIONS = ("wait",) + STOP_ACTIONS
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _iso_from_epoch(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _signal_name(signum: int) -> str:
@@ -139,16 +154,24 @@ def decide(
     stale_s: float,
     slack_s: float,
     last_beat_at: Optional[float],
+    own_job_id: Optional[str] = None,
+    own_deadline_stop_epoch: Optional[float] = None,
 ) -> Dict[str, Any]:
     """What the supervisor should do with this heartbeat, and why.
 
     Pure: no clock, no I/O, no stop call. The caller passes `now` and the epoch
     of the last beat, so every branch is testable at $0.
+
+    ADAAAA-9012: `own_job_id` / `own_deadline_stop_epoch` come from the
+    launcher's argv, not from the heartbeat. On the ADAAAA-8998 leg the
+    heartbeat froze mid-leg and the supervisor had no independent clock, so a
+    missing or truncated heartbeat read as "nothing to supervise" and the job
+    billed 372 s past its authorization. A supervisor that was told which job it
+    guards and when that job's deadline is can stop it with no heartbeat at all.
     """
-    if not beat:
-        return {"action": "no_arm", "reason": "no heartbeat on disk"}
+    beat = beat or {}
     phase = beat.get("phase")
-    job_id = beat.get("jobId")
+    job_id = beat.get("jobId") or own_job_id
     if phase == "finished":
         return {
             "action": "finished",
@@ -160,7 +183,7 @@ def decide(
             "action": "no_arm",
             "reason": "heartbeat names no job, so there is nothing to stop",
         }
-    if phase not in LIVE_PHASES:
+    if beat and phase not in LIVE_PHASES:
         return {
             "action": "no_arm",
             "reason": f"heartbeat phase `{phase}` is not a live phase",
@@ -172,26 +195,48 @@ def decide(
             "reason": (
                 f"the harness heartbeat is stale by {now - last_beat_at:.1f} s "
                 f"(> {stale_s:.0f} s): no harness process can issue the stop"
+                + ("" if beat else " (the heartbeat file is gone)")
             ),
             "jobId": job_id,
             "staleByS": round(now - last_beat_at, 1),
+            "trigger": "heartbeat_staleness",
+            "heartbeatMissing": not bool(beat),
         }
-    deadline = beat.get("deadlineEpoch")
-    try:
-        deadline_f = float(deadline) if deadline is not None else None
-    except (TypeError, ValueError):
-        deadline_f = None
-    if deadline_f is not None and now > deadline_f + max(0.0, slack_s):
-        return {
-            "action": "stopped_deadline",
-            "reason": (
-                f"the heartbeat deadline {beat.get('deadlineAt')} passed by "
-                f"{now - deadline_f:.1f} s with no finished phase: the in-process "
-                "stop thread did not fire"
-            ),
-            "jobId": job_id,
-            "lateByS": round(now - deadline_f, 1),
-        }
+    # The deadline is taken from the launcher's argv when it gave one, on this
+    # process's own clock — not from a heartbeat that may be frozen.
+    if own_deadline_stop_epoch is not None:
+        if now > own_deadline_stop_epoch:
+            return {
+                "action": "stopped_deadline",
+                "reason": (
+                    f"the authorized deadline + hard-stop slack passed at "
+                    f"{_iso_from_epoch(own_deadline_stop_epoch)} "
+                    f"({now - own_deadline_stop_epoch:.1f} s ago) on the "
+                    "supervisor's own clock with the leg not finished: the "
+                    "in-process stop thread did not fire"
+                ),
+                "jobId": job_id,
+                "lateByS": round(now - own_deadline_stop_epoch, 1),
+                "trigger": "own_clock_deadline",
+            }
+    else:
+        deadline = beat.get("deadlineEpoch")
+        try:
+            deadline_f = float(deadline) if deadline is not None else None
+        except (TypeError, ValueError):
+            deadline_f = None
+        if deadline_f is not None and now > deadline_f + max(0.0, slack_s):
+            return {
+                "action": "stopped_deadline",
+                "reason": (
+                    f"the heartbeat deadline {beat.get('deadlineAt')} passed by "
+                    f"{now - deadline_f:.1f} s with no finished phase: the in-process "
+                    "stop thread did not fire"
+                ),
+                "jobId": job_id,
+                "lateByS": round(now - deadline_f, 1),
+                "trigger": "heartbeat_deadline",
+            }
     return {
         "action": "wait",
         "reason": (
@@ -204,13 +249,22 @@ def decide(
 
 
 def stop_job(args: argparse.Namespace, job_id: str) -> Dict[str, Any]:
-    """Issue `POST /jobs/{id}/stop`. Never raises; reports the attempt."""
+    """Issue `POST /jobs/{id}/stop`, then read the record back.
+
+    ADAAAA-9012: `supervisor.json` must name the stop attempt, the token's
+    origin, the stop response AND the final record snapshot — a 200 is not proof
+    the job is stopped, and an empty verdict file is indistinguishable from a
+    supervisor that never started. Never raises; reports every step.
+    """
     out: Dict[str, Any] = {
         "jobId": job_id,
         "attempted": True,
         "ok": False,
         "http": None,
+        "tokenSource": "arg" if getattr(args, "token", None) else "minted",
+        "tokenError": None,
         "error": None,
+        "jobRecord": None,
     }
     cfg = SimpleNamespace(
         token=getattr(args, "token", None),
@@ -227,7 +281,8 @@ def stop_job(args: argparse.Namespace, job_id: str) -> Dict[str, Any]:
     try:
         token = harness_mod.mint_token(cfg, runner)
     except Exception as exc:  # no token means no stop; say so, never hide it
-        out["error"] = f"token: {type(exc).__name__}: {exc}"
+        out["tokenError"] = f"{type(exc).__name__}: {exc}"
+        out["error"] = f"token: {out['tokenError']}"
         return out
     try:
         res = runner.http(
@@ -242,6 +297,16 @@ def stop_job(args: argparse.Namespace, job_id: str) -> Dict[str, Any]:
             out["error"] = f"HTTP {res.status}: {res.raw[:300]}"
     except Exception as exc:
         out["error"] = f"stop: {type(exc).__name__}: {exc}"
+    # The record is the leg's own money statement: read it back so the verdict
+    # carries what the stop actually left behind.
+    try:
+        out["jobRecord"] = watchdog_mod.snapshot(
+            watchdog_mod.job_record(
+                getattr(args, "job_base", "http://127.0.0.1:3000"), job_id, token
+            ).get("record")
+        )
+    except Exception as exc:  # a snapshot failure must not mask the stop result
+        out["jobRecordError"] = f"{type(exc).__name__}: {exc}"
     return out
 
 
@@ -263,6 +328,8 @@ def start_record(
     watch_beat_s: float,
     pid: Optional[int] = None,
     deadline_guard_unit: Optional[str] = None,
+    own_job_id: Optional[str] = None,
+    own_deadline_stop_epoch: Optional[float] = None,
 ) -> Dict[str, Any]:
     """The `outcome: "watching"` record written before any decision is needed.
 
@@ -271,6 +338,9 @@ def start_record(
     supervisor armed and was killed" read identically. This record makes the
     armed-and-watching state durable, and the periodic refresh keeps
     `lastBeatAt` honest until a terminal outcome replaces it.
+
+    ADAAAA-9012: `ownClock` is the deadline this supervisor will enforce by
+    itself, so a reader can see the guard's own clock beside the heartbeat's.
     """
     at = _iso_now()
     return {
@@ -279,7 +349,7 @@ def start_record(
         "startedAt": at,
         "pid": pid if pid is not None else os.getpid(),
         "heartbeatPath": heartbeat_path,
-        "jobId": (beat or {}).get("jobId"),
+        "jobId": (beat or {}).get("jobId") or own_job_id,
         "harnessPid": (beat or {}).get("pid"),
         "lastBeatAt": (beat or {}).get("beatAt"),
         "legSeconds": (beat or {}).get("legSeconds"),
@@ -291,6 +361,16 @@ def start_record(
         "slackS": slack_s,
         "watchBeatS": watch_beat_s,
         "deadlineGuardUnit": deadline_guard_unit,
+        "ownClock": (
+            {
+                "jobId": own_job_id,
+                "deadlineStopEpoch": round(own_deadline_stop_epoch, 3),
+                "deadlineStopAt": _iso_from_epoch(own_deadline_stop_epoch),
+                "source": "launcher argv (does not depend on the heartbeat)",
+            }
+            if own_deadline_stop_epoch is not None
+            else {"source": "heartbeat deadlineEpoch + slack"}
+        ),
         "stop": {"attempted": False},
     }
 
@@ -400,15 +480,21 @@ def supervise(
     deadline_guard_unit: Optional[str] = None,
     disarm: Optional[Callable[[Optional[str]], Any]] = None,
     state: Optional[Dict[str, Any]] = None,
+    own_job_id: Optional[str] = None,
+    own_deadline_stop_epoch: Optional[float] = None,
 ) -> int:
     """The supervisor loop. `stop` and `now` are injected so tests own them.
 
     ADAAAA-9008: `state` is the same dict the signal handler reads, so a
     SIGTERM arrives with the last beat and the guard unit instead of a guess.
+    ADAAAA-9012: `own_job_id`/`own_deadline_stop_epoch` are the launcher's
+    argv, so the deadline trip needs no heartbeat at all.
     """
     state = state if state is not None else {}
     state["heartbeatPath"] = heartbeat_path
     state["deadlineGuardUnit"] = deadline_guard_unit
+    state["ownJobId"] = own_job_id
+    state["ownDeadlineStopEpoch"] = own_deadline_stop_epoch
     armed_deadline = now() + max(0.0, arm_timeout_s)
     beat: Optional[Dict[str, Any]] = None
     while now() < armed_deadline:
@@ -427,6 +513,16 @@ def supervise(
                 "the launcher's arm check owns this case"
             ),
             "heartbeatPath": heartbeat_path,
+            "jobId": own_job_id,
+            "ownClock": (
+                {
+                    "deadlineStopEpoch": round(own_deadline_stop_epoch, 3),
+                    "deadlineStopAt": _iso_from_epoch(own_deadline_stop_epoch),
+                }
+                if own_deadline_stop_epoch is not None
+                else None
+            ),
+            "stop": {"attempted": False},
         }
         write_verdict(evidence_out, verdict)
         log("no heartbeat appeared: nothing to supervise")
@@ -442,6 +538,8 @@ def supervise(
         slack_s=slack_s,
         watch_beat_s=watch_beat_s,
         deadline_guard_unit=deadline_guard_unit,
+        own_job_id=own_job_id,
+        own_deadline_stop_epoch=own_deadline_stop_epoch,
     )
     write_verdict(evidence_out, watching)
     state["startedAt"] = watching["startedAt"]
@@ -451,12 +549,16 @@ def supervise(
     while True:
         beat = harness_mod.read_json(heartbeat_path)
         last_beat_at = beat_epoch(beat or {}, heartbeat_path)
+        if last_beat_at is not None:
+            state["lastBeatAt"] = last_beat_at
         decision = decide(
             beat,
             now=now(),
             stale_s=stale_s,
             slack_s=slack_s,
             last_beat_at=last_beat_at,
+            own_job_id=own_job_id,
+            own_deadline_stop_epoch=own_deadline_stop_epoch,
         )
         state["beat"] = beat
         state["decision"] = decision
@@ -473,6 +575,8 @@ def supervise(
                 slack_s=slack_s,
                 watch_beat_s=watch_beat_s,
                 deadline_guard_unit=deadline_guard_unit,
+                own_job_id=own_job_id,
+                own_deadline_stop_epoch=own_deadline_stop_epoch,
             )
             watching["startedAt"] = state.get("startedAt")
             watching["lastDecision"] = decision
@@ -513,6 +617,12 @@ def supervise(
                 "reason": decision["reason"],
                 "jobId": job_id,
                 "pid": (beat or {}).get("pid"),
+                # ADAAAA-9012: which clock tripped the stop, and whether the
+                # heartbeat was even readable at that instant.
+                "trigger": decision.get("trigger"),
+                "heartbeatMissing": decision.get("heartbeatMissing"),
+                "heartbeatPhase": (beat or {}).get("phase"),
+                "ownClock": watching.get("ownClock"),
                 "lastBeatAt": (beat or {}).get("beatAt"),
                 "deadlineAt": (beat or {}).get("deadlineAt"),
                 "authorizedDurationS": (beat or {}).get("authorizedDurationS"),
@@ -555,6 +665,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-dir", default=None, help="the launcher's run dir")
     p.add_argument("--heartbeat", required=True,
                    help="the harness heartbeat JSON (`--heartbeat-path`)")
+    p.add_argument("--job-id", default=None,
+                   help="the job this supervisor guards, from the launcher's arm "
+                        "proof — independent of the heartbeat (ADAAAA-9012)")
+    p.add_argument("--deadline-epoch", type=float, default=None,
+                   help="the authorized deadline, from the launcher's arm proof; "
+                        "the own-clock trip uses this + --hard-stop-slack-s "
+                        "instead of a heartbeat that may be frozen")
+    p.add_argument("--hard-stop-slack-s", type=float, default=10.0,
+                   help="the harness's hard-stop slack, added to "
+                        "--deadline-epoch (default 10)")
     p.add_argument("--evidence-out", default=None,
                    help="write the verdict here (default <run-dir>/supervisor.json)")
     p.add_argument("--stale-s", type=float, default=45.0,
@@ -629,6 +749,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             stale_s=args.stale_s,
             slack_s=args.slack_s,
             last_beat_at=last_beat_at,
+            own_job_id=state.get("ownJobId"),
+            own_deadline_stop_epoch=state.get("ownDeadlineStopEpoch"),
         )
         job_id = decision.get("jobId")
         stop_result: Optional[Dict[str, Any]] = None
@@ -665,23 +787,50 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     log_always(
         f"start pid={os.getpid()} heartbeat={heartbeat_path} "
         f"stale-s={args.stale_s:g} slack-s={args.slack_s:g} "
+        f"job={args.job_id or '-'} "
+        f"own-deadline={_iso_from_epoch(args.deadline_epoch + max(0.0, args.hard_stop_slack_s)) if args.deadline_epoch is not None else '-'} "
         f"deadline-guard={guard_unit or '-'} verdict={evidence_out or '-'}"
     )
 
-    return supervise(
-        heartbeat_path=heartbeat_path,
-        evidence_out=evidence_out,
-        stale_s=args.stale_s,
-        slack_s=args.slack_s,
-        arm_timeout_s=args.arm_timeout_s,
-        poll_s=args.poll_s,
-        watch_beat_s=args.watch_beat_s,
-        deadline_guard_unit=guard_unit,
-        disarm=lambda unit: disarm_deadline_guard(unit, log_always),
-        state=state,
-        stop=lambda job_id: stop_job(args, job_id),
-        log=log,
-    )
+    def run() -> int:
+        return supervise(
+            heartbeat_path=heartbeat_path,
+            evidence_out=evidence_out,
+            stale_s=args.stale_s,
+            slack_s=args.slack_s,
+            arm_timeout_s=args.arm_timeout_s,
+            poll_s=args.poll_s,
+            watch_beat_s=args.watch_beat_s,
+            deadline_guard_unit=guard_unit,
+            disarm=lambda unit: disarm_deadline_guard(unit, log_always),
+            state=state,
+            stop=lambda job_id: stop_job(args, job_id),
+            log=log,
+            own_job_id=args.job_id,
+            own_deadline_stop_epoch=(
+                args.deadline_epoch + max(0.0, args.hard_stop_slack_s)
+                if args.deadline_epoch is not None
+                else None
+            ),
+        )
+
+    try:
+        return run()
+    except Exception as exc:  # ADAAAA-9012: a crashed supervisor still writes
+        write_verdict(evidence_out, {
+            "outcome": "crashed",
+            "at": _iso_now(),
+            "startedAt": state.get("startedAt"),
+            "pid": os.getpid(),
+            "jobId": args.job_id or (state.get("beat") or {}).get("jobId"),
+            "heartbeatPath": heartbeat_path,
+            "error": f"{type(exc).__name__}: {exc}",
+            "lastDecision": state.get("decision"),
+            "deadlineGuardUnit": guard_unit,
+            "stop": {"attempted": False},
+        })
+        print(f"[supervisor] crashed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_STOP_UNCONFIRMED
 
 
 if __name__ == "__main__":

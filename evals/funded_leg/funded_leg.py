@@ -122,7 +122,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 #: ADAAAA-8529 item 2: the four files a live leg is served from. A leg graded on
 #: an unrecorded build is a grade of an unknown artifact, so the harness records
@@ -666,6 +666,12 @@ class StubApi:
                    the evidence.
       operator-stop-within     the same outside stop, settled UNDER the cap: still
                    not gradable, but no breach to flag.
+      heartbeat-frozen  ADAAAA-9012: the harness stops beating AND stops acting a
+                   few seconds in, while the stub job keeps billing. Nothing
+                   inside the harness process can stop it, so the supervisor's
+                   deadline (or the launcher's watchdog) is the only guard. This
+                   is the ADAAAA-8998 shape: `heartbeat.json` froze at 793.8 s
+                   and the job metered another 372 s past its authorization.
     """
 
     def __init__(self, scenario: str, cost_per_s: float = 0.0016) -> None:
@@ -795,6 +801,12 @@ class StubApi:
                         if stub.job is not None and stub.scenario != "stop-stuck":
                             stub.job["status"] = "cancelled"
                             stub.job["_stoppedAt"] = time.monotonic()
+                            # ADAAAA-9012: the real API records the request it
+                            # was given, so an outside stop must look like one —
+                            # otherwise a guard's stop reads as "the content
+                            # ran out" and the leg is graded as supervised.
+                            stub.job["stopRequestedAt"] = _iso(_now())
+                            stub.job["error"] = "stopped (cancelled via API)"
                     self._send(200, {"job": stub.job_state()})
                 elif path == "/stub/sql":
                     q = str(body.get("q", ""))
@@ -902,6 +914,13 @@ class Config:
     # guard is alive, and how often it is refreshed.
     heartbeat_path: Optional[str] = None
     heartbeat_s: float = 5.0
+    # ADAAAA-9012: fault injection for the "harness heartbeat freezes while the
+    # job is live" stub. `wedge_after_s` makes this process stop beating AND
+    # stop acting from that leg second on — the ADAAAA-8998 shape, where the
+    # heartbeat froze at 793.8 s and the job billed 372 s past its clock.
+    wedge_after_s: Optional[float] = None
+    dry_run: bool = False
+    stub_scenario: Optional[str] = None
 
 
 @dataclass
@@ -1236,6 +1255,9 @@ class LegResult:
     record_stop: Dict[str, Any] = field(default_factory=dict)
     armed_at: Optional[str] = None
     heartbeat_path: Optional[str] = None
+    # ADAAAA-9012: the wedged-harness fault injection, when it fired. `None`
+    # means the harness never froze — the normal case.
+    wedge: Optional[Dict[str, Any]] = None
 
 
 def _job_field(body: Any, key: str, default: Any = None) -> Any:
@@ -1399,6 +1421,14 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
             "phase": phase,
             "jobId": job_id,
             "sessionId": session_id,
+            # ADAAAA-9012: the API the job lives on, so a guard that never got
+            # it on its argv (the dry-run stub picks its port at bind time) can
+            # still issue the stop, and a reader can tell a stub leg from a
+            # metered one without guessing.
+            "jobBase": cfg.job_base,
+            "mediaBase": cfg.media_base,
+            "dryRun": bool(cfg.dry_run),
+            "stubScenario": cfg.stub_scenario,
             "armedAt": _iso(armed_at),
             "beatAt": _iso(_now()),
             "legSeconds": round(max(0.0, time.monotonic() - t0), 3),
@@ -1484,6 +1514,13 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
             state["live_readable"] = True
         return status
 
+    wedge: Dict[str, Any] = {"at": None, "atMonotonic": None, "afterS": cfg.wedge_after_s}
+    if cfg.wedge_after_s is not None:
+        log(
+            f"fault injection: this harness will stop beating AND acting at "
+            f"t={cfg.wedge_after_s:.1f}s (ADAAAA-9012 heartbeat-frozen stub)"
+        )
+
     def issue_stop(reason: str, allow_retry: bool = True) -> bool:
         """Wall-clock stop. Idempotent; retried only on an unconfirmed stop."""
         nonlocal stop_issued, stop_confirmed, stop_calls, stop_reason
@@ -1519,6 +1556,12 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         remaining = deadline - time.monotonic()
         if remaining > 0 and done_event.wait(remaining):
             return
+        if wedge["at"] is not None:
+            # ADAAAA-9012: a wedged harness stops acting as well as beating —
+            # that is the whole point of the stub. This thread can already be
+            # parked in `done_event.wait` when the wedge lands, so the check has
+            # to be here, after the wait, not only at thread start.
+            return
         if not stop_confirmed and stop_issued is None:
             log(
                 f"WALL-CLOCK STOP at {cfg.authorized_duration_s:.0f} s "
@@ -1541,6 +1584,26 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
                 terminal_end = stop_issued is None
                 break
             now = time.monotonic()
+            if (
+                cfg.wedge_after_s is not None
+                and wedge["at"] is None
+                and (now - t0) >= cfg.wedge_after_s
+            ):
+                # ADAAAA-9012: the heartbeat-frozen stub. From here on this
+                # process neither beats nor stops — the ADAAAA-8998 shape, where
+                # `heartbeat.json` froze at 793.8 s and the job kept billing.
+                # It keeps POLLING so the stub API (in this process) stays
+                # reachable and so it can leave the leg when an outside guard
+                # stops it.
+                wedge["at"] = _iso(_now())
+                wedge["atMonotonic"] = now
+                log(
+                    f"SIMULATED HARNESS WEDGE at t={now - t0:.1f}s: heartbeats "
+                    "and stops are frozen from here (ADAAAA-9012 stub)"
+                )
+            if wedge["at"] is not None:
+                time.sleep(cfg.poll_s)
+                continue
             if now - last_beat >= cfg.heartbeat_s:
                 last_beat = now
                 log(
@@ -1587,8 +1650,15 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
     finally:
         # Any exit path stops the leg: exception, keyboard, or normal end. A job
         # that is ALREADY terminal is not stopped again — a no-op stop here would
-        # relabel an unguarded end as `harness_exit` (ADAAAA-8943).
-        if not terminal_end and not stop_confirmed and stop_issued is None:
+        # relabel an unguarded end as `harness_exit` (ADAAAA-8943). A WEDGED
+        # harness stops nothing at all: it is the process the stub is modelling
+        # as dead-to-the-guard (ADAAAA-9012).
+        if (
+            not terminal_end
+            and not stop_confirmed
+            and stop_issued is None
+            and wedge["at"] is None
+        ):
             issue_stop("harness_exit")
         done_event.set()
 
@@ -1681,6 +1751,22 @@ def run_leg(runner: Any, cfg: Config, log) -> LegResult:
         record_stop=record_stop_fields(state["record"]),
         armed_at=_iso(armed_at),
         heartbeat_path=cfg.heartbeat_path,
+        wedge=(
+            {
+                "wedged": wedge["at"] is not None,
+                "at": wedge["at"],
+                "afterS": cfg.wedge_after_s,
+                "reason": (
+                    "fault injection (ADAAAA-9012 heartbeat-frozen stub): this "
+                    "harness stopped beating and stopped acting, so the job could "
+                    "only be stopped from outside it"
+                    if wedge["at"]
+                    else "fault injection armed but the leg ended first"
+                ),
+            }
+            if cfg.wedge_after_s is not None
+            else None
+        ),
     )
 
 
@@ -2330,7 +2416,12 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["clean", "clean-no-cost", "decide-dark", "decide-record",
                             "live-cost-dark-session", "no-cost-source", "busy",
                             "stop-stuck", "operator-stop-overspend",
-                            "operator-stop-within"])
+                            "operator-stop-within", "heartbeat-frozen"])
+    p.add_argument("--heartbeat-freeze-s", type=float, default=None,
+                   help="fault injection (ADAAAA-9012): at this leg second the "
+                        "harness stops beating AND stops acting, so only an "
+                        "outside guard can stop the job. Implied at 3 s by "
+                        "--stub-scenario heartbeat-frozen; dry-run only")
     p.add_argument("--preflight-only", action="store_true",
                    help="run the quiet-window preflight and exit; creates nothing "
                         "(the $0 way to verify the real probes)")
@@ -2428,6 +2519,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         clips_dir=args.clips_dir,
         heartbeat_path=args.heartbeat_path,
         heartbeat_s=args.heartbeat_s,
+        # ADAAAA-9012: only the heartbeat-frozen stub arms the wedge, and only
+        # in a dry run — a real leg must never be able to stop beating.
+        wedge_after_s=(
+            args.heartbeat_freeze_s
+            if args.heartbeat_freeze_s is not None and args.dry_run
+            else 3.0
+            if args.dry_run and args.stub_scenario == "heartbeat-frozen"
+            else None
+        ),
+        dry_run=bool(args.dry_run),
+        stub_scenario=args.stub_scenario if args.dry_run else None,
     )
     if args.cost_source_grace_s is not None:
         log(
@@ -2748,6 +2850,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "harnessStopIssued": result.harness_stop_issued,
         "terminalWithoutHarnessStop": result.terminal_without_harness_stop,
         "recordStop": result.record_stop,
+        # ADAAAA-9012: the wedged-harness stub. Present only when the fault
+        # injection was armed; `wedged: true` is the statement that this
+        # heartbeat stopped and nothing inside this process could stop the job.
+        "wedge": result.wedge,
         "arm": {
             "pid": os.getpid(),
             "armedAt": result.armed_at,

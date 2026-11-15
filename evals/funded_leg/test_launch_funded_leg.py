@@ -37,6 +37,7 @@ sys.path.insert(0, HERE)
 import funded_leg  # noqa: E402
 import launch_funded_leg  # noqa: E402
 import leg_supervisor  # noqa: E402
+import leg_watchdog  # noqa: E402
 
 HARNESS = os.path.join(HERE, "funded_leg.py")
 LAUNCHER = os.path.join(HERE, "launch_funded_leg.py")
@@ -976,6 +977,356 @@ class SupervisorDeathTest(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+
+class SupervisorOwnClockTest(unittest.TestCase):
+    """ADAAAA-9012: the deadline is the supervisor's own clock, not the heartbeat.
+
+    The 8998 leg froze its heartbeat at 793.8 s of a 1200 s authorization; a
+    supervisor whose only deadline source is that heartbeat has nothing to act
+    on once it stops being written.
+    """
+
+    def _beat(self, **over: Any) -> Dict[str, Any]:
+        now = time.time()
+        beat = {
+            "phase": "running",
+            "jobId": "job-frozen",
+            "pid": 4242,
+            "beatAt": _iso(datetime.now(timezone.utc) - timedelta(seconds=400)),
+            "deadlineEpoch": now + 600,
+            "deadlineAt": _iso(datetime.now(timezone.utc) + timedelta(seconds=600)),
+        }
+        beat.update(over)
+        return beat
+
+    def test_the_own_clock_deadline_fires_on_a_frozen_heartbeat(self):
+        now = time.time()
+        decision = leg_supervisor.decide(
+            self._beat(),
+            now=now,
+            stale_s=600,          # staleness cannot trip inside this window
+            slack_s=10,
+            last_beat_at=now - 400,
+            own_job_id="job-frozen",
+            own_deadline_stop_epoch=now - 3,
+        )
+        self.assertEqual(decision["action"], "stopped_deadline")
+        self.assertEqual(decision["trigger"], "own_clock_deadline")
+        self.assertEqual(decision["jobId"], "job-frozen")
+        self.assertAlmostEqual(decision["lateByS"], 3.0, places=1)
+
+    def test_the_own_clock_stops_a_job_whose_heartbeat_file_is_gone(self):
+        now = time.time()
+        decision = leg_supervisor.decide(
+            None,
+            now=now,
+            stale_s=45,
+            slack_s=10,
+            last_beat_at=now - 120,
+            own_job_id="job-frozen",
+            own_deadline_stop_epoch=now + 60,
+        )
+        # The heartbeat vanished after arming: that is the harness dying, and the
+        # job is still named, so this is a stop, not "nothing to supervise".
+        self.assertEqual(decision["action"], "stop_stale_heartbeat")
+        self.assertTrue(decision["heartbeatMissing"])
+        self.assertEqual(decision["jobId"], "job-frozen")
+
+    def test_the_own_clock_reaches_the_deadline_with_no_heartbeat_at_all(self):
+        now = time.time()
+        decision = leg_supervisor.decide(
+            None,
+            now=now,
+            stale_s=600,
+            slack_s=10,
+            last_beat_at=now - 10,
+            own_job_id="job-frozen",
+            own_deadline_stop_epoch=now - 1,
+        )
+        self.assertEqual(decision["action"], "stopped_deadline")
+        self.assertEqual(decision["trigger"], "own_clock_deadline")
+
+    def test_before_the_own_clock_deadline_it_still_waits(self):
+        now = time.time()
+        decision = leg_supervisor.decide(
+            self._beat(beatAt=_iso(datetime.now(timezone.utc))),
+            now=now,
+            stale_s=45,
+            slack_s=10,
+            last_beat_at=now,
+            own_job_id="job-frozen",
+            own_deadline_stop_epoch=now + 300,
+        )
+        self.assertEqual(decision["action"], "wait")
+
+    def test_a_finished_heartbeat_beats_the_own_clock(self):
+        now = time.time()
+        decision = leg_supervisor.decide(
+            self._beat(phase="finished", status="done"),
+            now=now,
+            stale_s=1,
+            slack_s=0,
+            last_beat_at=now - 3600,
+            own_job_id="job-frozen",
+            own_deadline_stop_epoch=now - 600,
+        )
+        self.assertEqual(decision["action"], "finished")
+
+
+class WatchdogDecisionTest(unittest.TestCase):
+    """ADAAAA-9012: the launcher-side watcher's two triggers, without a clock."""
+
+    def _beat(self, **over: Any) -> Dict[str, Any]:
+        now = time.time()
+        beat = {
+            "phase": "running",
+            "jobId": "job-frozen",
+            "beatAt": _iso(datetime.now(timezone.utc)),
+            "deadlineEpoch": now + 600,
+        }
+        beat.update(over)
+        return beat
+
+    def _decide(self, **over: Any) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "now": time.time(),
+            "stale_s": 45,
+            "stall_factor": 2.0,
+            "deadline_stop_epoch": None,
+            "job_id": "job-frozen",
+            "job_status": "running",
+            "last_beat_at": time.time(),
+        }
+        kwargs.update(over)
+        return leg_watchdog.decide_watch(kwargs.pop("beat", self._beat()), **kwargs)
+
+    def test_a_healthy_leg_is_only_waited_on(self):
+        self.assertEqual(self._decide()["action"], "wait")
+
+    def test_a_stall_past_twice_the_stale_window_stops(self):
+        now = time.time()
+        decision = self._decide(now=now, last_beat_at=now - 91)
+        self.assertEqual(decision["action"], "stopped_stall_heartbeat")
+        self.assertEqual(decision["trigger"], "heartbeat_stall")
+        self.assertAlmostEqual(decision["stallS"], 90.0, places=1)
+
+    def test_a_stall_inside_twice_the_window_does_not(self):
+        now = time.time()
+        self.assertEqual(
+            self._decide(now=now, last_beat_at=now - 80)["action"], "wait"
+        )
+
+    def test_the_own_deadline_stops_without_any_heartbeat_read(self):
+        now = time.time()
+        decision = self._decide(
+            beat=None, now=now, last_beat_at=now - 5, deadline_stop_epoch=now - 4
+        )
+        self.assertEqual(decision["action"], "stopped_deadline")
+        self.assertAlmostEqual(decision["lateByS"], 4.0, places=1)
+
+    def test_a_terminal_job_is_finished_not_stopped(self):
+        self.assertEqual(
+            self._decide(job_status="cancelled")["action"], "finished"
+        )
+
+    def test_nothing_to_watch_without_a_job(self):
+        decision = self._decide(beat=None, job_id=None, job_status=None)
+        self.assertEqual(decision["action"], "nothing")
+
+
+class HeartbeatFrozenStubTest(unittest.TestCase):
+    """ADAAAA-9012 pass bar: the "heartbeat freezes while the job is live" stub.
+
+    This is the shape the ticket named as missing: `operator-stop-overspend`
+    proves the harness-side class check, but nothing proved that a guard STOPS a
+    leg whose harness stopped beating. `--stub-scenario heartbeat-frozen` wedges
+    the harness a few seconds in (no beats, no stops) while the stub job keeps
+    billing, so only an outside guard can end it — the ADAAAA-8998 leg.
+    """
+
+    def _launch(self, run_dir: str, extra: list, authorized: int) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable, LAUNCHER,
+                "--run-dir", run_dir,
+                "--arm-timeout-s", "40", "--quiet",
+                "--dry-run", "--stub-scenario", "heartbeat-frozen",
+                "--authorized-duration-s", str(authorized),
+                "--cap-usd", "0.65", "--quiet-window-min", "0.1",
+                "--token", "stub-token",
+            ] + extra,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180,
+        )
+
+    def test_the_supervisor_stops_the_frozen_leg_at_its_deadline(self):
+        """Own-clock deadline (stale-s 600 ⇒ staleness cannot be the trigger)."""
+        with tempfile.TemporaryDirectory() as run_dir:
+            proc = self._launch(
+                run_dir, ["--supervisor-stale-s", "600", "--no-watch"], authorized=20
+            )
+            out = proc.stdout.decode()
+            self.assertEqual(proc.returncode, 0, out[-3000:])
+            arm = read_json(os.path.join(run_dir, "arm.json"))
+            self.assertEqual(arm["outcome"], "armed")
+
+            verdict_path = os.path.join(run_dir, "supervisor.json")
+
+            def stopped():
+                body = read_json(verdict_path)
+                return body if body and body.get("outcome") != "watching" else None
+
+            verdict = wait_for(stopped, 120)
+            self.assertIsNotNone(verdict, f"no supervisor verdict: {out[-2000:]}")
+            # The heartbeat froze, so the deadline trip is the ONLY thing that
+            # could have stopped this leg.
+            self.assertEqual(verdict["outcome"], "stopped_deadline")
+            self.assertEqual(verdict["trigger"], "own_clock_deadline")
+            self.assertTrue(verdict["stop"]["ok"], verdict["stop"])
+            self.assertEqual(verdict["stop"]["http"], 200)
+            self.assertEqual(verdict["stop"]["tokenSource"], "arg")
+            self.assertIsNone(verdict["stop"]["tokenError"])
+            # The stop is at deadlineEpoch + hardStopSlackS on the guard's clock.
+            heartbeat = read_json(os.path.join(run_dir, "heartbeat.json"))
+            expected = heartbeat["deadlineEpoch"] + heartbeat["hardStopSlackS"]
+            self.assertAlmostEqual(
+                verdict["ownClock"]["deadlineStopEpoch"], round(expected, 3), places=2
+            )
+            self.assertGreaterEqual(verdict["lateByS"], 0.0)
+            self.assertLessEqual(verdict["lateByS"], 8.0)
+            # The final record snapshot is in the verdict, not inferred.
+            self.assertEqual(verdict["stop"]["jobRecord"]["status"], "cancelled")
+
+            # And the harness's own bundle refuses the leg: a guard stop is not
+            # the harness's stop, so this leg is not gradable.
+            evidence_path = os.path.join(run_dir, "evidence.json")
+
+            def leg_evidence():
+                body = read_json(evidence_path)
+                return body if body and "leg" in body else None
+
+            evidence = wait_for(leg_evidence, 90)
+            self.assertIsNotNone(evidence, "the wedged harness wrote no evidence")
+            self.assertTrue(evidence["leg"]["wedge"]["wedged"])
+            self.assertEqual(evidence["leg"]["stopSourceClass"], "external")
+            self.assertFalse(evidence["leg"]["harnessStopIssued"])
+
+    def test_the_launcher_watchdog_stops_a_stalled_leg_itself(self):
+        """Pass bar 3: with no supervisor, the launcher-side watcher stops it."""
+        with tempfile.TemporaryDirectory() as run_dir:
+            proc = self._launch(
+                run_dir,
+                ["--no-supervisor", "--supervisor-stale-s", "2"],  # stall = 4 s
+                authorized=120,
+            )
+            out = proc.stdout.decode()
+            self.assertEqual(proc.returncode, 0, out[-3000:])
+            arm = read_json(os.path.join(run_dir, "arm.json"))
+            self.assertEqual(arm["outcome"], "armed")
+            self.assertEqual(arm["watchdog"]["stallS"], 4.0)
+
+            def stopped():
+                body = read_json(os.path.join(run_dir, "watchdog.json"))
+                return body if body and body.get("outcome") not in (
+                    None, "watching"
+                ) else None
+
+            verdict = wait_for(stopped, 120)
+            self.assertIsNotNone(verdict, f"no watchdog verdict: {out[-2000:]}")
+            self.assertEqual(verdict["outcome"], "stopped_stall_heartbeat")
+            self.assertEqual(verdict["trigger"], "heartbeat_stall")
+            self.assertEqual(verdict["stop"]["http"], 200)
+            self.assertEqual(verdict["stop"]["jobRecord"]["status"], "cancelled")
+
+            # pass bar 3's second half: the arm verdict carries the refusal.
+            def armed_with_watch():
+                body = read_json(os.path.join(run_dir, "arm.json"))
+                return body if body and (body.get("watch") or {}).get("stop") else None
+
+            arm_after = wait_for(armed_with_watch, 60)
+            self.assertIsNotNone(arm_after, "arm.json never carried the watch stop")
+            self.assertEqual(arm_after["stopSourceClass"], "external")
+            self.assertEqual(
+                arm_after["watch"]["outcome"], "stopped_stall_heartbeat"
+            )
+            self.assertFalse(arm_after["watch"]["stop"]["ok"] is False)
+
+            # and the bundle the grader reads carries it too
+            evidence_path = os.path.join(run_dir, "evidence.json")
+
+            def folded():
+                body = read_json(evidence_path)
+                return body if body and body.get("launcherWatch") else None
+
+            evidence = wait_for(folded, 90)
+            self.assertIsNotNone(evidence, "evidence.json was never folded in")
+            self.assertEqual(
+                evidence["launcherWatch"]["stopSourceClass"], "external"
+            )
+            self.assertEqual(evidence["leg"]["stopSourceClass"], "external")
+
+
+class WatchdogArtifactTest(unittest.TestCase):
+    """The watchdog writes its verdict and the arm/evidence fields, at $0."""
+
+    def test_a_stall_stop_writes_the_verdict_arm_and_breach(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            arm_path = os.path.join(tmp, "arm.json")
+            evidence_path = os.path.join(tmp, "evidence.json")
+            verdict_path = os.path.join(tmp, "watchdog.json")
+            beat_path = os.path.join(tmp, "heartbeat.json")
+            funded_leg.write_json_atomic(beat_path, {
+                "phase": "running", "jobId": "job-9", "pid": 7,
+                "beatAt": _iso(datetime.now(timezone.utc) - timedelta(seconds=200)),
+                "deadlineEpoch": time.time() + 600,
+            })
+            funded_leg.write_json_atomic(arm_path, {
+                "outcome": "armed", "jobId": "job-9",
+                "capUsd": 1.30, "heartbeat": {"jobId": "job-9"},
+            })
+            record = {"status": "cancelled", "costUsd": 1.4537,
+                      "stopRequestedAt": _iso(datetime.now(timezone.utc))}
+            calls = []
+
+            def read_record(_job: str) -> Dict[str, Any]:
+                # live until the watchdog stops it, then terminal
+                status = "cancelled" if calls else "running"
+                return {"ok": True, "status": status, "record": record}
+
+            code = leg_watchdog.watch(
+                run_dir=tmp,
+                arm_path=arm_path,
+                evidence_path=None,
+                verdict_path=verdict_path,
+                heartbeat_path=beat_path,
+                stale_s=45,
+                stall_factor=2.0,
+                deadline_stop_epoch=None,
+                hard_stop_slack_s=10,
+                job_id="job-9",
+                cap_usd=1.30,
+                timeout_s=30,
+                poll_s=0.05,
+                read_record=read_record,
+                stop=lambda job: calls.append(job) or {
+                    "jobId": job, "attempted": True, "ok": True, "http": 200,
+                    "tokenSource": "arg", "error": None,
+                },
+                log=lambda _m: None,
+            )
+            self.assertEqual(code, leg_watchdog.EXIT_OK)
+            self.assertEqual(calls, ["job-9"])
+            verdict = read_json(verdict_path)
+            self.assertEqual(verdict["outcome"], "stopped_stall_heartbeat")
+            self.assertEqual(verdict["stopSourceClass"], "external")
+            self.assertEqual(verdict["jobRecord"]["status"], "cancelled")
+            self.assertAlmostEqual(verdict["capBreach"]["overspendUsd"], 0.1537, places=4)
+            arm = read_json(arm_path)
+            # the arm proof survives the merge
+            self.assertEqual(arm["outcome"], "armed")
+            self.assertEqual(arm["stopSourceClass"], "external")
+            self.assertEqual(arm["watch"]["jobRecord"]["status"], "cancelled")
+            self.assertAlmostEqual(arm["capBreach"]["overspendUsd"], 0.1537, places=4)
 
 
 if __name__ == "__main__":

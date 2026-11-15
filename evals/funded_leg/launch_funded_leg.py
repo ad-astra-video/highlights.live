@@ -55,6 +55,11 @@ re-derive it:
     <run-dir>/supervisor.pid          the fallback supervisor pid
     <run-dir>/supervisor.json         the supervisor's verdict (`watching` while
                                       it is armed, then what it decided)
+    <run-dir>/watchdog.json           the launcher-side watchdog's verdict: the
+                                      stall/deadline trip, the stop response and
+                                      the final record snapshot (ADAAAA-9012)
+    <run-dir>/watchdog.pid            the watchdog pid
+    <run-dir>/watchdog.log            the watchdog's own output
     <run-dir>/deadline_guard.json     the durable timer's unit/fire time/readback
     <run-dir>/deadline_guard_stop.py  what the timer runs when it fires (0700)
     <run-dir>/deadline_guard_result.json  what the timer did when it fired
@@ -200,6 +205,21 @@ def split_args(argv: Sequence[str]) -> Tuple[argparse.Namespace, List[str]]:
     parser.add_argument("--supervisor-script",
                         default=os.path.join(HERE, "leg_supervisor.py"),
                         help="path to leg_supervisor.py")
+    parser.add_argument("--watchdog-script",
+                        default=os.path.join(HERE, "leg_watchdog.py"),
+                        help="path to leg_watchdog.py (the watcher that outlives "
+                             "this launcher, ADAAAA-9012)")
+    parser.add_argument("--no-watch", action="store_true",
+                        help="do not spawn the launcher-side watchdog (then "
+                             "nothing watches past the arm window but the "
+                             "supervisor and the durable timer)")
+    parser.add_argument("--watch-stall-factor", type=float, default=2.0,
+                        help="the watchdog stops when the heartbeat has not "
+                             "advanced for this x --supervisor-stale-s "
+                             "(default 2)")
+    parser.add_argument("--watch-max-s", type=float, default=3600.0,
+                        help="hard bound on the watchdog window (default 3600; "
+                             "the watchdog also bounds itself by the deadline)")
     parser.add_argument("--python", default=sys.executable,
                         help="interpreter for the harness/supervisor (default: "
                              "the launcher's own)")
@@ -750,6 +770,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     launch_record["harnessPid"] = proc.pid
     log(f"harness pid {proc.pid} launched detached (own session) -> {log_path}")
 
+    # Filled in by the arm proof; `spawn_supervisor` runs after it and hands
+    # these to the supervisor as its OWN clock (ADAAAA-9012), so a frozen
+    # heartbeat cannot disable the deadline trip.
+    spawn_ctx: Dict[str, Any] = {
+        "jobBase": getattr(harness_ns, "job_base", "http://127.0.0.1:3000"),
+        "jobId": None,
+        "deadlineEpoch": None,
+        "hardStopSlackS": getattr(harness_ns, "hard_stop_slack_s", 10.0),
+    }
+
     def spawn_supervisor(guard_unit: Optional[str]) -> None:
         """Start the fallback supervisor beside the harness, in its own session.
 
@@ -759,6 +789,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         """
         if args.no_supervisor:
             return
+        job_base = spawn_ctx["jobBase"]
+        self_job_id = spawn_ctx["jobId"]
+        self_deadline_epoch = spawn_ctx["deadlineEpoch"]
         sup_cmd = [
             args.python, args.supervisor_script,
             "--run-dir", run_dir,
@@ -766,9 +799,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "--stale-s", str(args.supervisor_stale_s),
             "--arm-timeout-s", str(args.arm_timeout_s),
             "--slack-s", str(getattr(harness_ns, "hard_stop_slack_s", 10.0)),
-            "--job-base", getattr(harness_ns, "job_base", "http://127.0.0.1:3000"),
+            "--job-base", job_base,
             "--evidence-out", supervisor_evidence,
         ]
+        # ADAAAA-9012: the supervisor's deadline trip is on its OWN clock, from
+        # the arm proof — not from a heartbeat that froze on the 8998 leg.
+        if self_job_id:
+            sup_cmd += [
+                "--job-id", str(self_job_id),
+                "--hard-stop-slack-s",
+                str(spawn_ctx["hardStopSlackS"]),
+            ]
+        if self_deadline_epoch is not None:
+            sup_cmd += ["--deadline-epoch", str(self_deadline_epoch)]
         if guard_unit:
             sup_cmd += ["--deadline-guard-unit", guard_unit]
         for flag, key in (
@@ -903,6 +946,48 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     assert armed is not None  # the arm proof above returns EXIT_ARM_FAILED otherwise
 
+    # ---- the guards' own clock (ADAAAA-9012) ------------------------------
+    # Everything below is handed to the guards as argv, so none of them has to
+    # re-read a heartbeat that may freeze: the job id, the authorized deadline,
+    # the hard-stop slack, and the API base the job actually lives on (the
+    # dry-run stub picks its port at bind time, so only the heartbeat knows it).
+    spawn_ctx["jobId"] = armed["job"]
+    if (beat or {}).get("jobBase"):
+        spawn_ctx["jobBase"] = str((beat or {})["jobBase"])
+    try:
+        raw_deadline = (beat or {}).get("deadlineEpoch")
+        spawn_ctx["deadlineEpoch"] = (
+            float(raw_deadline) if raw_deadline is not None else None
+        )
+    except (TypeError, ValueError):
+        spawn_ctx["deadlineEpoch"] = None
+    try:
+        spawn_ctx["hardStopSlackS"] = float(
+            (beat or {}).get("hardStopSlackS")
+            if (beat or {}).get("hardStopSlackS") is not None
+            else getattr(harness_ns, "hard_stop_slack_s", 10.0)
+        )
+    except (TypeError, ValueError):
+        spawn_ctx["hardStopSlackS"] = float(
+            getattr(harness_ns, "hard_stop_slack_s", 10.0)
+        )
+    own_clock = {
+        "jobId": spawn_ctx["jobId"],
+        "deadlineEpoch": spawn_ctx["deadlineEpoch"],
+        "deadlineAt": (
+            _iso_from_epoch(spawn_ctx["deadlineEpoch"])
+            if spawn_ctx["deadlineEpoch"] is not None
+            else None
+        ),
+        "hardStopSlackS": spawn_ctx["hardStopSlackS"],
+        "deadlineStopEpoch": (
+            round(spawn_ctx["deadlineEpoch"] + spawn_ctx["hardStopSlackS"], 3)
+            if spawn_ctx["deadlineEpoch"] is not None
+            else None
+        ),
+        "source": "the arm proof (argv), not the heartbeat (ADAAAA-9012)",
+    }
+
     # ---- the durable deadline guard (ADAAAA-9008) -------------------------
     # An armed harness plus an armed supervisor is still not a guarantee: on the
     # ADAAAA-8998 C2 leg both were killed in the same second and the job metered
@@ -991,6 +1076,73 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         (launch_record.get("supervisor") or {}).get("pid")
     )
 
+    # ---- the launcher-side watchdog (ADAAAA-9012) -------------------------
+    # The arm proof passing used to end the launcher's involvement, which is the
+    # 8998 shape: `arm.json` said armed, the supervisor's log was 0 bytes, and
+    # nobody was watching the heartbeat. This process now keeps a watcher of its
+    # own beside the leg, in its own session, so it survives this launcher.
+    def spawn_watchdog() -> None:
+        if args.no_watch:
+            launch_record["watchdog"] = {
+                "pid": None,
+                "reason": "(--no-watch) — nothing keeps watching past the arm window",
+            }
+            log("WARNING: no launcher-side watchdog (--no-watch)")
+            return
+        wd_cmd = [
+            args.python, args.watchdog_script,
+            "--run-dir", run_dir,
+            "--heartbeat", heartbeat_path,
+            "--arm", arm_path,
+            "--evidence", evidence_path,
+            "--job-id", str(spawn_ctx["jobId"]),
+            "--stale-s", str(args.supervisor_stale_s),
+            "--stall-factor", str(args.watch_stall_factor),
+            "--hard-stop-slack-s", str(spawn_ctx["hardStopSlackS"]),
+            "--job-base", spawn_ctx["jobBase"],
+            "--poll-s", "2",
+            "--watch-timeout-s", str(args.watch_max_s),
+        ]
+        if spawn_ctx["deadlineEpoch"] is not None:
+            wd_cmd += ["--deadline-epoch", str(spawn_ctx["deadlineEpoch"])]
+        if harness_ns.cap_usd is not None:
+            wd_cmd += ["--cap-usd", str(harness_ns.cap_usd)]
+        for flag, key in (
+            ("--token", "token"), ("--user-id", "user_id"), ("--email", "email"),
+            ("--mint-token-container", "mint_token_container"),
+            ("--postgres-container", "postgres_container"),
+            ("--box-cmd", "box_cmd"), ("--repo-root", "repo_root"),
+        ):
+            value = getattr(harness_ns, key, None)
+            if value:
+                wd_cmd += [flag, str(value)]
+        wd_cmd.append("--quiet")
+        try:
+            wd = _spawn(wd_cmd, os.path.join(run_dir, "watchdog.log"), os.getcwd())
+            with open(os.path.join(run_dir, "watchdog.pid"), "w", encoding="utf-8") as fh:
+                fh.write(f"{wd.pid}\n")
+            launch_record["watchdog"] = {
+                "pid": wd.pid,
+                "command": " ".join(shlex.quote(part) for part in wd_cmd),
+                "stallS": round(args.supervisor_stale_s * max(1.0, args.watch_stall_factor), 1),
+                "deadlineStopEpoch": own_clock["deadlineStopEpoch"],
+                "evidence": os.path.join(run_dir, "watchdog.json"),
+            }
+            log(
+                f"watchdog pid {wd.pid} (stall >= "
+                f"{args.supervisor_stale_s * max(1.0, args.watch_stall_factor):.0f} s, "
+                f"deadline {own_clock['deadlineAt'] or '-'})"
+            )
+        except Exception as exc:
+            launch_record["watchdog"] = {
+                "pid": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            log(f"WARNING: launcher-side watchdog did not start: {exc}")
+
+    spawn_watchdog()
+    _write_json(launch_path, launch_record)
+
     _write_json(arm_path, {
         "outcome": "armed",
         "at": _iso_now(),
@@ -1001,6 +1153,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "evidence": evidence_path,
         "log": log_path,
         "supervisor": launch_record.get("supervisor"),
+        "watchdog": launch_record.get("watchdog"),
+        "watch": {
+            "outcome": "watching" if (launch_record.get("watchdog") or {}).get("pid") else None,
+            "stallS": round(args.supervisor_stale_s * max(1.0, args.watch_stall_factor), 1),
+            "deadlineStopEpoch": own_clock["deadlineStopEpoch"],
+            "evidence": os.path.join(run_dir, "watchdog.json"),
+        },
+        "ownClock": own_clock,
         "deadlineGuard": guard_record,
         "durable": durable,
         "deadlineAt": (beat or {}).get("deadlineAt"),

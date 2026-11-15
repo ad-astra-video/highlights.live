@@ -43,7 +43,8 @@ Three pieces close that, and all three are provable at `$0`:
 |---|---|
 | `launch_funded_leg.py --run-dir DIR` | the harness runs in its own session (`setsid`), stdin on `/dev/null`, stdout/stderr into `DIR/harness.log`, heartbeat + evidence inside `DIR`. Nothing depends on the launching terminal. |
 | arm check (same launcher) | within `--arm-timeout-s` (default 30) it requires the `[leg] arm pid=… job=…` line, a heartbeat naming that pid and a job, and a live pid. Missing any of the three: it stops the job it can name, writes `DIR/arm.json` with `outcome: "arm_failed"`, and exits `8`. It never reports a supervised leg it could not prove. |
-| `leg_supervisor.py` (launched beside it) | a second process that reads the heartbeat and issues `POST /jobs/{id}/stop` when the beat goes stale (`--stale-s`, default 45) or the heartbeat's `deadlineEpoch` passes by more than `--slack-s`. Verdict in `DIR/supervisor.json`. |
+| `leg_supervisor.py` (launched beside it) | a second process that reads the heartbeat and issues `POST /jobs/{id}/stop` when the beat goes stale (`--stale-s`, default 45) or the deadline passes — the deadline comes from the launcher's argv (`--job-id`, `--deadline-epoch`, `--hard-stop-slack-s`, ADAAAA-9012), so a frozen heartbeat cannot disable it. Verdict in `DIR/supervisor.json`. |
+| `leg_watchdog.py` (launched beside it, ADAAAA-9012) | the launcher's own watcher, in its own session: it keeps reading the heartbeat for the whole leg and stops the job when the beat has not advanced for `--watch-stall-factor x --stale-s` (default 2 x 45 s) or the deadline passes, writing `DIR/watchdog.json` plus `stopSourceClass`/`capBreach` into `DIR/arm.json` and `DIR/evidence.json`. `--no-watch` opts out. |
 
 The harness writes `<run-dir>/heartbeat.json` atomically (`--heartbeat-path`) and
 prints `[leg] arm …` plus `[leg] heartbeat t=… status=… cost=…` lines, so the arm
@@ -216,7 +217,37 @@ against a real localhost stop endpoint (a stale heartbeat must produce one
 `POST /jobs/{id}/stop`), and the operator-stop scenarios assert exit `7` plus
 `capBreach`.
 
-Unit tests (stdlib `unittest`, ~3 min, no network beyond localhost):
+### The heartbeat-frozen stub (ADAAAA-9012)
+
+`--stub-scenario heartbeat-frozen` wedges the harness a few seconds in: from
+`--heartbeat-freeze-s` (default 3) it stops **beating and acting** while the
+stub job keeps billing. That is the ADAAAA-8998 shape, where `heartbeat.json`
+froze at `t=793.8s` of a 1200 s authorization, `supervisor.json` was absent, and
+the job metered another 372 s until an operator stopped it. Two `$0` proofs:
+
+```sh
+# 1. the supervisor's OWN clock: the deadline trip, insensitive to staleness
+#    (stale-s 600 cannot fire inside the leg, so only deadlineEpoch + 10 s can)
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/leg-frozen-9012 \
+  --dry-run --stub-scenario heartbeat-frozen --authorized-duration-s 20 \
+  --cap-usd 0.65 --quiet-window-min 0.1 --token stub-token \
+  --supervisor-stale-s 600 --no-watch
+cat /tmp/leg-frozen-9012/supervisor.json   # stopped_deadline, trigger own_clock_deadline
+
+# 2. the launcher-side watchdog, with no supervisor at all: stall = 2 x stale-s
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/leg-frozen-wd-9012 \
+  --dry-run --stub-scenario heartbeat-frozen --authorized-duration-s 120 \
+  --cap-usd 0.65 --quiet-window-min 0.1 --token stub-token \
+  --no-supervisor --supervisor-stale-s 2
+cat /tmp/leg-frozen-wd-9012/watchdog.json  # stopped_stall_heartbeat, http 200
+cat /tmp/leg-frozen-wd-9012/arm.json       # stopSourceClass external + capBreach
+```
+
+Both runs end with `evidence.json` carrying `leg.wedge.wedged: true` and
+`leg.stopSourceClass: "external"` — a guard stop is not the harness's stop, so
+the leg is refused rather than graded.
+
+Unit tests (stdlib `unittest`, ~4 min, no network beyond localhost):
 
 ```sh
 python3 -m unittest discover -s evals/funded_leg -v
