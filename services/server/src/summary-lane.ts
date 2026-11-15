@@ -407,6 +407,10 @@ export async function runSummaryForRow(
      *  clause drop is what the copy died of. */
     name: Extract<SummaryDropReason, "filler" | "gate">;
     decision: ReturnType<typeof gateSummaryDetail>;
+    /** The WRITER's own reply (pre-prune). A repair that dropped every repeated
+     *  sentence leaves an empty post-prune body, so this is the text `summaryRaw`
+     *  must keep. */
+    raw: string;
     dropped: number;
     substituted: number;
     survivors: number;
@@ -617,6 +621,7 @@ export async function runSummaryForRow(
             token: `prune:${repairName}`,
             name: repairName,
             decision: prunedDecision,
+            raw: decision.raw,
             dropped: repeat.repeatedSentences.length,
             substituted: prune.substituted.length,
             survivors: survivors > 0 ? survivors : 0,
@@ -691,7 +696,12 @@ export async function runSummaryForRow(
   // excerpt in the log), so the next QA can quote WHAT was refused instead of
   // only the violation token. Still never a `summary`: the card renders on its
   // headline exactly as before (AC6).
-  const raw = lastGate ? lastGate.raw.slice(0, SUMMARY_RAW_MAX_CHARS) : undefined;
+  // ADAAAA-9085: when the repair is what refused the row, the reply worth keeping is
+  // the WRITER's (pre-prune) one — a repair that dropped every repeated sentence
+  // leaves an empty post-prune body, and `summaryRaw: ""` would lose the evidence the
+  // next census quotes.
+  const rawSource = repairRefused && !repairRefused.decision.raw ? repairRefused.raw : (lastGate?.raw ?? "");
+  const raw = rawSource ? rawSource.slice(0, SUMMARY_RAW_MAX_CHARS) : undefined;
   // ADAAAA-8903 (§15.4): the refusal DETAIL rides the row, not just the ordered
   // `gate` counter — the next census must be able to tell a depth-threshold
   // refusal from a compliance one by reading the row.
