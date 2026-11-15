@@ -1,6 +1,6 @@
-# Chunk 06 — Deploy + end-to-end on 192.0.2.6
+# Chunk 06 — Deploy + end-to-end on <GPU_BOX_LAN_IP>
 
-Target: `operator@box-ssh-alias` on 192.0.2.6:2222 (gpu-box).
+Target: `<SSH_USER>@<SSH_HOST_ALIAS>` on `<GPU_BOX_LAN_IP>:<SSH_PORT>` (`<GPU_BOX_HOST>`).
 - GPU 0 RTX 3090 Ti (24 GB, ~10.6G free) → perceive (Florence)
 - GPU 1 RTX 5070 Ti (16 GB, ~1.4G free) → decide (Gemma Q4 via llama.cpp) — may need to free GPU 1 or run Gemma on CPU
 - 16 cores, 62 GB RAM. Docker 28.4 + compose. ~/highlights.live is empty; hl_src.tar.gz (202KB) staged.

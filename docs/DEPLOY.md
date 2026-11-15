@@ -31,11 +31,11 @@ npx vitest run services/server/test/entitlements.test.ts \
 npm run build -w @highlights/webapp        # SPA tsc + vite build
 ```
 
-## Deploy to the box (gpu-box / highlights-server.dpn.gg)
+## Deploy to the box (<GPU_BOX_HOST> / <PUBLIC_HOST>)
 
-The live service runs on the `.6` box (gpu-box) from the repo source,
+The live service runs on the deployment GPU box from the repo source,
 served behind the Cloudflare tunnel (`cloudflared`) at
-`https://highlights-server.dpn.gg`. The canonical stack is defined in
+`https://<PUBLIC_HOST>`. The canonical stack is defined in
 `docker/docker-compose.yml` (server :3000, media, perceive, decide, gemma,
 orchestrator, postgres, email) and is started with:
 
@@ -80,7 +80,7 @@ server, using the same read-only credential as the deploy gate:
 ```sh
 docker/admin-readout.sh              # formatted readout
 docker/admin-readout.sh --json       # raw /admin/funnel + /admin/spend payloads
-HIGHLIGHTS_API_BASE=https://highlights-server.dpn.gg docker/admin-readout.sh
+HIGHLIGHTS_API_BASE=https://<PUBLIC_HOST> docker/admin-readout.sh
 ```
 
 - GET-only: the `admin_readonly` token is accepted on `GET` and rejected by
@@ -248,11 +248,11 @@ routed set:
 
 | runner_id | host | runner_url | capacity | metadata |
 |---|---|---|---|---|
-| `highlights-decide-5090-1` | decide-pool-box | `http://192.0.2.151:8091` | 4 | `tier=5090, seqs=4` |
-| `highlights-decide-5090-2` | decide-pool-box | `http://192.0.2.151:8092` | 4 | `tier=5090, seqs=4` |
-| `highlights-decide-5090-3` | decide-pool-box | `http://192.0.2.151:8093` | 4 | `tier=5090, seqs=4` |
-| `highlights-decide-x99` | x99 | `http://decide:8081` | 2 | `tier=x99-fallback, seqs=2` |
-| `highlights-decide-x99-b` | x99 | `http://decide-b:8081` | 2 | `tier=x99-fallback, seqs=2` |
+| `highlights-decide-5090-1` | <DECIDE_HOST> | `http://<DECIDE_HOST_LAN_IP>:8091` | 4 | `tier=5090, seqs=4` |
+| `highlights-decide-5090-2` | <DECIDE_HOST> | `http://<DECIDE_HOST_LAN_IP>:8092` | 4 | `tier=5090, seqs=4` |
+| `highlights-decide-5090-3` | <DECIDE_HOST> | `http://<DECIDE_HOST_LAN_IP>:8093` | 4 | `tier=5090, seqs=4` |
+| `highlights-decide-x99` | <GPU_BOX_HOST> | `http://decide:8081` | 2 | `tier=x99-fallback, seqs=2` |
+| `highlights-decide-x99-b` | <GPU_BOX_HOST> | `http://decide-b:8081` | 2 | `tier=x99-fallback, seqs=2` |
 
 Every registration keeps `app=highlights-live/decide` and `proxy=0`, so
 discovery capacity summing keeps matching and the runner id stays the route
@@ -265,13 +265,13 @@ fallback.
 
 Where the registrars run:
 
-- **x99:** `registrar-decide-x99` and `registrar-decide-x99-b` in
+- **GPU box:** `registrar-decide-x99` and `registrar-decide-x99-b` in
   `docker/docker-compose.yml`, one per decide container, each probing
   `RUNNER_URL/health`.
 - **5090 host:** `docker/registrar-5090.sh` starts
   `highlights-registrar-decide-5090-1..3` as `docker run --network host`
-  containers on decide-pool-box, with `ORCH_URL=https://192.0.2.6:8935`
-  and runner urls `http://192.0.2.151:809{1,2,3}` — the addresses S0
+  containers on <DECIDE_HOST>, with `ORCH_URL=https://<GPU_BOX_LAN_IP>:8935`
+  and runner urls `http://<DECIDE_HOST_LAN_IP>:809{1,2,3}` — the addresses S0
   (ADAAAA-8557) proved reachable. The orchestrator secret is resolved the same
   way compose resolves it: `ORCH_SECRET` in the environment, then
   `ORCHESTRATOR_SECRET`, then the box `.env`, then the compose default
@@ -432,17 +432,17 @@ used when the fetch fails.
 After a deploy, confirm the served behavior matches source:
 
 ```sh
-curl -s https://highlights-server.dpn.gg/health
+curl -s https://<PUBLIC_HOST>/health
 # {"status":"ok","billing":"disabled"}
 
 # hard beta-gate: non-invited register must be rejected 403 invite_required
-curl -s -X POST https://highlights-server.dpn.gg/auth/register \
+curl -s -X POST https://<PUBLIC_HOST>/auth/register \
   -H 'Content-Type: application/json' \
   -d '{"email":"probe@example.com","password":"ChangeMe123!"}'
 # 403  {"error":"invite required to create an account","code":"invite_required"}
 
 # public waitlist capture
-curl -s -X POST https://highlights-server.dpn.gg/waitlist \
+curl -s -X POST https://<PUBLIC_HOST>/waitlist \
   -H 'Content-Type: application/json' -d '{"email":"probe@example.com"}'
 # 200  {"ok":true,"registered":true,...}
 ```
@@ -455,7 +455,7 @@ loop. The supported path is the reviewer's **bound Komodo credentials**
 (`env.KOMODO_API_KEY` / `env.KOMODO_API_SECRET` on the Highlights.live
 Reviewer; secret names `deploy/komodo_api_key` / `deploy/komodo_api_secret` —
 values are never stored in issues, comments, or this doc), used to run a
-read-only script on `gpu-box`:
+read-only script on `<GPU_BOX_HOST>`:
 
 1. **Job record (AC-C1).** Job routes need a real DB user session, not the
    `admin_readonly` token (which 401s on every `/jobs/:id*` read). The script
@@ -493,5 +493,5 @@ Verified 2026-11-04 (ADAAAA-7920): `GET /jobs/6fef87c6-a564-499e-8336-18d79dd6b2
   the merge of local master (with gate+quota commit `0334366`) and the box's
   prior origin/master (compose/gpu work).
 - `git ls-remote origin master` -> `e7db4cddb8b147637cf60ba5771e39375a9bd990`.
-- Live re-check above re-run against `https://highlights-server.dpn.gg`,
+- Live re-check above re-run against `https://<PUBLIC_HOST>`,
   outputs match the source routes exactly.

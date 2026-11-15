@@ -43,3 +43,39 @@ is a decision input, so a stale map silently changes what "identified" means.
 | [`per-stream-lora-injection.md`](per-stream-lora-injection.md) | per-stream LoRA injection into perceive |
 | [`DEPLOY.md`](DEPLOY.md) | deployment shape |
 | [`INTEGRATIONS.md`](INTEGRATIONS.md) | external integrations |
+
+## Public-document hygiene
+
+This repository is public, so nothing under `docs/` may name a real host, a real
+address, an SSH target, or a credential value. Write the placeholder instead and
+keep the real value in the box `.env`, the ops vault, or the secrets store.
+
+| Real thing | Placeholder |
+| --- | --- |
+| production API/web host | `<PUBLIC_HOST>` |
+| deploy GPU box hostname | `<GPU_BOX_HOST>` |
+| deploy GPU box LAN address | `<GPU_BOX_LAN_IP>` |
+| decide host hostname | `<DECIDE_HOST>` |
+| decide host LAN address | `<DECIDE_HOST_LAN_IP>` |
+| ssh user / ssh alias / ssh port | `<SSH_USER>` / `<SSH_HOST_ALIAS>` / `<SSH_PORT>` |
+| bearer token, API key, password | `<TOKEN>` / `<PASSWORD>`, or the words "secrets-managed, never committed" |
+
+Allowed as-is: loopback (`127.0.0.1`, `0.0.0.0`), the RFC1918 CIDR ranges quoted
+as documentation defaults (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`),
+compose-network service names (`http://decide:8081`), `example.com` sample
+payloads, and container/runner ids (they are API identifiers, not addresses —
+`highlights-decide-<id>` names a runner, not a host).
+
+Check a docs change before committing:
+
+```sh
+git grep -nE '(^|[^0-9.])((192\.168|10|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)|https?://[a-z0-9-]+\.[a-z]{2,}|[A-Za-z0-9_.-]+@[a-z0-9-]+\.[a-z]{2,}' -- docs
+```
+
+Acceptable hits, and nothing else: the public GitHub repo URL, the RFC1918 CIDR
+defaults, `example.com` / `x.dev` sample payloads, the published product contact
+addresses in `legal/` and `INTEGRATIONS.md`, `admin@highlights.local` (the seeded
+dev admin), and a placeholder such as `your-app.railway.app`. Any other host,
+address or `user@host` is a real endpoint and must become a placeholder.
+`ADAAAA-9100` is the sweep that removed the 2026-11 values; the earlier values
+stay in git history until a rewrite is approved.
