@@ -30,6 +30,7 @@ import {
   type LiveLegMode,
   type LiveLegRowLike,
   type RowAnchorLike,
+  type StopSourceClass,
 } from "../services/server/src/live-leg-grade";
 
 interface CliArgs {
@@ -129,8 +130,17 @@ interface HarnessEvidenceLike {
     meteredProjectionS?: number;
     projectedCostUsd?: number;
     recordCostSource?: string;
+    /** ADAAAA-8943: who stopped the leg, and whether this harness did it. */
+    stopSource?: string;
+    stopSourceClass?: StopSourceClass;
+    harnessStopIssued?: boolean;
+    terminalWithoutHarnessStop?: boolean;
   };
-  shape?: { verdict?: string; gradedCostUsd?: number; projectedFrom?: string };
+  shape?: { verdict?: string; gradedCostUsd?: number; projectedFrom?: string; stopSource?: string };
+  /** ADAAAA-8943: the authorized cap, so an outside stop can be priced. */
+  authorized?: { capUsd?: number };
+  /** ADAAAA-8943: the breach the harness already computed, when it did. */
+  capBreach?: { capUsd?: number; settledCostUsd?: number; overspendUsd?: number };
   preflight?: { verdict?: string; allQuiet?: boolean };
   build?: { verdict?: string; sha?: string; matched?: number };
   clips?: { produced?: number; item2Source?: string; item2Met?: boolean };
@@ -289,14 +299,23 @@ function main(): void {
       ? loadRowAnchorsFromList(highlights as unknown[])
       : undefined;
 
+  // ADAAAA-8943: the stop provenance rides from the harness evidence into the
+  // grade, so a leg an operator stopped is refused here too — not only by the
+  // harness's own exit code. Absent fields keep the old behaviour.
+  const harnessLegBlock = harness?.leg;
+  const stopSource = harness?.leg?.stopSource ?? harness?.shape?.stopSource;
+  const stopSourceClass = harness?.leg?.stopSourceClass;
+  const capUsd = harness?.authorized?.capUsd ?? harness?.capBreach?.capUsd;
+  const settledCostUsd = harness?.capBreach?.settledCostUsd ?? harness?.leg?.costUsd;
+
   const grade = gradeLiveLeg({
     mode: args.mode,
     rows,
     ...(durationS !== undefined ? { durationS, durationSource } : {}),
-    startedAt: job.startedAt ?? harnessLeg?.startedAt,
+    startedAt: job.startedAt ?? harnessLegBlock?.startedAt,
     endedAt: job.endedAt,
-    finishedAt: job.finishedAt ?? harnessLeg?.finishedAt,
-    perceiveSessionS: job.perceiveSessionS ?? harnessLeg?.perceiveSessionS,
+    finishedAt: job.finishedAt ?? harnessLegBlock?.finishedAt,
+    perceiveSessionS: job.perceiveSessionS ?? harnessLegBlock?.perceiveSessionS,
     decideP50Ms: args.decideP50Ms,
     accepted,
     candidates,
@@ -304,6 +323,12 @@ function main(): void {
     ...(goalFalsePositiveRows !== undefined ? { goalFalsePositiveRows } : {}),
     ...(args.authorizedDurationS !== undefined ? { authorizedDurationS: args.authorizedDurationS } : {}),
     ...(fixtureAnchors && rowAnchors ? { fixtureAnchors, rowAnchors } : {}),
+    ...(stopSource !== undefined ? { stopSource } : {}),
+    ...(stopSourceClass !== undefined ? { stopSourceClass } : {}),
+    ...(capUsd !== undefined && Number.isFinite(capUsd) ? { capUsd } : {}),
+    ...(settledCostUsd !== undefined && Number.isFinite(settledCostUsd)
+      ? { settledCostUsd }
+      : {}),
   });
 
   if (args.json) {
@@ -376,6 +401,23 @@ function main(): void {
       `  |  ${bars.legacyMs} ms legacy -> ${bars.legacyPass ? "PASS" : "FAIL"}  (delta: ${bars.delta})`
   );
   lines.push(`  AC-B       ${grade.acB.status}  ${grade.acB.reasons.join(" ; ")}`);
+  // ADAAAA-8943: the stop provenance is printed on every grade, and a breach is
+  // a line of its own rather than something to divide out of two numbers.
+  if (grade.stopSource || grade.stopSourceClass) {
+    lines.push(
+      `  stop       ${grade.stopSource ?? "?"}${grade.stopSourceClass ? ` (${grade.stopSourceClass})` : ""}` +
+        (grade.stopSourceClass === "external"
+          ? "  — NOT GRADABLE: the authorized stop never fired"
+          : "")
+    );
+  }
+  if (grade.capBreach) {
+    const b = grade.capBreach;
+    lines.push(
+      `  CAP BREACH settled $${b.settledCostUsd.toFixed(4)} vs cap $${b.capUsd.toFixed(4)}` +
+        ` = overspend $${b.overspendUsd.toFixed(4)}`
+    );
+  }
   if (grade.acC) {
     lines.push(`  AC-C       ${grade.acC.status}  ${grade.acC.reasons.join(" ; ")}`);
   } else {

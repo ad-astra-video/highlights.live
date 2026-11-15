@@ -24,7 +24,43 @@ cap.
 
 Exit codes: `0` within, `2` over, `3` gate closed (nothing metered), `4` stop
 unconfirmed or overshoot beyond slack, `5` setup refused/failed (including "no
-readable cost source").
+readable cost source"), `7` stopped outside the guard (an operator/external stop
+or a self-ended job — not gradable, see below).
+
+### The guard must survive the caller (ADAAAA-8943)
+
+Source incident: ADAAAA-8924 rev-8 live leg. The harness was launched from a
+one-shot remote exec call and was killed with that session ~1 min after
+`job created`. The wall-clock stop lived only in a daemon thread inside that
+process, so nothing stopped the job: no `WALL-CLOCK STOP`, no evidence file, and
+the leg settled `costUsd $1.4537` against a `$1.3000` cap (overspend `$0.1537`)
+when an operator stopped it 1783 s after create. A stop that only exists while
+the caller's terminal does is not a stop.
+
+Three pieces close that, and all three are provable at `$0`:
+
+| piece | what it guarantees |
+|---|---|
+| `launch_funded_leg.py --run-dir DIR` | the harness runs in its own session (`setsid`), stdin on `/dev/null`, stdout/stderr into `DIR/harness.log`, heartbeat + evidence inside `DIR`. Nothing depends on the launching terminal. |
+| arm check (same launcher) | within `--arm-timeout-s` (default 30) it requires the `[leg] arm pid=… job=…` line, a heartbeat naming that pid and a job, and a live pid. Missing any of the three: it stops the job it can name, writes `DIR/arm.json` with `outcome: "arm_failed"`, and exits `8`. It never reports a supervised leg it could not prove. |
+| `leg_supervisor.py` (launched beside it) | a second process that reads the heartbeat and issues `POST /jobs/{id}/stop` when the beat goes stale (`--stale-s`, default 45) or the deadline passes — the deadline comes from the launcher's argv (`--job-id`, `--deadline-epoch`, `--hard-stop-slack-s`, ADAAAA-9012), so a frozen heartbeat cannot disable it. Verdict in `DIR/supervisor.json`. |
+| `leg_watchdog.py` (launched beside it, ADAAAA-9012) | the launcher's own watcher, in its own session: it keeps reading the heartbeat for the whole leg and stops the job when the beat has not advanced for `--watch-stall-factor x --stale-s` (default 2 x 45 s) or the deadline passes, writing `DIR/watchdog.json` plus `stopSourceClass`/`capBreach` into `DIR/arm.json` and `DIR/evidence.json`. `--no-watch` opts out. |
+
+The harness writes `<run-dir>/heartbeat.json` atomically (`--heartbeat-path`) and
+prints `[leg] arm …` plus `[leg] heartbeat t=… status=… cost=…` lines, so the arm
+proof reads two independent facts rather than one.
+
+Every bundle now names the stop source, and a leg this process did not stop is
+**not gradable**:
+
+- `leg.stopSource` / `leg.stopSourceClass` / `leg.stopSourceLine`, `shape.stopSource`
+  (also the `stop source` table row) and `result.gradable`;
+- `stopSourceClass: "external"` (an `operator_api` stop or a cancel) or
+  `"job_self_ended"` (`job_content_end`) exits `7` with `result.outcome:
+  "stopped_outside_guard"` and `result.gradable: false`;
+- if the settled cost crossed the cap, `capBreach` carries `capUsd`,
+  `settledCostUsd`, `overspendUsd` and the cause, so the breach is a field and
+  not something a reader has to notice.
 
 Gate probes never inherit the launcher's stdin (ADAAAA-8644). The SQL is passed
 to `psql -f -` as input and every other probe reads `/dev/null`, so a
@@ -34,9 +70,76 @@ read as a false "0 nonterminal jobs". A failed probe's exception text travels in
 refusal reason, so a `cannot prove quiet` refusal names its cause instead of
 reading as a busy box.
 
-The harness owns **stop + preflight + metered abort**. It does not grade a leg:
+The harness owns **stop + preflight + metered abort**; the launcher owns
+**detached launch + the arm proof**; the supervisor owns **the stop the harness
+can no longer issue**. The harness does not grade a leg:
 PASS/FAIL/UNMEASURED belongs to the offline grader on `origin/master` 123da6b
-(`services/server/src/live-leg-grade.ts`, `scripts/live-leg-grade.ts`).
+(`services/server/src/live-leg-grade.ts`, `scripts/live-leg-grade.ts`) — and that
+grader must treat `stopSourceClass: external` as ungradable.
+
+### A guard process is not a guard (ADAAAA-9008)
+
+Source incident: ADAAAA-8998 C2 leg `d46c3788` (file-sim, 1200 s authorized,
+cap `$1.45` / abort `$1.31`). `arm.json` read `outcome: "armed"` and the
+supervisor pid was live, then **both** guard processes disappeared in the same
+second: `harness.log` froze at `t=793.8s`, `supervisor.log` was 0 bytes,
+`supervisor.json` was absent, no traceback, no `dmesg` kill. Nothing issued a
+stop, the job metered 782 s past the guard's death and 375 s past its clock, and
+an operator API stop caught it. Spend stayed inside the abort by `$0.0417`.
+
+A guard that only exists as processes is defeatable by one signal to the
+session/cgroup they share. Three layers now answer that, and each is provable
+at `$0`:
+
+| layer | what it guarantees |
+|---|---|
+| the harness's own wall-clock stop | unchanged: fires inside the leg's process. |
+| `leg_supervisor.py` (catchable death) | writes `DIR/supervisor.json` with `outcome: "watching"` as soon as it has a beat and refreshes `lastBeatAt` every `--watch-beat-s` (default 10), so "never armed" and "armed then killed" stop reading the same. It **always** logs its start and its death (`--quiet` only silences per-poll noise), catches `SIGTERM`/`SIGINT`/`SIGHUP`, records `outcome: "killed_while_watching"` with the signal, and issues the stop on the way out when the last beat still names a live phase (exit `6`). |
+| `--deadline-guard auto` (uncatchable death) | the authorized deadline is committed to `systemd` as a transient timer (`systemd-run --unit=funded-leg-<job>-<fireEpoch> --on-active=…`), which lives under PID 1 outside every session/cgroup the guards share. On fire it runs `DIR/deadline_guard_stop.py` (mode `0700`, mints its own token if none was passed) and writes `DIR/deadline_guard_result.json` with `firedAt`/`lateByS`/the stop's HTTP. Fire time is `deadlineEpoch + hardStopSlackS + --deadline-guard-grace-s` (default 5), so it never races the harness or the supervisor. The supervisor disarms the timer when the leg ends. |
+
+`--deadline-guard auto` (the default) **refuses a real leg** when the timer
+cannot be committed: it disarms, stops the job it can name, writes
+`arm.json:{outcome:"arm_failed", reason:"no durable deadline guard: …"}`, and
+exits `8`. `--dry-run` records `skipped_dry_run` instead (the stub job lives
+inside the harness process, so there is nothing external to stop);
+`--deadline-guard none` is the explicit opt-out and says so in `arm.json`.
+
+Read the arm proof as seven artifacts, not one: launcher rc `0`,
+`arm.json.outcome == "armed"`, `harness.log`'s `[leg] arm pid= job=` line,
+`heartbeat.json` naming that pid+job with `deadlineEpoch`,
+`arm.json.deadlineGuard.durable: true` with `deadlineGuard.activeState:
+"active"` (a read-back from `systemctl show`, not the `systemd-run` exit code),
+`arm.json.supervisor.pid` with the supervisor's own-clock deadline logged at
+start, and — ADAAAA-9012 — `arm.json.watchdog.pid` live with
+`arm.json.watch.deadlineStopEpoch` set. A real leg whose `deadlineGuard.durable`
+is false ran with no layer that survives both guards — treat it as ungradable;
+a leg with no watchdog pid is watched only by the supervisor.
+
+`$0` proof, in order (all of it runs in ~2 min, no box, no job):
+
+```sh
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/armproof --dry-run \
+  --stub-scenario clean --authorized-duration-s 8 --cap-usd 0.65 --quiet-window-min 0.1
+# rc=0, arm.json outcome=armed, deadlineGuard.kind=skipped_dry_run,
+# supervisor.json outcome=finished + a non-empty supervisor.log "start pid=" line,
+# evidence.json stopSourceClass=harness
+
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/extstop --dry-run \
+  --stub-scenario operator-stop-overspend --authorized-duration-s 60 \
+  --cap-usd 1.30 --quiet-window-min 0.1
+# evidence exitCode 7, outcome=stopped_outside_guard, gradable=false,
+# stopSource=operator_api / class=external, message carries the $0.1537 breach
+
+python3 -m unittest evals/funded_leg/test_launch_funded_leg.py -v
+# 37 tests: SIGTERM-while-watching stops the job and records the death,
+# a killed supervisor on a finished leg does not amputate it, an inactive
+# timer is not an armed guard, and a leg with no durable guard is refused+stopped
+```
+
+The same arm path was proved on `gpu-box` (systemd 255) at `$0`: the
+timer read back `ActiveState=active`, fired `0.4 s` late after the arming
+process had exited, ran the generated stop script, and left no unit behind.
+
 
 ### The guard prices the unit the build bills (ADAAAA-8832)
 
@@ -92,9 +195,62 @@ python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario clean-no-cost \
 python3 evals/funded_leg/funded_leg.py --dry-run --stub-scenario decide-dark \
   --authorized-duration-s 5 --cap-usd 0.005 \
   --evidence-out /tmp/funded-leg-decide-basis.json
+
+# ADAAAA-8943: an operator stop past the cap. Exit 7, not gradable, capBreach
+# names the $0.1537 the 8924 leg overspent (check `result.outcome` and
+# `capBreach`); `operator-stop-within` is the same stop under the cap.
+python3 evals/funded_leg/funded_leg.py --dry-run \
+  --stub-scenario operator-stop-overspend --authorized-duration-s 60 \
+  --cap-usd 1.30 --quiet-window-min 0.1 \
+  --evidence-out /tmp/funded-leg-operator-stop.json; echo "exit=$?"
+
+# the same leg through the launcher: detached, arm-proved, with the fallback
+# supervisor beside it. `arm.json` must read `outcome: "armed"`.
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/leg-run-8943 \
+  --dry-run --stub-scenario clean --authorized-duration-s 8 --cap-usd 0.65 \
+  --quiet-window-min 0.1
+cat /tmp/leg-run-8943/arm.json /tmp/leg-run-8943/heartbeat.json
 ```
 
-Unit tests (stdlib `unittest`, ~1 min, no network beyond localhost):
+The detachment itself is proved by killing the launcher, not by reading it:
+`test_launch_funded_leg.py` launches a leg, `SIGKILL`s the launcher's whole
+session, and then asserts the harness still reaches its own
+`authorized_duration` stop and writes evidence. `leg_supervisor.py` is proved
+against a real localhost stop endpoint (a stale heartbeat must produce one
+`POST /jobs/{id}/stop`), and the operator-stop scenarios assert exit `7` plus
+`capBreach`.
+
+### The heartbeat-frozen stub (ADAAAA-9012)
+
+`--stub-scenario heartbeat-frozen` wedges the harness a few seconds in: from
+`--heartbeat-freeze-s` (default 3) it stops **beating and acting** while the
+stub job keeps billing. That is the ADAAAA-8998 shape, where `heartbeat.json`
+froze at `t=793.8s` of a 1200 s authorization, `supervisor.json` was absent, and
+the job metered another 372 s until an operator stopped it. Two `$0` proofs:
+
+```sh
+# 1. the supervisor's OWN clock: the deadline trip, insensitive to staleness
+#    (stale-s 600 cannot fire inside the leg, so only deadlineEpoch + 10 s can)
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/leg-frozen-9012 \
+  --dry-run --stub-scenario heartbeat-frozen --authorized-duration-s 20 \
+  --cap-usd 0.65 --quiet-window-min 0.1 --token stub-token \
+  --supervisor-stale-s 600 --no-watch
+cat /tmp/leg-frozen-9012/supervisor.json   # stopped_deadline, trigger own_clock_deadline
+
+# 2. the launcher-side watchdog, with no supervisor at all: stall = 2 x stale-s
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/leg-frozen-wd-9012 \
+  --dry-run --stub-scenario heartbeat-frozen --authorized-duration-s 120 \
+  --cap-usd 0.65 --quiet-window-min 0.1 --token stub-token \
+  --no-supervisor --supervisor-stale-s 2
+cat /tmp/leg-frozen-wd-9012/watchdog.json  # stopped_stall_heartbeat, http 200
+cat /tmp/leg-frozen-wd-9012/arm.json       # stopSourceClass external + capBreach
+```
+
+Both runs end with `evidence.json` carrying `leg.wedge.wedged: true` and
+`leg.stopSourceClass: "external"` — a guard stop is not the harness's stop, so
+the leg is refused rather than graded.
+
+Unit tests (stdlib `unittest`, ~4 min, no network beyond localhost):
 
 ```sh
 python3 -m unittest discover -s evals/funded_leg -v

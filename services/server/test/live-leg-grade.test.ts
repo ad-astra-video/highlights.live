@@ -734,3 +734,85 @@ describe("AC-B estimator disclosure (ADAAAA-8487 leg a7d61806)", () => {
     expect(g.acB.reasons.some((r) => r.startsWith("tail_over_bar:"))).toBe(false);
   });
 });
+
+// ADAAAA-8943: the funded harness can now be stopped from outside its guard (an
+// operator `POST /jobs/{id}/stop`), and the 8924 rev-8 leg proves why that must
+// not grade: nothing bound it to its authorized shape and it settled $1.4537
+// against a $1.30 cap. These cases pin the refusal and the breach.
+describe("stop source and outside-guard refusal (ADAAAA-8943)", () => {
+  const fundedLeg = (over: Record<string, unknown> = {}) =>
+    gradeLiveLeg({
+      mode: "funded",
+      rows: QUIET_ROWS,
+      durationS: 480,
+      decideP50Ms: 1_000,
+      accepted: 9,
+      deliveredGoalRows: 0,
+      ...over,
+    });
+
+  it("grades a harness-stopped leg and records the stop source", () => {
+    const g = fundedLeg({ stopSource: "authorized_duration", stopSourceClass: "harness" });
+
+    expect(g.acB.status).toBe("PASS");
+    expect(g.verdict).toBe("PASS");
+    expect(g.stopSource).toBe("authorized_duration");
+    expect(g.stopSourceClass).toBe("harness");
+    expect(g.capBreach).toBeUndefined();
+  });
+
+  it("refuses a leg an operator stopped and carries the overspend as a field", () => {
+    const g = fundedLeg({
+      stopSource: "operator_api",
+      stopSourceClass: "external",
+      settledCostUsd: 1.4537,
+      capUsd: 1.3,
+    });
+
+    // The rows look perfect, and that is exactly why the refusal has to be a
+    // shape gate: a grade over an unguarded leg grades an unknown shape.
+    expect(g.verdict).toBe("UNMEASURED");
+    expect(g.acB.status).toBe("UNMEASURED");
+    expect(g.stopSource).toBe("operator_api");
+    expect(g.stopSourceClass).toBe("external");
+    expect(g.capBreach).toEqual({
+      capUsd: 1.3,
+      settledCostUsd: 1.4537,
+      overspendUsd: 0.1537,
+      stopSource: "operator_api",
+      cause: expect.stringContaining("stopped from outside the harness"),
+    });
+    const reasons = g.acB.reasons.join(" ; ");
+    expect(reasons).toContain("stopped_outside_guard");
+    expect(reasons).toContain("NOT gradable");
+    expect(reasons).toContain("CAP BREACH: settled $1.4537 vs cap $1.3000 = overspend $0.1537");
+  });
+
+  it("refuses the same outside stop without inventing a breach under the cap", () => {
+    const g = fundedLeg({
+      stopSource: "operator_api",
+      stopSourceClass: "external",
+      settledCostUsd: 0.98,
+      capUsd: 1.3,
+    });
+
+    expect(g.verdict).toBe("UNMEASURED");
+    expect(g.capBreach).toBeUndefined();
+    expect(g.acB.reasons.join(" ; ")).toContain("no cap breach on the settled figure");
+  });
+
+  it("reads a bare operator_api stopSource as external even without the class", () => {
+    const g = fundedLeg({ stopSource: "operator_api" });
+
+    expect(g.verdict).toBe("UNMEASURED");
+    expect(g.stopSourceClass).toBeUndefined();
+  });
+
+  it("leaves a leg with no stop provenance graded as before", () => {
+    const g = fundedLeg();
+
+    expect(g.verdict).toBe("PASS");
+    expect(g.stopSource).toBeUndefined();
+    expect(g.capBreach).toBeUndefined();
+  });
+});
