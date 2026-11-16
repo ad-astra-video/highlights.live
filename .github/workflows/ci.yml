@@ -1,0 +1,92 @@
+# ADAAAA-9145 (board keep-public ruling ADAAAA-9102 §9.2, obligation 4).
+#
+# The ruling requires branch protection on `master` to demand "a PR + check".
+# This workflow is the check half. The job name `docs-hygiene` is the exact
+# context string the board selects as the required status check — do not rename
+# the job without telling them, because a renamed check leaves `master`
+# silently unprotected.
+#
+# The guard is scripts/check-docs-hygiene.mjs (ADAAAA-9101/9131). It exits 1 on
+# findings and 2 when the scan itself fails, so a violation fails the job
+# outright: the step is NOT wrapped in `|| true`, because a warning-only check
+# cannot gate a merge.
+#
+# Two jobs, and why:
+#
+#   docs-hygiene  the public-tree guard alone. This is the require-able check.
+#                 It is green on a clean tree at the tip, so the board can name
+#                 it as `master`'s required check the moment Stage B lands.
+#   test          the full vitest suite (`npm test`), which also runs the guard
+#                 as `docs-hygiene.test.ts`. It is NOT part of the required
+#                 check yet: at tip 6a4915fb the suite is already red for
+#                 reasons that predate this workflow (25 files / 54 tests on a
+#                 pristine checkout, reproduced on Node 20, 22 and 24). Folding
+#                 a red suite into the required job would block every merge,
+#                 Stage B included. Keep it visible; add it to the required set
+#                 once it is green (ADAAAA-9145 comment has the numbers).
+#
+# Node major: 24. The repository has no `.nvmrc` and no `engines` field; Node 24
+# is the current LTS line and the major the guard and the suite were exercised
+# on while building this workflow (the pre-existing failures reproduce on 20/22
+# too, so the major is a pin, not a fix). Pin the major instead of tracking
+# `latest` so an Actions runner bump cannot turn this check red on its own.
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+# Default GITHUB_TOKEN only: the guard reads the tracked tree, the suite runs
+# in-process tests, so read-only contents is enough. No secrets on this path.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs-hygiene:
+    # The required-status-check context the board's branch protection rule names.
+    name: docs-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      # Public-tree hygiene guard: fails on a tracked file that names a real
+      # endpoint (private IPv4, production/management host, contact address,
+      # operator home path, ssh target or ssh port). Exit 1 = findings.
+      - name: Public-tree hygiene guard
+        run: npm run check:docs-hygiene
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install from the lockfile
+        run: npm ci
+
+      # The full vitest suite, which includes docs-hygiene.test.ts (the guard
+      # runs as a test as well). Red at the tip for pre-existing reasons; see the
+      # header. Not a required check yet.
+      - name: Test
+        run: npm test

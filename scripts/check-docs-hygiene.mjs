@@ -183,6 +183,13 @@ const EMAIL = /\b[A-Za-z0-9_.+\-]+@([A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z
 /** a `user@host` address with a BARE (single-label) host, e.g. `user@box-ssh-alias`. */
 const EMAIL_BARE = /\b[A-Za-z][A-Za-z0-9_.+\-]*@([a-z][a-z0-9_\-]*)(?![.\w])/g;
 /**
+ * GitHub Actions step reference (`uses: owner/action@ref`). The `@ref` is a
+ * version tag, a branch or a commit SHA — never a mailbox — so rule 3 must not
+ * read it as `user@host`. Without this the guard flags its own workflow the
+ * moment CI exists (ADAAAA-9145).
+ */
+const USES_REF = /\buses:\s*[A-Za-z0-9_.\-\/]+@[A-Za-z0-9_.\-]+/g;
+/**
  * A bare hostname-ish token: letters/digits/hyphens with at least one hyphen or
  * digit, or the `x99` hardware form. A `.`-continuation is kept INSIDE the token
  * (ADAAAA-9134) so a dotted family name is reported whole: the old lookahead
@@ -225,6 +232,14 @@ export function scanText(text, relPath = "<inline>") {
   };
 
   lines.forEach((line, index) => {
+    // Spans occupied by `uses: owner/action@ref`: version refs, not endpoints.
+    const usesSpans = [];
+    for (const match of line.matchAll(USES_REF)) {
+      const start = match.index ?? 0;
+      usesSpans.push([start, start + match[0].length]);
+    }
+    const insideUsesRef = (at) => usesSpans.some(([start, end]) => at >= start && at < end);
+
     for (const match of line.matchAll(PRIVATE_IPV4)) {
       add(index, (match.index ?? 0) + 1, "private-ipv4", match[0]);
     }
@@ -247,11 +262,13 @@ export function scanText(text, relPath = "<inline>") {
       add(index, (match.index ?? 0) + 1, "endpoint-url", host);
     }
     for (const match of line.matchAll(EMAIL)) {
+      if (insideUsesRef(match.index ?? 0)) continue;
       const domain = match[1];
       if (isAllowedHost(domain)) continue;
       add(index, (match.index ?? 0) + 1, "endpoint-email", match[0]);
     }
     for (const match of line.matchAll(EMAIL_BARE)) {
+      if (insideUsesRef(match.index ?? 0)) continue;
       const host = match[1].toLowerCase();
       if (isAllowedHost(host) || ALLOWED_BARE_HOSTS.includes(host)) continue;
       // A bare host in `user@host` form is an ssh target, not an email address.

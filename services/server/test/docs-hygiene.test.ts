@@ -149,3 +149,24 @@ describe("a fleet host inside a URL, dotless and dotted (ADAAAA-9134)", () => {
     expect(scanText(text, "ok.txt")).toEqual([]);
   });
 });
+
+// ADAAAA-9145: the CI workflow names actions as `uses: owner/action@ref`. The
+// `@ref` is a version tag, not a mailbox, so rule 3 must not read it as
+// `user@host` — otherwise the guard fails on the workflow that runs it.
+describe("workflow step references are versions, not endpoints (ADAAAA-9145)", () => {
+  it("allows a `uses:` action reference at a tag ref", () => {
+    const text = [
+      "      - uses: actions/checkout@v4",
+      "      - uses: actions/setup-node@v4",
+      "      - uses: some-org/build-kit@v1.2.3-beta",
+    ].join("\n");
+    expect(scanText(text, "ci.yml")).toEqual([]);
+  });
+
+  it("still flags a bare host on a line that is not a `uses:` reference", () => {
+    // The exemption is span-local: the same token outside `uses:` stays denied.
+    const box = "ai-" + "server-" + "fixture-1";
+    const found = scanText(`deploy to ${box} now`, "notes.txt").map((v) => `${v.kind} ${v.value}`);
+    expect(found).toContain(`internal-hostname ${box}`);
+  });
+});
