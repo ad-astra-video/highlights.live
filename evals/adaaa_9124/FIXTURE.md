@@ -11,8 +11,15 @@ call, no job, no billing). The tools that read them live in this directory:
 | file | what it does |
 | --- | --- |
 | `export_corpus_9124.py` | exports a stored-row corpus for one `sourceUrl` from the box's `highlights` DB |
-| `replay9124.ts` | grades that corpus through the SERVED evidence mapper + gate, prints the per-leg and per-fixture serve-yield census, `--min-yield` makes it a regression gate |
+| `census9124.ts` | `censusFixture(dump)` — the read itself, as a function, so CI can hold it as a gate |
+| `replay9124.ts` | grades that corpus through the SERVED evidence mapper + gate, prints the per-leg and per-fixture serve-yield census; `--min-yield` makes it a yield regression gate, `--min-bodies` gates the deck bar on the best leg |
 | `probe-drop-sentences-9124.ts` | measures the AC14 "drop the offending sentence, then re-judge" repair's headroom on stored rows |
+
+The read is also a **CI gate**: `services/server/test/deck-yield-9124.test.ts` replays the
+committed corpus and asserts `auth 19/20`, `stored-served 8/20`, `served-now 11/20` (yield
+`55.0 % > 28.6 %`), `>= 10` bodies on the leg, **zero** `ac14-clause` refusals, and the
+loop's `0 of 143` legs reaching 10. A gate or writer change that lowers this fixture's
+yield now fails `pnpm test` instead of silently weakening the deck read.
 
 ## The fixture
 
