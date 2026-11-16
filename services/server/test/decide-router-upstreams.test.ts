@@ -1,7 +1,8 @@
 // ADAAAA-8083: the decide router must RE-RESOLVE its upstreams while nginx runs.
 //
 // `docker/decide-router.conf` fronts the decide workers behind one origin. Since
-// ADAAAA-8281 the three 5090 workers on decide-pool-box are the PRIMARY
+// ADAAAA-8281 the three 5090 workers on the decide-pool host (name in the box's
+// untracked docker/.env, never tracked here) are the PRIMARY
 // upstreams and the x99 pair (`decide`, `decide-b`) is `backup`-only failover.
 // nginx resolves an upstream `server <name>`
 // ONCE, at startup, unless the line carries `resolve`. A decide worker is

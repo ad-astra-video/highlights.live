@@ -2386,7 +2386,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "gpu-box'")
     p.add_argument("--cyc-box-cmd", default="",
                    help="prefix the decide-pool log probe when the pool host is "
-                        "remote, e.g. 'python3 .../komodo.py decide-pool-box'")
+                        "remote, e.g. 'python3 .../komodo.py <DECIDE_BOX>' "
+                        "(name read from the box's untracked docker/.env)")
     p.add_argument("--driver-cmd", default=None,
                    help="driver launched after session create; placeholders "
                         "{sid} {job} {seconds}")

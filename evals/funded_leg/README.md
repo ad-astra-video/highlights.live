@@ -282,13 +282,16 @@ HL_LEG_USER_ID=<qa user id> python3 evals/funded_leg/funded_leg.py \
   --authorized-duration-s 480 --cap-usd 0.65 --quiet-window-min 10 \
   --job-source browser --game-hint soccer \
   --driver-cmd 'sh docker/qa-drive-8035.sh --sid {sid} --seconds {seconds} --no-wait --log /state/drive-{sid}.log' \
-  --cyc-box-cmd '<command that reaches decide-pool-box>' \
+  --cyc-box-cmd '<command that reaches the decide-pool box>' \
   --evidence-out /tmp/leg8516-evidence.json
 
 # (b) run from the agent host and drive the box through a remote prefix
+# The box names are NOT tracked here: <BOX> is the control host and <DECIDE_BOX>
+# the decide-pool host, both read from the box's untracked docker/.env
+# (`BOX=…`, `DECIDE_BOX=…`) or exported in your own shell.
 python3 evals/funded_leg/funded_leg.py \
-  --box-cmd 'python3 /paperclip/.hermes/skills/komodo/scripts/komodo.py gpu-box' \
-  --cyc-box-cmd 'python3 /paperclip/.hermes/skills/komodo/scripts/komodo.py decide-pool-box' \
+  --box-cmd 'python3 /paperclip/.hermes/skills/komodo/scripts/komodo.py <BOX>' \
+  --cyc-box-cmd 'python3 /paperclip/.hermes/skills/komodo/scripts/komodo.py <DECIDE_BOX>' \
   --authorized-duration-s 480 --cap-usd 0.65 --quiet-window-min 10 \
   --job-source browser --game-hint soccer \
   --driver-cmd 'cd /home/operator/highlights.live && sh docker/qa-drive-8035.sh --sid {sid} --seconds {seconds} --no-wait --log /state/drive-{sid}.log' \

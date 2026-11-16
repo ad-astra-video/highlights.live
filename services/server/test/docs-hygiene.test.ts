@@ -1,10 +1,16 @@
-// ADAAAA-9101: the public-tree hygiene guard.
+// ADAAAA-9101 / ADAAAA-9131: the public-tree hygiene guard.
 //
 // docs/README.md "Public-document hygiene" is the rule: the repository is
 // public, so no tracked file may name a real endpoint. This test runs that rule
 // over the WHOLE tracked tree in the normal test job (`npm test`), so a new real
 // host / LAN address / contact address fails the build instead of being
 // published. The production values belong in the box docker/.env (untracked).
+//
+// ADAAAA-9131: the guard used to see only hosts that were part of a URL or a
+// `user@host` address, so a BARE fleet machine name stayed invisible while the
+// script's header claimed a management host was enforced. The cases below pin
+// each denied class from the ADAAAA-9102 ruling §4, including the exact shape
+// that leaked, so the next regression is a red test instead of a green guard.
 import { describe, it, expect } from "vitest";
 import { scanRepo, scanText } from "../../../scripts/check-docs-hygiene.mjs";
 
@@ -41,6 +47,67 @@ describe("public-tree hygiene guard (ADAAAA-9101)", () => {
       // documented reason (CT-logged, customer-facing), while LAN/ssh/home stay denied.
       "PUBLIC_BASE_URL=https://highlights-server.dpn.gg",
       "MEDIA_PUBLIC_BASE_URL=https://highlights-media.dpn.gg",
+      // Documented placeholders and service names, not endpoints.
+      "--cyc-box-cmd 'python3 .../komodo.py <DECIDE_BOX>'",
+      "--box-cmd 'python3 .../komodo.py gpu-box'",
+      "--driver-cmd 'cd /home/operator/highlights.live && sh docker/qa-drive-8035.sh'",
+      "postgres://user:***@host:5432/dbname",
+    ].join("\n");
+    expect(scanText(text, "ok.txt")).toEqual([]);
+  });
+});
+
+describe("denied classes from ruling §4 (ADAAAA-9131)", () => {
+  it("flags a BARE fleet hostname with no scheme and no @", () => {
+    // The regression that shipped: `evals/funded_leg/README.md` carried the bare
+    // 5090 box name in a `--cyc-box-cmd` example. No `http://`, no `user@`, so
+    // the three old rules could not see it.
+    const box = "ai-" + "server-" + "fixture-1";
+    const other = "livepeer-" + "ai-" + "fixture-x";
+    const text = [
+      `--cyc-box-cmd 'python3 .../komodo.py ${box}'`,
+      `the three workers on ${other} are PRIMARY`,
+    ].join("\n");
+    const found = scanText(text, "fixture.txt").map((v) => `${v.kind} ${v.value}`);
+    expect(found).toContain(`internal-hostname ${box}`);
+    expect(found).toContain(`internal-hostname ${other}`);
+  });
+
+  it("flags the operator home path but not the documented placeholder", () => {
+    const account = "opera" + "tor7";
+    const found = scanText(`cd /home/${account}/highlights.live && sh docker/x.sh`, "fixture.txt").map(
+      (v) => `${v.kind} ${v.value}`,
+    );
+    expect(found).toContain(`operator-home-path /home/${account}`);
+    expect(scanText("cd /home/operator/highlights.live", "ok.txt")).toEqual([]);
+  });
+
+  it("flags a bare ssh alias and an ssh port in a port context", () => {
+    const alias = "qa-" + "box" + "7";
+    const port = "12" + "22";
+    const text = [
+      `ssh ${alias} 'docker ps'`,
+      `ssh -p ${port} ${alias}`,
+      `scp --port=${port} /tmp/a ${alias}:/tmp/`,
+      `Host ${alias}\n  Port ${port}\n  User deploy`,
+    ].join("\n");
+    const found = scanText(text, "fixture.txt").map((v) => `${v.kind} ${v.value}`);
+    expect(found).toContain(`ssh-target ${alias}`);
+    expect(found.filter((f) => f === `ssh-port ${port}`).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not flag a bare number, a tier label or a data field as a port", () => {
+    // Recorded eval results carry timing numbers that must stay replayable
+    // (ruling §7.3) and the decide fleet names its tiers after the hardware.
+    const text = [
+      `"t": 1222.0,`,
+      `RUNNER_METADATA='{"tier": "5090", "seqs": 4}'`,
+      `RUNNER_ID=highlights-decide-5090-1`,
+      `uvicorn app:app --host 0.0.0.0 --port 8080`,
+      `pool is proxied by decide-pool-8183 to the workers`,
+      `host, which is not reachable from x99 (ssh and docker TCP are closed)`,
+      `read allowance must not run out 18 % into the clip (measured 40@seq 55)`,
+      `email: "dev@adastra", role: "admin_readonly"`,
     ].join("\n");
     expect(scanText(text, "ok.txt")).toEqual([]);
   });
