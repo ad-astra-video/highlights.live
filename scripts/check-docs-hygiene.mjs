@@ -19,12 +19,17 @@
  *
  *   1. private-ipv4      — 10/8, 172.16/12, 192.168/16 that is NOT written as a
  *                          documented CIDR default (`10.0.0.0/8`, ...);
- *   2. endpoint-url      — `http(s)://host` whose host is not allowlisted;
+ *   2. endpoint-url      — `http(s)://host` whose host is not allowlisted. A
+ *                          host with no dot is a compose service name and is
+ *                          exempt — unless it is a fleet-family token, which
+ *                          rule 4 reports instead (ADAAAA-9134);
  *   3. endpoint-email    — `user@host` whose host (dotted OR bare) is not
  *                          allowlisted / a documented placeholder;
- *   4. internal-hostname — a bare token from a deploy-fleet hostname family
- *                          (see INTERNAL_HOSTNAME_FAMILIES), which has no scheme
- *                          and no `@` and so matches none of rules 1–3;
+ *   4. internal-hostname — a token from a deploy-fleet hostname family (see
+ *                          INTERNAL_HOSTNAME_FAMILIES): bare, `<family>.suffix`
+ *                          or as a URL host. The reported value is the WHOLE
+ *                          token, so a fixer is never pointed at a shorter
+ *                          prefix of the machine name (ADAAAA-9134);
  *   5. operator-home-path — `/home/<account>` for a real operator account (the
  *                          documented placeholder is `/home/operator`);
  *   6. ssh-target        — a bare `ssh <alias>` target that is not allowlisted,
@@ -177,8 +182,15 @@ const URL_HOST = /https?:\/\/([A-Za-z0-9_.\-]+)/g;
 const EMAIL = /\b[A-Za-z0-9_.+\-]+@([A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*\.[A-Za-z]{2,})/g;
 /** a `user@host` address with a BARE (single-label) host, e.g. `user@box-ssh-alias`. */
 const EMAIL_BARE = /\b[A-Za-z][A-Za-z0-9_.+\-]*@([a-z][a-z0-9_\-]*)(?![.\w])/g;
-/** a bare hostname-ish token (letters/digits/hyphens, at least one hyphen or digit). */
-const BARE_HOSTNAME = /(?<![\w@$./<])([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+|[A-Za-z0-9]+x[0-9]+[A-Za-z0-9-]*)(?![\w.@/<])/g;
+/**
+ * A bare hostname-ish token: letters/digits/hyphens with at least one hyphen or
+ * digit, or the `x99` hardware form. A `.`-continuation is kept INSIDE the token
+ * (ADAAAA-9134) so a dotted family name is reported whole: the old lookahead
+ * rejected a following dot, the family match backtracked to the shorter prefix,
+ * and a fixer was pointed at a token that is not a host. (The family literals
+ * themselves are assembled below, so this comment does not name one.)
+ */
+const BARE_HOSTNAME = /(?<![\w@$./<])([A-Za-z][A-Za-z0-9]*(?:[-.][A-Za-z0-9]+)+|[A-Za-z0-9]+x[0-9]+[A-Za-z0-9-]*)(?![\w@/<])/g;
 /** `/home/<account>` — a real operator home directory names the account. */
 const HOME_PATH = /(?<![\w./<])\/home\/([A-Za-z0-9_.\-]+)/g;
 /** `ssh [-o opt] [-p N] <target>` — a bare ssh alias, no dot. */
@@ -218,9 +230,20 @@ export function scanText(text, relPath = "<inline>") {
     }
     for (const match of line.matchAll(URL_HOST)) {
       const host = match[1];
-      // A host without a dot is a compose service name / bare token, not an endpoint.
-      if (!host.includes(".")) continue;
       if (isAllowedHost(host)) continue;
+      // ADAAAA-9134: a fleet-family host is a management machine in EVERY form,
+      // including the dotless one that the compose-service exemption below would
+      // hide. Test the family before the exemption: `http://media:4070` is a
+      // service name, `http://<family>-<id>:8000` is a box.
+      if (INTERNAL_HOSTNAME_FAMILIES.some((family) => family.test(host))) {
+        add(index, (match.index ?? 0) + 1, "internal-hostname", host);
+        continue;
+      }
+      // No dot left: a compose service name (`media`, `postgres`, `server`, `db`)
+      // or a documented bare placeholder, not an endpoint. A hyphenated service
+      // name (`decide-router`, `fallback-orch`) stays exempt too — the families
+      // above are the only bare tokens this guard reads as machines.
+      if (!host.includes(".")) continue;
       add(index, (match.index ?? 0) + 1, "endpoint-url", host);
     }
     for (const match of line.matchAll(EMAIL)) {

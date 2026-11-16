@@ -112,3 +112,40 @@ describe("denied classes from ruling §4 (ADAAAA-9131)", () => {
     expect(scanText(text, "ok.txt")).toEqual([]);
   });
 });
+
+describe("a fleet host inside a URL, dotless and dotted (ADAAAA-9134)", () => {
+  it("flags a dotless fleet host used as a URL host, with and without a port", () => {
+    // The gap: rule 2 skipped EVERY dotless host as a compose service name, so
+    // `http://<family>:8000/v1` was invisible, and rule 4 could not match a
+    // token preceded by `/`. Both forms must be a finding, not a service name.
+    const box = "ai-" + "server-" + "fixture-2";
+    const other = "livepeer-" + "ai" + "-fixture-y";
+    const text = [`curl -s http://${box}:8000/v1/models`, `MEDIA_URL=http://${other}/live`].join("\n");
+    const found = scanText(text, "fixture.txt").map((v) => `${v.kind} ${v.value}`);
+    expect(found).toContain(`internal-hostname ${box}`);
+    expect(found).toContain(`internal-hostname ${other}`);
+  });
+
+  it("reports the whole token for a dotted fleet host, not a truncated prefix", () => {
+    // The old lookahead rejected a following `.`, so the family match backtracked
+    // to the shorter prefix and a fixer was pointed at a token that is not a host.
+    const box = "ai-" + "server-" + "fixture-3";
+    const fqdn = `${box}.internal`;
+    expect(scanText(`worker on ${fqdn}`, "fixture.txt").map((v) => `${v.kind} ${v.value}`)).toEqual([
+      `internal-hostname ${fqdn}`,
+    ]);
+  });
+
+  it("keeps the compose-service exemption and the documented exceptions", () => {
+    const text = [
+      "MEDIA_URL=http://media:4070",
+      "RUNNER_URL=http://decide-router:8081",
+      "ORCH_URL=http://fallback-orch",
+      "DB_URL=http://db:5432",
+      "API_URL=http://server:3000",
+      "postgres://user:***@host:5432/dbname",
+      "PUBLIC_URL=https://app.example.com",
+    ].join("\n");
+    expect(scanText(text, "ok.txt")).toEqual([]);
+  });
+});
