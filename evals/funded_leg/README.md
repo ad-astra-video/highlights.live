@@ -42,7 +42,8 @@ Three pieces close that, and all three are provable at `$0`:
 | piece | what it guarantees |
 |---|---|
 | `launch_funded_leg.py --run-dir DIR` | the harness runs in its own session (`setsid`), stdin on `/dev/null`, stdout/stderr into `DIR/harness.log`, heartbeat + evidence inside `DIR`. Nothing depends on the launching terminal. |
-| arm check (same launcher) | within `--arm-timeout-s` (default 30) it requires the `[leg] arm pid=… job=…` line, a heartbeat naming that pid and a job, and a live pid. Missing any of the three: it stops the job it can name, writes `DIR/arm.json` with `outcome: "arm_failed"`, and exits `8`. It never reports a supervised leg it could not prove. |
+| arm check (same launcher) | within `--arm-timeout-s` it requires the `[leg] arm pid=… job=…` line, a heartbeat naming that pid and a job, and a live pid. The default is the harness's `--quiet-window-min` + 120 s (720 s at the 10 min default), because the arm line is only printed after that preflight and the job create (ADAAAA-9105). Missing any of the three: it stops the job it can name, writes `DIR/arm.json` with `outcome: "arm_failed"`, and exits `8`. It never reports a supervised leg it could not prove. |
+| `--stay auto\|always\|never` (same launcher, ADAAAA-9105) | `setsid()` escapes the launcher's session but **not** its cgroup, so a launcher that exits on the arm proof takes the detached harness with it when its transient unit completes. `auto` (the default) keeps this launcher in the foreground as the leg's keeper until the harness exits — for a metered leg only, never for `--dry-run`. Keeper verdict in `DIR/launch.json` `stay`. |
 | `leg_supervisor.py` (launched beside it) | a second process that reads the heartbeat and issues `POST /jobs/{id}/stop` when the beat goes stale (`--stale-s`, default 45) or the deadline passes — the deadline comes from the launcher's argv (`--job-id`, `--deadline-epoch`, `--hard-stop-slack-s`, ADAAAA-9012), so a frozen heartbeat cannot disable it. Verdict in `DIR/supervisor.json`. |
 | `leg_watchdog.py` (launched beside it, ADAAAA-9012) | the launcher's own watcher, in its own session: it keeps reading the heartbeat for the whole leg and stops the job when the beat has not advanced for `--watch-stall-factor x --stale-s` (default 2 x 45 s) or the deadline passes, writing `DIR/watchdog.json` plus `stopSourceClass`/`capBreach` into `DIR/arm.json` and `DIR/evidence.json`. `--no-watch` opts out. |
 
@@ -131,10 +132,44 @@ python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/extstop --dry-run \
 # stopSource=operator_api / class=external, message carries the $0.1537 breach
 
 python3 -m unittest evals/funded_leg/test_launch_funded_leg.py -v
-# 37 tests: SIGTERM-while-watching stops the job and records the death,
+# 59 tests: SIGTERM-while-watching stops the job and records the death,
 # a killed supervisor on a finished leg does not amputate it, an inactive
 # timer is not an armed guard, and a leg with no durable guard is refused+stopped
 ```
+
+### The default arm window covers the quiet window, and the launcher stays (ADAAAA-9105)
+
+Two defects on the same path, both measured at `$0` on ADAAAA-9056 with the
+launcher's documented defaults:
+
+1. `--arm-timeout-s` defaulted to 30 s while `[leg] arm` is only printed after
+   `funded_leg.py`'s quiet-window preflight (`--quiet-window-min`, default
+   10 min) and the `POST /jobs`. A real launch therefore wrote
+   `arm.json:{outcome:"arm_failed", reason:"not armed within 30 s: …"}` and
+   exited `8` 25 s into a 600 s preflight. The dry-run stubs hid it because they
+   all pinned `--quiet-window-min 0.1`. The default is now **the harness's quiet
+   window + 120 s** (720 s at defaults); an explicit `--arm-timeout-s` is
+   honoured verbatim and a window shorter than the quiet period is flagged in
+   `launch.json.{armTimeoutAdequate,armTimeoutBasis}` and on stderr.
+2. The harness is spawned with `start_new_session=True`, which gives it a new
+   session but the launcher's **cgroup**: a launcher that exited once armed took
+   the detached harness down with its transient unit (two `preflight … quiet`
+   samples, then nothing). `--stay auto` (the default) keeps the launcher in the
+   foreground as the leg's keeper until the harness exits, so no external wrapper
+   is required. `--stay always` proves it on a stub; `--stay never` restores the
+   old return-immediately behaviour.
+
+```sh
+# no --arm-timeout-s at all, quiet window longer than the old 30 s default
+python3 evals/funded_leg/launch_funded_leg.py --run-dir /tmp/arm-9105 --dry-run \
+  --stub-scenario clean --authorized-duration-s 6 --cap-usd 0.65 \
+  --quiet-window-min 0.75 --no-watch --stay never
+# rc=0, arm.json outcome=armed after a 45 s preflight,
+# launch.json armTimeoutBasis=quiet_window+margin, armTimeoutS=165.0
+```
+
+`RealShapedArmTest` and `LauncherKeeperTest` in `test_launch_funded_leg.py` hold
+both properties, so a later change cannot put the 30 s default back.
 
 The same arm path was proved on `gpu-box` (systemd 255) at `$0`: the
 timer read back `ActiveState=active`, fired `0.4 s` late after the arming

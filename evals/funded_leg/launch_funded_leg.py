@@ -27,6 +27,18 @@ This launcher closes that hole with two rules:
      with `outcome: "arm_failed"`, and exits 8 ("no supervised leg"). A leg left
      running while the launcher calls it armed is exactly the 8924 overspend.
 
+4. THE ARM CLOCK IS DERIVED AND THE LAUNCHER STAYS AS KEEPER (ADAAAA-9105).
+   `[leg] arm` can only be printed after the harness's quiet-window preflight
+   and its `POST /jobs`, so a fixed 30 s arm window could never arm a real leg at
+   documented defaults (`--quiet-window-min` 10 min): the launcher wrote
+   `arm_failed` 25 s into a 600 s preflight. `--arm-timeout-s` now defaults to
+   the harness's quiet window + 120 s. And `setsid()` escapes the launcher's
+   session but NOT its cgroup, so a launcher that exited once armed took the
+   detached harness with it when its unit completed. This launcher now stays in
+   the foreground as the leg's keeper until the harness exits (`--stay auto` on
+   a metered leg), so no external wrapper is required to keep a correct leg
+   alive.
+
 A fallback supervisor (`leg_supervisor.py`) is launched beside the harness in
 its own session as well: it stops the job if the heartbeats stop advancing,
 which covers "the harness died but the caller's session did not take the job
@@ -159,6 +171,153 @@ def _write_json(path: str, payload: Dict[str, Any]) -> None:
     harness_mod.write_json_atomic(path, payload)
 
 
+#: The arm clock starts at harness launch, but `[leg] arm` only arrives after
+#: funded_leg.py's quiet-window preflight (`--quiet-window-min`, default 10 min)
+#: and its `POST /jobs`. A fixed 30 s window therefore cannot arm a real leg at
+#: documented defaults: measured ADAAAA-9056, the launcher wrote `arm_failed` 25
+#: seconds into a 600 s preflight and exited 8 with no job row (the same command
+#: with `--arm-timeout-s 900` armed normally). The default is now derived from
+#: the harness's own quiet window plus this margin.
+ARM_TIMEOUT_MARGIN_S = 120.0
+#: How long past the leg's own authorized deadline the keeper waits before it
+#: gives up: the harness stops itself at deadline + hard-stop slack.
+STAY_MARGIN_S = 180.0
+
+
+def quiet_window_s(harness_ns: Any) -> float:
+    """The harness's preflight quiet window in seconds (0.0 when unreadable)."""
+    minutes = getattr(harness_ns, "quiet_window_min", None)
+    if minutes is None:
+        return 0.0
+    try:
+        return max(0.0, float(minutes) * 60.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def resolve_arm_timeout(
+    explicit: Optional[float],
+    harness_ns: Any,
+    margin_s: float = ARM_TIMEOUT_MARGIN_S,
+) -> Dict[str, Any]:
+    """The arm window to use, and what it was derived from (ADAAAA-9105 #1).
+
+    An explicit `--arm-timeout-s` is still honoured verbatim — the stub
+    scenarios and the short real-shaped self-test pin one deliberately — but a
+    window shorter than the quiet period is reported as inadequate instead of
+    being discovered 10 minutes into a launch.
+    """
+    quiet = quiet_window_s(harness_ns)
+    margin = max(0.0, float(margin_s))
+    if explicit is None:
+        return {
+            "timeoutS": round(quiet + margin, 3),
+            "basis": "quiet_window+margin",
+            "quietWindowS": round(quiet, 3),
+            "marginS": round(margin, 3),
+            "explicit": False,
+            "adequate": True,
+        }
+    timeout = max(0.0, float(explicit))
+    return {
+        "timeoutS": round(timeout, 3),
+        "basis": "explicit",
+        "quietWindowS": round(quiet, 3),
+        "marginS": round(margin, 3),
+        "explicit": True,
+        "adequate": timeout >= quiet,
+    }
+
+
+def resolve_stay(mode: str, dry_run: bool) -> Dict[str, Any]:
+    """Whether this launcher stays as the leg's keeper (ADAAAA-9105 #2).
+
+    `setsid()` escapes the launcher's session but NOT its cgroup. When this
+    launcher is the main process of a transient unit (`systemd-run --unit=…`),
+    the unit completes the moment it exits and systemd kills every process left
+    in that cgroup — the detached harness with it (measured on ADAAAA-9056: two
+    `preflight … quiet` samples, then nothing, no processes left). Staying in the
+    foreground makes this launcher the keeper, so a correct leg no longer needs
+    an external wrapper to outlive it. `auto` stays only for a metered leg: a
+    dry run is a stub inside the harness process and must return immediately.
+    """
+    if mode == "always":
+        return {"stay": True, "basis": "--stay always"}
+    if mode == "never":
+        return {"stay": False, "basis": "--stay never"}
+    if dry_run:
+        return {"stay": False,
+                "basis": "auto: a dry run is a stub, not a metered leg"}
+    return {"stay": True,
+            "basis": "auto: a metered leg keeps its launcher as the cgroup keeper"}
+
+
+def stay_max_s(
+    harness_ns: Any,
+    quiet_s: float,
+    explicit: Optional[float] = None,
+    margin_s: float = STAY_MARGIN_S,
+) -> float:
+    """The longest this launcher keeps the leg's cgroup alive."""
+    if explicit is not None:
+        return max(1.0, float(explicit))
+    authorized = getattr(harness_ns, "authorized_duration_s", 0.0) or 0.0
+    slack = getattr(harness_ns, "hard_stop_slack_s", 10.0) or 10.0
+    try:
+        return max(1.0, quiet_s + float(authorized) + float(slack) + max(0.0, margin_s))
+    except (TypeError, ValueError):
+        return quiet_s + max(0.0, margin_s)
+
+
+def stay_with_leg(
+    proc: subprocess.Popen,
+    *,
+    evidence_path: str,
+    log,
+    max_s: float,
+    poll_s: float = 1.0,
+) -> Dict[str, Any]:
+    """Remain the leg's keeper until the harness exits, or `max_s` elapses.
+
+    $0 by construction: it polls `Popen.poll()` and nothing else. It exists only
+    so the launcher's cgroup is not torn down while the leg is still running.
+    """
+    started = time.time()
+    deadline = started + max(1.0, float(max_s))
+    outcome = "harness_exited"
+    rc: Optional[int] = None
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            break
+        if time.time() >= deadline:
+            outcome = "stay_timeout"
+            break
+        time.sleep(poll_s)
+    ended = time.time()
+    evidence_written = os.path.exists(evidence_path)
+    block = {
+        "outcome": outcome,
+        "harnessPid": proc.pid,
+        "harnessExitedRc": rc,
+        "startedAt": _iso_from_epoch(started),
+        "endedAt": _iso_from_epoch(ended),
+        "seconds": round(ended - started, 1),
+        "maxS": round(float(max_s), 1),
+        "evidenceWritten": evidence_written,
+    }
+    log(
+        f"STAY: {outcome} after {block['seconds']:.0f} s "
+        f"(harness rc={rc}, evidence "
+        f"{'written' if evidence_written else 'MISSING'})"
+    )
+    if outcome == "stay_timeout":
+        log("WARNING: stayed past the leg's deadline without the harness exiting")
+    elif rc is not None and not evidence_written:
+        log("WARNING: the harness exited without writing evidence.json")
+    return block
+
+
 def split_args(argv: Sequence[str]) -> Tuple[argparse.Namespace, List[str]]:
     """Separate this launcher's own flags from the harness's argv.
 
@@ -177,9 +336,22 @@ def split_args(argv: Sequence[str]) -> Tuple[argparse.Namespace, List[str]]:
     parser.add_argument("--run-dir", required=True,
                         help="durable directory for the log, heartbeat, pid, arm "
                              "verdict, evidence and supervisor output")
-    parser.add_argument("--arm-timeout-s", type=float, default=30.0,
+    parser.add_argument("--arm-timeout-s", type=float, default=None,
                         help="seconds to wait for the arm line + live pid + "
-                             "heartbeat before refusing (default 30)")
+                             "heartbeat, counted from harness launch. Default: "
+                             "the harness's --quiet-window-min + 120 s (720 s at "
+                             "the 10 min default), because `[leg] arm` is only "
+                             "printed after the quiet window and POST /jobs")
+    parser.add_argument("--stay", choices=("auto", "always", "never"),
+                        default="auto",
+                        help="keep this launcher in the foreground as the leg's "
+                             "cgroup keeper until the harness exits. `auto` "
+                             "stays for a metered leg and never for --dry-run "
+                             "(ADAAAA-9105 defect 2)")
+    parser.add_argument("--stay-max-s", type=float, default=None,
+                        help="hard bound on the keeper window (default: quiet "
+                             "window + authorized duration + hard-stop slack + "
+                             "180 s)")
     parser.add_argument("--no-arm-check", action="store_true",
                         help="skip the arm proof (a leg launched this way is NOT "
                              "evidence — it is the 8924 shape)")
@@ -702,6 +874,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     run_dir = os.path.abspath(args.run_dir)
     os.makedirs(run_dir, exist_ok=True)
+    # ADAAAA-9105 defect 1: the arm window must cover the harness's own quiet
+    # window, because `[leg] arm` is printed only after the preflight and the
+    # job create. Resolved once, from the harness argv the leg was actually
+    # given, and recorded in launch.json so the window is never a guess.
+    arm_window = resolve_arm_timeout(args.arm_timeout_s, harness_ns)
+    if not arm_window["adequate"]:
+        log(
+            f"WARNING: --arm-timeout-s {arm_window['timeoutS']:.0f} s is shorter "
+            f"than the harness's {arm_window['quietWindowS']:.0f} s quiet window: "
+            "`[leg] arm` cannot arrive inside it (ADAAAA-9105)"
+        )
     log_path = os.path.join(run_dir, "harness.log")
     pid_path = os.path.join(run_dir, "harness.pid")
     heartbeat_path = os.path.join(run_dir, "heartbeat.json")
@@ -749,7 +932,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # the harness never receives it: the arm proof reads `[leg] arm` out of
         # `harness.log`, and a silent harness would have no proof line.
         "harnessQuiet": "--quiet" in harness_args,
-        "armTimeoutS": args.arm_timeout_s,
+        "armTimeoutS": arm_window["timeoutS"],
+        "armTimeoutBasis": arm_window["basis"],
+        "armTimeoutExplicit": arm_window["explicit"],
+        "armTimeoutAdequate": arm_window["adequate"],
+        "quietWindowS": arm_window["quietWindowS"],
+        "armTimeoutMarginS": arm_window["marginS"],
         "armCheck": not args.no_arm_check,
         "supervisor": None,
     }
@@ -797,7 +985,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "--run-dir", run_dir,
             "--heartbeat", heartbeat_path,
             "--stale-s", str(args.supervisor_stale_s),
-            "--arm-timeout-s", str(args.arm_timeout_s),
+            "--arm-timeout-s", str(arm_window["timeoutS"]),
             "--slack-s", str(getattr(harness_ns, "hard_stop_slack_s", 10.0)),
             "--job-base", job_base,
             "--evidence-out", supervisor_evidence,
@@ -861,7 +1049,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return EXIT_ARMED
 
     # ---- the arm proof ----------------------------------------------------
-    deadline = time.time() + max(0.0, args.arm_timeout_s)
+    deadline = time.time() + max(0.0, arm_window["timeoutS"])
     reason: Optional[str] = None
     beat: Optional[Dict[str, Any]] = None
     armed: Optional[Dict[str, Any]] = None
@@ -901,7 +1089,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if not alive:
                 missing.append("harness pid not alive")
             reason = (
-                f"not armed within {args.arm_timeout_s:.0f} s: " + ", ".join(missing)
+                f"not armed within {arm_window['timeoutS']:.0f} s: " + ", ".join(missing)
             )
             break
         time.sleep(0.25)
@@ -1143,6 +1331,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     spawn_watchdog()
     _write_json(launch_path, launch_record)
 
+    # ADAAAA-9105 defect 2: decide whether this process stays as the leg's
+    # keeper, and record the decision in the arm proof. `auto` stays for a
+    # metered leg: `setsid()` does not escape the launcher's cgroup, so a
+    # launcher that exits when it is a transient unit's main process takes the
+    # detached harness down with it.
+    stay = resolve_stay(args.stay, dry_run)
+    stay_limit = stay_max_s(harness_ns, arm_window["quietWindowS"], args.stay_max_s)
+    stay_plan = {
+        "planned": stay["stay"],
+        "basis": stay["basis"],
+        "mode": args.stay,
+        "maxS": round(stay_limit, 1),
+    }
+
     _write_json(arm_path, {
         "outcome": "armed",
         "at": _iso_now(),
@@ -1154,6 +1356,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "log": log_path,
         "supervisor": launch_record.get("supervisor"),
         "watchdog": launch_record.get("watchdog"),
+        "stay": stay_plan,
+        "armTimeout": arm_window,
         "watch": {
             "outcome": "watching" if (launch_record.get("watchdog") or {}).get("pid") else None,
             "stallS": round(args.supervisor_stale_s * max(1.0, args.watch_stall_factor), 1),
@@ -1187,6 +1391,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     log(f"heartbeat {heartbeat_path}")
     log(f"evidence  {evidence_path}")
     log("the harness runs in its own session: closing this shell does not stop it")
+
+    if stay["stay"]:
+        log(
+            f"staying as the leg's keeper until the harness exits "
+            f"(max {stay_limit:.0f} s): a launcher that exits here takes the "
+            "harness's cgroup with it (ADAAAA-9105)"
+        )
+        stay_block = stay_with_leg(
+            proc, evidence_path=evidence_path, log=log, max_s=stay_limit
+        )
+    else:
+        stay_block = {"outcome": "not_staying", "basis": stay["basis"]}
+        log(f"not staying: {stay['basis']}")
+    launch_record["stay"] = {**stay_plan, **stay_block}
+    _write_json(launch_path, launch_record)
     return EXIT_ARMED
 
 

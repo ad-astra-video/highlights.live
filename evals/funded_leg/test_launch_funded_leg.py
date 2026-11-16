@@ -343,6 +343,151 @@ class LauncherDetachmentTest(unittest.TestCase):
             server.server_close()
 
 
+class ArmWindowTest(unittest.TestCase):
+    """ADAAAA-9105 defect 1: the default arm window covers the quiet window.
+
+    The incident: `--arm-timeout-s` defaulted to 30 s while `[leg] arm` is only
+    printed after funded_leg.py's 600 s quiet-window preflight, so every launch
+    at documented defaults wrote `arm_failed` and exited 8.
+    """
+
+    def _harness_args(self, quiet_min: float) -> Any:
+        return funded_leg.build_parser().parse_args([
+            "--dry-run", "--cap-usd", "0.65", "--authorized-duration-s", "60",
+            "--quiet-window-min", str(quiet_min),
+        ])
+
+    def test_the_default_window_is_the_quiet_window_plus_the_margin(self):
+        window = launch_funded_leg.resolve_arm_timeout(
+            None, self._harness_args(10.0)
+        )
+        self.assertEqual(window["basis"], "quiet_window+margin")
+        self.assertFalse(window["explicit"])
+        self.assertEqual(window["quietWindowS"], 600.0)
+        self.assertEqual(window["timeoutS"], 720.0)
+        self.assertTrue(window["adequate"])
+
+    def test_a_short_quiet_window_still_gets_the_margin(self):
+        window = launch_funded_leg.resolve_arm_timeout(None, self._harness_args(0.1))
+        self.assertEqual(window["timeoutS"], 126.0)
+
+    def test_an_explicit_window_is_honoured_verbatim(self):
+        window = launch_funded_leg.resolve_arm_timeout(
+            900.0, self._harness_args(10.0)
+        )
+        self.assertEqual(window["basis"], "explicit")
+        self.assertEqual(window["timeoutS"], 900.0)
+        self.assertTrue(window["adequate"])
+
+    def test_an_explicit_window_shorter_than_the_quiet_period_is_inadequate(self):
+        # The 9056 shape, now named instead of silently spending the window.
+        window = launch_funded_leg.resolve_arm_timeout(
+            30.0, self._harness_args(10.0)
+        )
+        self.assertFalse(window["adequate"])
+
+    def test_stay_auto_keeps_a_metered_leg_and_releases_a_dry_run(self):
+        self.assertTrue(launch_funded_leg.resolve_stay("auto", dry_run=False)["stay"])
+        self.assertFalse(launch_funded_leg.resolve_stay("auto", dry_run=True)["stay"])
+        self.assertTrue(launch_funded_leg.resolve_stay("always", dry_run=True)["stay"])
+        self.assertFalse(launch_funded_leg.resolve_stay("never", dry_run=False)["stay"])
+
+    def test_the_keeper_window_covers_the_leg_and_its_deadline(self):
+        limit = launch_funded_leg.stay_max_s(self._harness_args(10.0), 600.0)
+        # 600 s quiet + 60 s authorized + 10 s hard-stop slack + 180 s margin
+        self.assertGreaterEqual(limit, 600 + 60 + 10)
+
+
+class RealShapedArmTest(unittest.TestCase):
+    """ADAAAA-9105 pass bar: arm at NO `--arm-timeout-s`, real-shaped window.
+
+    The old stubs all pinned `--quiet-window-min 0.1` (6 s), which is why a
+    30 s default looked adequate. This one runs the quiet window for 45 s —
+    longer than the old default — and requires the launch to arm on the derived
+    window alone.
+    """
+
+    def test_default_flags_arm_after_a_quiet_window_longer_than_the_old_default(self):
+        with tempfile.TemporaryDirectory() as run_dir:
+            started = time.time()
+            proc = subprocess.run(
+                [
+                    sys.executable, LAUNCHER,
+                    "--run-dir", run_dir, "--no-supervisor", "--no-watch",
+                    "--stay", "never", "--quiet",
+                    "--dry-run", "--stub-scenario", "clean",
+                    "--authorized-duration-s", "6", "--cap-usd", "0.65",
+                    "--quiet-window-min", "0.75",
+                ],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=180,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stdout.decode()[-2000:])
+            arm = read_json(os.path.join(run_dir, "arm.json")) or {}
+            self.assertEqual(arm["outcome"], "armed", arm.get("reason"))
+            self.assertEqual(arm["jobId"], "stub-job-0001")
+            launch = read_json(os.path.join(run_dir, "launch.json")) or {}
+            self.assertEqual(launch["armTimeoutBasis"], "quiet_window+margin")
+            self.assertFalse(launch["armTimeoutExplicit"])
+            self.assertAlmostEqual(launch["quietWindowS"], 45.0)
+            self.assertAlmostEqual(launch["armTimeoutS"], 165.0)
+            # The quiet window really ran: the old 30 s default could not have
+            # seen the arm line inside it.
+            self.assertGreaterEqual(time.time() - started, 44.0)
+            with open(os.path.join(run_dir, "harness.log"), encoding="utf-8") as fh:
+                harness_log = fh.read()
+            self.assertGreaterEqual(harness_log.count("preflight"), 2)
+            self.assertIn("[leg] arm pid=", harness_log)
+
+
+class LauncherKeeperTest(unittest.TestCase):
+    """ADAAAA-9105 defect 2: the launcher stays so its cgroup is not torn down.
+
+    `setsid()` escapes the session but not the cgroup: a launcher that exits on
+    the arm proof takes the detached harness with it when its transient unit
+    completes. `--stay` makes this process the keeper.
+    """
+
+    def test_stay_keeps_the_launcher_alive_until_the_harness_exits(self):
+        with tempfile.TemporaryDirectory() as run_dir:
+            proc = subprocess.Popen(
+                [
+                    sys.executable, LAUNCHER,
+                    "--run-dir", run_dir, "--no-supervisor", "--no-watch",
+                    "--stay", "always", "--stay-max-s", "60", "--quiet",
+                    "--dry-run", "--stub-scenario", "clean",
+                    "--authorized-duration-s", "6", "--cap-usd", "0.65",
+                    "--quiet-window-min", "0.1",
+                ],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            try:
+                arm_path = os.path.join(run_dir, "arm.json")
+                arm = wait_for(
+                    lambda: (b if (b := read_json(arm_path)) and b.get("outcome") == "armed" else None),
+                    45,
+                )
+                self.assertIsNotNone(arm, "launcher never armed")
+                self.assertTrue(arm["stay"]["planned"])
+                # Still running after the arm proof, with a live harness: the
+                # keeper window is what holds the cgroup open.
+                self.assertIsNone(proc.poll(), "launcher exited on the arm proof")
+                self.assertTrue(launch_funded_leg.pid_alive(arm["harnessPid"]))
+
+                self.assertEqual(proc.wait(timeout=90), 0)
+                launch = read_json(os.path.join(run_dir, "launch.json")) or {}
+                stay = launch.get("stay") or {}
+                self.assertEqual(stay["outcome"], "harness_exited", stay)
+                self.assertTrue(stay["evidenceWritten"])
+                self.assertGreater(stay["seconds"], 3.0)
+                self.assertTrue(
+                    os.path.exists(os.path.join(run_dir, "evidence.json"))
+                )
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait(timeout=20)
+
+
 class SupervisorDecisionTest(unittest.TestCase):
     """The fallback supervisor's rules, without a clock or a network."""
 
