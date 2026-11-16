@@ -15,7 +15,13 @@ import {
   summaryP95,
   type SummaryLaneStore,
 } from "../src/summary-lane.js";
-import { SUMMARY_RAW_MAX_CHARS } from "@highlights/events";
+import {
+  SUMMARY_LIVE_BAND,
+  SUMMARY_RAW_MAX_CHARS,
+  frameOpenerOf,
+  summarySentencesOf,
+  summaryWordCount,
+} from "@highlights/events";
 import {
   billableSummaryCalls,
   computeCostUsd,
@@ -203,25 +209,30 @@ describe("runSummaryForRow — the promoted row's copy", () => {
   it("stores copy for a shipped one-line caption shape instead of refusing it (ADAAAA-8687)", async () => {
     // The QA-B live-leg shapes: a 3-token announcer line, and a 2-token one.
     // Rev 4 (ADAAAA-8735): the first row's own evidence carried no matchContext,
-    // so `action` is no longer available off the word `Ball`; its faithful body
-    // is refused for fact density (never for restating). The GOAL row still
-    // serves on clock + attested score, which is the ADAAAA-8687 non-restatement
-    // proof at the lane seam.
+    // so `action` is no longer available off the word `Ball`. ADAAAA-9052's
+    // substitution repair then fills the clause the filler deletion opened, so
+    // BOTH shapes now SERVE — the ADAAAA-8687 intent (a shipped one-line caption
+    // is stored, not refused as a restatement) holds on both, and the first row's
+    // served body is the REPAIR's, so it is pinned structurally, not byte-equal.
     const cases: {
       caption: string;
       body: string;
       outcome: string;
       reason?: string;
       scoreTransition?: { from: string; to: string };
+      /** ADAAAA-9052: the gate rewrote the body, so `summary !== c.body`. */
+      repaired?: boolean;
     }[] = [
       {
         caption: "Ball shoots in midfield",
         body:
           "The crowd erupts as the ball shoots through midfield in the opening exchanges. " +
           "A burst of noise near 2:38 marks the move that breaks forward again.",
-        outcome: "dropped",
-        // ADAAAA-8914: the body is filler, not just short — its repair empties it.
-        reason: "filler",
+        // ADAAAA-8687 pinned this shape as `dropped`/`filler`; ADAAAA-9052's
+        // fact-pool substitution fills the deleted crowd clause with an attested
+        // fact, so the row is `stored` behind a `neutralised` gate.
+        outcome: "stored",
+        repaired: true,
       },
       {
         caption: "Scoreboard changes to 2-2.",
@@ -253,8 +264,25 @@ describe("runSummaryForRow — the promoted row's copy", () => {
       );
       expect({ caption: c.caption, outcome: result.outcome }).toEqual({ caption: c.caption, outcome: c.outcome });
       if (c.outcome === "stored") {
-        expect(stub.patches[0].patch.summary).toBe(c.body);
+        const served = stub.patches[0].patch.summary as string;
+        expect(typeof served).toBe("string");
         expect(stub.patches[0].patch.summaryDropped).toBe(0);
+        // AC1 live band + AC15, asserted on the SERVED body so a repair cannot
+        // serve copy that is thin, frame-led, or names nobody.
+        const sentences = summarySentencesOf(served);
+        expect(sentences.length).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.minSentences);
+        expect(sentences.length).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.maxSentences);
+        expect(summaryWordCount(served)).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
+        expect(frameOpenerOf(served)).toBeNull();
+        if (c.repaired) {
+          // ADAAAA-9052: the substitution wrote the served sentence, so the body
+          // is the repair's — never the writer's bytes — and the gate records it.
+          expect(served).not.toBe(c.body);
+          expect(served).toContain("Northbridge");
+          expect(stub.patches[0].patch.summaryGate).toBe("neutralised");
+        } else {
+          expect(served).toBe(c.body);
+        }
       } else {
         expect(result.reason).toBe(c.reason);
         expect(stub.patches[0].patch.summary).toBeUndefined();
