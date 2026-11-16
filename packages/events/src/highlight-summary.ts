@@ -2141,6 +2141,62 @@ export const SUMMARY_WRITER_ACT_VOCABULARY: readonly string[] = [
 ];
 
 /**
+ * ADAAAA-9121 (writer round 3): the actor-and-act PAIRS this job's served cards
+ * already spend, so the prompt can ROTATE the substance instead of only banning a
+ * shape.
+ *
+ * The measured residual on the rev-17 served block `80ac7b3` (job `1e0d7187`, 7
+ * stored rows, all post-pin) is not a shape defect: every card's substance
+ * sentence was a legal act verb plus a purpose clause, and the SAME one —
+ * `… completes a pass to maintain their offensive movement during the sequence.`
+ * on three cards and `… completes a pass to move the ball toward the opposing
+ * side of the pitch.` on two (cross-card similarity 1.000, clock tokens masked).
+ * The AC14 prune deleted it, the remainder fell under the 18-word floor, and 5 of
+ * 5 `repeat-*` rows served nothing (`repairedWords` 15/15/0/0/0).
+ *
+ * Banning the shape is necessary but not sufficient: with `clock` + `action` as
+ * the only attested kinds, a 2-sentence body has to be built from an actor and a
+ * verb, and a model handed the same vocabulary repeats the same pick. Handing it
+ * the picks this job ALREADY used is what makes the second card's substance
+ * differ, and the vocabulary is wide enough to rotate: 3 attested actors x 11
+ * verbs = 33 pairs, two per card, so a job of 7 rows never runs dry.
+ *
+ * Reads only the verbs the prompt itself offers (`SUMMARY_WRITER_ACT_VOCABULARY`)
+ * and the row's attested actor names, so a pair is a name the gate grounds plus an
+ * act the gate credits. It is prompt STATE, not a bar: the gate still refuses a
+ * repeated SENTENCE and the lane's repeat key still drops it.
+ */
+export function summarySpentActPairs(bodies: readonly string[], actors: readonly string[]): string[] {
+  const names = actors.map((name) => name.trim()).filter(Boolean);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const body of bodies) {
+    for (const sentence of summarySentencesOf(body)) {
+      const lower = sentence.toLowerCase();
+      const actor = names.find((name) => lower.includes(name.toLowerCase()));
+      if (!actor) continue;
+      // The FIRST act the sentence states is the pair it spends; a second verb is
+      // the sentence's own second fact, not another card's substance.
+      let verb: string | null = null;
+      let at = Number.POSITIVE_INFINITY;
+      for (const entry of SUMMARY_WRITER_ACT_VOCABULARY) {
+        const index = lower.indexOf(entry);
+        if (index >= 0 && index < at) {
+          at = index;
+          verb = entry;
+        }
+      }
+      if (!verb) continue;
+      const pair = `${actor} + ${verb}`;
+      if (seen.has(pair)) continue;
+      seen.add(pair);
+      out.push(pair);
+    }
+  }
+  return out;
+}
+
+/**
  * ADAAAA-9047 (writer round): the fact menu WITH the row's own measured values.
  *
  * `summaryFactMenu` names the CATEGORIES (a contract the lane hands to the retry,
@@ -3353,6 +3409,13 @@ export interface SummaryRetryDirective {
    *  (with the fact menu above) is what makes the second sample different from the
    *  first — the same reason `droppedClauses` exists for the filler repair. */
   repeatedSentences?: string[];
+  /** ADAAAA-9121 (writer round 3): the refused draft's own FIRST sentence when the
+   *  repeat key fired on the AC8 opening run. An opening repeat is a 4-word run, not
+   *  a whole sentence, so `repeatedSentences` is usually empty on it and the retry
+   *  used to receive only the token — it then re-wrote the same opening (4 of the 5
+   *  dry rows on job `1e0d7187`). The sentence rides here so the second sample can
+   *  rewrite the opening it actually wrote. */
+  repeatedOpening?: string;
 }
 
 /** Everything the summary prompt may show the model. Built from the row's own
@@ -3372,6 +3435,14 @@ export interface SummaryPromptInput extends SummaryEvidence {
    *  is not one of them; the lane is the backstop, because only it can see the
    *  job's other bodies. */
   avoidSentences?: string[];
+  /** ADAAAA-9121 (writer round 3): the actor-and-act PAIRS this job's served
+   *  cards already use, as `"<actor> + <verb>"` (`summarySpentActPairs`). A body
+   *  on a `clock` + `action` row is built from one of those pairs, so handing the
+   *  writer the picks this job already spent is what stops card 2..n from
+   *  re-writing card 1's substance sentence — the measured reason 5 of 5
+   *  repeat-retry rows on job `1e0d7187` served nothing. Empty on the first card
+   *  of a job, and absent when the row attests no actor. */
+  avoidActs?: string[];
   /** ADAAAA-8803: present only on the RETRY call — the measured shape of the
    *  draft the gate refused. Absent on the first pass, so the first prompt stays
    *  the snapshot-pinned one.
@@ -3501,6 +3572,12 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   const retryMenu = (input.retry?.factMenu ?? []).filter((line) => line.trim());
   // ADAAAA-9052: the sentences the repeat key flagged, named in the retry.
   const retryRepeated = (input.retry?.repeatedSentences ?? []).filter((line) => line.trim()).slice(0, 4);
+  // ADAAAA-9121 (writer round 3): the AC8 opening repeat's own first sentence.
+  const retryOpening = (input.retry?.repeatedOpening ?? "").trim();
+  // ADAAAA-9121 (writer round 3): the actor-and-act pairs this job's served cards
+  // already spend. Handed to the prompt on every attempt (first pass included), so
+  // card 2..n rotates its substance pair instead of re-writing card 1's sentence.
+  const avoidActs = (input.avoidActs ?? []).filter((pair) => pair.trim());
   // ADAAAA-8971 (AC5): the "most words without inventing anything" clause names
   // only the fact types the row's menu actually offers. It used to name the score
   // line unconditionally, so a row with no measured transition was told its best
@@ -3531,6 +3608,15 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
         ...(retryRepeated.length > 0
           ? [
               `- These sentences REPEAT a sentence a card in this job already carries: ${retryRepeated.map((line) => `"${line.trim()}"`).join(" ")} Do not reuse or paraphrase them, and do not swap only their clock: write a different sentence that carries a different fact from ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}. Each replacement sentence must name an attested actor as its SUBJECT and say what that actor did, with the clip offset riding on that act. A frame sentence shape ('The clip carries this sequence at …', 'This scoring sequence occurs at …') is the exact thing being refused here.`,
+            ]
+          : []),
+        // ADAAAA-9121 (writer round 3): an OPENING repeat names the draft's own
+        // first sentence, which is the only thing that tells the second sample
+        // WHICH sentence to re-open. Named verbatim, and the rewrite is bounded to
+        // the opening so the rest of the body keeps its facts.
+        ...(retryOpening
+          ? [
+              `- The previous draft OPENED with the same four words as a card in this job already carries: "${retryOpening.length > 120 ? `${retryOpening.slice(0, 117)}…` : retryOpening}". Rewrite that first sentence so its opening words differ from every served card — keep its fact and change how the sentence opens (lead with the window or the clock instead of the actor, or the other way round) — and keep the rest of the body on the facts above.`,
             ]
           : []),
         `- Do NOT spend a whole sentence on the clip clock: the \`Window:\` label (${typeof input.windowTs === "number" && Number.isFinite(input.windowTs) ? clockLabel(input.windowTs) : "the offset"}) must sit INSIDE a sentence that also carries another fact. A sentence that only says when the clip moment occurs adds no depth and does not count toward the two-fact rule.`,
@@ -3627,6 +3713,20 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     // ADAAAA-9031 (AC14.3): distinctness is per SENTENCE, not per body — a body
     // whose sentences all restate the same clock reads as one template.
     "- Each sentence must carry a DIFFERENT fact from the sentence before it: do not restate the same clock, the same score line or the same actor's act in two sentences. Two sentences that differ only by a clock token count as the same sentence.",
+    // ADAAAA-9121 (writer round 3): the frame ban above stops clock-only copy;
+    // the served block `80ac7b3` shows the same defect one level down — a LEGAL
+    // act verb from the vocabulary with a purpose clause bolted on. On job
+    // `1e0d7187` every card's substance sentence was the same sentence:
+    // '… completes a pass to maintain their offensive movement during the
+    // sequence.' (three cards) and '… completes a pass to move the ball toward
+    // the opposing side of the pitch.' (two cards), cross-card similarity 1.000
+    // with the clock already masked. The AC14 prune deleted it, the remainder
+    // fell under the 18-word floor, and all five `repeat-*` rows served nothing.
+    // A purpose clause asserts something no channel measures, so it is not a
+    // fact (the same reason a possession clause is deleted); what remains is the
+    // act verb, which IS the whole substance of the sentence. Rendered with `X`
+    // and never as a filled actor sentence, so AC14 has nothing to copy.
+    "- BANNED SUBSTANCE SHAPES — a legal act verb with a purpose clause bolted on is still one sentence job-wide, and it is deleted: 'X completes a pass to move the ball toward the opposing side of the pitch', 'X completes a pass to maintain their offensive movement during the sequence', 'X drives forward … to maintain their offensive position', 'X drives forward … to advance their position'. Never append 'to move the ball toward the opposing side', 'to maintain their offensive movement', 'to maintain their offensive position', 'to advance their position' or 'during the sequence': the act verb is the whole fact, and the tail is exactly what makes your sentence the same sentence another card already carries.",
 
     "- Never describe the atmosphere, the crowd, the fans, a celebration, a reaction, momentum, intensity, a 'pivotal moment', a 'turning point', a 'battle for control' or a 'vital point': the evidence measures none of those, so the gate deletes every sentence that does.",
     "- Do not reuse a sentence shape from another card in this job. Two cards must never carry the same sentence: no template such as 'This pivotal moment occurs at the … mark'.",
@@ -3673,6 +3773,27 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     ...(attestedActors.length > 0
       ? [
           `- The evidence attests these actors: ${attestedActors.slice(0, 8).join(", ")}. This list is not empty, so a name is NOT optional on this row: EVERY sentence must name one of them as its SUBJECT and say what that actor did, with the clip offset riding on that act ('X drives forward at … into the clip'). Naming an actor once and then falling back to a frame sentence for the rest of the body is the defect; every sentence needs its own actor and its own fact about that actor. And the act has to be what THIS window's own evidence shows: never write the same actor-and-act sentence you would write on another card with only the clock changed — two cards that differ only by their clock carry the same sentence, and it is deleted.`,
+          // ADAAAA-9121 (writer round 3): banning the shape was not enough.
+          // With `clock` + `action` as the only attested kinds the body IS one
+          // actor-and-act pair per sentence, and a model handed the same
+          // vocabulary picks the same pair on every card — measured on job
+          // `1e0d7187`, where 5 of 5 repeat-retry rows died because every card
+          // re-used one substance sentence. The lane therefore hands the pairs
+          // this job already spends (`avoidActs`, `summarySpentActPairs`) and the
+          // rule below makes the next pick a rotation. Nothing here invents a
+          // name or an act: both come from the lists above.
+          ...(avoidActs.length > 0
+            ? [
+                `- This job's served cards already spend these actor-and-act pairs: ${avoidActs.slice(0, 10).join("; ")}. Your body must NOT use any of them: name a DIFFERENT attested actor as the sentence's subject, or give an actor already used a DIFFERENT verb from the act list, for every sentence. A pair is one sentence's whole substance, so a two-sentence body needs two pairs that are both off that list.`,
+              ]
+            : []),
+          // ADAAAA-9121 (writer round 3): the second half of the same defect is
+          // the connective SHAPE. Two cards that swap the actor and the verb but
+          // keep the same scaffolding ('at …, a 15-second passage.') still score
+          // >= 0.80 against each other, because the repeat key compares token sets,
+          // not meaning. Rotating the opening is what keeps the pair rotation
+          // visible to the bar.
+          `- Vary each sentence's OPENING as well: lead one sentence with its actor and start the other with the measured window or the clock, and change which of the two carries the clip offset. Two sentences that share the same connective words around the clock ('… of the match, a 15-second passage') read as one sentence beside another card even when their actor and verb differ.`,
         ]
       : []),
     ...(ballActionAttested === false
@@ -3783,7 +3904,12 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
           "- The previous draft spent sentences on atmosphere, a crowd, a reaction or significance instead of a fact; the gate deleted them. Replace each one with a sentence that carries a fact from the evidence: the score line, the clock or match clock, or a NAMED attested actor's action."
         );
       }
-      if (violations.includes("repeat-sentence")) {
+      // ADAAAA-9121 (writer round 3): the AC8 opening repeat carries its own token
+      // now (`repeat-opening`), because the retry names the flagged sentences on
+      // both keys. The rule below is the same defect at a different bar (AC8 vs
+      // AC14.3), so it fires on either token instead of leaving the opening retry
+      // with no instruction about the copy that repeated.
+      if (violations.includes("repeat-sentence") || violations.includes("repeat-opening")) {
         lines.push(
           "- The previous draft repeated a sentence another card in this job already carries. Write a different sentence with a different fact in it — do not reuse the same sentence shape with only the clock changed."
         );

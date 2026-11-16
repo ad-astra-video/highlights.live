@@ -150,7 +150,11 @@ describe("ADAAAA-9052 — a pruned row is repaired back to the floor and served"
     const f = stubFetch(DRAFT_9052);
     await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), { jobId: "job-9052", highlightId: "row-1", evidence }, stateWith(SERVED_9052));
     expect(f.prompts).toHaveLength(2);
-    expect(f.prompts[0]).not.toContain("already carries");
+    // ADAAAA-9121: the first pass carries no repeat directive at all — the ban
+    // on a shared SHAPE is a rule, not a report about this row's draft — so the
+    // assertion names the retry's own line instead of the substring "already
+    // carries", which now also appears in the shape ban.
+    expect(f.prompts[0]).not.toContain("REPEAT a sentence a card in this job already carries");
     expect(f.prompts[1]).toContain("REPEAT a sentence a card in this job already carries");
     expect(f.prompts[1]).toContain(REPEATED_9052);
   });

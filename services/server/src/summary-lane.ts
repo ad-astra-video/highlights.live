@@ -50,6 +50,8 @@ import {
   type SummaryEvidence,
   type SummaryRail,
   type SummaryRetryDirective,
+  attestedActorNames,
+  summarySpentActPairs,
 } from "@highlights/events";
 
 /** ADAAAA-9031 (AC5 / spec §13.2): why a row billed a SECOND summary call. The
@@ -119,6 +121,13 @@ export interface SummaryJobState {
    *  avoidance (`avoidSentences`) only — ADAAAA-8969 moved the DROP decision onto
    *  `servedBodies` because job-wide sentence equality also refuses honest cards. */
   servedSentences: string[];
+  /** ADAAAA-9121 (writer round 3): the actor-and-act PAIRS this job has already
+   *  served (`summarySpentActPairs`), handed to the prompt as `avoidActs`. On a
+   *  `clock` + `action` row an act pair IS a sentence's whole substance, so without
+   *  this state every card picks the same pair: job `1e0d7187` served 2 of 7 rows
+   *  and all 5 `repeat-*` rows re-used one substance sentence that the AC14 prune
+   *  then deleted. Prompt state only — the gate and the repeat key are unchanged. */
+  servedActs: string[];
   /** ADAAAA-8969 (increment 2, defect 3): the bodies this job actually SERVED,
    *  with the instants that tell one promotion from another. The repeat key reads
    *  these, so "another promotion from the same prompt template" (a shared opening
@@ -236,7 +245,7 @@ export function summaryRepeatKey(
 }
 
 export function newSummaryJobState(): SummaryJobState {
-  return { servedOpenings: new Set<string>(), servedSentences: [], servedBodies: [] };
+  return { servedOpenings: new Set<string>(), servedSentences: [], servedActs: [], servedBodies: [] };
 }
 
 export interface SummaryLaneConfig {
@@ -436,6 +445,13 @@ export async function runSummaryForRow(
       ...evidence,
       ...(servedOpenings && servedOpenings.size > 0 ? { avoidOpenings: [...servedOpenings] } : {}),
       ...(state && state.servedSentences.length > 0 ? { avoidSentences: [...state.servedSentences] } : {}),
+      // ADAAAA-9121 (writer round 3): rotate the SUBSTANCE, not only the shape.
+      // ADAAAA-9089 banned the frame shapes and the writer still re-emitted one
+      // act-plus-purpose sentence on every card, because a `clock` + `action` row
+      // has one pair to spend per sentence and the model picks the same one. The
+      // job's spent pairs go to the FIRST pass too (not the retry alone), so the
+      // repetition never happens instead of being repaired by a paid second call.
+      ...(state && state.servedActs.length > 0 ? { avoidActs: [...state.servedActs] } : {}),
       // ADAAAA-8803/8806: the retry directive carries the refused draft's
       // measured shape AND its violations, so the repair line can name both the
       // shortfall and the missing fact.
@@ -565,13 +581,29 @@ export async function runSummaryForRow(
         // ADAAAA-9052: the regeneration is told WHICH sentences repeated (and which
         // facts the row attests), so the second sample writes a different fact
         // instead of re-landing the same template one clock token over.
+        // ADAAAA-9121 (writer round 3): the retry carries the flagged sentences on
+        // BOTH repeat keys. A `repeat-opening` body's shared run IS its first
+        // sentence (`summaryRepeatKey` records it in `repeatedSentences`), so the
+        // opening retry used to be told only the token and re-wrote the same
+        // opening — 4 of the 5 dry rows on job `1e0d7187` took exactly that retry.
+        // The violation token is the honest one for the key, so a census can tell
+        // an AC8 retry from an AC14.3 retry.
+        const openingSentence =
+          repeat.key === "opening" ? (summarySentencesOf(decision.summary ?? decision.raw)[0] ?? null) : null;
         retry = {
           words: decision.words,
           sentences: decision.sentences,
-          violations: ["repeat-sentence"],
-          ...(repeat.key === "sentence" && repeat.repeatedSentences.length > 0
+          violations: [repeat.key === "opening" ? "repeat-opening" : "repeat-sentence"],
+          ...(repeat.repeatedSentences.length > 0
             ? { repeatedSentences: repeat.repeatedSentences, factMenu: summaryFactMenu(evidence) }
             : {}),
+          // ADAAAA-9121 (writer round 3): an opening repeat usually has NO sentence
+          // at the AC14.3 bar (the shared run is only the first four words), so the
+          // retry was handed the token alone and re-wrote the same opening — 4 of
+          // the 5 dry rows on job `1e0d7187` took that retry. The body's own first
+          // sentence rides the directive so the second sample can rewrite its
+          // opening instead of guessing which sentence collided.
+          ...(openingSentence ? { repeatedOpening: openingSentence } : {}),
         };
         retryReason = repeat.key === "opening" ? "repeat-opening" : "repeat-sentence";
         log(`[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — regenerating once`);
@@ -668,6 +700,9 @@ export async function runSummaryForRow(
     const opening = summaryOpeningRun(servedBody);
     servedOpenings?.add(opening);
     for (const sentence of summarySentencesOf(servedBody)) state?.servedSentences.push(sentence);
+    // ADAAAA-9121: remember which actor-and-act pairs this job has now spent, so
+    // the next card's prompt can rotate away from them.
+    if (state) state.servedActs.push(...summarySpentActPairs([servedBody], attestedActorNames(evidence)));
     state?.servedBodies.push({
       highlightId: descriptor.highlightId,
       windowTs: evidence.windowTs ?? null,
