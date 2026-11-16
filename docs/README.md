@@ -87,6 +87,14 @@ Check a tree change before committing:
 node scripts/check-docs-hygiene.mjs   # exits 1 on a denied endpoint in any tracked file
 ```
 
+CI runs the same guard on every pull request targeting `master` and every push
+to `master`: the job `docs-hygiene` in `.github/workflows/ci.yml`, Node 24,
+installed from `package-lock.json`, default `GITHUB_TOKEN` with `contents: read`
+(nothing else, no secrets). That job name is the status-check context branch
+protection selects, so renaming it silently un-protects `master` — tell the
+board before changing it. The full vitest suite runs as the separate `test` job;
+it is not part of the required check until the suite is green at the tip.
+
 Acceptable hits, and nothing else: the public GitHub repo URL, the RFC1918 CIDR
 defaults, `example.com` / `x.dev` sample payloads, the published product contact
 addresses in `legal/` and `INTEGRATIONS.md`, `admin@highlights.local` (the seeded
