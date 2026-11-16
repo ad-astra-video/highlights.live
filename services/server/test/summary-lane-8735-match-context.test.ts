@@ -8,6 +8,12 @@
 // reads the prompt the lane actually sent.
 import { afterEach, describe, expect, it } from "vitest";
 import { dropSummaryLane, requestHighlightSummary, summaryLaneFor } from "../src/api.js";
+import {
+  SUMMARY_LIVE_BAND,
+  frameOpenerOf,
+  summarySentencesOf,
+  summaryWordCount,
+} from "@highlights/events";
 import type { HighlightRecord } from "@highlights/events";
 
 const JOB_ID = "job-8735-match-context";
@@ -83,8 +89,24 @@ describe("the live promotion seam passes the job's matchContext to the summary l
     await lane!.idle();
 
     expect(prompts[0]).toContain("Match context:\nTeams: Northbridge vs Riverside");
-    expect(patches[0].patch.summary).toBe(NAMED_BODY);
-    expect(patches[0].patch.summaryGate).toBe("accepted");
+    // ADAAAA-9052 rewrites the SECOND sentence (the possession clause is filler,
+    // so the repair deletes it and fills the slot from the row's own evidence),
+    // so the served body is the repair's. Pin the structural contract instead of
+    // a byte-equal NAMED_BODY: the writer's lead survives, the body names an
+    // attested team, stays in the AC1 live band, keeps the row's clock, and never
+    // opens on the frame (ADAAAA-9083's AC15).
+    const served = patches[0].patch.summary as string;
+    expect(typeof served).toBe("string");
+    expect(patches[0].patch.summaryGate).toBe("neutralised");
+    expect(patches[0].patch.summaryDropped).toBe(0);
+    const sentences = summarySentencesOf(served);
+    expect(sentences[0]).toBe(summarySentencesOf(NAMED_BODY)[0]);
+    expect(sentences.length).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.minSentences);
+    expect(sentences.length).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.maxSentences);
+    expect(summaryWordCount(served)).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
+    expect(frameOpenerOf(served)).toBeNull();
+    expect(served).toContain("Northbridge");
+    expect(served).toContain("3:23");
   });
 
   it("refuses a bare-verb body when the job carries no matchContext (the pre-8736 shape)", async () => {
@@ -106,14 +128,19 @@ describe("the live promotion seam passes the job's matchContext to the summary l
     requestHighlightSummary(d, record("h3"), "live");
     await summaryLaneFor(d, JOB_ID)!.idle();
     expect(patches[0].patch.summary).toBeUndefined();
-    // ADAAAA-8914: on a row that DOES attest two fact kinds the refusal is
-    // repairable, so the clause repair is what takes the body under the floor and
-    // the drop is named `filler`. The AC9 signal is still on the row: §15.4's
-    // `summaryViolations` carries `too-few-facts` beside the filler tokens.
-    expect(patches[0].patch.summaryGate).toBe("dropped:filler");
+    // The clause repair DOES run here — the row attests two fact kinds — and its
+    // remainder clears the 18-word serve floor (`summaryRepairedWords` 22), so the
+    // refusal is a FACT refusal, not a depth one: ADAAAA-8914's `filler` name no
+    // longer applies and the drop is named `gate`. The AC9 signal is still on the
+    // row: §15.4's `summaryViolations` carries `too-few-facts`.
+    expect(patches[0].patch.summaryGate).toBe("dropped:gate");
     expect(patches[0].patch.summaryViolations).toEqual(
       expect.arrayContaining(["too-few-facts"])
     );
+    expect(patches[0].patch.summaryDroppedByReason).toEqual({ gate: 1 });
+    // The repair's own depth measure, so "this is a fact refusal" is asserted and
+    // not just narrated: the remainder is at or above the live serve floor.
+    expect(patches[0].patch.summaryRepairedWords).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
     expect(patches[0].patch.summaryRaw).toBe(BARE_BODY);
   });
 });
