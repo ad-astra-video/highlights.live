@@ -156,8 +156,14 @@ describe("ADAAAA-9106 — a MEASURED score change is relayed on the first pass",
 describe("ADAAAA-9106 — the relay in copy: row c2c7a982 serves the score line", () => {
   // The writer shape the new prompt asks for: 15+ words per sentence, the score
   // line packed into the sentence that names an attested actor's act.
+  // ADAAAA-8941 (rev-17): sentence 1's act is a BOUNDED act, not the carry it was
+  // pinned with ("drives forward through the middle"). `sustainedFactUnattested`
+  // no longer credits a carry on a row that measured no ball outcome (this fixture
+  // row: `ballOutcome: null`, `goalCrossed: false`), so the action kind the relay
+  // assertion reads has to come from an act the row can anchor. The relay itself —
+  // the score line inside the actor's sentence — is unchanged.
   const withScore =
-    "Real Madrid drives forward through the middle before the defence can reset as the scoreboard moves from 2-1 to 2-2 at 2:40 into the clip. Barcelona dispossesses the runner on the edge of the area and threads a pass between the lines.";
+    "Real Madrid intercepts a loose ball through the middle before the defence can reset as the scoreboard moves from 2-1 to 2-2 at 2:40 into the clip. Barcelona dispossesses the runner on the edge of the area and threads a pass between the lines.";
   const withoutScore =
     "Real Madrid drives forward through the middle before the defence can reset at 2:40 into the clip to advance the play. Barcelona dispossesses the runner on the edge of the area and threads a pass between the lines.";
 

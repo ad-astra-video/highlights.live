@@ -281,3 +281,92 @@ describe("ADAAAA-8941 defect 2 — the second live reading's clock shapes", () =
     expect(serveAttestedMatchClock(honest, ROW_771_8CAF.evidence).text).toBe(honest);
   });
 });
+
+// --- The THIRD live reading: rev-17 (job `1e0d7187`, served tree `80ac7b3`) ----
+//
+// The writer round-2 prompt moved the same play claim onto new verbs, and the gate
+// served it: 7 stored rows, 2 `neutralised` bodies, both on rows whose own
+// `attestationUsed` read `authority: none` / `ballOutcome: null` /
+// `goalCrossed: false` — and both served with the row's clock as their only fact.
+// Every fixture value below is that leg's own stored row
+// (`evals/adaaa_8941/live-rail-1e0d7187.json`).
+
+const REV17_CONTEXT = {
+  sport: "soccer",
+  teams: [
+    { name: "Real Madrid", side: "home", kitColors: [], confidence: 0.85, evidence: [{ source: "scorebug_ocr", snippet: "22:18 RMA2-2 BAR" }] },
+    { name: "Barcelona", side: "away", kitColors: [], confidence: 0.85, evidence: [{ source: "scorebug_ocr", snippet: "22:18 RMA2-2 BAR" }] },
+  ],
+};
+
+/** Row `5f1ca385`: BIG_PLAY at 12 s of the clip, scorebug token `11:31`, nothing measured. */
+const rev17Evidence = (token: string, seconds: number, windowTs: number, ballOutcome: string | null = null): SummaryEvidence => ({
+  rail: "live",
+  verdict: "big_play",
+  eventType: "BIG_PLAY",
+  reason: null,
+  caption: null,
+  postTitle: "BIG PLAY · 0:12",
+  windowTs,
+  windowDurationS: 15,
+  scoreTransition: null,
+  matchContext: REV17_CONTEXT,
+  transcript: null,
+  attestation: { ballOutcome, goalCrossed: false, scoreBoardChanged: false },
+  matchClock: { token, seconds, period: null, legible: true },
+});
+
+const ROW_5F1C = rev17Evidence("11:31", 691, 12);
+const ROW_73CC = rev17Evidence("23:16", 1396, 185);
+
+const SERVED_5F1C =
+  "Barcelona drives forward at 11:31 of the match to maintain their offensive position. The team continues to move the ball toward the opposing side of the pitch at 11:31 of the match.";
+const SERVED_73CC =
+  "Real Madrid drives forward at 23:16 of the match to advance their position. Barcelona completes a pass to maintain their offensive movement during the sequence.";
+
+describe("ADAAAA-8941 defect 1 (rev-17 reading) — the carry verbs are the same claim", () => {
+  it("refuses both served bodies and names the play clause", () => {
+    const cases: [string, SummaryEvidence, RegExp][] = [
+      [SERVED_5F1C, ROW_5F1C, /drives forward|move the ball toward/],
+      [SERVED_73CC, ROW_73CC, /drives forward|completes a pass/],
+    ];
+    for (const [body, evidence, pattern] of cases) {
+      const decision = gateSummaryDetail(body, evidence);
+      expect(decision.summary).toBeNull();
+      expect(decision.violations).toContain("unattested-atmosphere");
+      const claims = unattestedAtmosphereClaims(body, evidence);
+      expect(claims.length).toBeGreaterThan(0);
+      expect(claims.join(" | ")).toMatch(pattern);
+    }
+  });
+
+  it("does not credit a carry as an action fact on a row that measured nothing", () => {
+    const sentence = "Barcelona drives forward at 11:31 of the match to maintain their offensive position.";
+    const [report] = summarySentenceFacts(sentence, ROW_5F1C);
+    expect(report.facts).toEqual(["clock"]);
+    expect(report.claims).toContain("drives forward");
+  });
+
+  it("keeps the credit on a row whose own attestation measured a ball outcome", () => {
+    const measured = rev17Evidence("11:31", 691, 12, "goal");
+    const sentence = "Barcelona drives forward at 11:31 of the match to maintain their offensive position.";
+    const [report] = summarySentenceFacts(sentence, measured);
+    expect(report.facts).toContain("action");
+    expect(report.claims).toEqual([]);
+    // The band still applies (two sentences, >= 18 words), so the serving fixture
+    // carries the carry sentence plus a bounded act on the measured row.
+    const body =
+      "Barcelona drives forward at 11:31 of the match to maintain their offensive position. Real Madrid intercepts the second ball near the edge of the area at 11:31 of the match.";
+    expect(gateSummaryDetail(body, measured).summary).not.toBeNull();
+  });
+
+  it("still serves a bounded act on the same no-outcome row", () => {
+    // `threads a pass` is a credited bounded act (`ACTION_RE`), not a carry: the
+    // rev-17 bar refuses the play CLAIM, not the actor's act.
+    const honest =
+      "Barcelona threads a pass between the lines at the 23:16 mark of the match. Real Madrid intercepts the second ball near the edge of the area.";
+    const decision = gateSummaryDetail(honest, ROW_73CC);
+    expect(decision.violations).toEqual([]);
+    expect(decision.summary).toBe(honest);
+  });
+});

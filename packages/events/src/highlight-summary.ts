@@ -1490,9 +1490,33 @@ function clockFactGrounded(factText: string, evidence: SummaryEvidence): boolean
  *  outcome — the possession/pressure vocabulary asserts what the row did not
  *  measure, which is the same class as `crowd` / `momentum`. A row that DID
  *  measure an outcome keeps the credit (and a ball-outcome verb is never affected:
- *  `ACTION_RE` owns it and that class is judged by `unattested-action`). */
+ *  `ACTION_RE` owns it and that class is judged by `unattested-action`).
+ *
+ *  ADAAAA-8941 (rev-17 reading, live job `1e0d7187`, served tree `80ac7b3`): the
+ *  BALL-PROGRESS family joins that class. `ACTION_RE` credits a bounded act
+ *  ("intercepts", "wins the ball back") and `sentenceActionAttested` lets any verb
+ *  it recognises earn a fact once the sentence names an attested actor, but a
+ *  carry has no bounded outcome to anchor it: "drives forward", "completes a pass"
+ *  and "moves the ball toward" describe play the row never measured. Crediting
+ *  them gave the served filler a second fact kind, which SKIPPED the AC14.1
+ *  tactical bar (it only judges a clock-only sentence) by construction. Measured:
+ *  both `neutralised` bodies of that leg carried `attestationUsed.authority: none`,
+ *  `ballOutcome: null`, `goalCrossed: false`, and still served —
+ *  "Barcelona drives forward at 11:31 of the match to maintain their offensive
+ *  position…" / "Real Madrid drives forward … Barcelona completes a pass to
+ *  maintain their offensive movement…".
+ *
+ *  `=== false` only, like the atmosphere bar: a row with no attestation at all
+ *  (legacy/VOD) and a row that measured an outcome keep ADAAAA-8903's credit. */
+const BALL_PROGRESS_VERB_RE =
+  /^(?:drives?|drove|driving|completes?|completed|completing|moves?|moved|moving)$/i;
+
 function sustainedFactUnattested(factText: string, evidence: SummaryEvidence): boolean {
   if (summaryBallActionAttested(evidence) !== false) return false;
+  // The fact text is the surface VERB `summaryFacts` extracted ("drives",
+  // "completes"), not the phrase, so the verb alone is what this bar judges; the
+  // clause-level TACTICAL_CLAIM_RE owns the sentence shape.
+  if (BALL_PROGRESS_VERB_RE.test((factText ?? "").trim())) return true;
   return !ACTION_RE.test(factText) && SUSTAINED_STATE_RE.test(factText);
 }
 
@@ -1834,7 +1858,27 @@ const VALUE_FILLER_RE =
  *  ADAAAA-8928 owns the prompt skew that produces the template; this bar refuses
  *  the shape whichever prompt produced it. */
 const TACTICAL_CLAIM_RE =
-  /\b(?:(?:maintains?|maintained|maintaining|holds?|held|keeps?|kept|retains?|retained|has|had|takes?|took|keeps?)\s+(?:the\s+)?(?:possession|control|ball)\b|\b(?:works?|worked|working|moves?|moved|moving|plays?|played|playing)\s+the\s+ball\s+(?:forward|up|across|out|wide)\b|\bsustained\s+play\b|\bcontinues?\s+their\s+sustained\b)/i;
+  /\b(?:(?:maintains?|maintained|maintaining|holds?|held|keeps?|kept|retains?|retained|has|had|takes?|took|keeps?)\s+(?:the\s+)?(?:possession|control|ball)\b|\b(?:works?|worked|working|moves?|moved|moving|plays?|played|playing)\s+the\s+ball\s+(?:forward|up|across|out|wide|toward|towards|into|down|through)\b|\bsustained\s+play\b|\bcontinues?\s+their\s+sustained\b|\b(?:drives?|drove|driving)\s+(?:the\s+ball\s+)?forward\b|\b(?:completes?|completed|completing)\s+(?:a\s+|the\s+)?pass\b|\b(?:maintains?|maintained|maintaining|advances?|advanced|advancing)\s+(?:their|its)\s+(?:offensive|attacking)\s+(?:position|movement|play|shape)\b|\b(?:advances?|advanced|advancing)\s+(?:their|its)\s+position\b|\boffensive\s+(?:position|movement|play|shape)\b)/i;
+/*
+ * ADAAAA-8941 (rev-17 reading, live job `1e0d7187`, served tree `80ac7b3`): the
+ * writer round-2 prompt moved the same unattested play claim onto NEW verbs, so
+ * the first three clauses above did not fire and both `neutralised` bodies served
+ * with the row's own evidence recording NO ball outcome (`authority: none`,
+ * `ballOutcome: null`, `goalCrossed: false`):
+ *   "Barcelona drives forward at 11:31 of the match to maintain their offensive
+ *    position. The team continues to move the ball toward the opposing side of the
+ *    pitch at 11:31 of the match."
+ *   "Real Madrid drives forward at 23:16 of the match to advance their position.
+ *    Barcelona completes a pass to maintain their offensive movement during the
+ *    sequence."
+ * The four added alternations are those verbs: `drives forward`, `move the ball
+ * toward|into|down|through`, `completes a pass`, and the
+ * `offensive position|movement|play|shape` / `advance their position` tails. The
+ * per-sentence guard above still decides WHEN they are a claim (clock-only facts
+ * on a row that measured no outcome), so a sentence that pairs the score line or a
+ * credited bounded act with a carry is untouched, and `threads a pass` stays a
+ * credited act (`ACTION_RE`) rather than joining this family.
+ */
 
 /** Every unattested atmosphere / reaction / value clause in `text`. Matched per
  *  CLAUSE (sentence) so a body can be repaired by deleting exactly the sentence
