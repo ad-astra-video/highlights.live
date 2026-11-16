@@ -2185,6 +2185,27 @@ export const SUMMARY_WRITER_ACT_VOCABULARY: readonly string[] = [
 ];
 
 /**
+ * ADAAAA-9121 (writer round 3): the act vocabulary this ROW's gate actually
+ * credits.
+ *
+ * ADAAAA-8941 landed a bar that refuses the ball-PROGRESS family (`drives
+ * forward`, `completes a pass`, `move the ball toward …`) on a row that measured
+ * no ball outcome, because a carry has no bounded result to anchor it. A menu that
+ * still offers those verbs is the ADAAAA-8971 defect one level up: a prompt asking
+ * for a fact the gate then deletes. On the rev-17 leg `1e0d7187` every row is
+ * exactly that shape (`attestationUsed.ballOutcome: null`, `authority: none`), so
+ * the writer must be offered the nine bounded acts only. `=== false` mirrors the
+ * bar: a row with no attestation at all (legacy/VOD) and a row that measured an
+ * outcome keep the full list.
+ */
+export function summaryWriterActVocabulary(evidence: SummaryEvidence): string[] {
+  if (summaryBallActionAttested(evidence) !== false) return [...SUMMARY_WRITER_ACT_VOCABULARY];
+  return SUMMARY_WRITER_ACT_VOCABULARY.filter(
+    (verb) => !/^(?:drives forward|completes a pass)$/.test(verb)
+  );
+}
+
+/**
  * ADAAAA-9121 (writer round 3): the actor-and-act PAIRS this job's served cards
  * already spend, so the prompt can ROTATE the substance instead of only banning a
  * shape.
@@ -2273,7 +2294,7 @@ export function summaryFactMenuDetail(evidence: SummaryEvidence): string[] {
   if (kinds.has("action")) {
     const actors = attestedActorNames(evidence).slice(0, 6);
     out.push(
-      `a bounded act by a named attested actor — named actors you may use: ${actors.length > 0 ? actors.join(", ") : "(none; carry the depth with the clock)"}; acts that count: ${SUMMARY_WRITER_ACT_VOCABULARY.join(", ")}`
+      `a bounded act by a named attested actor — named actors you may use: ${actors.length > 0 ? actors.join(", ") : "(none; carry the depth with the clock)"}; acts that count: ${summaryWriterActVocabulary(evidence).join(", ")}`
     );
   }
   return out;
@@ -3453,13 +3474,6 @@ export interface SummaryRetryDirective {
    *  (with the fact menu above) is what makes the second sample different from the
    *  first — the same reason `droppedClauses` exists for the filler repair. */
   repeatedSentences?: string[];
-  /** ADAAAA-9121 (writer round 3): the refused draft's own FIRST sentence when the
-   *  repeat key fired on the AC8 opening run. An opening repeat is a 4-word run, not
-   *  a whole sentence, so `repeatedSentences` is usually empty on it and the retry
-   *  used to receive only the token — it then re-wrote the same opening (4 of the 5
-   *  dry rows on job `1e0d7187`). The sentence rides here so the second sample can
-   *  rewrite the opening it actually wrote. */
-  repeatedOpening?: string;
 }
 
 /** Everything the summary prompt may show the model. Built from the row's own
@@ -3616,8 +3630,6 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   const retryMenu = (input.retry?.factMenu ?? []).filter((line) => line.trim());
   // ADAAAA-9052: the sentences the repeat key flagged, named in the retry.
   const retryRepeated = (input.retry?.repeatedSentences ?? []).filter((line) => line.trim()).slice(0, 4);
-  // ADAAAA-9121 (writer round 3): the AC8 opening repeat's own first sentence.
-  const retryOpening = (input.retry?.repeatedOpening ?? "").trim();
   // ADAAAA-9121 (writer round 3): the actor-and-act pairs this job's served cards
   // already spend. Handed to the prompt on every attempt (first pass included), so
   // card 2..n rotates its substance pair instead of re-writing card 1's sentence.
@@ -3652,15 +3664,6 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
         ...(retryRepeated.length > 0
           ? [
               `- These sentences REPEAT a sentence a card in this job already carries: ${retryRepeated.map((line) => `"${line.trim()}"`).join(" ")} Do not reuse or paraphrase them, and do not swap only their clock: write a different sentence that carries a different fact from ${retryMenu.length > 0 ? retryMenu.join(", ") : factMenu}. Each replacement sentence must name an attested actor as its SUBJECT and say what that actor did, with the clip offset riding on that act. A frame sentence shape ('The clip carries this sequence at …', 'This scoring sequence occurs at …') is the exact thing being refused here.`,
-            ]
-          : []),
-        // ADAAAA-9121 (writer round 3): an OPENING repeat names the draft's own
-        // first sentence, which is the only thing that tells the second sample
-        // WHICH sentence to re-open. Named verbatim, and the rewrite is bounded to
-        // the opening so the rest of the body keeps its facts.
-        ...(retryOpening
-          ? [
-              `- The previous draft OPENED with the same four words as a card in this job already carries: "${retryOpening.length > 120 ? `${retryOpening.slice(0, 117)}…` : retryOpening}". Rewrite that first sentence so its opening words differ from every served card — keep its fact and change how the sentence opens (lead with the window or the clock instead of the actor, or the other way round) — and keep the rest of the body on the facts above.`,
             ]
           : []),
         `- Do NOT spend a whole sentence on the clip clock: the \`Window:\` label (${typeof input.windowTs === "number" && Number.isFinite(input.windowTs) ? clockLabel(input.windowTs) : "the offset"}) must sit INSIDE a sentence that also carries another fact. A sentence that only says when the clip moment occurs adds no depth and does not count toward the two-fact rule.`,
@@ -3842,7 +3845,12 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
       : []),
     ...(ballActionAttested === false
       ? [
-          "- No ball outcome was measured in this window: do NOT say the ball was shot, headed, struck, fired, saved, blocked, cleared or went wide/in/near, and do not describe the ball entering the net.",
+          // ADAAAA-9121 (writer round 3): ADAAAA-8941 landed the matching BAR (a
+          // carry is not an action fact on a row that measured no outcome), so the
+          // prompt names the carry family instead of letting the writer spend a
+          // sentence on it and watch the gate delete it — the measured shape of all
+          // 7 stored rows of job `1e0d7187`.
+          "- No ball outcome was measured in this window: do NOT say the ball was shot, headed, struck, fired, saved, blocked, cleared or went wide/in/near, and do not describe the ball entering the net. Do NOT describe a CARRY either: no 'drives forward', 'drives the ball forward', 'completes a pass', 'moves the ball toward/into/down/through', 'maintains their offensive movement/position' or 'advances their position'. Those state play this row did not measure, so the gate deletes the sentence — use a bounded act instead (tackles, intercepts, wins the ball back, recovers, dispossesses, counters, passes, crosses, threads a pass).",
           // ADAAAA-8914 (AC14.2): this line used to offer "the reaction, the
           // crowd" as substitute material, and that is exactly what the served VOD
           // bodies then wrote ("The crowd erupts in celebration", "the atmosphere
@@ -3948,12 +3956,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
           "- The previous draft spent sentences on atmosphere, a crowd, a reaction or significance instead of a fact; the gate deleted them. Replace each one with a sentence that carries a fact from the evidence: the score line, the clock or match clock, or a NAMED attested actor's action."
         );
       }
-      // ADAAAA-9121 (writer round 3): the AC8 opening repeat carries its own token
-      // now (`repeat-opening`), because the retry names the flagged sentences on
-      // both keys. The rule below is the same defect at a different bar (AC8 vs
-      // AC14.3), so it fires on either token instead of leaving the opening retry
-      // with no instruction about the copy that repeated.
-      if (violations.includes("repeat-sentence") || violations.includes("repeat-opening")) {
+      if (violations.includes("repeat-sentence")) {
         lines.push(
           "- The previous draft repeated a sentence another card in this job already carries. Write a different sentence with a different fact in it — do not reuse the same sentence shape with only the clock changed."
         );

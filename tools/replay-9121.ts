@@ -60,6 +60,9 @@ const evidenceFor = (row: any): SummaryEvidence =>
 type RowResult = {
   hid: string;
   retry: string | null;
+  /** What the SERVED block `80ac7b3` actually stored for this row (`summaryGate`),
+   *  i.e. the census QA graded — not a replay through a later gate. */
+  servedBlockGate: string;
   storedGate: string;
   storedWords: number;
   storedServed: boolean;
@@ -108,6 +111,7 @@ for (const row of bundle.rows) {
   storedRows.push({
     hid: hid(row),
     retry: row.summaryRetryReason ?? null,
+    servedBlockGate: String(row.summaryGate ?? "-"),
     storedGate: !storedDecision.summary
       ? `refused:${storedDecision.violations.join(",")} ${storedDecision.words}w`
       : storedServed
@@ -135,14 +139,19 @@ const census = {
   job: bundle.job.id,
   band,
   rows: storedRows,
-  stored: {
+  servedBlock: {
+    served: bundle.rows.filter((row) => row.summaryGate && !String(row.summaryGate).startsWith("dropped")).map(hid),
+    total: bundle.rows.length,
+    repeatRetryServed: repeatRetry.filter((row) => row.servedBlockGate && !row.servedBlockGate.startsWith("dropped")).length,
+    droppedRepeat: bundle.rows.filter((row) => row.summaryGate === "dropped:repeat").length,
+  },
+  gateReplay: {
     served: storedRows.filter((row) => row.storedServed).map((row) => row.hid),
     servedCount: storedRows.filter((row) => row.storedServed).length,
     total: storedRows.length,
     repeatRetryRows: repeatRetry.map((row) => row.hid),
     repeatRetryServed: repeatRetry.filter((row) => row.storedServed).length,
     worstPair: Number(worstStored.toFixed(3)),
-    droppedRepeat: bundle.rows.filter((row) => row.summaryGate === "dropped:repeat").length,
   },
   projection: {
     served: storedRows.filter((row) => row.projectionServed).map((row) => row.hid),
@@ -162,13 +171,14 @@ const census = {
 };
 
 console.log(`band(live) ${band.minSentences}-${band.maxSentences} sentences, floor ${band.floorWords}, target ${band.targetMinWords}-${band.targetMaxWords}`);
-console.log(`\nrow       retry           STORED                          PROJECTION                      worst   pairs`);
+console.log(`\nrow       retry           SERVED BLOCK (80ac7b3)          current-gate replay             PROJECTION (rotation)           worst   pairs`);
 for (const row of storedRows) {
   console.log(
-    `${row.hid}  ${String(row.retry ?? "-").padEnd(15)} ${row.storedGate.padEnd(31)} ${row.projectionGate.padEnd(31)} ${String(row.worstAgainstServed).padEnd(7)} ${row.spentPairs.join(" | ")}`
+    `${row.hid}  ${String(row.retry ?? "-").padEnd(15)} ${row.servedBlockGate.padEnd(31)} ${row.storedGate.padEnd(31)} ${row.projectionGate.padEnd(31)} ${String(row.worstAgainstServed).padEnd(7)} ${row.spentPairs.join(" | ")}`
   );
 }
-console.log(`\nSTORED:     ${census.stored.servedCount}/${census.stored.total} served (repeat-retry ${census.stored.repeatRetryServed}/${repeatRetry.length}), worst pair ${census.stored.worstPair}, dropped:repeat ${census.stored.droppedRepeat}`);
+console.log(`\nSERVED BLOCK: ${census.servedBlock.served.length}/${census.servedBlock.total} served (repeat-retry ${census.servedBlock.repeatRetryServed}/${repeatRetry.length}), dropped:repeat ${census.servedBlock.droppedRepeat} — QA's census on 80ac7b3`);
+console.log(`GATE REPLAY:  ${census.gateReplay.served.length}/${census.gateReplay.total} of the same drafts serve through the CURRENT gate (ADAAAA-8941's ball-progress bar refuses the carry clauses these drafts are built on), worst pair ${census.gateReplay.worstPair}`);
 console.log(`PROJECTION: ${census.projection.servedCount}/${census.projection.total} served (repeat-retry ${census.projection.repeatRetryServed}/${repeatRetry.length}), worst pair ${census.projection.worstPair}, words ${census.projection.words.join("/")} (floor ${band.floorWords})`);
 console.log(`PROMPT:     spent-pair line on ${census.prompt.cardsWithSpentPairs.length}/${storedRows.length} cards (${census.prompt.cardsWithSpentPairs.join(",")}), banned substance shapes on ${census.prompt.cardsWithBannedShapes}/${storedRows.length}, ${census.prompt.uniqueSpentPairs} unique pairs spent`);
 console.log(`CALLS:      ${census.summaryCalls}`);

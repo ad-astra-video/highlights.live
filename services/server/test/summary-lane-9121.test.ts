@@ -130,8 +130,8 @@ describe("ADAAAA-9121 — the lane rotates the job's spent actor-and-act pairs",
   });
 });
 
-describe("ADAAAA-9121 — the AC8 opening retry names the sentence it repeated", () => {
-  it("hands the retry the flagged sentence, the fact menu and its own violation token", async () => {
+describe("ADAAAA-9121 — a repeat refusal spends no pairs and buys no second call", () => {
+  it("repairs on the row's own call and leaves the rotation state untouched", async () => {
     const { store, patches } = stubStore();
     const state = newSummaryJobState();
     const evidence = liveEvidence();
@@ -146,7 +146,8 @@ describe("ADAAAA-9121 — the AC8 opening retry names the sentence it repeated",
       body: ROW_A,
       opening: summaryOpeningRun(ROW_A),
     });
-    const repeated = "Real Madrid wins the ball back at 11:31 of the match and sets the move going early. Barcelona dispossesses and counters toward the other end of the pitch.";
+    const repeated =
+      "Real Madrid wins the ball back at 11:31 of the match and sets the move going early. Barcelona dispossesses and counters toward the other end of the pitch.";
     const f = stubFetch([repeated, ROW_B]);
     const result = await runSummaryForRow(
       store,
@@ -155,17 +156,13 @@ describe("ADAAAA-9121 — the AC8 opening retry names the sentence it repeated",
       state
     );
 
-    expect(result.calls).toBe(2);
+    // ADAAAA-9120 (AC5): the repeat refusal is deterministic, so it ends on ONE
+    // call — the rotation lever must not reintroduce a second sample.
+    expect(result.calls).toBe(1);
+    expect(f.prompts).toHaveLength(1);
     expect(patches.at(-1)?.patch.summaryRetryReason).toBe("repeat-opening");
-    // The retry names the offending sentence verbatim and says what to avoid.
-    const retry = f.prompts[1];
-    expect(retry).toContain("RETRY:");
-    expect(retry).toContain("repeat-opening");
-    // An opening repeat is a 4-word run, not a sentence at the AC14.3 bar, so the
-    // directive carries the draft's own first sentence and the prompt names it.
-    expect(retry).toContain("The previous draft OPENED with the same four words as a card in this job already carries");
-    expect(retry).toContain('"Real Madrid wins the ball back at 11:31 of the match and sets the move going early."');
-    expect(retry).toContain("The previous draft repeated a sentence another card in this job already carries");
-    expect(retry).toContain("the clock or spell");
+    // Nothing served, so nothing was spent: card 2 of this job still sees an empty
+    // rotation list and is free to use any pair.
+    expect(state.servedActs).toEqual([]);
   });
 });

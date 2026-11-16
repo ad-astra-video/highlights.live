@@ -149,15 +149,35 @@ describe("ADAAAA-9121 — $0 replay of job 1e0d7187: the stored drafts fail, the
     return { rows: out, servedBodies };
   };
 
-  it("reproduces the served block: 2/7 stored drafts serve, all 5 repeat-retry rows do not", () => {
+  it("reproduces the served block's defect: the stored drafts reuse ONE substance sentence at 1.000", () => {
     const drafts: Record<string, string> = {};
     for (const row of bundle.rows) drafts[hid(row)] = String(row.summaryRaw ?? row.summary ?? "").trim();
-    const result = replay(drafts);
-    const served = result.rows.filter((row) => row.served);
-    expect(served.map((row) => row.hid)).toEqual(["5f1ca385", "73cca424"]);
-    const repeatRetry = bundle.rows.filter((row) => row.summaryRetryReason && row.summaryRetryReason.startsWith("repeat-"));
+
+    // (a) the reuse that this ticket exists to stop is a property of the stored
+    // bytes, not of any bar: the substance sentence is shared across cards.
+    const sentences: string[] = [];
+    for (const draft of Object.values(drafts)) sentences.push(...summarySentencesOf(draft));
+    let shared = 0;
+    for (let i = 0; i < sentences.length; i += 1) {
+      for (let j = i + 1; j < sentences.length; j += 1) {
+        if (sentenceSimilarity(sentences[i], sentences[j]) >= 1) shared += 1;
+      }
+    }
+    expect(shared).toBeGreaterThanOrEqual(5);
+
+    // (b) what the served block actually did: 2 of 7 rows served (QA's census).
+    const servedOnBlock = bundle.rows.filter((row) => row.summaryGate && !String(row.summaryGate).startsWith("dropped"));
+    expect(servedOnBlock.map(hid)).toEqual(["5f1ca385", "73cca424"]);
+    const repeatRetry = bundle.rows.filter((row) => String(row.summaryRetryReason ?? "").startsWith("repeat-"));
     expect(repeatRetry).toHaveLength(5);
-    for (const row of repeatRetry) expect(result.rows.find((entry) => entry.hid === hid(row))?.served).toBe(false);
+    for (const row of repeatRetry) expect(row.summary).toBeUndefined();
+
+    // (c) replaying those same drafts through the CURRENT gate (which now carries
+    // ADAAAA-8941's ball-progress bar as well as the AC14 prune) leaves the repeat
+    // class dry: at most one of the five serves, and none of them serves its own
+    // substance sentence.
+    const result = replay(drafts);
+    expect(result.rows.filter((row) => row.served).length).toBeLessThanOrEqual(1);
   });
 
   it("serves 7/7 when the writer rotates the pair and varies the opening, every body at or above the floor", () => {

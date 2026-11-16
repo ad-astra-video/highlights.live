@@ -110,7 +110,25 @@ describe("ADAAAA-9047 — the fact menu carries the row's own values", () => {
     const detail = summaryFactMenuDetail(liveRow());
     expect(detail.join("\n")).toContain("the clock — the clip offset 17:40");
     expect(detail.join("\n")).toContain("named actors you may use: Liverpool, Chelsea");
-    for (const verb of SUMMARY_WRITER_ACT_VOCABULARY) expect(detail.join("\n")).toContain(verb);
+    // ADAAAA-9121: the menu is narrowed to what the ROW's gate credits. This row
+    // measured no ball outcome, so ADAAAA-8941's bar refuses the ball-progress
+    // family; offering it would instruct the writer to write a sentence the gate
+    // deletes (the ADAAAA-8971 defect). Every OTHER verb still renders.
+    for (const verb of SUMMARY_WRITER_ACT_VOCABULARY) {
+      if (verb === "drives forward" || verb === "completes a pass") {
+        expect(detail.join("\n")).not.toContain(verb);
+      } else {
+        expect(detail.join("\n")).toContain(verb);
+      }
+    }
+  });
+
+  it("offers the ball-progress verbs again on a row that measured a ball outcome", () => {
+    const detail = summaryFactMenuDetail(
+      liveRow({ attestation: { ballOutcome: "goal", goalCrossed: true, scoreBoardChanged: false } })
+    );
+    expect(detail.join("\n")).toContain("drives forward");
+    expect(detail.join("\n")).toContain("completes a pass");
   });
 
   it("renders the score line only when the row attests a measured transition", () => {
