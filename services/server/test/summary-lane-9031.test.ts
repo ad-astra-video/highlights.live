@@ -193,7 +193,7 @@ describe("ADAAAA-9031 (AC5 / §13.2) — a second call only on a permitted path"
     expect(patch.summary).toBeUndefined();
   });
 
-  it("records `repeat-opening` when the AC8 path regenerates", async () => {
+  it("records `repeat-opening` on the one-call AC8 repair", async () => {
     const evidence = goalEvidence();
     const { store, patches } = stubStore();
     const f = stubFetch(TEMPLATE_BODY.replace("moves the scoreboard from", "moves the scoreboard from"));
@@ -203,14 +203,17 @@ describe("ADAAAA-9031 (AC5 / §13.2) — a second call only on a permitted path"
       { jobId: "job-9031", highlightId: "row-opening", evidence },
       stateWith(TEMPLATE_BODY)
     );
-    expect(f.calls()).toBe(2);
+    expect(f.calls()).toBe(1);
     expect(result.outcome).toBe("dropped");
     const patch = patches.at(-1)!.patch;
+    // ADAAAA-9120: the reason is still recorded beside a ONE-call row, so a census
+    // reads `summaryCalls` to tell a repair from a billed retry.
+    expect(patch.summaryCalls).toBe(1);
     expect(patch.summaryRetryReason).toBe("repeat-opening");
   });
 });
 
-describe("ADAAAA-9031 (AC14.3) — regenerate once, then drop the repeated CLAUSE", () => {
+describe("ADAAAA-9031 (AC14.3) — drop the repeated CLAUSE on the row's one call", () => {
   it("serves the pruned body instead of dropping the row", async () => {
     const evidence = goalEvidence();
     const served = "The clip carries this sequence at 0:24 into the clip. Real Madrid moves the scoreboard from 1-1 to 2-1.";
@@ -229,10 +232,12 @@ describe("ADAAAA-9031 (AC14.3) — regenerate once, then drop the repeated CLAUS
       state
     );
 
-    expect(f.calls()).toBe(2);
+    // ADAAAA-9120 (AC5 envelope): the clause drop is deterministic, so it runs on
+    // the row's own call — one call, and the reason is recorded beside it.
+    expect(f.calls()).toBe(1);
     expect(result.outcome).toBe("stored");
     const patch = patches.at(-1)!.patch;
-    expect(patch.summaryCalls).toBe(2);
+    expect(patch.summaryCalls).toBe(1);
     expect(patch.summaryRetryReason).toBe("repeat-sentence");
     expect(String(patch.summary)).not.toContain("The clip carries this sequence");
     expect((patch.summaryDroppedSentences as number) ?? 0).toBeGreaterThanOrEqual(1);

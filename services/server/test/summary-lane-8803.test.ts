@@ -140,7 +140,7 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     expect(f.bodies[1]).toContain("aim for 45-55 words");
   });
 
-  it("leaves the AC8 repeat-opening retry without a depth directive", async () => {
+  it("leaves the AC8 repeat-opening row on one call without a depth directive", async () => {
     const { store } = stubStore();
     const state = newSummaryJobState();
     // The job already served this body's opening run ON THE SAME WINDOW, so the
@@ -162,19 +162,20 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
       { jobId: "4e5ddf8d", highlightId: "other", evidence: EVIDENCE },
       state
     );
-    // ADAAAA-8969: one instant is one card, so the regeneration cannot save this
-    // row and the retry ends in the `repeat` drop — the assertion under test is
-    // that the repeat retry carries no depth directive.
+    // ADAAAA-8969: one instant is one card. ADAAAA-9120: the repeat refusal is
+    // deterministic, so the row ends on its FIRST call — the assertion under test
+    // is that the AC8 path buys no depth retry.
     expect(result.outcome).toBe("dropped");
     // ADAAAA-9085: the opening repeat now reaches the clause drop, and the drop is
     // named by the repair's own refusal (`gate`: the pruned remainder could not relay
     // the facts) instead of the pre-prune `repeat`.
     expect(result.reason).toBe("gate");
-    expect(result.calls).toBe(2);
-    expect(f.bodies[1]).toContain("Do not open with any of these already-served runs");
-    // The repeat retry names the repeated sentence, and carries no DEPTH directive
-    // (nothing measured a shortfall on this row).
-    expect(f.bodies[1]).toContain("repeated a sentence another card in this job already carries");
-    expect(f.bodies[1]).not.toContain("fell under the depth floor");
+    expect(result.calls).toBe(1);
+    // The one prompt this row buys carries the prompt-first avoid line...
+    expect(f.bodies).toHaveLength(1);
+    expect(f.bodies[0]).toContain("Do not open with any of these already-served runs");
+    // ...and no RETRY directive at all (nothing measured a shortfall on this row).
+    expect(f.bodies[0]).not.toContain("fell under the depth floor");
+    expect(f.bodies[0]).not.toContain("repeated a sentence another card in this job already carries");
   });
 });
