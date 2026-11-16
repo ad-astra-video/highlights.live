@@ -59,6 +59,12 @@ interface StoredRow {
   } | null;
   storedSummaryGate: string | null;
   storedWords: number;
+  /** ADAAAA-8941 (rev-17 reading): a body this ticket pinned as a REFUSAL. The
+   *  corpus row is a served copy of a play claim the row's own evidence measured
+   *  nothing of, so the gate must not serve it — the `$0` bite pass-bar item 4
+   *  asks for on a live-rail filler body. */
+  mustRefuse?: boolean;
+  mustRefuseReason?: string;
 }
 
 interface StoredDump {
@@ -158,6 +164,19 @@ for (const { row, decision } of servedBodies) {
       `AC14.1/AC14.2 ${row.id}: served body carries ${JSON.stringify(bad.map((b) => b.claims))} / unattested sentences=${bad.length}`
     );
   }
+  // AC14.1's clause half, on EVERY served body (not only a stored-`accepted` one).
+  // The rev-17 reading is why: live job `1e0d7187` served two `neutralised`
+  // bodies whose whole substance was a play claim the row measured nothing of
+  // ("drives forward … to maintain their offensive position", "completes a pass
+  // to maintain their offensive movement") and the sentence lens above read them
+  // as fact-bearing (each carried the row's clock). The stored-verdict lens below
+  // cannot see them either — `neutralised` is not `accepted`.
+  const tactical = unattestedAtmosphereClaims(decision.summary as string, evidence);
+  if (tactical.length > 0) {
+    failures.push(
+      `AC14.1 ${row.id}: served body carries an unattested play/atmosphere clause ${JSON.stringify(tactical)}`
+    );
+  }
 }
 
 // --- AC14.4: every served body's clock is the row's own token ------------------
@@ -170,6 +189,22 @@ for (const { row, decision } of servedBodies) {
       `AC14.4 ${row.id}: served clock tokens=${JSON.stringify(clock.tokens)} != matchClock.token=${JSON.stringify(
         clock.matchClockToken
       )}`
+    );
+  }
+}
+
+// --- Pass-bar item 4: a corpus row pinned `mustRefuse` must NOT serve ----------
+// The rev-17 reading (live job `1e0d7187`, served tree `80ac7b3`) served two
+// `neutralised` bodies whose whole substance was a play claim the row measured
+// nothing of. They are pinned here as refusals so the pre-fix code (which served
+// both) fails this gate, and any future vocabulary regression that lets the same
+// shape back onto the card fails it again. `$0`, no model call.
+for (const row of dump.rows) {
+  if (!row.mustRefuse) continue;
+  const decision = gateSummaryDetail(row.body as string, evidenceOf(row));
+  if (decision.summary !== null) {
+    failures.push(
+      `AC14.1 ${row.id}: pinned mustRefuse but the gate SERVES it (${JSON.stringify(decision.gate)}) — ${row.mustRefuseReason ?? ""}`
     );
   }
 }

@@ -1,0 +1,580 @@
+{
+ "jobId": "1e0d7187-d573-4f7a-8271-4540890d3a7e",
+ "source": "file-sim",
+ "matchContext": {
+  "sport": "soccer",
+  "teams": [
+   {
+    "name": "Real Madrid",
+    "side": "home",
+    "evidence": [
+     {
+      "source": "scorebug_ocr",
+      "snippet": "PABLO IAGO ALVAREZ 7\"LAMINE YAMAL NASROUI'SREAL MADRID1-1FC BARCELONAFCBArt Soccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "AszendeASzendeAszendeszende AszendegolGOLGOLDCARPATRICKASGOLDCARPROMO ROCA WINESPABLO IAGO ALVAREZ 7LAMINE YAMAL NASRAQUI 5'REAL MADRID1-1FC BARCELONAArt Soccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "lePABLO IAGO ALVAREZ 7LAMINE YAMAL NASRAQUI'SREAL MADRID1-1FC BARCELONAArt Soccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "AszendeAszendePATRICKASGOLDCARPABLO IAGO ALVAREZ 7LAMINE YAMAL NASRAQUI'SREAL MADRID1-1FC BARCELONAsoccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID1-1FC BARCELONAFCBSoccer"
+     },
+     {
+      "source": "asr",
+      "snippet": "Y el ver Jordana, y el ver que intenta superar a Paolo de Almeida,  se la lleva al real."
+     }
+    ],
+    "kitColors": [],
+    "confidence": 0.85
+   },
+   {
+    "name": "Barcelona",
+    "side": "away",
+    "evidence": [
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:18 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:19 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:23 RMA 2-2 BAR4DAVID SAEZGOLES 1ArtSoccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:24 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:30 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:31 RMA-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:33 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:34 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:35 |RMA-2-BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "22:39 |RM2:2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:14 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:15 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:16 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "Aszende23:23 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "23:24 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "23:25 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:31 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:33 RMA 2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:34 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:35 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:36 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:37 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "24:39 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:20 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:21 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:22 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:23 RMA-2-BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:24 RMA 2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:25 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:30 |RMA 2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:38 IRMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:40 IRMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:41 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:42 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:43 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:53 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:55 |RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "25:57 |RM2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:00 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.02 RMA 2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.12 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:13 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.14 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26.15 RMA2.2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:16 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:19 RMA2-2 BAR"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "26:20 RMA2-2 BAR"
+     },
+     {
+      "source": "asr",
+      "snippet": "Y es, bal\u00f3n para el bar\u00e7a."
+     }
+    ],
+    "kitColors": [],
+    "confidence": 0.85
+   }
+  ],
+  "trail": [
+   {
+    "at": "2026-11-16T02:42:05.013142Z",
+    "names": [
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "no change"
+    ],
+    "progressPct": 0
+   },
+   {
+    "at": "2026-11-16T02:43:07.260298Z",
+    "names": [
+     {
+      "name": "Portugal",
+      "side": "home",
+      "confidence": 0.35
+     },
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "no change"
+    ],
+    "progressPct": 25
+   },
+   {
+    "at": "2026-11-16T02:44:04.609447Z",
+    "names": [
+     {
+      "name": "Real Madrid",
+      "side": "home",
+      "confidence": 0.85
+     },
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "confidence": 0.5
+     }
+    ],
+    "action": [
+     "flipped Portugal -> Real Madrid at home"
+    ],
+    "progressPct": 50
+   },
+   {
+    "at": "2026-11-16T02:46:06.180637Z",
+    "names": [
+     {
+      "name": "Real Madrid",
+      "side": "home",
+      "confidence": 0.85
+     },
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "confidence": 0.85
+     }
+    ],
+    "action": [
+     "no change"
+    ],
+    "progressPct": 100
+   }
+  ],
+  "ambiguous": false,
+  "inferredAt": "2026-11-16T02:46:06.180670Z",
+  "resolverVersion": 1
+ },
+ "servedPin": {
+  "tree": "80ac7b3",
+  "image": "sha256:2638a55c851f8689f91932b61b0e836726709b715d4d376cdfd59b3047c83027",
+  "startedAt": "2026-11-15T22:54:10.637059026Z"
+ },
+ "rows": [
+  {
+   "id": "5f1ca385-5b48-454d-bbe5-18db0bc32183",
+   "rail": "live",
+   "body": "Barcelona drives forward at 11:31 of the match to maintain their offensive position. The team continues to move the ball toward the opposing side of the pitch at 11:31 of the match.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-1.3s, confirmed by ASR and crowd surge. | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=9 preSamples=9 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 0:12",
+   "postTitleGate": "label:empty",
+   "windowTs": 12,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 691,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "11:31",
+    "ts": 10.666666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "neutralised",
+   "storedWords": 32,
+   "servedSummary": "Barcelona drives forward at 11:31 of the match to maintain their offensive position. The team continues to move the ball toward the opposing side of the pitch at 11:31 of the match.",
+   "summaryDropped": 0,
+   "summaryRetryReason": "filler-repair",
+   "summaryCalls": 2,
+   "attestationRefusal": "no_measured_authority",
+   "mustRefuse": true,
+   "mustRefuseReason": "served filler: play claim (drives forward / move the ball / completes a pass / offensive position) on a row whose attestation recorded no ball outcome"
+  },
+  {
+   "id": "b018185a-0d59-4db8-bc52-58e1e1f49e7e",
+   "rail": "live",
+   "body": null,
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "ASR confirms goal at t=-2.0s and scoreboard changes to RMA 2-1 | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=14 preSamples=13 postSamples=1 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 1:40",
+   "postTitleGate": "label:empty",
+   "windowTs": 100.66666666666666,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1091,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:11",
+    "ts": 100.66666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 0,
+   "servedSummary": null,
+   "summaryDropped": 1,
+   "summaryRetryReason": "repeat-opening",
+   "summaryCalls": 2,
+   "attestationRefusal": "no_measured_authority"
+  },
+  {
+   "id": "75b1b2f5-fc5b-4663-bf7e-7eeea575e45c",
+   "rail": "live",
+   "body": null,
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "Ball enters net at t=-1.3s; scoreboard changes to 2-2 at t=-1.3s | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=13 preSamples=12 postSamples=1 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 2:38",
+   "postTitleGate": "label:empty",
+   "windowTs": 158.66666666666666,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1333,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "22:13",
+    "ts": 158.66666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 0,
+   "servedSummary": null,
+   "summaryDropped": 1,
+   "summaryRetryReason": "repeat-sentence",
+   "summaryCalls": 2,
+   "attestationRefusal": "score_lane_read_no_transition"
+  },
+  {
+   "id": "73cca424-c567-47cb-b146-422e71849400",
+   "rail": "live",
+   "body": "Real Madrid drives forward at 23:16 of the match to advance their position. Barcelona completes a pass to maintain their offensive movement during the sequence.",
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=-0.3s, confirmed by the keeper's position and crowd reaction. | provisional goal: asr_goal_call + frame_celebration in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=12 preSamples=12 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 3:07",
+   "postTitleGate": "label:empty",
+   "windowTs": 187,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1396,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "23:16",
+    "ts": 184.66666666666666
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "neutralised",
+   "storedWords": 25,
+   "servedSummary": "Real Madrid drives forward at 23:16 of the match to advance their position. Barcelona completes a pass to maintain their offensive movement during the sequence.",
+   "summaryDropped": 0,
+   "summaryRetryReason": null,
+   "summaryCalls": 1,
+   "attestationRefusal": "no_measured_authority",
+   "mustRefuse": true,
+   "mustRefuseReason": "served filler: play claim (drives forward / move the ball / completes a pass / offensive position) on a row whose attestation recorded no ball outcome"
+  },
+  {
+   "id": "4327056d-56a5-4ca6-9f51-0f3706a30d0c",
+   "rail": "live",
+   "body": null,
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "ASR confirms goal at t=-2.0s and scoreboard changes to 2-1 at t=0.0s; scoreboard score change confirmed | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: the window's measured score transition 1-1>2-1 at 400.667s lands below the score state this run already read (2-2) \u2014 a rewind cannot attest a new GOAL (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=15 preSamples=13 postSamples=2 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 6:40",
+   "postTitleGate": "label:empty",
+   "windowTs": 400.66666666666663,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1091,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "18:11",
+    "ts": 400.66666666666663
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 0,
+   "servedSummary": null,
+   "summaryDropped": 1,
+   "summaryRetryReason": "repeat-opening",
+   "summaryCalls": 2,
+   "attestationRefusal": "no_measured_authority"
+  },
+  {
+   "id": "3e000c94-01ce-46ad-9ae2-a298423c3cf3",
+   "rail": "live",
+   "body": null,
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The scoreboard changes to 2-2 at t=-6.3s and the ball enters the net.; scoreboard score change confirmed | live scoring lane: the window's measured score transition 2-1>2-2 at 458.667s lands below the score state this run already read (4-2) \u2014 a rewind cannot attest a new GOAL (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=14 preSamples=9 postSamples=5 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 7:38",
+   "postTitleGate": "label:empty",
+   "windowTs": 458.66666666666663,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1333,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "22:13",
+    "ts": 458.66666666666663
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 0,
+   "servedSummary": null,
+   "summaryDropped": 1,
+   "summaryRetryReason": "repeat-opening",
+   "summaryCalls": 2,
+   "attestationRefusal": "no_measured_authority"
+  },
+  {
+   "id": "13367ffd-bd78-4d06-9406-a208c9fc6a3d",
+   "rail": "live",
+   "body": null,
+   "raw": null,
+   "reason": null,
+   "reasonRaw": "The ball enters the net at t=0.0s, confirmed by the net rippling. | provisional goal: asr_goal_call in the judged window, no measured scoreboard change yet \u2014 the row is a celebration until a later score read measures the transition (then it becomes the confirmed GOAL). | live scoring lane: no scoreboard change was measured and no goal-line / net signal or corroborated confirm landed (scoreBoardChanged=false goalCrossed=false ballOutcome=none corroborated=false goalConfirmed=none scoreReads=13 preSamples=13 postSamples=0 need=2); audio/motion reaction is corroborating evidence only and cannot attest a score \u2014 delivered as a celebration, not a GOAL",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 8:07",
+   "postTitleGate": "label:empty",
+   "windowTs": 487,
+   "windowDurationS": 15,
+   "scoreTransition": null,
+   "matchClock": {
+    "seconds": 1396,
+    "shape": "mm:ss",
+    "period": null,
+    "legible": true,
+    "token": "23:16",
+    "ts": 485
+   },
+   "verdict": "big_play",
+   "eventType": "BIG_PLAY",
+   "attestation": {
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "scoreBoardChanged": false
+   },
+   "storedSummaryGate": "dropped:gate",
+   "storedWords": 0,
+   "servedSummary": null,
+   "summaryDropped": 1,
+   "summaryRetryReason": "repeat-opening",
+   "summaryCalls": 2,
+   "attestationRefusal": "no_measured_authority"
+  }
+ ]
+}

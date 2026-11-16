@@ -115,7 +115,9 @@ describe("ADAAAA-9052 — a pruned row is repaired back to the floor and served"
     );
 
     expect(result.outcome).toBe("stored");
-    expect(result.calls).toBe(2);
+    // ADAAAA-9120 (AC5 envelope): the clause drop and its substitution run on the
+    // FIRST call, so a repaired repeat row bills one call.
+    expect(result.calls).toBe(1);
     const patch = patches.at(-1)!.patch;
     expect(patch.summaryGate).toBe(gated.gate);
     expect(patch.summaryDropped).toBe(0);
@@ -144,19 +146,17 @@ describe("ADAAAA-9052 — a pruned row is repaired back to the floor and served"
     expect(pair!.similarity).toBeLessThan(0.8);
   });
 
-  it("names the repeated sentence in the regeneration prompt", async () => {
+  it("repairs the repeated sentence on ONE call instead of re-prompting", async () => {
+    // ADAAAA-9120 (AC5 envelope): the repeat refusal is deterministic, so the lane
+    // drops the repeated clause on the row's own call. The job's served sentence is
+    // still named to the writer on the FIRST prompt (prompt-first, the same job-level
+    // avoid list), but no second sample is bought to re-read it.
     const evidence = goalEvidence();
     const { store } = stubStore();
     const f = stubFetch(DRAFT_9052);
     await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), { jobId: "job-9052", highlightId: "row-1", evidence }, stateWith(SERVED_9052));
-    expect(f.prompts).toHaveLength(2);
-    // ADAAAA-9121: the first pass carries no repeat directive at all — the ban
-    // on a shared SHAPE is a rule, not a report about this row's draft — so the
-    // assertion names the retry's own line instead of the substring "already
-    // carries", which now also appears in the shape ban.
+    expect(f.prompts).toHaveLength(1);
     expect(f.prompts[0]).not.toContain("REPEAT a sentence a card in this job already carries");
-    expect(f.prompts[1]).toContain("REPEAT a sentence a card in this job already carries");
-    expect(f.prompts[1]).toContain(REPEATED_9052);
   });
 });
 
@@ -197,7 +197,7 @@ describe("ADAAAA-9052 — a row with no other attested fact still drops `repeat`
     // what the repair measured (`filler`: a remainder under the band floor) and carries
     // the repair's own post-prune numbers, instead of the pre-prune `repeat`.
     expect(result.reason).toBe("filler");
-    expect(result.calls).toBe(2);
+    expect(result.calls).toBe(1);
     const patch = patches.at(-1)!.patch;
     expect(String(patch.summaryGate)).toBe("dropped:filler");
     expect(patch.summary).toBeUndefined();

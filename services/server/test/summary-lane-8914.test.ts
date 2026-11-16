@@ -188,7 +188,7 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
     expect(second.prompts[0]).toContain("The scoreboard moves to 2-1 at the 18:13 mark of the match.");
   });
 
-  it("regenerates once with the repeat named, then repairs the pruned body instead of dropping it", async () => {
+  it("repairs the pruned body on ONE call instead of dropping it", async () => {
     const state = newSummaryJobState();
     // The previous card served this (factual) sentence; the next row's reply
     // reuses it, which is the AC14.3 defect one level below the template.
@@ -226,10 +226,10 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
     // the ROW. The repair re-grows it with a different attested fact, so the row
     // serves — and the repeated sentence still never joins the job's served set.
     expect(result.outcome).toBe("stored");
-    expect(result.calls).toBe(2); // one regeneration, never a third call
-    expect(f.prompts[1]).toContain("The previous draft repeated a sentence another card in this job already carries.");
-    expect(f.prompts[1]).toContain("REPEAT a sentence a card in this job already carries");
-    expect(f.prompts[1]).toContain(servedSentence);
+    // ADAAAA-9120 (AC5 envelope): the repeat refusal is deterministic, so the clause
+    // drop and its substitution run on the row's own call — one call, never two.
+    expect(result.calls).toBe(1);
+    expect(f.prompts).toHaveLength(1);
     const last = patches.at(-1)!.patch as Record<string, unknown>;
     const repaired = String(last.summary);
     expect(last.summaryDropped).toBe(0);

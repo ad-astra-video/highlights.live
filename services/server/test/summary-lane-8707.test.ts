@@ -115,11 +115,11 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
     expect(servedOpening).toBe("the move drives forward");
 
     const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: evidence() }, state);
-    // The regeneration repeats the opening too: the second body is DROPPED.
+    // ADAAAA-9120 (AC5 envelope): the repeat refusal is DETERMINISTIC, so the row
+    // ends on ONE call — no paid regeneration, and the second body is DROPPED.
     expect(second.outcome).toBe("dropped");
     expect(second.reason).toBe("repeat");
-    expect(second.calls).toBe(2);
-    expect(second.calls).toBeLessThanOrEqual(2);
+    expect(second.calls).toBe(1);
     expect(patches[1].id).toBe("h2");
     expect(patches[1].patch.summary).toBeUndefined();
     expect(patches[1].patch.summaryGate).toBe("dropped:repeat");
@@ -129,25 +129,28 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
     expect(openings).toEqual([servedOpening]);
   });
 
-  it("asks the regeneration for a different opening (prompt first, gate as backstop)", async () => {
+  it("asks the FIRST call for a different opening (prompt first, gate as backstop)", async () => {
     const { store } = stubStore();
     const state = newSummaryJobState();
     const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B)]);
     const run = cfg({ fetchImpl: f.fn });
     await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: evidence() }, state);
     await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: evidence() }, state);
-    // Call 1 (h1) has nothing to avoid; call 3 (h2's ONE regeneration) names the
-    // opening already served in this job.
+    // ADAAAA-9120: h2 bills exactly ONE call, and that call carries the job's
+    // already-served runs — the prompt-first ask is the whole defence now that the
+    // paid regeneration is gone for the repeat class.
+    expect(f.seen).toHaveLength(2);
     expect(f.seen[0].prompt).not.toContain("already-served runs");
-    expect(f.seen[2].prompt).toContain("already-served runs");
-    expect(f.seen[2].prompt).toContain("'the move drives forward'");
+    expect(f.seen[1].prompt).toContain("already-served runs");
+    expect(f.seen[1].prompt).toContain("'the move drives forward'");
   });
 
-  it("keeps AC8 on a DIFFERENT instant: a shared opening is regenerated once, then the distinct body serves", async () => {
+  it("keeps AC8 on a DIFFERENT instant: a shared opening is refused on ONE call", async () => {
     // ADAAAA-8941 (integration repair): AC8 is graded on the served COPY within
     // one job, with no instant exception — two cards that open the same way read
-    // the same however far apart their windows are. So the shared opening spends
-    // the one regeneration (the prompt names it) and the distinct body serves.
+    // the same however far apart their windows are. ADAAAA-9120: that refusal is
+    // DETERMINISTIC, so it ends on the row's first call; the paid regeneration the
+    // old envelope spent here is gone (AC5 envelope, one call per row).
     const { store, patches } = stubStore();
     const state = newSummaryJobState();
     const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B), ok(DISTINCT_OPENING)]);
@@ -159,29 +162,29 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
       { jobId: "j1", highlightId: "h2", evidence: evidence({ windowTs: 40, windowDurationS: 8 }) },
       state
     );
-    expect(second.outcome).toBe("stored");
-    expect(second.calls).toBe(2);
-    // The regenerated body is the one that served, not the repeated opening.
-    expect(patches[1].patch.summary).toBe(DISTINCT_OPENING);
-    expect(summaryOpeningRun(String(patches[1].patch.summary))).toBe("a low shot from");
-    // The prompt asked the regeneration not to reuse the served opening.
-    expect(f.seen[2].prompt).toContain("'the move drives forward'");
-    // The job holds both served openings; neither repeats.
-    expect([...state.servedOpenings].sort()).toEqual(["a low shot from", "the move drives forward"]);
+    expect(second.outcome).toBe("dropped");
+    expect(second.calls).toBe(1);
+    // The third answer is never asked for: the row does not buy a second sample.
+    expect(f.seen).toHaveLength(2);
+    expect(f.seen[1].prompt).toContain("'the move drives forward'");
+    // The job holds only the first card's opening: the repeat never joins it.
+    expect([...state.servedOpenings]).toEqual(["the move drives forward"]);
+    expect(patches[1].patch.summary).toBeUndefined();
   });
 
-  it("serves a regeneration that lands on a different opening (same instant)", async () => {
+  it("does not buy a second sample on a same-instant repeat", async () => {
     const { store, patches } = stubStore();
     const state = newSummaryJobState();
     const f = stubFetch([ok(SAME_OPENING_A), ok(SAME_OPENING_B), ok(DISTINCT_OPENING)]);
     const run = cfg({ fetchImpl: f.fn });
     await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h1", evidence: evidence() }, state);
     const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: evidence() }, state);
-    // AC8: the shared opening spends the one regeneration; the distinct body then
-    // serves. The instant plays no part — the bars are on the served copy.
-    expect(second.outcome).toBe("stored");
-    expect(second.calls).toBe(2);
-    expect(patches[1].patch.summary).toBe(DISTINCT_OPENING);
+    // AC8: the instant plays no part — the bar is on the served copy — and the row
+    // bills one call whether the instant matches or not.
+    expect(second.outcome).toBe("dropped");
+    expect(second.calls).toBe(1);
+    expect(f.seen).toHaveLength(2);
+    expect(patches[1].patch.summary).toBeUndefined();
   });
 
   it("is JOB-scoped: a different job may reuse the same opening", async () => {
@@ -224,10 +227,11 @@ describe("AC8 — a repeat drop never blanks the card", () => {
     for (const served of ["postTitle", "caption", "verdict", "status", "clipUri"]) {
       expect(drop).not.toHaveProperty(served);
     }
-    // AC8's `not_captured` close: the regenerated/refused body is replayable at
+    // AC8's `not_captured` close: the refused body is replayable at
     // $0 by QA, the same way ADAAAA-8687 stores a gate refusal.
     expect(drop.summaryRaw).toBe(SAME_OPENING_B);
-    expect(drop.summaryCalls).toBe(2);
+    // ADAAAA-9120: one call per row by construction, even on the repeat drop.
+    expect(drop.summaryCalls).toBe(1);
     expect(drop.summaryDropped).toBe(1);
   });
 });
@@ -251,13 +255,14 @@ describe("AC8 — the repeat reason is readable on the row AND the job", () => {
     expect(SUMMARY_LANE_PENDING_RING).toBeGreaterThanOrEqual(2);
 
     const meter = lane.snapshot();
-    expect(meter.summaryCalls).toBe(5);
+    // ADAAAA-9120: three rows, three calls (h2/h3 drop on their first call).
+    expect(meter.summaryCalls).toBe(3);
     expect(meter.summaryDropped).toBe(2);
     expect(meter.summaryDroppedByReason).toEqual({ repeat: 2 });
     // The job record publishes the same rollup, so "this job lost its bodies to
     // repetition" is a read, not a log grep.
     expect(jobSummaryMeterFields(meter)).toMatchObject({
-      summaryCalls: 5,
+      summaryCalls: 3,
       summaryDropped: 2,
       summaryDroppedByReason: { repeat: 2 },
     });

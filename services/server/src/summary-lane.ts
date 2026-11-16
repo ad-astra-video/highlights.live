@@ -54,10 +54,12 @@ import {
   summarySpentActPairs,
 } from "@highlights/events";
 
-/** ADAAAA-9031 (AC5 / spec §13.2): why a row billed a SECOND summary call. The
- *  contract permits one only on the AC8 repeat path, plus the AC14 filler-clause
- *  regeneration. Recording it on the row is what makes the meter auditable: the
- *  rev-10 VOD leg billed 11 second calls and 3 served rows carried no reason. */
+/** ADAAAA-9031 (AC5 / spec §13.2): why a row took a SECOND summary call, or — since
+ *  ADAAAA-9120 — which repair a ONE-call repeat row ran. The contract permits a
+ *  second call only on the AC14 filler-clause regeneration; the AC8 repeat refusal
+ *  is deterministic and now ends on its first call (the clause drop is free).
+ *  Recording it on the row is what makes the meter auditable: the rev-10 VOD leg
+ *  billed 11 second calls and 3 served rows carried no reason. */
 export type SummaryRetryReason =
   | "repeat-opening"
   | "repeat-sentence"
@@ -151,8 +153,9 @@ export interface SummaryServedBody {
  *  bars spec rev 16 grades, neither of which takes an instant exception:
  *
  *  - **AC8**: no two served bodies in one job share a normalized 4-word opening
- *    run. A candidate that repeats a served opening is regenerated once, then
- *    dropped with `summaryDroppedByReason: {repeat: 1}`.
+ *    run. A candidate that repeats a served opening is repaired on its FIRST call
+ *    (the repeated clause is dropped, ADAAAA-9120); a body with no admissible
+ *    clause repair drops with `summaryDroppedByReason: {repeat: 1}`.
  *  - **AC14**: no two served bodies in one job share a normalized sentence at
  *    >= 0.80 similarity (the template detector, `repeatedSentences`).
  *
@@ -381,10 +384,12 @@ export function summaryDropReasonName(
  * never touched — only the six `summary*` fields.
  *
  * AC8 (rev 3): `state` carries the JOB's already-served opening runs. A body
- * whose opening repeats one of them is regenerated ONCE (the retry slot the
- * contract already allows, so the row still bills at most two calls, AC5); a
- * regeneration that repeats too drops with `repeat`, stores the candidate body as
- * `summaryRaw` and leaves the card on its headline.
+ * whose opening repeats one of them, or whose sentence repeats one at >= 0.80, is
+ * a DETERMINISTIC refusal (the served corpus cannot change between two samples),
+ * so ADAAAA-9120 ends it on ONE call: the repeated clause is dropped and the
+ * remainder re-gated, and only a remainder that still fails drops with its own
+ * named reason. The paid regeneration is reserved for the AC14 filler-clause class
+ * (AC5 envelope: `summaryCalls / rows <= 1.5`, one call per row by construction).
  */
 export async function runSummaryForRow(
   store: SummaryLaneStore,
@@ -558,12 +563,14 @@ export async function runSummaryForRow(
     }
     // AC8 + AC14 (ADAAAA-8941 integration repair): ONE repeat key on the
     // contract's job scope. A shared normalized 4-word opening (AC8) or a shared
-    // sentence at >= 0.80 similarity (AC14) is a repeat, regenerate once, then
-    // drop. ADAAAA-8969 increment 2 briefly exempted rows on different windows;
-    // that traded both bars for a coverage number the attested-fact gate refuses
-    // anyway, so it is reverted here. The prompt still asks the writer to avoid
-    // the job's openings and sentences, so the retry usually lands a distinct body
-    // and the drop is the backstop.
+    // sentence at >= 0.80 similarity (AC14) is a repeat: drop the repeated clause
+    // and re-gate the remainder. ADAAAA-8969 increment 2 briefly exempted rows on
+    // different windows; that traded both bars for a coverage number the
+    // attested-fact gate refuses anyway, so it is reverted here. The prompt still
+    // asks the writer to avoid the job's openings and sentences (prompt-first), so
+    // the gate is the backstop. ADAAAA-9120 removed the paid REGENERATION on this
+    // path: the served corpus is fixed, so a second sample is not a repair (see
+    // the block below).
     /** The decision this row serves (the gate's own, or the AC14 clause-dropped
      *  repair of it). */
     let accepted = decision;
@@ -577,45 +584,27 @@ export async function runSummaryForRow(
         `bodySimilarity=${repeat.bodySimilarity.toFixed(3)} windowOverlapS=${repeat.windowOverlapS ?? "n/a"} ` +
         `sameClock=${JSON.stringify(repeat.sameClock)} openingRepeat=${JSON.stringify(repeat.openingRepeat)} ` +
         `closestSentence=${repeat.sentence ? `${repeat.sentence.similarity.toFixed(3)} ${JSON.stringify(repeat.sentence.a.slice(0, 120))}` : "none"}`;
-      if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
-        // ADAAAA-9052: the regeneration is told WHICH sentences repeated (and which
-        // facts the row attests), so the second sample writes a different fact
-        // instead of re-landing the same template one clock token over.
-        // ADAAAA-9121 (writer round 3): the retry carries the flagged sentences on
-        // BOTH repeat keys. A `repeat-opening` body's shared run IS its first
-        // sentence (`summaryRepeatKey` records it in `repeatedSentences`), so the
-        // opening retry used to be told only the token and re-wrote the same
-        // opening — 4 of the 5 dry rows on job `1e0d7187` took exactly that retry.
-        // The violation token is the honest one for the key, so a census can tell
-        // an AC8 retry from an AC14.3 retry.
-        const openingSentence =
-          repeat.key === "opening" ? (summarySentencesOf(decision.summary ?? decision.raw)[0] ?? null) : null;
-        retry = {
-          words: decision.words,
-          sentences: decision.sentences,
-          violations: [repeat.key === "opening" ? "repeat-opening" : "repeat-sentence"],
-          ...(repeat.repeatedSentences.length > 0
-            ? { repeatedSentences: repeat.repeatedSentences, factMenu: summaryFactMenu(evidence) }
-            : {}),
-          // ADAAAA-9121 (writer round 3): an opening repeat usually has NO sentence
-          // at the AC14.3 bar (the shared run is only the first four words), so the
-          // retry was handed the token alone and re-wrote the same opening — 4 of
-          // the 5 dry rows on job `1e0d7187` took that retry. The body's own first
-          // sentence rides the directive so the second sample can rewrite its
-          // opening instead of guessing which sentence collided.
-          ...(openingSentence ? { repeatedOpening: openingSentence } : {}),
-        };
-        retryReason = repeat.key === "opening" ? "repeat-opening" : "repeat-sentence";
-        log(`[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — regenerating once`);
-        continue;
-      }
+      // ADAAAA-9120 (AC5 envelope): the AC8/AC14 repeat refusal is DETERMINISTIC —
+      // the served bodies it is measured against are fixed, so a second sample of
+      // the same prompt is not a repair, it is another bill. The rev-17 served job
+      // `1e0d7187` measured it: 6 of 7 rows billed a second call and every one of
+      // the 5 dropped rows re-landed the repeat (`summaryRepairRefused:
+      // prune:gate`), for row meter 1.857 and job meter 2.143 against AC5's 1.5.
+      // The paid regeneration is therefore gone for this class. The deterministic
+      // clause drop (AC14.3) IS the repair and it runs on THIS call, so a repeat
+      // row bills exactly one summary call whether the pruned remainder serves or
+      // is refused. The reason is still recorded: a census reads `summaryCalls`
+      // beside it, so a one-call repair cannot be mistaken for a 2-call retry.
+      retryReason = retryReason ?? (repeat.key === "opening" ? "repeat-opening" : "repeat-sentence");
+      log(`[summary:${descriptor.jobId}] repeat-body highlight=${descriptor.highlightId} ${inputs} — repairing on one call`);
       // ADAAAA-9031 (AC14.3): "a failing candidate is regenerated once, then the
       // offending CLAUSE is dropped; a body that then falls under its floor is
-      // dropped with the named reason." The lane used to drop the whole body,
-      // which cost the rev-10 VOD leg 4 of 22 promoted rows even where the
-      // surviving sentences carried facts. Drop the repeated sentences and
-      // re-gate the remainder; only a body that still fails (or falls under the
-      // band floor) drops as `repeat`.
+      // dropped with the named reason." On the repeat class ADAAAA-9120 dropped the
+      // paid first step (see above): the clause drop is deterministic, so it runs
+      // immediately. The lane used to drop the whole body, which cost the rev-10 VOD
+      // leg 4 of 22 promoted rows even where the surviving sentences carried facts.
+      // Drop the repeated sentences and re-gate the remainder; only a body that
+      // still fails (or falls under the band floor) drops as `repeat`.
       // ADAAAA-9052: and a remainder the drop took UNDER the floor is now
       // repaired back to the band with a different attested fact instead of the
       // row being discarded — dropping the row was the defect (rev-11 VOD

@@ -109,7 +109,9 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
     // Before, the repair was unreachable for `key === "opening"` and the row kept the
     // pre-prune decision under the name `repeat`.
     expect(second.reason).toBe("gate");
-    expect(second.calls).toBe(2);
+    // ADAAAA-9120 (AC5 envelope): the repeat repair runs on the FIRST call; the row
+    // never buys a second sample.
+    expect(second.calls).toBe(1);
 
     expect(patches[1].id).toBe("8b444000");
     expect(patches[1].patch.summary).toBeUndefined();
@@ -126,23 +128,25 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
     expect([...state.servedOpenings]).toEqual(["northbridge shoot on the"]);
   });
 
-  it("asks the regeneration to avoid the clock-stripped opening", async () => {
+  it("asks the FIRST call to avoid the clock-stripped opening", async () => {
     const { store } = stubStore();
     const f = stubFetch([ok(CLOCK_A), ok(CLOCK_B)]);
     const run = cfg({ fetchImpl: f.fn });
     const state = newSummaryJobState();
     await runSummaryForRow(store, run, { jobId: "9891ff33", highlightId: "h1", evidence: teamContext() }, state);
     await runSummaryForRow(store, run, { jobId: "9891ff33", highlightId: "h2", evidence: teamContext() }, state);
+    // ADAAAA-9120: h2 bills exactly ONE call, and its prompt carries the ask.
+    expect(f.seen).toHaveLength(2);
     expect(f.seen[0].prompt).not.toContain("already-served runs");
-    expect(f.seen[2].prompt).toContain("already-served runs");
-    expect(f.seen[2].prompt).toContain("'northbridge shoot on the'");
+    expect(f.seen[1].prompt).toContain("already-served runs");
+    expect(f.seen[1].prompt).toContain("'northbridge shoot on the'");
   });
 
-  it("regenerates once on a DIFFERENT window, then serves the distinct body (AC8 has no instant exception)", async () => {
+  it("refuses on ONE call on a DIFFERENT window (AC8 has no instant exception)", async () => {
     // ADAAAA-8941 (integration repair): the scoped key briefly served a different
     // window whatever the opening run was. AC8 grades the served copy within one
-    // job, so the repeat spends the one regeneration and the distinct body serves;
-    // the instant is census evidence, not a suppression.
+    // job. ADAAAA-9120: the refusal is deterministic, so the row is repaired (and,
+    // here, refused by the repair) on its FIRST call — no second sample is bought.
     const { store, patches } = stubStore();
     const f = stubFetch([ok(CLOCK_A), ok(CLOCK_B), ok(DISTINCT)]);
     const run = cfg({ fetchImpl: f.fn });
@@ -162,12 +166,12 @@ describe("AC8 rev 4 — two bodies differing only by the leading clock", () => {
       },
       state
     );
-    expect(second.outcome).toBe("stored");
-    expect(second.calls).toBe(2);
-    expect(patches[1].patch.summary).toBe(DISTINCT);
-    expect(summaryOpeningRun(String(patches[1].patch.summary))).toBe("a low drive from");
-    expect(patches[1].patch.summaryGate).toBe("accepted");
-    expect([...state.servedOpenings].sort()).toEqual(["a low drive from", "northbridge shoot on the"]);
+    expect(second.outcome).toBe("dropped");
+    expect(second.calls).toBe(1);
+    // The distinct answer is never asked for.
+    expect(f.seen).toHaveLength(2);
+    expect(patches[1].patch.summary).toBeUndefined();
+    expect([...state.servedOpenings]).toEqual(["northbridge shoot on the"]);
   });
 });
 

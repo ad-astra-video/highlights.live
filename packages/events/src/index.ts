@@ -2524,10 +2524,13 @@ export const HighlightRecordSchema = z.object({
   /** Words that survived the AC14.5 clause repair; beside `summaryFloorWords` it
    *  is the floor check the ticket names. */
   summaryRepairedWords: z.number().int().min(0).optional(),
-  /** ADAAAA-9031 (AC5 / spec §13.2): why this row billed a SECOND summary call —
-   *  `repeat-opening` / `repeat-sentence` (the only AC8 path the contract permits)
-   *  or `filler-repair` (the AC14 regeneration). Absent on a one-call row, so the
-   *  meter can prove every 2-call row was on a permitted path. */
+  /** ADAAAA-9031 (AC5 / spec §13.2): the reason this row took a second summary call,
+   *  or (ADAAAA-9120) the repair a ONE-call repeat row ran — `repeat-opening` /
+   *  `repeat-sentence` on the deterministic AC8 path (no second call billed since
+   *  ADAAAA-9120; read `summaryCalls` beside it) or `filler-repair` on the AC14
+   *  regeneration (the only path that still bills two). Present only on a row that
+   *  took one of those repairs, so the meter can prove every 2-call row was on a
+   *  permitted path. */
   summaryRetryReason: z.enum(["repeat-opening", "repeat-sentence", "filler-repair"]).optional(),
   /** ADAAAA-9085: the AC14 clause repair RAN and its own re-gate refused the row,
    *  named as `prune:<drop name>` (e.g. `prune:filler`, `prune:gate`). Absent when
