@@ -1,0 +1,1285 @@
+{
+ "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+ "source": "file",
+ "sourceUrl": "/data/uploads/54537ffa-b227-4cef-b461-35075d08f5cd/kids-soccer.mp4",
+ "matchContext": {
+  "sport": "soccer",
+  "teams": [
+   {
+    "name": "Real Madrid",
+    "side": "home",
+    "evidence": [
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONA456PENALITIS456Art Soccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONAFCB456PENALITIS456Soccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONACCB45 6PENALITIS45 6Soccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONAFCB45 6PENALITIS45 6ArtSoccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONACB45 6PENALTS45 6HtSoccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONAFCB45 6PENALTS45 6ArtSoccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONAFCB45 6PENALITIS45 6Soccer"
+     },
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONAFCB45 6PENALTIS45 6Art Soccer"
+     },
+     {
+      "source": "asr",
+      "snippet": "Al\u00e9vin el cl\u00e1sico en Bar\u00e7a TV, en esta final\u00edsima que se disputa en el campo principal de Cornelia  con un muy buen ambiente, con mucha fluencia de p\u00fablico y expectaci\u00f3n para ver a"
+     }
+    ],
+    "kitColors": [],
+    "confidence": 0.85
+   },
+   {
+    "name": "Barcelona",
+    "side": "away",
+    "evidence": [
+     {
+      "source": "scorebug_ocr",
+      "snippet": "REAL MADRID 3-4 FC BARCELONA456PENALITIS456Art Soccer"
+     },
+     {
+      "source": "asr",
+      "snippet": "Al\u00e9vin el cl\u00e1sico en Bar\u00e7a TV, en esta final\u00edsima que se disputa en el campo principal de Cornelia  con un muy buen ambiente, con mucha fluencia de p\u00fablico y expectaci\u00f3n para ver a"
+     }
+    ],
+    "kitColors": [],
+    "confidence": 0.85
+   }
+  ],
+  "trail": [
+   {
+    "at": "2026-11-15T14:26:18.500422Z",
+    "names": [],
+    "action": [
+     "no evidence"
+    ],
+    "progressPct": 0
+   },
+   {
+    "at": "2026-11-15T14:31:46.227052Z",
+    "names": [],
+    "action": [
+     "no evidence"
+    ],
+    "progressPct": 25
+   },
+   {
+    "at": "2026-11-15T14:35:55.450438Z",
+    "names": [],
+    "action": [
+     "no evidence"
+    ],
+    "progressPct": 50
+   },
+   {
+    "at": "2026-11-15T14:45:48.623567Z",
+    "names": [
+     {
+      "name": "Real Madrid",
+      "side": "home",
+      "confidence": 0.85
+     },
+     {
+      "name": "Barcelona",
+      "side": "away",
+      "confidence": 0.85
+     }
+    ],
+    "action": [
+     "flipped unknown -> Barcelona at away",
+     "flipped unknown -> Real Madrid at home"
+    ],
+    "progressPct": 90
+   }
+  ],
+  "ambiguous": false,
+  "inferredAt": "2026-11-15T14:45:48.623593Z",
+  "resolverVersion": 1
+ },
+ "fixture": {
+  "url": "/data/uploads/54537ffa-b227-4cef-b461-35075d08f5cd/kids-soccer.mp4",
+  "legs": 1,
+  "rows": 20,
+  "legIds": [
+   "54537ffa-b227-4cef-b461-35075d08f5cd"
+  ],
+  "costUsdByLeg": {
+   "54537ffa-b227-4cef-b461-35075d08f5cd": "1.0136"
+  },
+  "legsWithDifferentMatchContext": 0
+ },
+ "matchContextByLeg": {},
+ "rows": [
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "dc4c869f-5744-44b7-a030-3315631af88e",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=04:37, followed by a clear celebration by the blue-shirted team (Barcelona) and a surge in crowd energy.; confirmation pass: goal confirmed (deep frame dive); The ball clearly enters the net at t=119.0s, followed by a celebration by the Barcelona players. The trajectory shows the ball crossing the goal line into the net.",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 1:57",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 117
+   },
+   "start": 110,
+   "end": 125,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:29:51.394Z",
+    "momentTs": 118.75,
+    "corroborated": true,
+    "diveLatencyMs": 3677,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "Yojo al c\u00f3rrer que va a ejecutar David Saez a primer palo rey  Chaz a la defensa del Real Madrid, Valon para la malgo",
+   "summary": "The ball crosses the goal line into the net at 1:57 into the clip. David Saez completes a pass to set up the scoring opportunity. Yojo is in the passage at 1:57 into the clip. The clip carries this sequence at 1:57 into the clip.",
+   "summaryRaw": null,
+   "summaryGate": "neutralised",
+   "summaryViolations": null,
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:29:55.265Z",
+   "body": "The ball crosses the goal line into the net at 1:57 into the clip. David Saez completes a pass to set up the scoring opportunity. Yojo is in the passage at 1:57 into the clip. The clip carries this sequence at 1:57 into the clip.",
+   "servedSummary": "The ball crosses the goal line into the net at 1:57 into the clip. David Saez completes a pass to set up the scoring opportunity. Yojo is in the passage at 1:57 into the clip. The clip carries this sequence at 1:57 into the clip.",
+   "rawSummary": null,
+   "storedSummaryGate": "neutralised",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "045d3aea-af73-404c-a03b-8801bda073ab",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The scoreboard changes from 0-0 to 0-1 at 04:47, and the frames show a group of players in blue kits (Barcelona) celebrating in a huddle, confirming a goal was scored.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 2:00",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 120,
+    "scoreBoardChanged": true
+   },
+   "start": 113,
+   "end": 128,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "0-0>0-1",
+    "transitionScore": {
+     "pre": [
+      0,
+      0
+     ],
+     "post": [
+      0,
+      1
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:30:07.795Z",
+    "momentTs": 119.708,
+    "corroborated": true,
+    "diveLatencyMs": 4052,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "el c\u00f3rrer que va a ejecutar David Saez a primer palo rey  chaz a la defensa del rey a Madrid, valo para la maldol",
+   "summary": "Madrid finds the back of the net as the scoreboard moves to 0-1. David Saez completes a pass to create the scoring opportunity at 2:00 into the clip. David Saez is in the sequence as the scoreboard moves from 0-0 to 0-1 at 2:00.",
+   "summaryRaw": null,
+   "summaryGate": "neutralised",
+   "summaryViolations": null,
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:30:12.015Z",
+   "body": "Madrid finds the back of the net as the scoreboard moves to 0-1. David Saez completes a pass to create the scoring opportunity at 2:00 into the clip. David Saez is in the sequence as the scoreboard moves from 0-0 to 0-1 at 2:00.",
+   "servedSummary": "Madrid finds the back of the net as the scoreboard moves to 0-1. David Saez completes a pass to create the scoring opportunity at 2:00 into the clip. David Saez is in the sequence as the scoreboard moves from 0-0 to 0-1 at 2:00.",
+   "rawSummary": null,
+   "storedSummaryGate": "neutralised",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "95b6af80-270c-4f18-b29c-a679a4344c2b",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=06:13, confirmed by the scoreboard changing from 0-1 to 1-1 and the ASR commentary 'gol, gol, gol'.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 2:30",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 150,
+    "scoreBoardChanged": true
+   },
+   "start": 143,
+   "end": 158,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "0-1>1-1",
+    "transitionScore": {
+     "pre": [
+      0,
+      1
+     ],
+     "post": [
+      1,
+      1
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:30:46.589Z",
+    "momentTs": 150.917,
+    "corroborated": true,
+    "diveLatencyMs": 3903,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "El disparo se estrella ahora en la barrio en corto con Jordi S\u00e1ucedo, el portero a punto de hacerse un l\u00edo ojo ojo al gol, gol gol gol del Real Madrid,  gol del Real Madrid, el error de Max Bonfield, el portero y marca Pablo Yago para el...",
+   "summary": null,
+   "summaryRaw": "The scoreboard moves to 1-1 as the ball finds the net. Jordi S\u00e1ucedo makes a move during the sequence at 2:30 into the clip. Real Madrid completes the play to change the scoreline.",
+   "summaryGate": "dropped:gate",
+   "summaryViolations": [
+    "too-few-words"
+   ],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:30:50.700Z",
+   "body": "The scoreboard moves to 1-1 as the ball finds the net. Jordi S\u00e1ucedo makes a move during the sequence at 2:30 into the clip. Real Madrid completes the play to change the scoreline.",
+   "servedSummary": null,
+   "rawSummary": "The scoreboard moves to 1-1 as the ball finds the net. Jordi S\u00e1ucedo makes a move during the sequence at 2:30 into the clip. Real Madrid completes the play to change the scoreline.",
+   "storedSummaryGate": "dropped:gate",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "e9b8e239-7b34-4cfc-8992-e1b349571541",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ASR commentary explicitly states 'Acaba de marcar el Real Madrid' at the peak of the audio energy, and the scoreboard updates from 1-1 to 2-1 at 18:06.; confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball crossing the goal line and entering the net (ballInNet=true) following a shot by Manuel Ordo\u00f1ez. This is corroborated by the ASR commentary stating 'Acaba de marcar el Real Madrid'.",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 5:42",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 342
+   },
+   "start": 335,
+   "end": 350,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:35:04.638Z",
+    "momentTs": 341.125,
+    "corroborated": true,
+    "diveLatencyMs": 3952,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "Carlos Javier quien intenta progresar por la banda izquierda sigue Carlos Javier, el centro para  Ordo\u00f1ez el remate gol. Acaba de marcar el Real Madrid, acaba de marcar Manuel Ordo\u00f1ez  Manu en el minuto 19 de partido.",
+   "summary": "Manuel Ordo\u00f1ez finds the back of the net to secure a goal for Real Madrid. Carlos Javier is in the passage at 5:42 into the clip. This scoring sequence occurs at 5:42 into the clip as the ball crosses the line.",
+   "summaryRaw": null,
+   "summaryGate": "neutralised",
+   "summaryViolations": null,
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:35:08.806Z",
+   "body": "Manuel Ordo\u00f1ez finds the back of the net to secure a goal for Real Madrid. Carlos Javier is in the passage at 5:42 into the clip. This scoring sequence occurs at 5:42 into the clip as the ball crosses the line.",
+   "servedSummary": "Manuel Ordo\u00f1ez finds the back of the net to secure a goal for Real Madrid. Carlos Javier is in the passage at 5:42 into the clip. This scoring sequence occurs at 5:42 into the clip as the ball crosses the line.",
+   "rawSummary": null,
+   "storedSummaryGate": "neutralised",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "fbf4b5cf-60bb-44c9-8ad6-59e560c1bf0e",
+   "eventType": "BIG_PLAY",
+   "outcome": "big_play",
+   "reason": "The ball enters the net at t=22:09, confirmed by the ASR 'el gol' and the visual of the ball crossing the line into the net.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); the text claims a score line but no scoreboard read / score_delta record carries it; confirmation pass: goal confirmed (deep frame dive); The ball trajectory clearly shows the ball crossing the goal line and entering the net at t=398.7s, which is visually confirmed by the ball's position in the net in the final frames. | celebration of an already-delivered goal (anchor 342.0s, highlight e9b8e239-7b34-4cfc-8992-e1b349571541): no independent score-transition evidence in this window",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 6:36",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 396
+   },
+   "start": 389,
+   "end": 404,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:36:11.877Z",
+    "momentTs": 398.875,
+    "corroborated": true,
+    "diveLatencyMs": 3776,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "aleador del Real Madrid y el balance para el Bar\u00e7a.  La intenta por banda derecha, la mina y el mal.  La mina y para la bich\u00e1 y la bich\u00e1 y el gol.",
+   "summary": null,
+   "summaryRaw": "Real Madrid maintains possession as the play develops during the sequence. The ball moves toward the right side of the field at 6:36 into the clip. Bar\u00e7a attempts to control the ball while the opposing team looks for an opening.",
+   "summaryGate": "dropped:filler",
+   "summaryViolations": [
+    "too-few-words",
+    "no-new-fact",
+    "too-few-facts",
+    "unattested-sentence"
+   ],
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:36:15.842Z",
+   "body": "Real Madrid maintains possession as the play develops during the sequence. The ball moves toward the right side of the field at 6:36 into the clip. Bar\u00e7a attempts to control the ball while the opposing team looks for an opening.",
+   "servedSummary": null,
+   "rawSummary": "Real Madrid maintains possession as the play develops during the sequence. The ball moves toward the right side of the field at 6:36 into the clip. Bar\u00e7a attempts to control the ball while the opposing team looks for an opening.",
+   "storedSummaryGate": "dropped:filler",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "c076510d-4101-475a-9e8d-567ec23c38fc",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball clearly enters the net at t=24:17, confirmed by the goalkeeper's collapse and the subsequent celebration by the white-shirted team.; confirmation pass: goal confirmed (deep frame dive); The ball clearly enters the net at 24:18, as seen in the first frame of the dense sequence where the ball is inside the net and the goalkeeper is on the ground.",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 7:05",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 423
+   },
+   "start": 418,
+   "end": 433,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:36:46.999Z",
+    "momentTs": 420,
+    "corroborated": true,
+    "diveLatencyMs": 4651,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [
+     "motion_trajectories",
+     "optical_flow"
+    ],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "El capi recibe el bal\u00f3n de la mine y a mal y ante la salida de Alberde,  reacerse despu\u00e9s del gol encajado, bal\u00f3n que controla la mal, ya a mi  la mal con marbernal.",
+   "summary": null,
+   "summaryRaw": "Alberde is dispossessed of the ball at 7:03 into the clip during a transition. The ball then crosses the goal line into the net to find the back of the net. This sequence concludes with the goalkeeper collapsing on the ground as the white-shirted team celebrates.",
+   "summaryGate": "dropped:filler",
+   "summaryViolations": [
+    "too-few-words",
+    "too-few-sentences",
+    "unattested-sentence",
+    "unattested-atmosphere"
+   ],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:36:51.847Z",
+   "body": "Alberde is dispossessed of the ball at 7:03 into the clip during a transition. The ball then crosses the goal line into the net to find the back of the net. This sequence concludes with the goalkeeper collapsing on the ground as the white-shirted team celebrates.",
+   "servedSummary": null,
+   "rawSummary": "Alberde is dispossessed of the ball at 7:03 into the clip during a transition. The ball then crosses the goal line into the net to find the back of the net. This sequence concludes with the goalkeeper collapsing on the ground as the white-shirted team celebrates.",
+   "storedSummaryGate": "dropped:filler",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "f62c16ca-e915-4ab1-bb27-e62d765a4ce6",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=0.85, confirmed by the scoreboard changing to 0-1 for FC Barcelona and the crowd/commentary eruption.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 9:48",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 588,
+    "scoreBoardChanged": true
+   },
+   "start": 581,
+   "end": 596,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "0-0>0-1",
+    "transitionScore": {
+     "pre": [
+      0,
+      0
+     ],
+     "post": [
+      0,
+      1
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:40:42.364Z",
+    "momentTs": 588.25,
+    "corroborated": true,
+    "diveLatencyMs": 4516,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "Raudales, le pega el Andri...  Gol...  Gol, gol, gol, gol, gol, gol, gol, gol, gol...  No...  ...istralmente con potencia.  Ah\u00ed va ahora, Carlos Javier por el Real Madrid.  Bajo los palos, le va a pegar con la derecha, silbar.",
+   "summary": "Carlos Javier drives forward and finds the back of the net at 9:48 into the clip. The scoreboard moves from 0-0 to 0-1 following this successful scoring play. Real Madrid completes the sequence as the ball crosses the goal line into the net.",
+   "summaryRaw": null,
+   "summaryGate": "accepted",
+   "summaryViolations": null,
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:40:47.046Z",
+   "body": "Carlos Javier drives forward and finds the back of the net at 9:48 into the clip. The scoreboard moves from 0-0 to 0-1 following this successful scoring play. Real Madrid completes the sequence as the ball crosses the goal line into the net.",
+   "servedSummary": "Carlos Javier drives forward and finds the back of the net at 9:48 into the clip. The scoreboard moves from 0-0 to 0-1 following this successful scoring play. Real Madrid completes the sequence as the ball crosses the goal line into the net.",
+   "rawSummary": null,
+   "storedSummaryGate": "accepted",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "c7ec9026-a373-40b4-88b1-2ae314d96c48",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=11.5s, confirmed by the ASR 'gol' and the visual of the ball crossing the line and the keeper being beaten.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball crossing the goal line and entering the net (ballInNet=true) at t=601.0s, which is corroborated by the ASR commentary 'el gol del empate'.",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 10:00",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 600
+   },
+   "start": 593,
+   "end": 608,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:40:57.700Z",
+    "momentTs": 601.25,
+    "corroborated": true,
+    "diveLatencyMs": 3920,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "los Javier por el Real Madrid.  Bajo los palos le va a pegar con la derecha,  silba el \u00e1rbitro y dispara.  Amarcado Carlos Javier, el gol del empate para el Real Madrid.  Para intentar poner el dos a uno en el mercado.",
+   "summary": "Real Madrid finds the back of the net as the ball crosses the goal line. Carlos Javier completes the scoring play at 10:00 into the clip. This passage sits at 10:00 of the clip. The window runs at 10:00 into the clip.",
+   "summaryRaw": null,
+   "summaryGate": "accepted",
+   "summaryViolations": null,
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:41:01.821Z",
+   "body": "Real Madrid finds the back of the net as the ball crosses the goal line. Carlos Javier completes the scoring play at 10:00 into the clip. This passage sits at 10:00 of the clip. The window runs at 10:00 into the clip.",
+   "servedSummary": "Real Madrid finds the back of the net as the ball crosses the goal line. Carlos Javier completes the scoring play at 10:00 into the clip. This passage sits at 10:00 of the clip. The window runs at 10:00 into the clip.",
+   "rawSummary": null,
+   "storedSummaryGate": "accepted",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "603d206a-7aa4-402b-b01c-59cb332cf78b",
+   "eventType": "BIG_PLAY",
+   "outcome": "big_play",
+   "reason": "The ball enters the net at t=11.0, confirmed by the goalkeeper's dive and the subsequent crowd/commentary eruption.; confirmation pass: goal confirmed (deep frame dive); The ball clearly enters the net after a penalty kick, as shown by the ball's trajectory crossing the goal line and the goalkeeper's dive into the net. | celebration of an already-delivered goal (anchor 600.0s, highlight c7ec9026-a373-40b4-88b1-2ae314d96c48): no independent score-transition evidence in this window",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 10:16",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 615
+   },
+   "start": 609.300000000002,
+   "end": 624.300000000002,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:41:38.819Z",
+    "momentTs": 617.375,
+    "corroborated": true,
+    "diveLatencyMs": 3828,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "para intentar poner el dos a uno en el marcador con la izquierda le va a pegar mar  Bernal bajo los paleos al baro chuta con el",
+   "summary": null,
+   "summaryRaw": "Bernal completes a pass to move the ball forward at 10:15 into the clip. The ball enters the net after a penalty kick. This sequence shows the goalkeeper diving into the net as the ball crosses the goal line.",
+   "summaryGate": "dropped:filler",
+   "summaryViolations": [
+    "too-few-words",
+    "goal-claim",
+    "unattested-sentence"
+   ],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:41:42.833Z",
+   "body": "Bernal completes a pass to move the ball forward at 10:15 into the clip. The ball enters the net after a penalty kick. This sequence shows the goalkeeper diving into the net as the ball crosses the goal line.",
+   "servedSummary": null,
+   "rawSummary": "Bernal completes a pass to move the ball forward at 10:15 into the clip. The ball enters the net after a penalty kick. This sequence shows the goalkeeper diving into the net as the ball crosses the goal line.",
+   "storedSummaryGate": "dropped:filler",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "1257cce3-12d3-4f65-90e5-73fcc06449ad",
+   "eventType": "BIG_PLAY",
+   "outcome": "big_play",
+   "reason": "The ball clearly enters the net at the end of the sequence, and the goalkeeper is seen falling into the net as the ball crosses the line.; confirmation pass: goal confirmed (deep frame dive); The ball is clearly seen entering the net and the goalkeeper is diving into the net as the ball crosses the line, which is corroborated by the ASR transcript calling 'gol'. | celebration of an already-delivered goal (anchor 600.0s, highlight c7ec9026-a373-40b4-88b1-2ae314d96c48): no independent score-transition evidence in this window",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 10:24",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 624
+   },
+   "start": 617.8000000000021,
+   "end": 632.8000000000021,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:42:06.152Z",
+    "momentTs": 626.875,
+    "corroborated": true,
+    "diveLatencyMs": 4381,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "al baro chuta con el  gol, gol, gol, gol, gol, gol, gol, gol, gol, gol, gol, gol, gol, gol, gol, gol,  el baro con sale espero iba muy fuerte ese bal\u00f3n y ahora es el turno del  Real Madrid Pablo Lago y es para Pablo Lago con la izquierda",
+   "summary": null,
+   "summaryRaw": "Pablo Lago receives the ball and prepares to initiate a move for his team. At 10:24 into the clip, the play develops as the unknown team maintains possession. The sequence concludes with the ball crossing the line while the goalkeeper falls into the net.",
+   "summaryGate": "dropped:filler",
+   "summaryViolations": [
+    "too-few-words",
+    "goal-claim",
+    "unattested-sentence"
+   ],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:42:10.702Z",
+   "body": "Pablo Lago receives the ball and prepares to initiate a move for his team. At 10:24 into the clip, the play develops as the unknown team maintains possession. The sequence concludes with the ball crossing the line while the goalkeeper falls into the net.",
+   "servedSummary": null,
+   "rawSummary": "Pablo Lago receives the ball and prepares to initiate a move for his team. At 10:24 into the clip, the play develops as the unknown team maintains possession. The sequence concludes with the ball crossing the line while the goalkeeper falls into the net.",
+   "storedSummaryGate": "dropped:filler",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "26c33a12-d2f3-4f27-9476-52d4fb89ee2a",
+   "eventType": "BIG_PLAY",
+   "outcome": "big_play",
+   "reason": "The ball enters the net at t=0.53, confirmed by the goalkeeper's dive and the subsequent celebration by the white-shirted team.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); confirmation pass: goal confirmed (deep frame dive); The ball trajectory clearly shows the ball entering the net (crossing the goal line) at t=635.0s, followed by a celebration by the white-shirted team. The ASR transcript also confirms a goal for Real Madrid. | celebration of an already-delivered goal (anchor 600.0s, highlight c7ec9026-a373-40b4-88b1-2ae314d96c48): no independent score-transition evidence in this window",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 10:36",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 636
+   },
+   "start": 629.6000000000022,
+   "end": 644.6000000000022,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:42:36.283Z",
+    "momentTs": 635.125,
+    "corroborated": true,
+    "diveLatencyMs": 3792,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "y va muy fuerte ese bal\u00f3n y ahora es el turno del Real Madrid, Pablo Yago y es para Pablo  Yago con izquierda, con gol del Real Madrid en Patea 2. En Patea 2 se emoci\u00f3n tambi\u00e9n  en la tanda de por, siempre y cuando falle alguno de los dos.",
+   "summary": "Real Madrid maintains control of the play as the action unfolds at 10:36 into the clip. Pablo Yago completes a pass to move the ball forward toward the opposing side. Real Madrid is in the passage at 10:36 into the clip.",
+   "summaryRaw": null,
+   "summaryGate": "neutralised",
+   "summaryViolations": null,
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:42:40.238Z",
+   "body": "Real Madrid maintains control of the play as the action unfolds at 10:36 into the clip. Pablo Yago completes a pass to move the ball forward toward the opposing side. Real Madrid is in the passage at 10:36 into the clip.",
+   "servedSummary": "Real Madrid maintains control of the play as the action unfolds at 10:36 into the clip. Pablo Yago completes a pass to move the ball forward toward the opposing side. Real Madrid is in the passage at 10:36 into the clip.",
+   "rawSummary": null,
+   "storedSummaryGate": "neutralised",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "8b291d6c-cf0f-47f0-9afe-1db76251b318",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball clearly enters the net at t=0.50, followed by a scoreboard update and a crowd/commentary eruption.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 10:45",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 645,
+    "scoreBoardChanged": true
+   },
+   "start": 638.7000000000023,
+   "end": 653.7000000000023,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "1-2>2-2",
+    "transitionScore": {
+     "pre": [
+      1,
+      2
+     ],
+     "post": [
+      2,
+      2
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:43:16.802Z",
+    "momentTs": 644.75,
+    "corroborated": true,
+    "diveLatencyMs": 3617,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "audio_text",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "Pablo Lago con izquierda, con el gol del Real Madrid en Patea 2.  En Patea 2, emoci\u00f3n tambi\u00e9n en la tanda de Poe.  Siempre cuando falle alguno de los dos y el otro a cierta es la Mine\u00f1a Mal.  La Mine\u00f1a Mal que ha conseguido el 0-1 que le va a pegar en este...",
+   "summary": null,
+   "summaryRaw": "The scoreboard moves to 2-2 as the ball finds the net. Pablo Lago completes a pass at 10:45 into the clip. Real Madrid finds the back of the net during this sequence.",
+   "summaryGate": "dropped:gate",
+   "summaryViolations": [
+    "too-few-words"
+   ],
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:43:20.608Z",
+   "body": "The scoreboard moves to 2-2 as the ball finds the net. Pablo Lago completes a pass at 10:45 into the clip. Real Madrid finds the back of the net during this sequence.",
+   "servedSummary": null,
+   "rawSummary": "The scoreboard moves to 2-2 as the ball finds the net. Pablo Lago completes a pass at 10:45 into the clip. Real Madrid finds the back of the net during this sequence.",
+   "storedSummaryGate": "dropped:gate",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "369ff147-e5b4-4fcb-a8e8-69e767d1e76a",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ASR commentary explicitly calls 'Gol, gol, gol' at the moment the ball enters the net, and the visual evidence shows the ball crossing the goal line into the net at the end of the sequence.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); the text claims a score line but no scoreboard read / score_delta record carries it; confirmation pass: goal confirmed (deep frame dive); The visual evidence shows the ball crossing the goal line and entering the net, corroborated by the ASR commentary calling 'gol gol gol'.",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 10:57",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 657
+   },
+   "start": 650,
+   "end": 665,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "none",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:43:57.842Z",
+    "momentTs": 657.25,
+    "corroborated": true,
+    "diveLatencyMs": 3878,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "audio_text"
+   },
+   "asrTranscript": "es la mine llamal que ha conseguido el 0-1 que le va a pegar en este tercer  penalti de momento en parte a dos le pega con la izquierda gol gol gol gol  gol de la mine llamal 3 a 2 el bar\u00e7a que ha traguir\u00e1n lanzando penaltis si  falla",
+   "summary": null,
+   "summaryRaw": "The ball crosses the goal line into the net at 10:57 into the clip. An unknown player completes the sequence to find the back of the net. This scoring play concludes the sequence as the ball enters the net.",
+   "summaryGate": "dropped:repeat",
+   "summaryViolations": [],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:44:01.888Z",
+   "body": "The ball crosses the goal line into the net at 10:57 into the clip. An unknown player completes the sequence to find the back of the net. This scoring play concludes the sequence as the ball enters the net.",
+   "servedSummary": null,
+   "rawSummary": "The ball crosses the goal line into the net at 10:57 into the clip. An unknown player completes the sequence to find the back of the net. This scoring play concludes the sequence as the ball enters the net.",
+   "storedSummaryGate": "dropped:repeat",
+   "attestationAuthority": "none"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "144c6be9-2e23-4a4a-87de-a1909a0c7969",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=0.22, confirmed by the scoreboard change and the ASR commentary '3 a 2 el bar\u00e7a'.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 11:07",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 666,
+    "scoreBoardChanged": true
+   },
+   "start": 660.2000000000024,
+   "end": 675.2000000000024,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "2-2>2-3",
+    "transitionScore": {
+     "pre": [
+      2,
+      2
+     ],
+     "post": [
+      2,
+      3
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:44:16.985Z",
+    "momentTs": 666.083,
+    "corroborated": true,
+    "diveLatencyMs": 3745,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "de la minena y a mal, tres a dos, el bar\u00e7a que ha traguir\u00e1n,  lanzando penaltis, si falla, Marcos viega, el Madrid estar\u00e1 eliminado,  el Madrid estar\u00e1 eliminado, Marcos viega, le pega con la derecha, gol.",
+   "summary": "The scoreboard moves to 2-3 as the ball finds the net. The clip carries the score change from 2-2 to 2-3 at 11:06. Marcos is in the sequence as the scoreboard moves from 2-2 to 2-3 at 11:06. The scoreboard moves from 2-2 to 2-3 at 11:06 into the clip.",
+   "summaryRaw": null,
+   "summaryGate": "accepted",
+   "summaryViolations": null,
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:44:20.923Z",
+   "body": "The scoreboard moves to 2-3 as the ball finds the net. The clip carries the score change from 2-2 to 2-3 at 11:06. Marcos is in the sequence as the scoreboard moves from 2-2 to 2-3 at 11:06. The scoreboard moves from 2-2 to 2-3 at 11:06 into the clip.",
+   "servedSummary": "The scoreboard moves to 2-3 as the ball finds the net. The clip carries the score change from 2-2 to 2-3 at 11:06. Marcos is in the sequence as the scoreboard moves from 2-2 to 2-3 at 11:06. The scoreboard moves from 2-2 to 2-3 at 11:06 into the clip.",
+   "rawSummary": null,
+   "storedSummaryGate": "accepted",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "c1a78055-90e0-402a-97ab-df027e2e1ed7",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ASR commentary explicitly states 'gol, gol, gol, gol' at the end of the sequence, and the visual evidence shows the ball entering the net and the goalkeeper falling to the ground at the end of the window.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball moving from the penalty spot towards the goal and clearly entering the net at t=676.3s, with the goalkeeper falling to the ground. This is corroborated by the ASR commentary 'gol, gol, gol'.",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 11:16",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 675
+   },
+   "start": 669.3000000000025,
+   "end": 684.3000000000025,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:44:51.982Z",
+    "momentTs": 676.25,
+    "corroborated": true,
+    "diveLatencyMs": 3935,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "Si falla, Marcos viega, el Madrid estar\u00e1 eliminado.  Marcos viega, le pega con la derecha, con el gol, gol, gol, que sangre f\u00eda.  Como la coloc\u00f3 en las cuadras, Marcos viega.  Acerte, y el otro que falle.",
+   "summary": null,
+   "summaryRaw": "Marcos viega strikes the ball with his right foot to find the back of the net. This scoring sequence occurs at 11:15 into the clip as the ball crosses the line. The goalkeeper falls to the ground after the ball enters the net.",
+   "summaryGate": "dropped:repeat",
+   "summaryViolations": [],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:44:56.082Z",
+   "body": "Marcos viega strikes the ball with his right foot to find the back of the net. This scoring sequence occurs at 11:15 into the clip as the ball crosses the line. The goalkeeper falls to the ground after the ball enters the net.",
+   "servedSummary": null,
+   "rawSummary": "Marcos viega strikes the ball with his right foot to find the back of the net. This scoring sequence occurs at 11:15 into the clip as the ball crosses the line. The goalkeeper falls to the ground after the ball enters the net.",
+   "storedSummaryGate": "dropped:repeat",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "3d2c1fae-dab9-40c6-be2e-55d313e1cf15",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=0.34 and the scoreboard updates to 3-3 (Real Madrid 3-3 FC Barcelona) during the window.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 11:24",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 684,
+    "scoreBoardChanged": true
+   },
+   "start": 677,
+   "end": 692,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "2-3>3-3",
+    "transitionScore": {
+     "pre": [
+      2,
+      3
+     ],
+     "post": [
+      3,
+      3
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:45:15.799Z",
+    "momentTs": 683.583,
+    "corroborated": true,
+    "diveLatencyMs": 4342,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "con la colegia, con el gol, con el gol, con el que sangre f\u00eda, como la coloc\u00f3 en las cuadras,  marcos, viega, y el otro que falle, ojo que ahora es Gilbert Jordana, quien dispara  el gol de Gilbert Jordana, balanzar.",
+   "summary": null,
+   "summaryRaw": "Gilbert Jordana fires a shot that finds the back of the net. The scoreboard moves to 3-3 during this sequence. This scoring play occurs at 11:24 into the clip.",
+   "summaryGate": "dropped:gate",
+   "summaryViolations": [
+    "too-few-words"
+   ],
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:45:20.341Z",
+   "body": "Gilbert Jordana fires a shot that finds the back of the net. The scoreboard moves to 3-3 during this sequence. This scoring play occurs at 11:24 into the clip.",
+   "servedSummary": null,
+   "rawSummary": "Gilbert Jordana fires a shot that finds the back of the net. The scoreboard moves to 3-3 during this sequence. This scoring play occurs at 11:24 into the clip.",
+   "storedSummaryGate": "dropped:gate",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "15d64871-fb04-4ba1-bf7d-f2b206343bed",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=11.0, confirmed by the scoreboard changing to 3-4 for FC Barcelona and the crowd/commentary eruption.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 11:33",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 693,
+    "scoreBoardChanged": true
+   },
+   "start": 686,
+   "end": 701,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "3-3>3-4",
+    "transitionScore": {
+     "pre": [
+      3,
+      3
+     ],
+     "post": [
+      3,
+      4
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:45:39.634Z",
+    "momentTs": 695.042,
+    "corroborated": true,
+    "diveLatencyMs": 3809,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "Y el otro que falle, ojo que ahora es Gilbert Jordana, quien dispara gol de Gilbert Jordana,  va a lanzar Paolo de Almeida para el Real Madrid  y intentar\u00e1 atajar Jordi Saucedo, Paolo de Almeida",
+   "summary": null,
+   "summaryRaw": "Gilbert Jordana finds the back of the net as the scoreboard moves to 3-4. This scoring play occurs at 11:33 into the clip. Paolo de Almeida completes a pass for Real Madrid to create the opportunity.",
+   "summaryGate": "dropped:gate",
+   "summaryViolations": [
+    "too-few-words"
+   ],
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:45:43.608Z",
+   "body": "Gilbert Jordana finds the back of the net as the scoreboard moves to 3-4. This scoring play occurs at 11:33 into the clip. Paolo de Almeida completes a pass for Real Madrid to create the opportunity.",
+   "servedSummary": null,
+   "rawSummary": "Gilbert Jordana finds the back of the net as the scoreboard moves to 3-4. This scoring play occurs at 11:33 into the clip. Paolo de Almeida completes a pass for Real Madrid to create the opportunity.",
+   "storedSummaryGate": "dropped:gate",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "3b8ff4f5-ba1b-41c3-b3dd-7a64fd3f878a",
+   "eventType": "BIG_PLAY",
+   "outcome": "big_play",
+   "reason": "The ball enters the net at t=1.0, confirmed by the goalkeeper being beaten and the net rippling, accompanied by a crowd/commentary eruption.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); confirmation pass: goal confirmed (deep frame dive); The ball is clearly seen entering the net in the frames, and the ASR transcript confirms a goal being scored during a penalty shootout. | celebration of an already-delivered goal (anchor 693.0s, highlight 15d64871-fb04-4ba1-bf7d-f2b206343bed): no independent score-transition evidence in this window",
+   "caption": null,
+   "postTitle": "BIG PLAY \u00b7 11:48",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 708
+   },
+   "start": 701.0000000000027,
+   "end": 716.0000000000027,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:46:19.844Z",
+    "momentTs": 708.25,
+    "corroborated": true,
+    "diveLatencyMs": 3837,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "y intentar\u00e1 atajar Jordi Succedo, Paolo de Alm\u00e9ida dispara con el empate a  cuatro, empate a cuatro, sigue en la Antutu Penalty para el f\u00fatbol clover  thrown al capit\u00e1n, bajo los palos el portero del Real Madrid \u00c1lvaro Gonz\u00e1lez,  m\u00e1xima emoci\u00f3n, le pega David.",
+   "summary": null,
+   "summaryRaw": "Real Madrid faces a high-pressure situation during the Antutu Penalty. Paolo de Alm\u00e9ida drives forward and takes a shot at 11:48 into the clip. David then completes a pass to set up the next sequence. The match features a tense standoff between Real Madrid and Barcelona.",
+   "summaryGate": "dropped:repeat",
+   "summaryViolations": [],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:46:23.848Z",
+   "body": "Real Madrid faces a high-pressure situation during the Antutu Penalty. Paolo de Alm\u00e9ida drives forward and takes a shot at 11:48 into the clip. David then completes a pass to set up the next sequence. The match features a tense standoff between Real Madrid and Barcelona.",
+   "servedSummary": null,
+   "rawSummary": "Real Madrid faces a high-pressure situation during the Antutu Penalty. Paolo de Alm\u00e9ida drives forward and takes a shot at 11:48 into the clip. David then completes a pass to set up the next sequence. The match features a tense standoff between Real Madrid and Barcelona.",
+   "storedSummaryGate": "dropped:repeat",
+   "attestationAuthority": "frame"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "bc764d9a-7b53-47be-82f3-c84c18ab1a24",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ball enters the net at t=11.0, confirmed by the goalkeeper's position and the scoreboard change to 4-4.; scoreboard score change confirmed",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 11:51",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "score_change",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 711,
+    "scoreBoardChanged": true
+   },
+   "start": 704,
+   "end": 719,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "scoreboard",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "transitionKey": "3-4>4-4",
+    "transitionScore": {
+     "pre": [
+      3,
+      4
+     ],
+     "post": [
+      4,
+      4
+     ]
+    },
+    "scoreBoardChanged": true
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:46:24.826Z",
+    "momentTs": 712.542,
+    "corroborated": true,
+    "diveLatencyMs": 7378,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation",
+    "laneKeptByMeasurement": true
+   },
+   "asrTranscript": "Jordi Salcedo, paulo de alm\u00e9idad, dispara, gol...  Empate a cuatro, empate a cuatro sigue en Lantuto Penalty para el f\u00fatbol club  Barcelona, al capit\u00e1n.  Bajo los palos, el portero del Real Madrid \u00c1lvaro Gonz\u00e1lez.  Maxima emoci\u00f3n.  Le pega David Ch\u00e1ez con la derecha...",
+   "summary": "Barcelona finds the back of the net as the scoreboard moves to 4-4. David Ch\u00e1ez completes a pass to set up the scoring opportunity at 11:51 into the clip. Jordi Salcedo is in the sequence as the scoreboard moves from 3-4 to 4-4 at 11:51.",
+   "summaryRaw": null,
+   "summaryGate": "neutralised",
+   "summaryViolations": null,
+   "summaryCalls": 1,
+   "createdAt": "2026-11-15T14:46:32.375Z",
+   "body": "Barcelona finds the back of the net as the scoreboard moves to 4-4. David Ch\u00e1ez completes a pass to set up the scoring opportunity at 11:51 into the clip. Jordi Salcedo is in the sequence as the scoreboard moves from 3-4 to 4-4 at 11:51.",
+   "servedSummary": "Barcelona finds the back of the net as the scoreboard moves to 4-4. David Ch\u00e1ez completes a pass to set up the scoring opportunity at 11:51 into the clip. Jordi Salcedo is in the sequence as the scoreboard moves from 3-4 to 4-4 at 11:51.",
+   "rawSummary": null,
+   "storedSummaryGate": "neutralised",
+   "attestationAuthority": "scoreboard"
+  },
+  {
+   "jobId": "54537ffa-b227-4cef-b461-35075d08f5cd",
+   "id": "b45fc105-cdcd-4406-a043-c83377d0deaa",
+   "eventType": "GOAL",
+   "outcome": "scoring_play",
+   "reason": "The ASR commentary explicitly states 'gol' at the end of the sequence, and the audio energy curve peaks at 0.25, coinciding with the visual of the ball entering the net and the player's celebration.; rejected by contract guard: the accept's support is commentary text only (reason_cites_commentary) and no measured channel attests the goal (absent: ballOutcome, goalCrossed, scoreBoardChanged, perceiveTimeline); confirmation pass: goal confirmed (deep frame dive); The ball trajectory shows the ball moving from the penalty spot towards the goal and entering the net, which is visually confirmed by the ball's position in the net in the final frames of the sequence.",
+   "caption": null,
+   "postTitle": "GOAL \u00b7 12:00",
+   "postTitleGate": "label",
+   "trigger": {
+    "kind": "motion",
+    "eventType": "SPORTING_EVENT",
+    "timestamp": 720
+   },
+   "start": 713,
+   "end": 728,
+   "matchClock": null,
+   "deferredAttestation": null,
+   "attestationUsed": {
+    "authority": "frame",
+    "ballOutcome": null,
+    "goalCrossed": false,
+    "corroborated": true,
+    "frameRefCount": 12,
+    "goalConfirmed": "confirmed_goal",
+    "scoreBoardChanged": false
+   },
+   "goalConfirmed": "confirmed_goal",
+   "confirmAttestation": {
+    "diveAt": "2026-11-15T14:46:40.329Z",
+    "momentTs": 721.75,
+    "corroborated": true,
+    "diveLatencyMs": 5558,
+    "goalConfirmed": "confirmed_goal",
+    "contextDegraded": [],
+    "momentConfidence": 1,
+    "corroborationSource": "frame_attestation"
+   },
+   "asrTranscript": "El cocl\u00f3barz\u00f3n al capit\u00e1n bajo los palos el portero del Real Madrid \u00c1lvaro Gonz\u00e1lez  m\u00e1xima emoci\u00f3n le pega David Saez con la derecha  gol  gol gol gol gol gol gol  no  Cee momento a 5-4  Si t\u00fa al bal\u00f3n sobre el punto de penal",
+   "summary": null,
+   "summaryRaw": "David Saez strikes the ball with his right foot to find the back of the net. This scoring sequence occurs at 12:00 into the clip. Real Madrid faces off against Barcelona in this match. The ball moves from the penalty spot and crosses the goal line.",
+   "summaryGate": "dropped:repeat",
+   "summaryViolations": [],
+   "summaryCalls": 2,
+   "createdAt": "2026-11-15T14:46:46.052Z",
+   "body": "David Saez strikes the ball with his right foot to find the back of the net. This scoring sequence occurs at 12:00 into the clip. Real Madrid faces off against Barcelona in this match. The ball moves from the penalty spot and crosses the goal line.",
+   "servedSummary": null,
+   "rawSummary": "David Saez strikes the ball with his right foot to find the back of the net. This scoring sequence occurs at 12:00 into the clip. Real Madrid faces off against Barcelona in this match. The ball moves from the penalty spot and crosses the goal line.",
+   "storedSummaryGate": "dropped:repeat",
+   "attestationAuthority": "frame"
+  }
+ ]
+}

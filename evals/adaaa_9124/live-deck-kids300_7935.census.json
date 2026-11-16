@@ -1,0 +1,29 @@
+{
+ "fixture": "/data/clips/kids300_7935.mp4",
+ "note": "Aggregate only: the 1188 stored rows of the 300.05 s LOOPING fixture are not committed (761 KB). Regenerate with evals/adaaa_9124/export_corpus_9124.py.",
+ "legs": 143,
+ "rows": 1188,
+ "authorityRows": 18,
+ "storedServed": 22,
+ "gateServed": 7,
+ "yield": 0.0059,
+ "authYield": 0.3889,
+ "refusalsByReason": {
+  "unattested-action": 3,
+  "too-few-facts": 77,
+  "unattested-sentence": 76,
+  "unattested-atmosphere": 38,
+  "too-many-sentences": 5,
+  "unattested-venue": 9,
+  "unattested-side": 3,
+  "goal-claim": 2,
+  "too-few-words": 4,
+  "no-new-fact": 2,
+  "repeat:sentence": 1,
+  "repeat:opening": 1,
+  "too-few-sentences": 2
+ },
+ "legsWithTenServable": 0,
+ "maxServableInOneLeg": 2,
+ "legsWithAnyAuthority": 5
+}
