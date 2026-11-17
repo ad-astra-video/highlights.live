@@ -446,6 +446,10 @@ export class Store {
       summaryDroppedClauses?: number;
       summaryClauseClaims?: string[];
       summaryRepairedWords?: number;
+      /** ADAAAA-9178 (AC2): purpose/manner tails the write seam deleted, and the
+       *  sentences it deleted for adding no fact. */
+      summaryPurposeTails?: number;
+      summaryRestatedSentences?: number;
       /** ADAAAA-9031 (AC5 §13.2): why a second summary call was billed. */
       summaryRetryReason?: string;
       /** ADAAAA-9177 (AC1/lever 3): the prompt's avoid block for this row, so the

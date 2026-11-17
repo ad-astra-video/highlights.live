@@ -96,7 +96,16 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     expect(f.bodies[1]).toContain("Do NOT spend a whole sentence on the clip clock");
 
     const stored = patches.find((p) => typeof p.patch.summary === "string");
-    expect(stored?.patch.summary).toBe(REPAIRED);
+    // ADAAAA-9178 (AC2): the repair's own 4th sentence (`The scoreline stays at 2-2
+    // as Barcelona keeps possession through the restart.`) carries the 2-2 score
+    // sentence 1 already served, so the seam deletes it — the remainder still clears
+    // the live floor. Before this ticket the stored body was `REPAIRED` verbatim.
+    expect(stored?.patch.summary).toBe(
+      "Barcelona pulls level at 2-2 as the scoreboard moves on from 2-1 late in this clip. " +
+        "The equaliser lands at the 1:27 mark of the clip. " +
+        "Barcelona works the ball into the box and finishes the move from close range."
+    );
+    expect(stored?.patch.summaryRestatedSentences).toBe(1);
     expect(stored?.patch.summaryCalls).toBe(2);
     expect(stored?.patch.summaryDropped).toBe(0);
     expect(stored?.patch.summaryGate).toBe("accepted");

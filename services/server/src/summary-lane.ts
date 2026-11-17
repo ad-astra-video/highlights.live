@@ -91,6 +91,10 @@ export interface SummaryLaneStore {
       summaryDroppedClauses?: number;
       summaryClauseClaims?: string[];
       summaryRepairedWords?: number;
+      /** ADAAAA-9178 (AC2): purpose/manner tails the seam deleted, and sentences
+       *  it deleted for adding no fact. */
+      summaryPurposeTails?: number;
+      summaryRestatedSentences?: number;
       /** ADAAAA-9031: the reason a second call was billed (AC5 §13.2). */
       summaryRetryReason?: string;
       /** ADAAAA-9177 (AC1/lever 3): the prompt's avoid block as rendered, persisted
@@ -772,6 +776,10 @@ export async function runSummaryForRow(
       summaryCalls: calls,
       summaryDropped: 0,
       summaryP95Ms: latencyMs,
+      // ADAAAA-9178 (AC2): what the seam had to delete for the card to be fact-
+      // bearing. 0/0 on a body whose sentences each added a fact.
+      summaryPurposeTails: accepted.purposeTails.length,
+      summaryRestatedSentences: accepted.restatedSentences.length,
       ...(retryReason ? { summaryRetryReason: retryReason } : {}),
       // ADAAAA-9177 (AC1): the avoid block this row's prompt carried, so the next
       // grade reads "did the writer see the served openings" off the row instead of
@@ -827,6 +835,8 @@ export async function runSummaryForRow(
           summaryDroppedClauses: detail.droppedClauses,
           summaryRepairedWords: detail.repairedWords,
           ...(detail.clauseClaims.length > 0 ? { summaryClauseClaims: detail.clauseClaims } : {}),
+          summaryPurposeTails: detail.purposeTails,
+          summaryRestatedSentences: detail.restatedSentences,
         }
       : {}),
     summaryCalls: calls,

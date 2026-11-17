@@ -2289,6 +2289,240 @@ export function summarySpentOpenings(bodies: readonly string[]): string[] {
 }
 
 /**
+ * ADAAAA-9178 (rev-21, depth at the write seam): the PURPOSE / MANNER tail.
+ *
+ * The rev-19 served block (job `798f21c2`, 5 bodies, 18-26 words, p50 19) is ONE
+ * fact plus a padding sentence, and three of the five padding sentences are this
+ * shape:
+ *
+ *   `df285a29`  "Barcelona then crosses the ball to maintain their offensive presence during the play."
+ *   `dd30bde1`  "Barcelona then counters to maintain their offensive position."
+ *   `0901bd41`  "Barcelona then crosses the ball to initiate a transition."
+ *
+ * A purpose clause (`to maintain …`, `to initiate …`, `to advance …`, `to move
+ * the ball toward …`) names an INTENTION, and a manner clause (`during the play`,
+ * `as the play develops`) names no measurement either: nothing this lane reads —
+ * the attestation, the match clock, the score transition, the transcript — measures
+ * an intention or a manner. So the tail is not a fact, it is words, and on the
+ * served block it is the words that made the card look long while adding nothing
+ * (`df285a29` is the 26-word body and it is the driest one).
+ *
+ * It is the SAME class ADAAAA-9121 banned as a prompt shape ("X completes a pass
+ * to maintain their offensive movement during the sequence") — there it was
+ * measured as the cause of five `repeat-*` rows serving nothing, because the tail
+ * is job-wide identical and made every card's substance sentence the same
+ * sentence. This is that ban's DETERMINISTIC half: the seam deletes the tail
+ * instead of trusting the prompt to omit it. Deletion only — never a rewrite, so
+ * the strip cannot launder a body past another bar — and it is refused when the
+ * tail itself carries a fact or when the remainder would be factless (see
+ * `stripPurposeTails`).
+ */
+export const SUMMARY_PURPOSE_TAIL_RE = new RegExp(
+  "[\\s,]+(?:" +
+    // an INTENTION clause: the act happened, the purpose is unmeasured
+    "to\\s+(?:maintain|keep|preserve|retain|sustain|hold)\\s+(?:their|the|its|his|her)\\s+(?:offensive\\s+|defensive\\s+|attacking\\s+)?(?:position|positions|presence|movement|possession|shape|structure|momentum)" +
+    "|to\\s+(?:initiate|start|begin|launch|trigger)\\s+(?:a|the)\\s+(?:transition|counter|break|breakaway|move)" +
+    "|to\\s+advance\\s+(?:their|the|its|his|her)\\s+position" +
+    "|to\\s+move\\s+the\\s+ball\\s+(?:toward|into|down|through)\\s+the\\s+[^.,;]{1,40}" +
+    ")" +
+    // an optional MANNER tag on the same intention
+    "(?:\\s+(?:during|throughout|as)\\s+the\\s+(?:play|sequence|passage|window|move)(?:\\s+(?:develops|unfolds|continues))?)?" +
+    "[.!?…]?$",
+  "i"
+);
+
+export interface SummaryPurposeTailStrip {
+  /** The body with every trailing purpose/manner tail deleted, bytes otherwise
+   *  untouched (a body with no tail is returned as written). */
+  text: string;
+  /** The tails deleted, verbatim, in body order — the AC2 census quotes these. */
+  stripped: string[];
+  /** Sentences that carry a tail-like phrase but were left intact because the
+   *  deletion would have taken a fact with it, or would have emptied the
+   *  sentence. Kept so a census can tell "no tail" from "tail the strip refused". */
+  kept: string[];
+}
+
+/**
+ * Delete a trailing purpose/manner clause from every sentence that has one.
+ *
+ * The three guards are what make this safe next to the extractive bars:
+ *
+ *  1. the match must be TRAILING (the regex is `$`-anchored and cannot cross a
+ *     `,` or `.`, so "… to maintain their position and wins the ball back" is
+ *     left alone rather than truncated mid-fact);
+ *  2. the remainder must still carry at least one fact (`summaryFacts`), so the
+ *     strip can never delete a whole fact sentence and pretend it was a tail;
+ *  3. the TAIL itself must carry no fact, so a phrase that looks like a purpose
+ *     but names a measured thing is never deleted;
+ *  4. with the row in hand, a tail that was masking a claim on a sentence the row
+ *     does not credit an ACTION fact for is left in place, so the AC14.1 filler
+ *     repair still judges it (deleting the tail first would serve the claim).
+ *
+ * Takes no evidence on purpose: the tail is a closed vocabulary of NON-facts, so
+ * the same deletion is correct on any row and can be censused from stored bodies
+ * at `$0`.
+ */
+export function stripPurposeTails(text: string, evidence?: SummaryEvidence): SummaryPurposeTailStrip {
+  const sentences = summarySentencesOf(text);
+  const out: string[] = [];
+  const stripped: string[] = [];
+  const kept: string[] = [];
+  for (const sentence of sentences) {
+    const match = sentence.match(SUMMARY_PURPOSE_TAIL_RE);
+    if (!match || typeof match.index !== "number") {
+      out.push(sentence);
+      continue;
+    }
+    const head = sentence
+      .slice(0, match.index)
+      .trim()
+      .replace(/[,;]$/, "")
+      .trim();
+    const tail = match[0].trim();
+    const headFacts = summaryFacts(head);
+    const tailFacts = summaryFacts(tail);
+    if (headFacts.length === 0 || tailFacts.length > 0) {
+      kept.push(sentence);
+      out.push(sentence);
+      continue;
+    }
+    // ADAAAA-9178 (guard 4, measured): deleting the tail must not LAUNDER a claim
+    // the tail was hiding. On the rev-17 served bodies the tail sits on a CARRY
+    // ("Barcelona drives forward at 11:31 of the match to maintain their offensive
+    // position") on a row that measured no ball outcome: the carry is not an
+    // action fact there (ADAAAA-8941/`sentenceActionAttested`), so the sentence is
+    // a claim that the AC14.1 filler repair must still delete — and stripping the
+    // tail first would turn it into a servable clock sentence. So when the caller
+    // HAS the row and the sentence carries an atmospheric/sustained-play claim, the
+    // tail goes only if the head still credits an ACTION fact on this row. A
+    // bounded act ("crosses the ball", "counters", "dispossesses") does, which is
+    // the rev-19 class; a carry does not, and the sentence keeps its claim for the
+    // filler repair to judge.
+    if (
+      evidence &&
+      unattestedAtmosphereClaims(sentence, evidence).length > 0 &&
+      !sentenceFactKinds(head, evidence).includes("action")
+    ) {
+      kept.push(sentence);
+      out.push(sentence);
+      continue;
+    }
+    stripped.push(tail);
+    out.push(`${head}.`);
+  }
+  return { text: stripped.length > 0 ? out.join(" ").trim() : (text ?? "").trim(), stripped, kept };
+}
+
+/** Normalize one fact's identity for the restatement comparison: fold
+ *  diacritics/case, keep digits (a clock and a score are identified BY their
+ *  digits), collapse whitespace. */
+function factTokenId(text: string): string {
+  return (text ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9:.\-]+/g, " ")
+    .trim();
+}
+
+/** The leading proper-noun run of a sentence — the evidence-free actor read the
+ *  restatement census uses when it has no row to attest against. `The clip
+ *  carries …` yields nothing (`The` is a stopword and not an actor). */
+function leadingActorRun(sentence: string): string | null {
+  const match = (sentence ?? "").match(/^\s*([A-ZÀ-Ý][a-zà-ÿ'’.-]+(?:\s+[A-ZÀ-Ý][a-zà-ÿ'’.-]+)*)/);
+  const run = match?.[1]?.trim() ?? "";
+  if (!run) return null;
+  const first = run.split(/\s+/)[0].toLowerCase();
+  if (SUMMARY_NON_ENTITY_WORDS.has(first) || STOPWORDS.has(first)) return null;
+  return run;
+}
+
+/**
+ * ADAAAA-9178 (AC2 / AC14): the FACT IDENTITY one sentence carries.
+ *
+ * The gate credits facts by KIND (`sentenceFactKinds`), and a kind is too coarse
+ * for AC2's bar: a second sentence that names a different actor's act and the SAME
+ * clock carries `[clock, action]`, which is a compliant kind set, while it has
+ * added nothing sentence 1 did not already say. The rev-19 block's `8abf948e` is
+ * exactly that (`04:38` in both sentences). So each fact is reduced to an
+ * IDENTITY:
+ *
+ *   - `clock:<token>`  — the token itself (never masked: restating a clock is the defect)
+ *   - `score:<digits>` — the score line the row measured
+ *   - `venue:<text>`   — the competition/venue
+ *   - `action:<actor>|<verb>` — the act AND its subject, because "Barcelona counters"
+ *     and "Portugal counters" are two facts while "Barcelona counters" twice is one
+ *
+ * `evidence` supplies the attested actor list when the caller has the row; without
+ * it the sentence's own leading proper-noun run is the actor, so the `$0` census
+ * can run on stored bodies alone.
+ */
+export function summarySentenceFactTokens(sentence: string, evidence?: SummaryEvidence): string[] {
+  const tokens: string[] = [];
+  const actors = evidence
+    ? attestedActorNames(evidence)
+        .map((name) => (name ?? "").trim())
+        .filter(Boolean)
+        .sort((a, b) => b.length - a.length)
+    : [];
+  for (const fact of summaryFacts(sentence)) {
+    if (fact.kind === "action") {
+      const lowered = (sentence ?? "").toLowerCase();
+      const attested = actors.find((name) => lowered.includes(name.toLowerCase()));
+      const actor = attested ?? leadingActorRun(sentence);
+      tokens.push(`action:${factTokenId(actor ?? "?")}|${factTokenId(fact.text)}`);
+      continue;
+    }
+    tokens.push(`${fact.kind}:${factTokenId(fact.text)}`);
+  }
+  // ADAAAA-9047: the scorebug reading the gate serves into a sentence is a clock
+  // fact even when it is dot-shaped (`57.44`), so the identity read credits it too
+  // — otherwise a restatement of the row's own match clock reads as novel.
+  if (evidence && carriesAttestedMatchClockToken(sentence, evidence)) {
+    const token = attestedMatchClockToken(evidence);
+    if (token && !tokens.includes(`clock:${factTokenId(token)}`)) tokens.push(`clock:${factTokenId(token)}`);
+  }
+  return tokens;
+}
+
+export interface SummarySentenceRestatement {
+  sentence: string;
+  /** This sentence's own fact identities (`summarySentenceFactTokens`). */
+  tokens: string[];
+  /** True when every identity this sentence carries was already carried by an
+   *  EARLIER sentence of the same body: it adds no fact. A sentence with no fact
+   *  at all is NOT "restated" — the AC14.1 filler repair owns that class. */
+  restated: boolean;
+  /** The identities earlier sentences already carried (the reason it restates). */
+  carried: string[];
+}
+
+/**
+ * ADAAAA-9178 (AC2): the sentences of `text` whose facts the body already has.
+ *
+ * Read in body order, with the carried set growing as it goes, so a body that
+ * says the same thing twice is reported once (the repeat) rather than every
+ * sentence being flagged. `summaryFactKinds` cannot answer this question and
+ * `internalSentenceRepeats` (>= 0.80 token similarity) does not either: a padding
+ * sentence that shares only the clock scores well under 0.80 against sentence 1 —
+ * which is why the rev-19 block read `repeatedSentences: 0` per card on all five
+ * bodies while 5 of 5 second sentences added nothing.
+ */
+export function summaryRestatedSentences(text: string, evidence?: SummaryEvidence): SummarySentenceRestatement[] {
+  const carried = new Set<string>();
+  const out: SummarySentenceRestatement[] = [];
+  for (const sentence of summarySentencesOf(text)) {
+    const tokens = summarySentenceFactTokens(sentence, evidence);
+    const known = [...carried];
+    const restated = tokens.length > 0 && tokens.every((token) => carried.has(token));
+    if (!restated) for (const token of tokens) carried.add(token);
+    out.push({ sentence, tokens, restated, carried: known });
+  }
+  return out;
+}
+
+/**
  * ADAAAA-9047 (writer round): the fact menu WITH the row's own measured values.
  *
  * `summaryFactMenu` names the CATEGORIES (a contract the lane hands to the retry,
@@ -2838,6 +3072,78 @@ export function dropSentences(text: string, drop: readonly string[]): string {
   return kept.join(" ").trim();
 }
 
+export interface SummaryRestatedDrop {
+  /** The body with its restating sentences deleted, or the input unchanged when
+   *  the deletion was not affordable. */
+  text: string;
+  /** Every sentence the read found restating the body's own facts — whether or not
+   *  the seam could afford to delete it (the AC2 census quotes these). */
+  dropped: string[];
+  /** True when the body still clears its band without those sentences, so the
+   *  deletion was taken. False means the restatement is still in the served bytes
+   *  and the row is a prompt miss, not a seam miss. */
+  affordable: boolean;
+}
+
+/**
+ * ADAAAA-9178 (AC2, at the seam): delete a sentence that restates the body's own
+ * facts, and grow the hole back with a fact the body does NOT carry.
+ *
+ * This is the deterministic half of AC14's "every sentence earns a fact" for the
+ * class the rev-19 block served: `8abf948e` wrote `04:38` in both sentences and
+ * `03cdc053` re-narrated `11:55` in a frame sentence. Both are two-sentence bodies
+ * whose second sentence is a restatement, and both SERVED (`neutralised` /
+ * `accepted`) because every per-sentence bar the gate had was satisfied: the
+ * sentence named a fact, the fact was attested, and the two sentences were not
+ * >= 0.80 similar to each other. What neither bar asks is the only question AC2
+ * asks — did this sentence ADD anything.
+ *
+ * The deletion is EXTRACTIVE and AFFORDABILITY-GUARDED. ADAAAA-9085 pinned that
+ * "the repair may never BECOME the body", and the filler pool's only sentences are
+ * clock/score/venue phrasings — growing a restatement hole with one of those is
+ * restating the clock the body already carries (it is the exact sentence
+ * `03cdc053` served, `The clip carries this sequence at 11:55 into the clip.`). So
+ * the seam deletes the sentence and nothing else: when the remainder still clears
+ * the band the card serves without the padding, and when it does not the deletion
+ * is refused and the body keeps the writer's bytes (`affordable: false`). The
+ * depth that replaces the padding is the writer's job — the prompt asks for a third
+ * distinct fact — and the meter says whether the seam could remove the restatement
+ * or only see it.
+ */
+export function dropRestatedSentences(
+  text: string,
+  evidence: SummaryEvidence,
+  forbid: readonly string[] = []
+): SummaryRestatedDrop {
+  const reports = summaryRestatedSentences(text, evidence);
+  const slots: (string | null)[] = [];
+  const dropped: string[] = [];
+  let survivors = 0;
+  for (const report of reports) {
+    if (report.restated) {
+      slots.push(null);
+      dropped.push(report.sentence);
+      continue;
+    }
+    slots.push(report.sentence);
+    survivors += 1;
+  }
+  if (dropped.length === 0) return { text: (text ?? "").trim(), dropped: [], affordable: true };
+  const filled = (): string[] => slots.filter((sentence): sentence is string => typeof sentence === "string");
+  // EXTRACTIVE ONLY (ADAAAA-9085's pin: "the repair may never BECOME the body"). The
+  // seam does not author a fact sentence, so it does not grow the hole a
+  // restatement leaves; trying to would turn a `too-few-facts` refusal into a serve
+  // written by the repair. The deletion is therefore taken only when the remainder
+  // still clears the band, and otherwise REFUSED — the body keeps the writer's
+  // bytes, the prompt's AC2 rule is the fix, and the census records that the seam
+  // saw the restatement and could not afford to remove it (`affordable: false`).
+  const band = summaryBand(evidence.rail);
+  if (!summaryClearsBand(filled(), band)) {
+    return { text: (text ?? "").trim(), dropped, affordable: false };
+  }
+  return { text: filled().join(" ").trim(), dropped, affordable: true };
+}
+
 /** AC9 read: the DISTINCT fact types the body relays that the row attests. */
 export function attestedSummaryFactKinds(text: string, evidence: SummaryEvidence): SummaryFactKind[] {
   const available = new Set(attestedFactKinds(evidence));
@@ -3227,6 +3533,17 @@ export interface SummaryGateDecision {
    *  records that sentence in `droppedClauses`, which is what the AC5 retry is
    *  told about. Empty when the body did not open on the frame. */
   frameOpeners: string[];
+  /** ADAAAA-9178 (rev-21, AC2): the purpose/manner TAILS the seam deleted
+   *  ("to maintain their offensive presence during the play"). A closed list of
+   *  intentions the evidence never measures, so a served body carrying one is
+   *  words, not depth. Empty when the body carried none. */
+  purposeTails: string[];
+  /** ADAAAA-9178 (AC2): the sentences the seam deleted because every fact they
+   *  carried was already in an earlier sentence of the same body (the
+   *  `8abf948e` / `03cdc053` class on the rev-19 served block). The hole is grown
+   *  with a fact the body did not have; `substitutedClauses` records what was
+   *  spent. */
+  restatedSentences: string[];
   /** ADAAAA-8914 (AC14.5): words left in the body AFTER the clause repair (0 when
    *  the repair left nothing, and the judged word count when it deleted nothing).
    *  This is the number the floor check reads, so a `dropped:filler` row shows the
@@ -3266,7 +3583,8 @@ export function gateSummaryDetail(
 ): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
-  if (!stripped) return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], substitutedClauses: [], frameOpeners: [], repairedWords: 0, raw: "", captionOverlap: 0 };
+  if (!stripped)
+    return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], substitutedClauses: [], frameOpeners: [], purposeTails: [], restatedSentences: [], repairedWords: 0, raw: "", captionOverlap: 0 };
   const clamped = clampSummaryDepth(stripped, evidence.rail);
   const candidates: { text: string; trimmed: boolean }[] =
     clamped && clamped !== stripped ? [{ text: stripped, trimmed: false }, { text: clamped, trimmed: true }] : [{ text: stripped, trimmed: false }];
@@ -3283,6 +3601,10 @@ export function gateSummaryDetail(
   let substitutedClauses: string[] = [];
   /** ADAAAA-9083 (AC15): the frame-narration openers the lead repair deleted. */
   let frameOpeners: string[] = [];
+  /** ADAAAA-9178 (AC2): the purpose/manner tails and restating sentences the seam
+   *  deleted before judging. */
+  let purposeTails: string[] = [];
+  let restatedSentences: string[] = [];
   /** Words left after the clause repair — the number AC14.5's floor check reads. */
   let repairedWords = 0;
   for (const candidate of candidates) {
@@ -3300,14 +3622,28 @@ export function gateSummaryDetail(
     // clock, so the card's stamp matches the scorebug reading the row persists
     // ("at 1:42 into the clip" on a 102.7 s window -> "at 18:12 of the match").
     const clockServed = serveAttestedMatchClock(clockFrame.text, evidence);
+    // ADAAAA-9178 (rev-21): the PURPOSE/MANNER tail is deleted before anything is
+    // judged, because it is a closed vocabulary of NON-facts (`stripPurposeTails`
+    // verified the remainder keeps its fact). On the rev-19 served block the tail
+    // is what made `df285a29` the longest body (26 words) and the driest one.
+    const purpose = stripPurposeTails(clockServed.text, evidence);
+    // Extractive and affordability-guarded, the same rule the restatement drop
+    // follows: a tail is only worth deleting when the card still serves without it.
+    // A body whose padding is the only thing holding it over the floor keeps the
+    // tail and serves exactly as the writer wrote it — the prompt's ban is the fix
+    // for that row, and the served-body census is what measures it.
+    const purposeAffordable =
+      purpose.stripped.length === 0 ||
+      summaryClearsBand(summarySentencesOf(purpose.text), summaryBand(evidence.rail));
+    const purposeStripped = purpose.stripped.length > 0 && purposeAffordable ? purpose.text : clockServed.text;
     // ADAAAA-9083 (AC15): the frame-narration LEAD is stripped by deletion BEFORE
     // the depth floor is re-checked, on both rails. It runs after the three
     // rewriters above so it judges the body the card would actually serve, and
     // before the filler clause repair so a body whose lead was the only frame
     // narration still gets its fact sentences judged. Deletion only: the strip can
     // never add a fact, so it cannot launder a body past another bar.
-    const frame = stripFrameOpener(clockServed.text);
-    const frameStripped = frame.stripped.length > 0 ? frame.text : clockServed.text;
+    const frame = stripFrameOpener(purposeStripped);
+    const frameStripped = frame.stripped.length > 0 ? frame.text : purposeStripped;
     // ADAAAA-8914 (AC14.1/AC14.2/AC14.5): the FILLER clause is deleted BEFORE
     // judging, extractively and on the first sample — the one cheap repair the
     // contract allows. A body that keeps its facts in band still serves; one that
@@ -3317,18 +3653,35 @@ export function gateSummaryDetail(
     // lead never attributes its depth loss to the writer; ADAAAA-9085 supplies the
     // sentences this job already served, so the repair's substitution pool cannot
     // re-serve another card's sentence.
+    // ADAAAA-9178 orders this AFTER the filler repair on purpose: a claim sentence
+    // leaves no substitution slot, so judging restatement on a body that still
+    // carries claims would read a restatement that the claim drop removes anyway —
+    // and it must not put a fact sentence where the AC14.1 repair is about to
+    // delete one (the measured rev-17 case: `Barcelona drives forward … to maintain
+    // their offensive position` was refused for the carry claim, and growing the
+    // body around it served the claim).
     const filler = dropFillerSentences(frameStripped, evidence, options?.avoidSentences ?? []);
-    const fillerText = filler.text && filler.text !== frameStripped ? filler.text : "";
-    // The repair under test: the filler repair when it fired, else the frame strip.
-    // `repairText` can be "" (the strip deleted a frame-only body), and
-    // `hasRepair` stays true so the refusal measures 0 words rather than the
-    // writer's pre-strip count.
+    const fillerBase = filler.text && filler.text !== frameStripped ? filler.text : frameStripped;
+    // ADAAAA-9178 (AC2): a sentence whose facts the body already carries adds
+    // nothing, so it is deleted — and the hole is grown with a fact the body does
+    // not have, not with the clock the body already says.
+    const restated = dropRestatedSentences(fillerBase, evidence, options?.avoidSentences ?? []);
+    const restatedBase = restated.text && restated.text !== fillerBase ? restated.text : fillerBase;
+    const repairedBase = restatedBase;
+    // The repair under test: the whole seam chain's output when it changed the
+    // writer's bytes. `repairText` can be "" (the filler drop emptied the body),
+    // and `hasRepair` stays true so the refusal measures 0 words rather than the
+    // writer's pre-repair count.
     const frameRepaired = frameStripped !== clockServed.text;
-    const repairText = fillerText || (frameRepaired ? frameStripped : "");
+    const repairText = repairedBase !== clockServed.text ? repairedBase : "";
     // `hasRepair` is true whenever a repair FIRED, including the case where the
-    // clause repair emptied the body (`fillerText` is "" then): the refusal must
-    // measure 0 words rather than the writer's pre-repair count.
-    const hasRepair = frameRepaired || filler.dropped.length > 0;
+    // clause repair emptied the body: the refusal must measure 0 words rather than
+    // the writer's pre-repair count.
+    const hasRepair =
+      frameRepaired ||
+      (purpose.stripped.length > 0 && purposeAffordable) ||
+      filler.dropped.length > 0 ||
+      restated.dropped.length > 0;
     // ADAAAA-9083: the fallback candidate is the frame-STRIPPED body, not
     // `clockServed.text` — the closed-list lead deletion is deterministic, so
     // judging the pre-strip body would fail AC15 every time and attribute a
@@ -3345,6 +3698,8 @@ export function gateSummaryDetail(
         clauseClaims = filler.claims;
         substitutedClauses = filler.substituted;
         frameOpeners = frame.stripped;
+        purposeTails = purposeAffordable ? purpose.stripped : [];
+        restatedSentences = restated.affordable ? restated.dropped : [];
         repairedWords = hasRepair ? summaryWordCount(repairText) : summaryWordCount(judged);
         return {
           summary: judged,
@@ -3366,6 +3721,8 @@ export function gateSummaryDetail(
           clauseClaims,
           substitutedClauses,
           frameOpeners,
+          purposeTails,
+          restatedSentences,
           repairedWords,
           raw: stripped,
           captionOverlap: captionTokenOverlap(judged, evidence.caption),
@@ -3384,6 +3741,8 @@ export function gateSummaryDetail(
     clauseClaims = filler.claims;
     substitutedClauses = filler.substituted;
     frameOpeners = frame.stripped;
+    purposeTails = purposeAffordable ? purpose.stripped : [];
+    restatedSentences = restated.affordable ? restated.dropped : [];
     // ADAAAA-8941: `clockServed` is the adjudicated text (the 8941 branch renamed
     // the neutralised frame); keep the 8984 `substitutedClauses` read beside it.
     // ADAAAA-9083: a body the frame strip shortened measures on the STRIPPED text,
@@ -3414,6 +3773,8 @@ export function gateSummaryDetail(
     clauseClaims,
     substitutedClauses,
     frameOpeners,
+    purposeTails,
+    restatedSentences,
     repairedWords,
     raw: stripped,
     captionOverlap: captionTokenOverlap(stripped, evidence.caption),
@@ -3450,6 +3811,12 @@ export interface SummaryRefusalDetail {
   droppedClauses: number;
   clauseClaims: string[];
   repairedWords: number;
+  /** ADAAAA-9178 (AC2): purpose/manner tails the seam deleted, and sentences it
+   *  deleted because they added no fact. Both are §15.4 evidence for a
+   *  `dropped:filler` row on the rev-19 class: a body the seam took under the
+   *  floor because it was one fact plus padding. */
+  purposeTails: number;
+  restatedSentences: number;
 }
 
 export function summaryRefusalDetail(decision: SummaryGateDecision, rail: SummaryRail): SummaryRefusalDetail {
@@ -3464,6 +3831,8 @@ export function summaryRefusalDetail(decision: SummaryGateDecision, rail: Summar
     droppedClauses: decision.droppedClauses.length,
     clauseClaims: [...decision.clauseClaims],
     repairedWords: decision.repairedWords,
+    purposeTails: decision.purposeTails.length,
+    restatedSentences: decision.restatedSentences.length,
   };
 }
 
@@ -3643,6 +4012,16 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // clause repair deletes filler AFTER the writer answers, so a body written to
   // the exact minimum loses ~8-10 words and serves under it.
   const perSentenceAsk = perSentenceMin + SUMMARY_WRITER_SENTENCE_MARGIN_WORDS;
+  // ADAAAA-9178 (rev-21): whether THREE distinct facts are available, which is the
+  // only honest way to reach AC1's 25-word bar on the live rail without padding.
+  // Two attested actors supply two acts and the clock rides on either; one actor
+  // plus a measured score line supplies an act, the score and the clock. Below
+  // that the writer is asked for the band minimum and told not to pad — the row
+  // cannot reach three facts and a prompt asking for one is the ADAAAA-8971
+  // defect (a menu the row cannot fill).
+  const attestedActorsForDepth = attestedActorNames(input);
+  const thirdFactAvailable =
+    attestedActorsForDepth.length >= 2 || (attestedActorsForDepth.length >= 1 && attestsScore);
   // ADAAAA-8803: the depth instruction is a BAND, and the RETRY is told what the
   // refused draft measured. Both fixes answer the same measured defect on the
   // served VOD leg of job `4e5ddf8d`: a compliant draft landed on 41 words
@@ -3787,6 +4166,26 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     // ADAAAA-9031 (AC14.3): distinctness is per SENTENCE, not per body — a body
     // whose sentences all restate the same clock reads as one template.
     "- Each sentence must carry a DIFFERENT fact from the sentence before it: do not restate the same clock, the same score line or the same actor's act in two sentences. Two sentences that differ only by a clock token count as the same sentence.",
+    // ADAAAA-9178 (rev-21, depth at the write seam): the rev-19 served block (job
+    // `798f21c2`) served five bodies at 18-26 words, p50 19, and every one of them
+    // is ONE fact plus a sentence that adds nothing: three pad with a purpose
+    // clause and two restate the clock (`8abf948e` says `04:38` twice, `03cdc053`
+    // re-narrates `11:55` in a frame sentence). The rule above is per-KIND
+    // ("different fact"), and the writer satisfied it while adding no fact at all,
+    // because "different fact" reads as "different kind". This line states the bar
+    // in the terms AC2 measures: the SECOND sentence has to be NEW information.
+    "- Every sentence after the first must carry a fact the body does NOT already have: a different attested actor's act, the score line when this row measured one, or the competition when the match context carries one. A second sentence that repeats the clip clock, repeats the score line, or re-names the first sentence's actor and act adds nothing and is deleted from your copy.",
+    // ADAAAA-9178: the purpose/manner tail is the shape the seam now DELETES
+    // (`stripPurposeTails`), so the prompt names it in the same closed-list words
+    // the strip reads. ADAAAA-9121 banned it as a job-wide repeated shape; the
+    // measured rev-19 bodies show it is also the writer's favourite way to add
+    // words without adding a fact (`df285a29`: 26 words, one fact).
+    "- NEVER append a purpose or manner tail to a sentence: no 'to maintain their offensive position/presence/movement', 'to advance their position', 'to initiate a transition', 'to move the ball toward the opposing side', 'during the play', 'during the sequence' and no 'as the play develops'. Those words name an intention the evidence never measured; the seam deletes the tail, so they buy no length.",
+    ...(thirdFactAvailable
+      ? [
+          `- Depth comes from a THIRD fact, not from padding. This row can supply ${band.maxSentences} distinct facts, so write ${band.maxSentences} sentences of at least ${perSentenceAsk} words each — each on a different attested actor-and-act, with the clip offset riding on one of them — instead of two short sentences. ${band.maxSentences} sentences at ${perSentenceAsk} words is ${band.maxSentences * perSentenceAsk} words, which clears the length band on facts alone.`,
+        ]
+      : []),
     // ADAAAA-9121 (writer round 3): the frame ban above stops clock-only copy;
     // the served block `80ac7b3` shows the same defect one level down — a LEGAL
     // act verb from the vocabulary with a purpose clause bolted on. On job

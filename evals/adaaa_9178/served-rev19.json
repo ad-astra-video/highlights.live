@@ -1,0 +1,64 @@
+{
+ "ticket": "ADAAAA-9178",
+ "label": "rev-19 served block, job 798f21c2 (5 served bodies)",
+ "job": "798f21c2-648b-44a8-a5ff-2ad2ad8e41ee",
+ "rail": "file-sim",
+ "pin": {
+  "container": "highlights-server",
+  "State.StartedAt": "2026-11-16T04:04:18.198326425Z",
+  "image": "sha256:b84e433948041670013d1fb75eea548a93d943dd88d2512cd3563df923fefe83",
+  "mounts": 1,
+  "sha256": {
+   "packages/events/src/highlight-summary.ts": "c7c163745f6d279698c1e2aceecaa2f6f3b328720612fca8247580e0f0e3683a",
+   "services/server/src/summary-lane.ts": "9a440a911af5dd3f37690cc2c7dc249af550417366e3d7f1f16050156e0e93c2"
+  },
+  "avoidActs_hits": "2",
+  "mount_note": "Mounts=1 (docker/data only) so in-container /app bytes ARE served code"
+ },
+ "provenance": {
+  "source": "ADAAAA-9126 served grade artifact 37b83f05-c2e5-4e4b-8d2f-c385ef238815 (ad9126-rev19-served-grade.json), served_cards",
+  "note": "Bodies are the SERVED bytes read from the served row set at $0. The dump does NOT carry per-row evidence (reason/transcript/matchContext/attestation), so the seam's evidence-gated arm runs only when --dump=<rows.json> is supplied. Word counts here are re-derived with summaryWordCount(), not copied."
+ },
+ "rows": [
+  {
+   "hid": "df285a29-e7d5-4dcf-ad76-abe117868d25",
+   "hid8": "df285a29",
+   "gate": "neutralised",
+   "words": 26,
+   "body": "Portugal recovers the ball at 18:11 of the match to initiate a transition. Barcelona then crosses the ball to maintain their offensive presence during the play.",
+   "summaryCalls": 1
+  },
+  {
+   "hid": "8abf948e-504d-4811-9c84-b533bed87c51",
+   "hid8": "8abf948e",
+   "gate": "neutralised",
+   "words": 22,
+   "body": "Barcelona wins the ball back at 04:38 of the match. Real Madrid then attempts a counter as the match clock reaches 04:38.",
+   "summaryCalls": 1
+  },
+  {
+   "hid": "03cdc053-0f2d-4d9d-ae2c-03300e2e3b5e",
+   "hid8": "03cdc053",
+   "gate": "accepted",
+   "words": 19,
+   "body": "Portugal dispossesses the ball at 11:55 into the clip. The clip carries this sequence at 11:55 into the clip.",
+   "summaryCalls": 1
+  },
+  {
+   "hid": "dd30bde1-7758-4213-87ac-0995c3417fd4",
+   "hid8": "dd30bde1",
+   "gate": "neutralised",
+   "words": 18,
+   "body": "Real Madrid threads a pass at 06:16 of the match. Barcelona then counters to maintain their offensive position.",
+   "summaryCalls": 1
+  },
+  {
+   "hid": "0901bd41-b266-4b52-88bd-3c02f710fbe9",
+   "hid8": "0901bd41",
+   "gate": "neutralised",
+   "words": 18,
+   "body": "Portugal dispossesses the ball at 22:13 of the match. Barcelona then crosses the ball to initiate a transition.",
+   "summaryCalls": 1
+  }
+ ]
+}

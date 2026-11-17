@@ -95,8 +95,20 @@ describe("ADAAAA-8791 — the VOD depth floor is the target", () => {
   it("still accepts a body above the 40-word floor on the same evidence", () => {
     const decision = gateSummaryDetail(SERVED_44, ROW_48FE);
     expect(decision.violations).toEqual([]);
-    expect(decision.summary).toBe(SERVED_44);
-    expect(decision.words).toBe(55);
+    // ADAAAA-9178 (AC2): the 4th sentence (`The scoreboard reads 2-1 as the clip
+    // runs past 0:27.`) carries the score line AND the clock sentence 1 already
+    // served — it adds no fact, which is the rev-19 served class this ticket
+    // removes. The seam deletes it extractively (the remainder clears the 40-word
+    // VOD floor at 45 words), so the card serves the three fact sentences and the
+    // restated one no longer reaches the reader. Before this ticket the same
+    // assertion was `toBe(SERVED_44)` at 55 words.
+    expect(decision.summary).toBe(
+      "Barcelona works the ball through the middle as the scoreboard moves to 2-1 at 0:27 into the clip. " +
+        "Real Madrid intercepts the ball near the touchline and counters at 0:31 of the clip. " +
+        "Barcelona recovers the ball and threads a pass to the far side."
+    );
+    expect(decision.restatedSentences).toEqual(["The scoreboard reads 2-1 as the clip runs past 0:27."]);
+    expect(decision.words).toBe(45);
     expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
   });
 

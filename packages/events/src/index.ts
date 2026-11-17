@@ -2545,6 +2545,13 @@ export const HighlightRecordSchema = z.object({
    *  substituted to try to restore the band. Zero substitutions beside a named
    *  refusal is the "no admissible fact left" class. */
   summaryRepairDroppedSentences: z.number().int().min(0).optional(),
+  /** ADAAAA-9178 (rev-21, AC2): purpose/manner tails the write seam deleted from
+   *  the served body ("to maintain their offensive presence during the play"), and
+   *  the sentences it deleted because every fact they carried was already in an
+   *  earlier sentence. Both are 0 on a body that earned every sentence, so a served
+   *  grade reads the rev-19 class off the row instead of re-parsing the prose. */
+  summaryPurposeTails: z.number().int().min(0).optional(),
+  summaryRestatedSentences: z.number().int().min(0).optional(),
   summaryRepairSubstitutedSentences: z.number().int().min(0).optional(),
   /** ADAAAA-9177 (AC1 / lever 3): the AVOID BLOCK the writer's prompt carried for
    *  THIS row — the served cards' opening runs and spent actor-and-act pairs, in
