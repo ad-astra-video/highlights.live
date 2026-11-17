@@ -2262,6 +2262,33 @@ export function summarySpentActPairs(bodies: readonly string[], actors: readonly
 }
 
 /**
+ * ADAAAA-9177 (rev-20, writer round 4): the OPENINGS this job's served cards
+ * already spend, as the masked first-four-word run (`summaryOpeningRun`).
+ *
+ *  ADAAAA-9121 handed the writer the spent actor-and-act PAIRS (`avoidActs`) and
+ *  the writer still opened every card on a spent pair: on the rev-19 served block
+ *  (job `798f21c2`) `0901bd41` served `portugal dispossesses the ball` and the next
+ *  three cards ALL opened on that same actor+act. The pair list is the wrong
+ *  granularity for the key that actually refuses — AC8 compares the FIRST
+ *  sentence's first four words — so the prompt has to carry the opening itself,
+ *  not only the pair it was built from.
+ *
+ *  The run is taken through `summaryOpeningRun`, which strips a leading clock
+ *  prefix first: "At 22:13, Portugal dispossesses the ball" and "Portugal
+ *  dispossesses the ball at 11:10 into the clip" are the SAME opening to the gate,
+ *  so they must read as the same entry here. Duplicates collapse, and the caller's
+ *  served order is kept so a census can read the rotation in the order it happened.
+ */
+export function summarySpentOpenings(bodies: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const body of bodies) {
+    const run = summaryOpeningRun(body ?? "");
+    if (run && !out.includes(run)) out.push(run);
+  }
+  return out;
+}
+
+/**
  * ADAAAA-9047 (writer round): the fact menu WITH the row's own measured values.
  *
  * `summaryFactMenu` names the CATEGORIES (a contract the lane hands to the retry,
@@ -3884,7 +3911,20 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     // serves, so a body that spends its opening on the clip's own frame loses it.
     "- Never open on the frame, on either rail (live and VOD): no 'The scene opens with …', 'The clip/video/footage begins with …', 'In this clip …', 'We see …', 'Here we see …', 'The camera …' and never make the clip the subject of your first sentence. Open on the concrete action itself — the attested actor's act, the score line, or the clock inside a sentence that names one. A lead that names the scene, the clip or the camera is deleted before the card serves.",
     ...(input.avoidOpenings && input.avoidOpenings.length > 0
-      ? [`- Do not open with any of these already-served runs: ${input.avoidOpenings.slice(0, 8).map((o) => `'${o}'`).join(", ")}.`]
+      ? [
+          // ADAAAA-9177 (rev-20): the FIRST sentence's opening is what AC8
+          // compares, and the writer had to be told so in those words. The
+          // rev-19 served block (job `798f21c2`) carried these runs and still
+          // opened three cards on `portugal dispossesses the ball`, because the
+          // list read as vocabulary to avoid ANYWHERE rather than the rule that
+          // judges sentence 1. The list itself is unchanged (`summaryOpeningRun`
+          // per served card, clock prefix masked); only the statement of what is
+          // compared is new.
+          `- Do not open with any of these already-served runs: ${input.avoidOpenings
+            .slice(0, 8)
+            .map((o) => `'${o}'`)
+            .join(", ")}. These are the OPENINGS of sentence 1 on cards this job already serves, and the gate compares YOUR sentence 1 the same way: it takes your body's first ${SUMMARY_OPENING_RUN_WORDS} words after any leading clock and refuses the card when they are one of these. Start the card on a different attested actor-and-act from the lists above — not one of these runs with the clock moved.`,
+        ]
       : []),
     ...(input.avoidSentences && input.avoidSentences.length > 0
       ? [

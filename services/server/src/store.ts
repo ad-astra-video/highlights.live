@@ -448,6 +448,10 @@ export class Store {
       summaryRepairedWords?: number;
       /** ADAAAA-9031 (AC5 §13.2): why a second summary call was billed. */
       summaryRetryReason?: string;
+      /** ADAAAA-9177 (AC1/lever 3): the prompt's avoid block for this row, so the
+       *  "did the writer see the served openings / spent pairs" question is a row
+       *  read instead of a replay. */
+      summaryPromptAvoid?: { openings: string[]; acts: string[] };
     }
   ): Promise<HighlightRecord> {
     const h = this.highlights.get(id);

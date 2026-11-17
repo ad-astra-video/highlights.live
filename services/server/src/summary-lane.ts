@@ -52,6 +52,7 @@ import {
   type SummaryRetryDirective,
   attestedActorNames,
   summarySpentActPairs,
+  summarySpentOpenings,
 } from "@highlights/events";
 
 /** ADAAAA-9031 (AC5 / spec §13.2): why a row took a SECOND summary call, or — since
@@ -92,6 +93,10 @@ export interface SummaryLaneStore {
       summaryRepairedWords?: number;
       /** ADAAAA-9031: the reason a second call was billed (AC5 §13.2). */
       summaryRetryReason?: string;
+      /** ADAAAA-9177 (AC1/lever 3): the prompt's avoid block as rendered, persisted
+       *  on the row so "did `avoidOpenings`/`avoidActs` reach the writer" is a row
+       *  read. */
+      summaryPromptAvoid?: { openings: string[]; acts: string[] };
     }
   ): Promise<unknown>;
 }
@@ -421,10 +426,11 @@ export async function runSummaryForRow(
     token: string;
     /** The drop NAME the repair's own refusal earns (`filler` for a remainder the
      *  clause drop took under the band floor, `gate` for a content bar the repair
-     *  cannot fix). The row is named by the repair, not by the repeat that started
+     *  cannot fix, `repeat` for a remainder that still repeats after the drop —
+     *  ADAAAA-9177). The row is named by the repair, not by the repeat that started
      *  it: AC14.3's own order is "regenerate once, then drop the clause", and the
      *  clause drop is what the copy died of. */
-    name: Extract<SummaryDropReason, "filler" | "gate">;
+    name: Extract<SummaryDropReason, "filler" | "gate" | "repeat">;
     decision: ReturnType<typeof gateSummaryDetail>;
     /** The WRITER's own reply (pre-prune). A repair that dropped every repeated
      *  sentence leaves an empty post-prune body, so this is the text `summaryRaw`
@@ -439,6 +445,28 @@ export async function runSummaryForRow(
    *  what tripped the repeat key on 3 of the rev-13 VOD job's 20 rows. */
   const gateOptions =
     state && state.servedSentences.length > 0 ? { avoidSentences: [...state.servedSentences] } : undefined;
+  /** ADAAAA-9177 (AC1 / lever 3): the avoid block the prompt renders, built ONCE
+   *  per row from the same two lists the prompt call gets — same order, same
+   *  truncation (`slice(0, 8)` openings, `slice(0, 10)` pairs) — so the block
+   *  persisted on the row is byte-for-byte what the model was shown. The state
+   *  cannot change mid-row (only a SERVED row spends anything), so one build per
+   *  row is exact rather than approximate.
+   *
+   *  The openings come from `servedOpenings`, the AC8 structure the lane has kept
+   *  since rev 3; `summarySpentOpenings` re-derives them from the served bodies
+   *  for a caller that hydrates bodies without replaying the set (a replay tool),
+   *  and both derivations read the same `summaryOpeningRun`. */
+  const avoidOpenings =
+    servedOpenings && servedOpenings.size > 0
+      ? [...servedOpenings]
+      : state
+        ? summarySpentOpenings(state.servedBodies.map((served) => served.body))
+        : [];
+  const avoidActs = state ? [...state.servedActs] : [];
+  const promptAvoid =
+    avoidOpenings.length > 0 || avoidActs.length > 0
+      ? { openings: avoidOpenings.slice(0, 8), acts: avoidActs.slice(0, 10) }
+      : null;
   const started = now();
   for (let attempt = 1; attempt <= SUMMARY_MAX_CALLS_PER_ROW; attempt++) {
     // AC8 prompt-first: the regeneration (and any retry) is asked to avoid the
@@ -448,7 +476,10 @@ export async function runSummaryForRow(
     // differ from them, because only the lane can see the other cards.
     const prompt = buildSummaryPrompt({
       ...evidence,
-      ...(servedOpenings && servedOpenings.size > 0 ? { avoidOpenings: [...servedOpenings] } : {}),
+      // ADAAAA-9177 (rev-20): the OPENINGS come first in the avoid block, and the
+      // prompt states plainly that sentence 1's opening is what is compared —
+      // `avoidActs` alone let three cards open on one spent pair on job `798f21c2`.
+      ...(avoidOpenings.length > 0 ? { avoidOpenings } : {}),
       ...(state && state.servedSentences.length > 0 ? { avoidSentences: [...state.servedSentences] } : {}),
       // ADAAAA-9121 (writer round 3): rotate the SUBSTANCE, not only the shape.
       // ADAAAA-9089 banned the frame shapes and the writer still re-emitted one
@@ -456,7 +487,7 @@ export async function runSummaryForRow(
       // has one pair to spend per sentence and the model picks the same one. The
       // job's spent pairs go to the FIRST pass too (not the retry alone), so the
       // repetition never happens instead of being repaired by a paid second call.
-      ...(state && state.servedActs.length > 0 ? { avoidActs: [...state.servedActs] } : {}),
+      ...(avoidActs.length > 0 ? { avoidActs } : {}),
       // ADAAAA-8803/8806: the retry directive carries the refused draft's
       // measured shape AND its violations, so the repair line can name both the
       // shortfall and the missing fact.
@@ -619,21 +650,49 @@ export async function runSummaryForRow(
       // on `key === "sentence"` made ADAAAA-9052's repair unreachable for the class
       // and the row dropped with the pre-prune decision on it (rev-13 VOD row
       // `369ff147`, `repeat-opening`).
-      if (repeat.repeatedSentences.length > 0) {
+      //
+      // ADAAAA-9177 (rev-20): that assumption only held when the two cards also
+      // shared a whole SENTENCE. On job `798f21c2` the openings collided and the
+      // bodies did not (`closestSentence=none` on `f7f62ed8` and `d9dc73b6`), so
+      // `repeatedSentences` was EMPTY, no clause drop ran, and both rows dropped
+      // with the pre-prune decision — `summaryViolations: []`, which reads as a bar
+      // nothing pointed at. The opening run IS sentence 1, so an `opening` repeat
+      // puts sentence 1 in the drop list whether or not a whole sentence repeated.
+      // That is the "force a different opening" half of the AC2 lever done at `$0`:
+      // the drop and the re-gate ride the SAME call, so no second sample is billed
+      // (AC4) and the served body cannot share the spent opening by construction.
+      // A row whose opening did NOT repeat keeps the pre-9177 list exactly.
+      const repairClauses =
+        repeat.openingRepeat && decision.summary
+          ? [...new Set([...repeat.repeatedSentences, summarySentencesOf(decision.summary)[0] ?? ""])].filter(
+              (sentence) => sentence.trim().length > 0
+            )
+          : repeat.repeatedSentences;
+      if (repairClauses.length > 0) {
         const prune = pruneRepeatedSentences(
           decision.summary,
-          repeat.repeatedSentences,
+          repairClauses,
           evidence,
           state?.servedSentences ?? []
         );
         const prunedDecision = gateSummaryDetail(prune.text, evidence, gateOptions);
-        if (prunedDecision.summary) {
+        // ADAAAA-9177: the re-gate does not read AC8 (and never read AC14), so a
+        // pruned body must also clear the repeat key before it can serve. This is
+        // the measured rev-19 shape on row `03cdc053`: its collision was sentence
+        // 2, the prune dropped sentence 2, and the SERVED body still opened on
+        // `portugal dispossesses the ball` — a served AC8 violation that the
+        // sentence-similarity grade could not see. A remainder that still repeats
+        // drops as `repeat` with the mechanism named on the row (`prune:repeat`).
+        const prunedRepeat = prunedDecision.summary
+          ? summaryRepeatKey(prune.text, evidence, state?.servedBodies ?? [])
+          : null;
+        if (prunedDecision.summary && (prunedRepeat === null || prunedRepeat.key === null)) {
           accepted = prunedDecision;
-          prunedSentences = repeat.repeatedSentences;
+          prunedSentences = repairClauses;
           prunedSubstituted = prune.substituted.length;
           retryReason = retryReason ?? (repeat.key === "opening" ? "repeat-opening" : "repeat-sentence");
           log(
-            `[summary:${descriptor.jobId}] repeat-clause-drop highlight=${descriptor.highlightId} dropped=${repeat.repeatedSentences.length} substituted=${prune.substituted.length} words=${prunedDecision.words} ${inputs}`
+            `[summary:${descriptor.jobId}] repeat-clause-drop highlight=${descriptor.highlightId} dropped=${repairClauses.length} substituted=${prune.substituted.length} words=${prunedDecision.words} opening=${JSON.stringify(summaryOpeningRun(prune.text))} ${inputs}`
           );
         } else {
           // ADAAAA-9085: keep the REPAIR's own refusal, not the pre-prune decision.
@@ -641,12 +700,17 @@ export async function runSummaryForRow(
           // separate "the row's evidence offered no admissible fact" from "the
           // writer's body violated a bar"; the drop path below then persists this
           // decision's violations / words / droppedClauses.
-          const survivors = (decision.sentences ?? 0) - repeat.repeatedSentences.length;
+          //
+          // ADAAAA-9177: a remainder that still repeats is a REPEAT refusal, not a
+          // depth or content one — named `prune:repeat` so the row says why.
+          const stillRepeats = prunedDecision.summary !== null && prunedRepeat?.key != null;
+          const survivors = (decision.sentences ?? 0) - repairClauses.length;
           const depthOnly = prunedDecision.violations.every(
             (violation) => violation === "too-few-words" || violation === "too-few-sentences"
           );
-          const repairName: Extract<SummaryDropReason, "filler" | "gate"> =
-            prunedDecision.violations.length > 0 && depthOnly
+          const repairName: Extract<SummaryDropReason, "filler" | "gate" | "repeat"> = stillRepeats
+            ? "repeat"
+            : prunedDecision.violations.length > 0 && depthOnly
               ? "filler"
               : summaryDropReasonName(prunedDecision, evidence);
           repairRefused = {
@@ -654,12 +718,12 @@ export async function runSummaryForRow(
             name: repairName,
             decision: prunedDecision,
             raw: decision.raw,
-            dropped: repeat.repeatedSentences.length,
+            dropped: repairClauses.length,
             substituted: prune.substituted.length,
             survivors: survivors > 0 ? survivors : 0,
           };
           log(
-            `[summary:${descriptor.jobId}] repeat-prune-refused highlight=${descriptor.highlightId} reason=prune:${repairName} dropped=${repeat.repeatedSentences.length} substituted=${prune.substituted.length} survivors=${survivors > 0 ? survivors : 0} words=${prunedDecision.words} violations=${prunedDecision.violations.join(",")} ${inputs}`
+            `[summary:${descriptor.jobId}] repeat-prune-refused highlight=${descriptor.highlightId} reason=prune:${repairName} dropped=${repairClauses.length} substituted=${prune.substituted.length} survivors=${survivors > 0 ? survivors : 0} words=${prunedDecision.words} violations=${prunedDecision.violations.join(",")}${stillRepeats ? ` stillRepeats=${prunedRepeat?.key}` : ""} ${inputs}`
           );
         }
       }
@@ -709,6 +773,10 @@ export async function runSummaryForRow(
       summaryDropped: 0,
       summaryP95Ms: latencyMs,
       ...(retryReason ? { summaryRetryReason: retryReason } : {}),
+      // ADAAAA-9177 (AC1): the avoid block this row's prompt carried, so the next
+      // grade reads "did the writer see the served openings" off the row instead of
+      // writing `not_captured`.
+      ...(promptAvoid ? { summaryPromptAvoid: promptAvoid } : {}),
       ...(prunedSentences.length > 0
         ? {
             summaryDroppedSentences: (accepted.droppedSentences ?? 0) + prunedSentences.length,
@@ -718,6 +786,8 @@ export async function runSummaryForRow(
     });
     log(
       `[summary:${descriptor.jobId}] stored highlight=${descriptor.highlightId} words=${accepted.words} sentences=${accepted.sentences} gate=${accepted.gate} calls=${calls} ms=${latencyMs} opening=${JSON.stringify(opening)} clockToken=${JSON.stringify(clockTokensOf(servedBody))} matchClockToken=${JSON.stringify(attestedMatchClockToken(evidence))} retryReason=${JSON.stringify(retryReason)}${
+        promptAvoid ? ` avoid=${JSON.stringify(promptAvoid)}` : ""
+      }${
         accepted.droppedClauses.length > 0
           ? ` droppedClauses=${accepted.droppedClauses.length} substitutedClauses=${accepted.substitutedClauses.length} repairedWords=${accepted.repairedWords}`
           : ""
@@ -764,6 +834,9 @@ export async function runSummaryForRow(
     summaryDroppedByReason: { [reason]: 1 },
     summaryP95Ms: latencyMs,
     ...(retryReason ? { summaryRetryReason: retryReason } : {}),
+    // ADAAAA-9177 (AC1): a DROPPED row carries the same block, so a census can read
+    // "the writer was told" beside "the writer still repeated" without a leg.
+    ...(promptAvoid ? { summaryPromptAvoid: promptAvoid } : {}),
     // ADAAAA-9085: the repair's own outcome rides the row. Without it a census
     // reads a repaired-then-refused row as a clean body dropped for repeating.
     ...(repairRefused
@@ -789,7 +862,7 @@ export async function runSummaryForRow(
     }
   }
   log(
-    `[summary:${descriptor.jobId}] dropped (${reason}) highlight=${descriptor.highlightId} calls=${calls}${lastGate ? ` violations=${lastGate.violations.join(",")} raw=${JSON.stringify((raw ?? "").slice(0, 200))}` : ""}`
+    `[summary:${descriptor.jobId}] dropped (${reason}) highlight=${descriptor.highlightId} calls=${calls}${lastGate ? ` violations=${lastGate.violations.join(",")} raw=${JSON.stringify((raw ?? "").slice(0, 200))}` : ""}${promptAvoid ? ` avoid=${JSON.stringify(promptAvoid)}` : ""}`
   );
   return { outcome: "dropped", reason, gate: lastGate?.gate, calls, latencyMs };
 }

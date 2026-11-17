@@ -116,14 +116,23 @@ describe("AC8 — the opening guard is per-row and JOB-scoped", () => {
 
     const second = await runSummaryForRow(store, run, { jobId: "j1", highlightId: "h2", evidence: evidence() }, state);
     // ADAAAA-9120 (AC5 envelope): the repeat refusal is DETERMINISTIC, so the row
-    // ends on ONE call — no paid regeneration, and the second body is DROPPED.
+    // ends on ONE call — no paid regeneration, and the second body never serves.
+    // ADAAAA-9177 (rev-20): the row now takes the deterministic clause repair on
+    // that same call (the opening run IS sentence 1), and this evidence offers the
+    // repair no admissible fact — its only pool sentence is frame narration the
+    // write seam deletes — so the remainder falls under the live floor and the row
+    // is named by the repair: `filler`, with `summaryRepairRefused: prune:filler`
+    // beside `summaryRetryReason: repeat-opening` on the row. The AC8 invariant is
+    // unchanged: the job still holds exactly one body with that opening.
     expect(second.outcome).toBe("dropped");
-    expect(second.reason).toBe("repeat");
+    expect(second.reason).toBe("filler");
     expect(second.calls).toBe(1);
     expect(patches[1].id).toBe("h2");
     expect(patches[1].patch.summary).toBeUndefined();
-    expect(patches[1].patch.summaryGate).toBe("dropped:repeat");
-    expect(patches[1].patch.summaryDroppedByReason).toEqual({ repeat: 1 });
+    expect(patches[1].patch.summaryGate).toBe("dropped:filler");
+    expect(patches[1].patch.summaryDroppedByReason).toEqual({ filler: 1 });
+    expect(patches[1].patch.summaryRepairRefused).toBe("prune:filler");
+    expect(patches[1].patch.summaryRetryReason).toBe("repeat-opening");
     // Only ONE body in this job carries that opening.
     const openings = patches.map((p) => p.patch.summary).filter(Boolean).map((s) => summaryOpeningRun(String(s)));
     expect(openings).toEqual([servedOpening]);
@@ -229,7 +238,15 @@ describe("AC8 — a repeat drop never blanks the card", () => {
     }
     // AC8's `not_captured` close: the refused body is replayable at
     // $0 by QA, the same way ADAAAA-8687 stores a gate refusal.
-    expect(drop.summaryRaw).toBe(SAME_OPENING_B);
+    // ADAAAA-9177 (rev-20): the opening repeat now runs the deterministic clause
+    // repair on the row's own call, so the persisted text is the remainder the
+    // repair JUDGED — the same rule ADAAAA-9120 pins for a repeat refusal (the
+    // writer's whole reply survives only when the clause drop emptied the body).
+    // The offending opening sentence is gone from it, which is what makes the
+    // refusal replayable as evidence rather than as the draft that dropped.
+    expect(String(drop.summaryRaw)).toContain("Northbridge recovers the ball as the move opens up.");
+    expect(String(drop.summaryRaw)).not.toContain("The midfielder drives forward for Northbridge");
+    expect(drop.summaryRepairRefused).toBe("prune:filler");
     // ADAAAA-9120: one call per row by construction, even on the repeat drop.
     expect(drop.summaryCalls).toBe(1);
     expect(drop.summaryDropped).toBe(1);
@@ -250,7 +267,13 @@ describe("AC8 — the repeat reason is readable on the row AND the job", () => {
     expect(patches[0].patch.summary).toBe(NEUTRALISED_A);
     for (const dropped of patches.slice(1)) {
       expect(dropped.patch.summary).toBeUndefined();
-      expect(dropped.patch.summaryDroppedByReason).toEqual({ repeat: 1 });
+      // ADAAAA-9177 (rev-20): the row is named by the repair that refused it
+      // (`prune:filler` — the opening sentence is dropped and this evidence offers
+      // no admissible fact to restore the floor), so the drop CLASS is the depth
+      // one and the AC8 cause stays readable beside it as `summaryRetryReason`.
+      expect(dropped.patch.summaryDroppedByReason).toEqual({ filler: 1 });
+      expect(dropped.patch.summaryRetryReason).toBe("repeat-opening");
+      expect(dropped.patch.summaryRepairRefused).toBe("prune:filler");
     }
     expect(SUMMARY_LANE_PENDING_RING).toBeGreaterThanOrEqual(2);
 
@@ -258,13 +281,13 @@ describe("AC8 — the repeat reason is readable on the row AND the job", () => {
     // ADAAAA-9120: three rows, three calls (h2/h3 drop on their first call).
     expect(meter.summaryCalls).toBe(3);
     expect(meter.summaryDropped).toBe(2);
-    expect(meter.summaryDroppedByReason).toEqual({ repeat: 2 });
+    expect(meter.summaryDroppedByReason).toEqual({ filler: 2 });
     // The job record publishes the same rollup, so "this job lost its bodies to
     // repetition" is a read, not a log grep.
     expect(jobSummaryMeterFields(meter)).toMatchObject({
       summaryCalls: 3,
       summaryDropped: 2,
-      summaryDroppedByReason: { repeat: 2 },
+      summaryDroppedByReason: { filler: 2 },
     });
   });
 });

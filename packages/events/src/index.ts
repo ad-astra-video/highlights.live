@@ -2546,6 +2546,27 @@ export const HighlightRecordSchema = z.object({
    *  refusal is the "no admissible fact left" class. */
   summaryRepairDroppedSentences: z.number().int().min(0).optional(),
   summaryRepairSubstitutedSentences: z.number().int().min(0).optional(),
+  /** ADAAAA-9177 (AC1 / lever 3): the AVOID BLOCK the writer's prompt carried for
+   *  THIS row — the served cards' opening runs and spent actor-and-act pairs, in
+   *  the same order and the same truncation the prompt renders (`slice(0, 8)` /
+   *  `slice(0, 10)`), so the bytes here are the bytes the model saw.
+   *
+   *  The summary writer prompt is persisted NOWHERE else: on job `798f21c2` the two
+   *  summary-prompt control phrases appear in 0 of 167 `decide_audit` rows and a
+   *  served row keeps no prompt text, so "did `avoidActs` / `avoidOpenings` reach
+   *  the writer" was `not_captured` from stored bytes and the AC4 grade had to be
+   *  written off a source read instead of a row read. Persisting the block makes
+   *  that question gradable at `$0`, from the row itself.
+   *
+   *  Absent on the FIRST card of a job (nothing is spent yet) and on legacy rows. */
+  summaryPromptAvoid: z
+    .object({
+      /** Served opening runs the prompt listed (`summarySpentOpenings` order). */
+      openings: z.array(z.string()),
+      /** Served actor-and-act pairs the prompt listed (`summarySpentActPairs`). */
+      acts: z.array(z.string()),
+    })
+    .optional(),
   // ADAAAA-7965 (contract v5 §3.1, R18): the measured signal the colour beat in
   // `reason` was derived from, with the frame that confirms it.
   colour: ColourSignalSchema.optional(),
