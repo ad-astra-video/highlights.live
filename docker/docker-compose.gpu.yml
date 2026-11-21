@@ -98,3 +98,11 @@ services:
   server:
     environment:
       - PERCEIVE_CLIP_ROOT=${PERCEIVE_CLIP_ROOT:-/data}
+    # ADAAAA-8099: restated deliberately so a `-f docker-compose.yml
+    # -f docker-compose.gpu.yml` deploy is self-describing; the values MUST match
+    # the base block (deploy-compose-log-retention-8099.test.ts fails on drift).
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "4"

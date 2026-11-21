@@ -1004,6 +1004,18 @@ services:
       - MAILER_TOKEN=${MAILER_TOKEN:-dev-mailer-token}
     ports:
       - "3000:3000"
+    # ADAAAA-8099: bound the container's json-file log so disk cannot creep (the
+    # disk alert chain is sensitive). This is NOT the durable copy — a recreate
+    # removes the container and its json-file log with it. The durable evidence
+    # is `${DATA_DIR}/logs/server.log` under the bind mount below; the server
+    # tees stdout/stderr into it and rotates in-process (services/server/src/
+    # log-file.ts, 25 MiB x 5 files). QA reads lane lines after a deploy from the
+    # file, not from `docker logs`.
+    logging:
+      driver: json-file
+      options:
+        max-size: "25m"
+        max-file: "4"
     volumes:
       - ./data:/data
     depends_on:

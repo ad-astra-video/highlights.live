@@ -19,6 +19,7 @@ import { outcomeForStrandedJob } from "./job-failure";
 import { accruedSecondsSince, buildTerminalAccountingPatch } from "./job-settlement";
 import { isLiveWatchSession } from "./live-watch-minutes";
 import { reconcileStaleMediaSessions } from "./media-session-reconcile";
+import { installLogFileTee, serverLogFilePath } from "./log-file";
 import Stripe from "stripe";
 
 /** Schedule the rejected-clip TTL sweep (runs at least once per `interval`,
@@ -75,6 +76,12 @@ function scheduleDatasetPurgeSweep(
 }
 
 async function main() {
+  // ADAAAA-8099: tee stdout/stderr into `${DATA_DIR}/logs/server.log` (compose
+  // bind-mounts it from the host) before anything else boots. A recreate deletes
+  // the container's json-file log, which is what voided the ADAAAA-8057/8058 QA
+  // legs; the teed file outlives the container. Bounded rotation lives in
+  // log-file.ts; the sink never throws into the serving path.
+  installLogFileTee({ file: serverLogFilePath() });
   const cfg = loadConfig();
   // ADAAAA-7758: wire the live decide admission switch before any rail starts.
   liveDecideAdmission.configure(cfg.liveDecideAdmission);
