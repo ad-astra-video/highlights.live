@@ -68,6 +68,68 @@ Acceptance after a real deploy: `GET /assets/<hash>.js` for each of the last
 and the real bundle size, and an unretained hash returns 404 rather than
 `text/html`.
 
+### Edge caching of the serve path (ADAAAA-9312)
+
+The public origin sits behind Cloudflare, and Cloudflare caches an origin
+response that carries **no** `cache-control` header for its default edge TTL
+(observed as `cache-control: max-age=14400`, `cf-cache-status: HIT`, i.e. 4 h).
+That is how the pre-fix bug outlived its fix: the old build cached the fallback
+document at `/assets/index-<hash>.js`, so the public origin kept answering
+`200 text/html` for four hours after the image answered
+`404 application/json`; the same path with a cache-buster reached the origin and
+proved it. A 404 is cacheable at the edge too, so a miss in the seconds before
+`archiveWebappBuild` finishes would be pinned the same way.
+
+The SPA handler now states a policy on every response it emits, in both
+`Cache-Control` and `CDN-Cache-Control` (Cloudflare gives the latter precedence
+at the edge):
+
+| response | policy | why |
+| --- | --- | --- |
+| asset-404, unknown `/api/` route, traversal refusal | `no-store` | a cached failure would hide the retained asset, or a route a later deploy adds, for the whole edge TTL |
+| SPA document (`/`, `/index.html`, history fallback) | `no-cache` | an edge-pinned `index.html` names asset hashes the current image no longer ships |
+| content-hashed asset (`assets/*-<hash>.js`, `assets/*.<hash>.css`, served from the live dist or a retained snapshot) | `public, max-age=31536000, immutable` | the URL pins the bytes, so a stale tab can keep loading its own build |
+
+Verification after a deploy (AC2): the 404 body and both headers must appear at
+the public origin, on a first request and again without a cache-buster ~1 s
+later — record the pair in the deploy ticket.
+
+```sh
+curl -sSI https://<PUBLIC_HOST>/assets/index-DOESNOTEXIST.js
+# HTTP/2 404
+# content-type: application/json
+# cache-control: no-store
+# cdn-cache-control: no-store
+# cf-cache-status: MISS   (or BYPASS/DYNAMIC)
+```
+
+Purging: **no purge credential exists on the box** — measured on the GPU box, `awk -F= '/^[A-Z_]+=/{print $1}' docker/.env | grep -iE
+'cloudflare|cf_'` prints nothing. So a deploy cannot invalidate entries an
+earlier build wrote; the edge TTL governs (up to 4 h) for anything cached
+before the header change landed, and a `?v=<random>` query is the way to
+confirm the origin while waiting.
+
+If a purge capability is ever sanctioned, it needs a **zone-scoped Cache Purge
+token** for the `<PUBLIC_HOST>` zone, stored only on the box as two env vars:
+
+| env | meaning |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | scoped token with Zone → Cache Purge → Purge permission for that zone only (never a global API key) |
+| `CLOUDFLARE_ZONE_ID` | the zone id the token is scoped to |
+
+The deploy path would then purge the fallback entries after the recreate:
+
+```sh
+curl -sS -X POST \
+  "https://<CF_API_HOST>/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
+  --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  --header "Content-Type: application/json" \
+  --data '{"files":["https://<PUBLIC_HOST>/assets/index-<old-hash>.js"]}'
+```
+
+(`{"prefixes":["https://<PUBLIC_HOST>/assets/"]}` purges the whole asset prefix
+at once; both need the token above, so neither can run today.)
+
 The live service runs on the deployment GPU box from the repo source,
 served behind the Cloudflare tunnel (`cloudflared`) at
 `https://<PUBLIC_HOST>`. The canonical stack is defined in

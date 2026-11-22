@@ -9697,13 +9697,52 @@ export function scoreboardSurfaceTracker(
   };
 }
 
+/**
+ * Cache policy for the SPA serve path (ADAAAA-9312).
+ *
+ * Cloudflare caches an origin response that carries no `cache-control` header
+ * for its default 4 h edge TTL, so an asset-404 written before ADAAAA-7917 kept
+ * being served as the pre-fix `200 text/html` fallback long after the origin
+ * answered correctly. Every response this handler emits therefore states its
+ * policy, and states it in `CDN-Cache-Control` as well because Cloudflare gives
+ * that header precedence over `Cache-Control` at the edge.
+ */
+const CACHE_NO_STORE = "no-store";
+/** The SPA document must revalidate: an edge-pinned index.html names asset
+ * hashes a later deploy no longer ships. */
+const CACHE_REVALIDATE = "no-cache";
+/** A content-hashed asset URL pins its bytes, so it may be cached forever. */
+const CACHE_IMMUTABLE_ASSET = "public, max-age=31536000, immutable";
+
+/** Vite content-hash shape: `assets/index-CNBH-rmM.js`, `assets/chunk.4f9a1c2b.css`. */
+function isContentHashedAsset(relPath: string): boolean {
+  const clean = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!clean.startsWith("assets/")) return false;
+  const base = clean.slice(clean.lastIndexOf("/") + 1);
+  return /(?:^|[.-])[A-Za-z0-9_-]{6,}\.[A-Za-z0-9]+$/.test(base);
+}
+
+function replyNoStore(reply: any, code: number, payload: unknown) {
+  reply.header("Cache-Control", CACHE_NO_STORE);
+  reply.header("CDN-Cache-Control", CACHE_NO_STORE);
+  return reply.code(code).send(payload);
+}
+
+function replyWithPolicy(reply: any, policy: string, type: string, body: any) {
+  reply.header("Cache-Control", policy);
+  reply.header("CDN-Cache-Control", policy);
+  return reply.type(type).send(body);
+}
+
 function spaHandler(cfg: ServerConfig) {
   return async (req: any, reply: any) => {
-    if (req.method !== "GET" && req.method !== "HEAD") return reply.code(404).send({ error: "not found" });
+    if (req.method !== "GET" && req.method !== "HEAD")
+      return replyNoStore(reply, 404, { error: "not found" });
     const dist = resolveWebappDist(cfg);
     const url = (req.url.split("?")[0] ?? "/");
     // API-only mode (no built webapp) or an unknown API route -> JSON 404.
-    if (!dist || url.startsWith("/api/")) return reply.code(404).send({ error: "not found" });
+    // Cached at the edge this would hide a route a later deploy adds.
+    if (!dist || url.startsWith("/api/")) return replyNoStore(reply, 404, { error: "not found" });
     let rel: string;
     try {
       rel = decodeURIComponent(url).replace(/^\/+/, "") || "index.html";
@@ -9714,7 +9753,7 @@ function spaHandler(cfg: ServerConfig) {
     const filePath = path.normalize(path.join(dist, rel));
     // Path-traversal guard: resolved path must stay inside dist.
     if (filePath !== distNorm && !filePath.startsWith(distNorm + path.sep)) {
-      return reply.code(403).send("forbidden");
+      return replyNoStore(reply, 403, "forbidden");
     }
     let abs: string;
     if (existsSync(filePath) && statSync(filePath).isFile()) {
@@ -9729,14 +9768,22 @@ function spaHandler(cfg: ServerConfig) {
         abs = retained;
       } else if (isStaticAssetPath(rel)) {
         // AC2: an asset path that is not retained must fail observably, never
-        // fall back to the SPA document.
-        return reply.code(404).send({ error: "asset not found", path: rel });
+        // fall back to the SPA document — and never be cached (AC1 of
+        // ADAAAA-9312): an edge-pinned 404 outlives the retention that would
+        // have answered it a second later.
+        return replyNoStore(reply, 404, { error: "asset not found", path: rel });
       } else {
         abs = path.join(dist, "index.html");
       }
     }
     const ext = path.extname(abs).toLowerCase();
-    return reply.type(SPA_MIME[ext] || "application/octet-stream").send(createReadStream(abs));
+    const policy =
+      ext === ".html"
+        ? CACHE_REVALIDATE
+        : isContentHashedAsset(rel)
+          ? CACHE_IMMUTABLE_ASSET
+          : CACHE_REVALIDATE;
+    return replyWithPolicy(reply, policy, SPA_MIME[ext] || "application/octet-stream", createReadStream(abs));
   };
 }
 
