@@ -681,6 +681,12 @@ services:
       # a max-size job stages ~4 GiB, times VOD_WORKER_CONCURRENCY.
       - VOD_MAX_UPLOAD_BYTES=${VOD_MAX_UPLOAD_BYTES:-4294967296}
       - FFMPEG_PATH=ffmpeg
+      # ADAAAA-7917: webapp build-retention window. The server snapshots each
+      # build's dist into ${DATA_DIR}/webapp-assets at boot (DATA_DIR is the
+      # ./data bind mount, so snapshots survive a recreate) and serves an older
+      # content hash from the newest snapshot that still has it. Default 5 keeps
+      # the last 5 deploys' assets; 0 disables retention (missing assets 404).
+      - WEBAPP_ASSET_RETENTION=${WEBAPP_ASSET_RETENTION:-5}
       # ADAAAA-7855: the match-context resolver's ONE bounded commentary probe
       # per VOD job calls the same cheap CPU ASR service the decide path uses
       # (no Livepeer GPU). Unset/unreachable => the ASR source is not_captured

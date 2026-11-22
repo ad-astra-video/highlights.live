@@ -5,6 +5,7 @@ import { resolveExportTokenSecret } from "./export-token";
 import { LIVE_OBSERVE_LAG_BUDGET_S, resolveDecideImageBudget } from "./observe-loop";
 import { LIVE_SUPPLY_STALL_S } from "./live-supply-stall";
 import { normalizeConfirmDiveCap } from "./live-confirm-async";
+import { WEBAPP_ASSET_RETENTION_DEFAULT } from "./webapp-asset-retention";
 
 export interface ServerConfig {
   port: number;
@@ -595,6 +596,15 @@ export interface ServerConfig {
    * reachable over HTTPS. Falls back to the repo-local `webapp/dist` when the
    * directory exists; empty disables SPA serving (API-only). */
   webappDist?: string;
+  /** ADAAAA-7917: how many built-webapp snapshots the server keeps across
+   * deploys (default 5, `WEBAPP_ASSET_RETENTION`). Snapshots live under
+   * `webappAssetArchiveDir` on the bind-mounted data volume, so a stale tab can
+   * still load a module hash from an older build. 0 disables retention (a
+   * missing asset path then 404s instead of answering the SPA document). */
+  webappAssetRetention: number;
+  /** Directory holding retained webapp build snapshots. Default
+   * `${dataDir}/webapp-assets` (`WEBAPP_ASSET_ARCHIVE_DIR` to override). */
+  webappAssetArchiveDir: string;
   /** Root directory (server-visible) where completed fine-tune artifacts are
    * staged for user download (ADAAAA-5323). The train runner emits a LoRA
    * adapter file per run; in direct/shared-mount deployments the server reads
@@ -1248,6 +1258,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // ADAAAA-7904: resolved above — production refuses the published default.
     adminPassword,
     webappDist: env.WEBAPP_DIST || "",
+    // ADAAAA-7917: retained webapp build snapshots. The archive lives on the
+    // bind-mounted data volume so a deploy (image rebuild) does not remove the
+    // previous builds' content-hashed assets. A malformed count falls back to
+    // the documented default; 0 disables retention explicitly.
+    webappAssetRetention: (() => {
+      const raw = env.WEBAPP_ASSET_RETENTION?.trim();
+      // Unset (or empty) keeps the documented default; Number("") would be 0
+      // and silently disable retention on every deploy that does not set it.
+      if (!raw) return WEBAPP_ASSET_RETENTION_DEFAULT;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : WEBAPP_ASSET_RETENTION_DEFAULT;
+    })(),
+    webappAssetArchiveDir:
+      env.WEBAPP_ASSET_ARCHIVE_DIR || path.join(env.DATA_DIR ?? "data", "webapp-assets"),
     trainArtifactRoot: env.TRAIN_ARTIFACT_ROOT || path.join(env.DATA_DIR ?? "data", "train-artifacts"),
     // Increment A (the annotation loop) publishes curated train/val manifests
     // to <dataDir>/../evals via /training/manifests — this is the default feed

@@ -8,6 +8,7 @@ import { rm } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { archiveWebappBuild, isStaticAssetPath, resolveRetainedAsset } from "./webapp-asset-retention";
 import { clipWindow, validateClipWindow } from "./config";
 import type { ServerConfig } from "./config";
 import type { ClipCutWindow } from "./clip-placement";
@@ -9126,6 +9127,30 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
     }
   });
 
+  // ADAAAA-7917: snapshot this build's webapp assets before serving, so an
+  // older tab keeps resolving its content hashes after the next deploy. The
+  // archive lives on the bind-mounted data volume (`${DATA_DIR}/webapp-assets`)
+  // and keeps `WEBAPP_ASSET_RETENTION` (default 5) newest builds. Best-effort:
+  // a filesystem error must not block serving.
+  const spaDist = resolveWebappDist(cfg);
+  // Only snapshot when the dist is explicitly configured (deploy sets
+  // WEBAPP_DIST): the repo-local dev fallback must not write archives on every
+  // test/dev boot.
+  if (cfg.webappDist && spaDist && cfg.webappAssetRetention > 0) {
+    try {
+      const archived = archiveWebappBuild(spaDist, cfg.webappAssetArchiveDir, cfg.webappAssetRetention);
+      if (archived.buildKey) {
+        console.log(
+          `[webapp] retained build ${archived.buildKey} files=${archived.copiedFiles} ` +
+            `snapshots=${archived.retainedBuilds.length} retention=${cfg.webappAssetRetention}` +
+            (archived.prunedBuilds.length ? ` pruned=${archived.prunedBuilds.join(",")}` : "")
+        );
+      }
+    } catch (e: any) {
+      console.warn(`[webapp] build retention failed: ${String(e?.message || e)}`);
+    }
+  }
+
   // Serve the built webapp (SPA) for any unmatched GET; API routes above win.
   attachSpaServing(app, cfg);
 
@@ -9686,7 +9711,25 @@ function spaHandler(cfg: ServerConfig) {
     if (filePath !== distNorm && !filePath.startsWith(distNorm + path.sep)) {
       return reply.code(403).send("forbidden");
     }
-    const abs = existsSync(filePath) && statSync(filePath).isFile() ? filePath : path.join(dist, "index.html");
+    let abs: string;
+    if (existsSync(filePath) && statSync(filePath).isFile()) {
+      abs = filePath;
+    } else {
+      // ADAAAA-7917: a tab loaded before a deploy asks for a content-hashed
+      // asset that the new image no longer ships. Serve it from the newest
+      // retained build snapshot instead of answering index.html — receiving
+      // `text/html` for a `.js` module is a failed module load and a dead page.
+      const retained = resolveRetainedAsset(cfg.webappAssetArchiveDir, rel);
+      if (retained) {
+        abs = retained;
+      } else if (isStaticAssetPath(rel)) {
+        // AC2: an asset path that is not retained must fail observably, never
+        // fall back to the SPA document.
+        return reply.code(404).send({ error: "asset not found", path: rel });
+      } else {
+        abs = path.join(dist, "index.html");
+      }
+    }
     const ext = path.extname(abs).toLowerCase();
     return reply.type(SPA_MIME[ext] || "application/octet-stream").send(createReadStream(abs));
   };

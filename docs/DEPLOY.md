@@ -33,6 +33,41 @@ npm run build -w @highlights/webapp        # SPA tsc + vite build
 
 ## Deploy to the box (<GPU_BOX_HOST> / <PUBLIC_HOST>)
 
+### Webapp build retention (ADAAAA-7917)
+
+Every deploy rebuilds `webapp/dist` inside the `highlights-server` image, so a
+container recreate would otherwise leave only the NEW build's content-hashed
+assets. A tab that loaded `index.html` before the deploy then requests
+`/assets/index-<old>.js` and — before this change — received the 1428-byte SPA
+fallback document (`200 text/html`), which fails the module load and leaves a
+dead page until the user reloads.
+
+The server now does both halves itself, with no extra deploy step or mount:
+
+- **Retention.** At boot it snapshots the configured `WEBAPP_DIST` into
+  `${DATA_DIR}/webapp-assets/<buildKey>/` (`buildKey` = sha1 of `index.html`,
+  12 hex chars). `DATA_DIR` is the bind-mounted `./data` volume, so snapshots
+  survive a container recreate. The newest `WEBAPP_ASSET_RETENTION` snapshots
+  are kept and the rest pruned (`[webapp] retained build …` boot line).
+- **Serve path.** The SPA handler reads the live dist first, then the newest
+  retained snapshot that still has the requested `assets/` file. A missing
+  asset path (`.js`, `.mjs`, `.css`, fonts/images/sourcemaps) answers a real
+  `404 {"error":"asset not found"}`; it never answers the SPA document. Client
+  routes are extensionless, so history fallback (`/privacy` → `index.html`) is
+  unchanged.
+
+Knobs (server env; defaults match the shipped compose):
+
+| env | default | meaning |
+| --- | --- | --- |
+| `WEBAPP_ASSET_RETENTION` | `5` | build snapshots kept across deploys; `0` disables retention (missing assets 404) |
+| `WEBAPP_ASSET_ARCHIVE_DIR` | `${DATA_DIR}/webapp-assets` | where snapshots live (must be on the persistent data volume) |
+
+Acceptance after a real deploy: `GET /assets/<hash>.js` for each of the last
+`WEBAPP_ASSET_RETENTION` build hashes returns `content-type: text/javascript`
+and the real bundle size, and an unretained hash returns 404 rather than
+`text/html`.
+
 The live service runs on the deployment GPU box from the repo source,
 served behind the Cloudflare tunnel (`cloudflared`) at
 `https://<PUBLIC_HOST>`. The canonical stack is defined in
