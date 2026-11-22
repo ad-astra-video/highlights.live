@@ -43,6 +43,9 @@ import { audioTriggerFromCandidate, audioTriggerFromWhistle } from "./audio-trig
 import { MediaRailObserver } from "./media-rail";
 import { LiveFrameWriter, parseLiveFrameSeq } from "./live-frames";
 import { diskFrameLoader, perceiveScoreboardOcr } from "./live-frame-reread";
+// ADAAAA-8143: the one definition of what lands in `job_observations.score_text`
+// (the lines a frame's OCR actually read, NULL when no score line was read).
+import { jobSport, scoreTextForObservation } from "./observation-score";
 import {
   declaredScoreboardSurface,
   nextScoreboardSurface,
@@ -3064,11 +3067,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           if (Number.isFinite(frame.timestamp) && frame.timestamp > (bj.analysedTs ?? 0)) {
             bj.analysedTs = frame.timestamp;
           }
+          // ADAAAA-8143: the score line this frame's perceive pass read is stored
+          // on the same observation row (NULL when it read none), so a demoted
+          // window can re-attest from storage with no OCR call.
+          const scoreText = scoreTextForObservation(frame.observation.ocr, jobSport(store.getJob(job.id)));
           frames.enqueue({
             seq: frame.seq,
             timestamp: frame.timestamp,
             frameB64: frame.frameB64,
             tracks: (frame.observation.tracks ?? []) as any,
+            ...(scoreText ? { scoreText } : {}),
           });
         },
         onDecide: async (payload) => {
@@ -3557,11 +3565,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (ev.type === "observation" && ev.observation) {
         // ADAAAA-6851 Inc 1: durable write-through so per-frame perceive data
         // survives a server restart (memory is updated synchronously first).
+        // ADAAAA-8143: the score line this frame ACTUALLY read rides the same row
+        // (NULL when its OCR read none) so a later re-attestation replays storage
+        // instead of re-OCR-ing the persisted JPEG.
+        const scoreText = scoreTextForObservation(ev.observation.ocr, jobSport(store.getJob(jobId)));
         store
           .recordObservation(jobId, {
             seq: ev.seq,
             timestamp: ev.timestamp,
             tracks: ev.observation.tracks,
+            ...(scoreText ? { scoreText } : {}),
           })
           .catch((e: any) => console.error(`[obs:${jobId}] persist failed:`, e?.message || e));
       }

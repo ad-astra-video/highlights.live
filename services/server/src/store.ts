@@ -22,6 +22,12 @@ export interface StoredObservation {
   seq: number;
   timestamp: number;
   tracks: TrackObservation[];
+  /** ADAAAA-8143: the scoreboard OCR lines this frame actually read — persisted
+   *  so a re-attestation replays storage instead of re-OCR-ing the stored JPEG.
+   *  Absent (never `[]`) means the row captured no score line: storage holds SQL
+   *  NULL, and readers must report it as `not_captured`, never as a score of 0.
+   *  Only set when the lines parse to a score under `parseOcrScoreLine`. */
+  scoreText?: string[];
 }
 
 /** Per-job FLOOR on durable per-frame observations (ADAAAA-6870, Increment 3 T1).

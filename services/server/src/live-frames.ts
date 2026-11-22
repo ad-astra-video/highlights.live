@@ -88,6 +88,11 @@ export interface LiveFrameInput {
   timestamp: number;
   frameB64: string;
   tracks: { trackId: string; label?: string; kind?: string; bbox?: number[] }[];
+  /** ADAAAA-8143: the scoreboard OCR lines this frame's perceive pass actually
+   *  read, or absent when no score line was read. Persisted on the frame's
+   *  observation row so a later re-attestation replays storage instead of
+   *  re-OCR-ing this JPEG. Absent => the row stores SQL NULL (`not_captured`). */
+  scoreText?: string[];
 }
 
 export interface LiveFrameWriterOptions {
@@ -99,7 +104,12 @@ export interface LiveFrameWriterOptions {
    *  failing sink never fails the frame write (and vice versa). */
   recordObservation?: (
     jobId: string,
-    obs: { seq: number; timestamp: number; tracks: LiveFrameInput["tracks"] }
+    obs: {
+      seq: number;
+      timestamp: number;
+      tracks: LiveFrameInput["tracks"];
+      scoreText?: string[];
+    }
   ) => Promise<unknown> | unknown;
   /** Injected for tests. */
   log?: (line: string) => void;
@@ -156,8 +166,11 @@ export class LiveFrameWriter {
     const timestamp = Number.isFinite(frame.timestamp) ? frame.timestamp : 0;
     const tracks = Array.isArray(frame.tracks) ? frame.tracks : [];
     const b64 = frame.frameB64;
+    // ADAAAA-8143: the score text rides the same queued write, so the frame file
+    // and its observation row never disagree about what OCR read.
+    const scoreText = Array.isArray(frame.scoreText) && frame.scoreText.length ? frame.scoreText : undefined;
     this.chain = this.chain
-      .then(() => this.write(seq, timestamp, b64, tracks))
+      .then(() => this.write(seq, timestamp, b64, tracks, scoreText))
       .catch((e: any) => {
         this.failed++;
         this.log(`[live-frames:${this.opts.jobId}] frame ${seq} write failed: ${String(e?.message || e)}`);
@@ -173,7 +186,8 @@ export class LiveFrameWriter {
     seq: number,
     timestamp: number,
     b64: string,
-    tracks: LiveFrameInput["tracks"]
+    tracks: LiveFrameInput["tracks"],
+    scoreText?: string[]
   ): Promise<void> {
     let buf: Buffer;
     try {
@@ -197,7 +211,12 @@ export class LiveFrameWriter {
     // 3 s window and overlay its tracks; the frame file is what the tile renders.
     if (this.opts.recordObservation) {
       try {
-        await this.opts.recordObservation(this.opts.jobId, { seq, timestamp, tracks });
+        await this.opts.recordObservation(this.opts.jobId, {
+          seq,
+          timestamp,
+          tracks,
+          ...(scoreText ? { scoreText } : {}),
+        });
       } catch (e: any) {
         this.log(`[live-frames:${this.opts.jobId}] observation row for frame ${seq} failed: ${String(e?.message || e)}`);
       }

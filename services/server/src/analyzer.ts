@@ -11748,7 +11748,11 @@ export interface AnalyzeEvent {
     // the moment the live cut patches `clipUri` (and by the stop path), so an
     // open grid / job-detail view repaints the card without a page reload.
     | "clip";
-  observation?: { tracks: TrackObservation[] };
+  /** ADAAAA-8143: `ocr` is the perceive OCR lines for this frame (the analyze
+   *  result already carries them; the event used to drop them at the type level).
+   *  The observation write-through persists them as `job_observations.score_text`
+   *  so a re-attestation replays storage instead of re-OCR-ing the JPEG. */
+  observation?: { tracks: TrackObservation[]; ocr?: string[] };
   candidate?: { eventType: string; timestamp: number };
   highlight?: HighlightRecord;
   reason?: string;

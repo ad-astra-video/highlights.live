@@ -1108,26 +1108,54 @@ export class SqliteDb implements Db {
   async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO job_observations (job_id, seq, timestamp, tracks, created_at)
-         VALUES (?,?,?,?,?)
+        `INSERT INTO job_observations (job_id, seq, timestamp, tracks, score_text, created_at)
+         VALUES (?,?,?,?,?,?)
          ON CONFLICT(job_id, seq) DO UPDATE SET timestamp=excluded.timestamp,
-           tracks=excluded.tracks, created_at=excluded.created_at`
+           tracks=excluded.tracks,
+           score_text=COALESCE(excluded.score_text, job_observations.score_text),
+           created_at=excluded.created_at`
       )
-      .run(jobId, obs.seq, obs.timestamp, JSON.stringify(obs.tracks), new Date().toISOString());
+      .run(
+        jobId,
+        obs.seq,
+        obs.timestamp,
+        JSON.stringify(obs.tracks),
+        scoreTextColumn(obs),
+        new Date().toISOString()
+      );
   }
 
   async observationsForJob(jobId: string): Promise<StoredObservation[]> {
     const rows = this.db
-      .prepare("SELECT seq, timestamp, tracks FROM job_observations WHERE job_id = ? ORDER BY seq")
-      .all(jobId) as { seq: number; timestamp: number; tracks: string }[];
-    return rows.map((r) => ({ seq: r.seq, timestamp: r.timestamp, tracks: JSON.parse(r.tracks) }));
+      .prepare("SELECT seq, timestamp, tracks, score_text FROM job_observations WHERE job_id = ? ORDER BY seq")
+      .all(jobId) as { seq: number; timestamp: number; tracks: string; score_text: string | null }[];
+    return rows.map((r) => {
+      const scoreText = parseScoreTextColumn(r.score_text);
+      return {
+        seq: r.seq,
+        timestamp: r.timestamp,
+        tracks: JSON.parse(r.tracks),
+        ...(scoreText ? { scoreText } : {}),
+      };
+    });
   }
 
   async listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]> {
     const rows = this.db
-      .prepare("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq")
-      .all() as { job_id: string; seq: number; timestamp: number; tracks: string }[];
-    return rows.map((r) => ({ jobId: r.job_id, observation: { seq: r.seq, timestamp: r.timestamp, tracks: JSON.parse(r.tracks) } }));
+      .prepare("SELECT job_id, seq, timestamp, tracks, score_text FROM job_observations ORDER BY job_id, seq")
+      .all() as { job_id: string; seq: number; timestamp: number; tracks: string; score_text: string | null }[];
+    return rows.map((r) => {
+      const scoreText = parseScoreTextColumn(r.score_text);
+      return {
+        jobId: r.job_id,
+        observation: {
+          seq: r.seq,
+          timestamp: r.timestamp,
+          tracks: JSON.parse(r.tracks),
+          ...(scoreText ? { scoreText } : {}),
+        },
+      };
+    });
   }
 
   async trimJobObservations(jobId: string, max: number): Promise<void> {
@@ -1941,25 +1969,55 @@ export class PgDb implements Db {
 
   async saveObservation(jobId: string, obs: StoredObservation): Promise<void> {
     await this.pool.query(
-      `INSERT INTO job_observations (job_id, seq, timestamp, tracks, created_at)
-       VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO job_observations (job_id, seq, timestamp, tracks, score_text, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (job_id, seq) DO UPDATE SET timestamp=EXCLUDED.timestamp,
-         tracks=EXCLUDED.tracks, created_at=EXCLUDED.created_at`,
-      [jobId, obs.seq, obs.timestamp, JSON.stringify(obs.tracks), new Date().toISOString()]
+         tracks=EXCLUDED.tracks,
+         score_text=COALESCE(EXCLUDED.score_text, job_observations.score_text),
+         created_at=EXCLUDED.created_at`,
+      [
+        jobId,
+        obs.seq,
+        obs.timestamp,
+        JSON.stringify(obs.tracks),
+        scoreTextColumn(obs),
+        new Date().toISOString(),
+      ]
     );
   }
 
   async observationsForJob(jobId: string): Promise<StoredObservation[]> {
     const r = await this.pool.query(
-      "SELECT seq, timestamp, tracks FROM job_observations WHERE job_id = $1 ORDER BY seq",
+      "SELECT seq, timestamp, tracks, score_text FROM job_observations WHERE job_id = $1 ORDER BY seq",
       [jobId]
     );
-    return r.rows.map((row) => ({ seq: row.seq, timestamp: row.timestamp, tracks: JSON.parse(row.tracks) }));
+    return r.rows.map((row) => {
+      const scoreText = parseScoreTextColumn(row.score_text);
+      return {
+        seq: row.seq,
+        timestamp: row.timestamp,
+        tracks: JSON.parse(row.tracks),
+        ...(scoreText ? { scoreText } : {}),
+      };
+    });
   }
 
   async listObservations(): Promise<{ jobId: string; observation: StoredObservation }[]> {
-    const r = await this.pool.query("SELECT job_id, seq, timestamp, tracks FROM job_observations ORDER BY job_id, seq");
-    return r.rows.map((row) => ({ jobId: row.job_id, observation: { seq: row.seq, timestamp: row.timestamp, tracks: JSON.parse(row.tracks) } }));
+    const r = await this.pool.query(
+      "SELECT job_id, seq, timestamp, tracks, score_text FROM job_observations ORDER BY job_id, seq"
+    );
+    return r.rows.map((row) => {
+      const scoreText = parseScoreTextColumn(row.score_text);
+      return {
+        jobId: row.job_id,
+        observation: {
+          seq: row.seq,
+          timestamp: row.timestamp,
+          tracks: JSON.parse(row.tracks),
+          ...(scoreText ? { scoreText } : {}),
+        },
+      };
+    });
   }
 
   async trimJobObservations(jobId: string, max: number): Promise<void> {
@@ -2566,6 +2624,11 @@ const SCHEMA_SQLITE = `
     seq INTEGER NOT NULL,
     timestamp REAL NOT NULL,
     tracks TEXT NOT NULL,
+    -- ADAAAA-8143: the scoreboard OCR lines this frame actually read (JSON
+    -- array of strings), or NULL when the frame's OCR read no score line. The
+    -- column is additive + nullable, so a historic row keeps NULL; no backfill
+    -- is ever synthesised from pixels or inferred from the tracks column.
+    score_text TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (job_id, seq)
   );
@@ -2805,6 +2868,11 @@ const SCHEMA_PG = `
     seq INTEGER NOT NULL,
     timestamp REAL NOT NULL,
     tracks TEXT NOT NULL,
+    -- ADAAAA-8143: the scoreboard OCR lines this frame actually read (JSON
+    -- array of strings), or NULL when the frame's OCR read no score line. The
+    -- column is additive + nullable, so a historic row keeps NULL; no backfill
+    -- is ever synthesised from pixels or inferred from the tracks column.
+    score_text TEXT,
     created_at TEXT NOT NULL,
     PRIMARY KEY (job_id, seq)
   );
@@ -3134,6 +3202,23 @@ const MIGRATIONS: Migration[] = [
       await exec("CREATE INDEX IF NOT EXISTS highlight_alternatives_highlight ON highlight_alternatives (highlight_id)");
     },
   },
+  {
+    version: 11,
+    name: "job-observations-score-text",
+    up: async (exec, hasColumn) => {
+      // ADAAAA-8143: persist the per-frame scoreboard text so a demoted-window
+      // re-attestation replays storage instead of re-OCR-ing the stored JPEGs.
+      //
+      // ADD COLUMN with no DEFAULT and no NOT NULL is additive in both
+      // backends: Postgres marks the column missing in existing tuples (a
+      // metadata-only change, no table rewrite and no row rewrite), SQLite
+      // stores NULL for every existing row. Historic rows therefore keep NULL —
+      // `not_captured`, never a score of 0 — and nothing backfills them.
+      if (!(await hasColumn("job_observations", "score_text"))) {
+        await exec("ALTER TABLE job_observations ADD COLUMN score_text TEXT");
+      }
+    },
+  },
 ];
 
 async function runMigrations(exec: Exec, hasColumn: HasColumn, applied: Applied, markApplied: MarkApplied): Promise<void> {
@@ -3141,6 +3226,40 @@ async function runMigrations(exec: Exec, hasColumn: HasColumn, applied: Applied,
     if (await applied(m.version)) continue;
     await m.up(exec, hasColumn);
     await markApplied(m.version, m.name);
+  }
+}
+
+/**
+ * ADAAAA-8143: the `score_text` value for one observation row.
+ *
+ * The JSON array of the OCR lines the frame actually read, or `null` — SQL NULL
+ * — when the frame's OCR read no score line. An empty array is NEVER written: it
+ * would read as "captured nothing" instead of "not captured" and the AC5 grader
+ * could not tell them apart.
+ */
+function scoreTextColumn(obs: StoredObservation): string | null {
+  const lines = Array.isArray(obs.scoreText)
+    ? obs.scoreText.map((l) => (typeof l === "string" ? l.trim() : "")).filter((l) => !!l)
+    : [];
+  return lines.length ? JSON.stringify(lines) : null;
+}
+
+/**
+ * ADAAAA-8143: read `score_text` back.
+ *
+ * NULL, absent, or unparseable JSON => `undefined` (the row captured no score
+ * line). A real array => the stored lines. Callers must treat `undefined` as
+ * `not_captured`, never as a score of 0.
+ */
+function parseScoreTextColumn(raw: unknown): string[] | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const lines = parsed.map((l) => (typeof l === "string" ? l : "")).filter((l) => !!l.trim());
+    return lines.length ? lines : undefined;
+  } catch {
+    return undefined;
   }
 }
 
