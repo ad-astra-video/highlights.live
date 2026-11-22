@@ -70,15 +70,24 @@ and the real bundle size, and an unretained hash returns 404 rather than
 
 ### Edge caching of the serve path (ADAAAA-9312)
 
-The public origin sits behind Cloudflare, and Cloudflare caches an origin
-response that carries **no** `cache-control` header for its default edge TTL
-(observed as `cache-control: max-age=14400`, `cf-cache-status: HIT`, i.e. 4 h).
-That is how the pre-fix bug outlived its fix: the old build cached the fallback
-document at `/assets/index-<hash>.js`, so the public origin kept answering
-`200 text/html` for four hours after the image answered
-`404 application/json`; the same path with a cache-buster reached the origin and
-proved it. A 404 is cacheable at the edge too, so a miss in the seconds before
-`archiveWebappBuild` finishes would be pinned the same way.
+The public origin sits behind Cloudflare, which caches by **file extension** when
+the origin sends no `cache-control` (`.js`, `.css`, fonts and images are on the
+default list). The edge TTL then comes from the status code: **2 h** for
+`200`/`206`/`301`, **3 min** for `404`/`410`. The `cache-control: max-age=14400`
+the edge returns is the zone's *Browser Cache TTL* (4 h) stamped downstream
+because the origin sent nothing — it is not the edge TTL. Measured 2026-11-22,
+all read-only:
+
+| time (UTC) | request | result |
+| --- | --- | --- |
+| 06:25:04 | origin loopback `GET /assets/nope-9312.js` | `404 application/json`, **no** `cache-control` — the header is edge-added |
+| 04:13 → 06:13 | `/assets/index-ZZZZZZZZ.js` (pre-fix entry) | `200 text/html` `HIT`, `age` grew to 7072 s, then `EXPIRED` at ~06:13 — the 2 h `200` default, **not** 4 h |
+| 06:26:01 | a never-seen `/assets/<hash>.js` | `404` `MISS`, then `HIT` with `age: 20` — a fresh 404 is edge-cached too (3 min) |
+
+So the pre-fix fallback outlived its fix for the 2 h edge TTL: a tab could keep
+reading `200 text/html` for a module the image had been answering `404` an hour
+earlier, and a 404 written in the seconds before `archiveWebappBuild` finishes
+was pinned for 3 min. Both are the same defect — the origin said nothing.
 
 The SPA handler now states a policy on every response it emits, in both
 `Cache-Control` and `CDN-Cache-Control` (Cloudflare gives the latter precedence
@@ -90,8 +99,21 @@ at the edge):
 | SPA document (`/`, `/index.html`, history fallback) | `no-cache` | an edge-pinned `index.html` names asset hashes the current image no longer ships |
 | content-hashed asset (`assets/*-<hash>.js`, `assets/*.<hash>.css`, served from the live dist or a retained snapshot) | `public, max-age=31536000, immutable` | the URL pins the bytes, so a stale tab can keep loading its own build |
 
+`no-store` in either header makes Cloudflare treat the response as not cacheable
+and report `cf-cache-status: BYPASS` (Cloudflare evaluates `CDN-Cache-Control`
+ahead of `Cache-Control`), so an asset-404 stops being pinned: the next attempt
+for a hash that retention has archived by then is answered by the origin.
+
+One Cloudflare-side lever defeats that: a **Cache Rule that sets Edge Cache TTL**
+overrides origin `Cache-Control`/`CDN-Cache-Control` directives, `no-store`
+included. Nothing in the measurements above shows such a rule — a rule-level 4 h
+edge TTL would have kept the old entry `HIT` past 06:13 — so the header change is
+expected to be sufficient. If the post-deploy read still shows
+`max-age=14400` with `HIT`, the rule is the cause and it has to be changed in the
+dashboard (`Caching` → `Cache Rules`), which needs the zone-scoped token below.
+
 Verification after a deploy (AC2): the 404 body and both headers must appear at
-the public origin, on a first request and again without a cache-buster ~1 s
+the public origin, on a first request and again without a cache-buster ~2 s
 later — record the pair in the deploy ticket.
 
 ```sh
@@ -100,21 +122,22 @@ curl -sSI https://<PUBLIC_HOST>/assets/index-DOESNOTEXIST.js
 # content-type: application/json
 # cache-control: no-store
 # cdn-cache-control: no-store
-# cf-cache-status: MISS   (or BYPASS/DYNAMIC)
+# cf-cache-status: BYPASS   (DYNAMIC is also fine; MISS/HIT means a rule is pinning it)
 ```
 
 Purging: **no purge credential exists on the box** — measured on the GPU box, `awk -F= '/^[A-Z_]+=/{print $1}' docker/.env | grep -iE
 'cloudflare|cf_'` prints nothing. So a deploy cannot invalidate entries an
-earlier build wrote; the edge TTL governs (up to 4 h) for anything cached
-before the header change landed, and a `?v=<random>` query is the way to
-confirm the origin while waiting.
+earlier build wrote; the edge TTL governs (2 h for a cached `200`, 3 min for a
+cached 404) for anything written before the header change landed, and a
+`?v=<random>` query is the way to confirm the origin while waiting.
 
-If a purge capability is ever sanctioned, it needs a **zone-scoped Cache Purge
-token** for the `<PUBLIC_HOST>` zone, stored only on the box as two env vars:
+If purging — or changing a Cache Rule — is ever sanctioned, it needs a
+**zone-scoped token** for the `<PUBLIC_HOST>` zone, stored only on the box as two
+env vars:
 
 | env | meaning |
 | --- | --- |
-| `CLOUDFLARE_API_TOKEN` | scoped token with Zone → Cache Purge → Purge permission for that zone only (never a global API key) |
+| `CLOUDFLARE_API_TOKEN` | scoped token for that zone only (never a global API key): Zone → Cache Purge → Purge, and Zone → Cache Rules → Edit if a rule has to be changed |
 | `CLOUDFLARE_ZONE_ID` | the zone id the token is scoped to |
 
 The deploy path would then purge the fallback entries after the recreate:
