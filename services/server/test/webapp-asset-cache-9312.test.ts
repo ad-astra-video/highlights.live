@@ -72,6 +72,7 @@ describe("ADAAAA-9312 SPA serve path cache policy", () => {
     const dist = tempRoot("serve-dist");
     const archive = tempRoot("serve-archive");
     writeBuild(dist, "OLDHASH1");
+    writeFileSync(path.join(dist, "assets", "logo.svg"), `<svg xmlns="http://www.w3.org/2000/svg"></svg>\n`);
     const { app } = await buildTestApp({
       WEBAPP_DIST: dist,
       WEBAPP_ASSET_ARCHIVE_DIR: archive,
@@ -107,5 +108,11 @@ describe("ADAAAA-9312 SPA serve path cache policy", () => {
     const rootFile = await app.inject({ method: "GET", url: "/bolt.svg" });
     expect(rootFile.statusCode).toBe(200);
     expect(rootFile.headers["cache-control"]).toBe("no-cache");
+
+    // Same for an unhashed file that happens to live under assets/. Pinning it
+    // for a year would strand a renamed logo on the edge.
+    const plainAsset = await app.inject({ method: "GET", url: "/assets/logo.svg" });
+    expect(plainAsset.statusCode).toBe(200);
+    expect(plainAsset.headers["cache-control"]).toBe("no-cache");
   });
 });
