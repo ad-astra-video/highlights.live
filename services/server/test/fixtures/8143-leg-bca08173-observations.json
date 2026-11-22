@@ -1,0 +1,1731 @@
+{
+"_source": "read-only box Postgres, highlights-postgres, 2026-11-22: SELECT seq, timestamp FROM job_observations WHERE job_id='bca08173-1418-437e-9c22-24af6b748111' ORDER BY seq",
+"jobId": "bca08173-1418-437e-9c22-24af6b748111",
+"rows": 431,
+"observations": [
+{
+"seq": 0,
+"timestamp": 2.5279999
+},
+{
+"seq": 1,
+"timestamp": 3.027
+},
+{
+"seq": 2,
+"timestamp": 3.4929998
+},
+{
+"seq": 3,
+"timestamp": 4.0249996
+},
+{
+"seq": 4,
+"timestamp": 4.536
+},
+{
+"seq": 5,
+"timestamp": 5.087
+},
+{
+"seq": 6,
+"timestamp": 5.601
+},
+{
+"seq": 7,
+"timestamp": 6.119
+},
+{
+"seq": 8,
+"timestamp": 6.62
+},
+{
+"seq": 9,
+"timestamp": 6.954
+},
+{
+"seq": 10,
+"timestamp": 7.469
+},
+{
+"seq": 11,
+"timestamp": 8.043
+},
+{
+"seq": 12,
+"timestamp": 8.532
+},
+{
+"seq": 13,
+"timestamp": 9.063
+},
+{
+"seq": 14,
+"timestamp": 9.542
+},
+{
+"seq": 15,
+"timestamp": 10.025
+},
+{
+"seq": 16,
+"timestamp": 10.457
+},
+{
+"seq": 17,
+"timestamp": 10.802
+},
+{
+"seq": 18,
+"timestamp": 11.136
+},
+{
+"seq": 19,
+"timestamp": 11.48
+},
+{
+"seq": 20,
+"timestamp": 11.954
+},
+{
+"seq": 21,
+"timestamp": 12.495
+},
+{
+"seq": 22,
+"timestamp": 13.042
+},
+{
+"seq": 23,
+"timestamp": 13.469999
+},
+{
+"seq": 24,
+"timestamp": 13.885
+},
+{
+"seq": 25,
+"timestamp": 14.504
+},
+{
+"seq": 26,
+"timestamp": 15.009
+},
+{
+"seq": 27,
+"timestamp": 15.509
+},
+{
+"seq": 28,
+"timestamp": 16.009
+},
+{
+"seq": 29,
+"timestamp": 16.555
+},
+{
+"seq": 30,
+"timestamp": 17.009
+},
+{
+"seq": 31,
+"timestamp": 17.538
+},
+{
+"seq": 32,
+"timestamp": 18.001
+},
+{
+"seq": 33,
+"timestamp": 18.541
+},
+{
+"seq": 34,
+"timestamp": 19.025
+},
+{
+"seq": 35,
+"timestamp": 19.553
+},
+{
+"seq": 36,
+"timestamp": 20.004
+},
+{
+"seq": 37,
+"timestamp": 20.546
+},
+{
+"seq": 38,
+"timestamp": 21.056
+},
+{
+"seq": 39,
+"timestamp": 21.556
+},
+{
+"seq": 40,
+"timestamp": 21.975
+},
+{
+"seq": 41,
+"timestamp": 22.462
+},
+{
+"seq": 42,
+"timestamp": 22.959
+},
+{
+"seq": 43,
+"timestamp": 23.481
+},
+{
+"seq": 44,
+"timestamp": 23.95
+},
+{
+"seq": 45,
+"timestamp": 24.475
+},
+{
+"seq": 46,
+"timestamp": 24.963
+},
+{
+"seq": 47,
+"timestamp": 25.506
+},
+{
+"seq": 48,
+"timestamp": 25.971
+},
+{
+"seq": 49,
+"timestamp": 26.504
+},
+{
+"seq": 50,
+"timestamp": 27.059
+},
+{
+"seq": 51,
+"timestamp": 27.499
+},
+{
+"seq": 52,
+"timestamp": 28.022
+},
+{
+"seq": 53,
+"timestamp": 28.48
+},
+{
+"seq": 54,
+"timestamp": 28.962
+},
+{
+"seq": 55,
+"timestamp": 29.384
+},
+{
+"seq": 56,
+"timestamp": 29.979
+},
+{
+"seq": 57,
+"timestamp": 30.431
+},
+{
+"seq": 58,
+"timestamp": 30.981
+},
+{
+"seq": 59,
+"timestamp": 31.494
+},
+{
+"seq": 60,
+"timestamp": 32.002
+},
+{
+"seq": 61,
+"timestamp": 32.475998
+},
+{
+"seq": 62,
+"timestamp": 32.966
+},
+{
+"seq": 63,
+"timestamp": 33.528
+},
+{
+"seq": 64,
+"timestamp": 33.958
+},
+{
+"seq": 65,
+"timestamp": 34.446
+},
+{
+"seq": 66,
+"timestamp": 35.012
+},
+{
+"seq": 67,
+"timestamp": 35.508
+},
+{
+"seq": 68,
+"timestamp": 35.997
+},
+{
+"seq": 69,
+"timestamp": 36.484
+},
+{
+"seq": 70,
+"timestamp": 36.973
+},
+{
+"seq": 71,
+"timestamp": 37.508
+},
+{
+"seq": 72,
+"timestamp": 37.968
+},
+{
+"seq": 73,
+"timestamp": 38.525
+},
+{
+"seq": 74,
+"timestamp": 39.01
+},
+{
+"seq": 75,
+"timestamp": 39.509
+},
+{
+"seq": 76,
+"timestamp": 40.002
+},
+{
+"seq": 77,
+"timestamp": 40.503
+},
+{
+"seq": 78,
+"timestamp": 41.015
+},
+{
+"seq": 79,
+"timestamp": 41.479
+},
+{
+"seq": 80,
+"timestamp": 42.015
+},
+{
+"seq": 81,
+"timestamp": 42.499
+},
+{
+"seq": 82,
+"timestamp": 43.001
+},
+{
+"seq": 83,
+"timestamp": 43.482
+},
+{
+"seq": 84,
+"timestamp": 43.843
+},
+{
+"seq": 85,
+"timestamp": 44.214
+},
+{
+"seq": 86,
+"timestamp": 44.571
+},
+{
+"seq": 87,
+"timestamp": 44.947998
+},
+{
+"seq": 88,
+"timestamp": 45.467
+},
+{
+"seq": 89,
+"timestamp": 45.859
+},
+{
+"seq": 90,
+"timestamp": 46.214
+},
+{
+"seq": 91,
+"timestamp": 46.572
+},
+{
+"seq": 92,
+"timestamp": 46.927
+},
+{
+"seq": 93,
+"timestamp": 47.501
+},
+{
+"seq": 94,
+"timestamp": 47.981
+},
+{
+"seq": 95,
+"timestamp": 48.466
+},
+{
+"seq": 96,
+"timestamp": 48.961
+},
+{
+"seq": 97,
+"timestamp": 49.479
+},
+{
+"seq": 98,
+"timestamp": 49.988
+},
+{
+"seq": 99,
+"timestamp": 50.46
+},
+{
+"seq": 100,
+"timestamp": 50.981
+},
+{
+"seq": 101,
+"timestamp": 51.486
+},
+{
+"seq": 102,
+"timestamp": 51.977
+},
+{
+"seq": 103,
+"timestamp": 52.48
+},
+{
+"seq": 104,
+"timestamp": 52.974
+},
+{
+"seq": 105,
+"timestamp": 53.455
+},
+{
+"seq": 106,
+"timestamp": 53.958
+},
+{
+"seq": 107,
+"timestamp": 54.462
+},
+{
+"seq": 108,
+"timestamp": 54.978
+},
+{
+"seq": 109,
+"timestamp": 55.489
+},
+{
+"seq": 110,
+"timestamp": 55.975
+},
+{
+"seq": 111,
+"timestamp": 56.481
+},
+{
+"seq": 112,
+"timestamp": 56.986
+},
+{
+"seq": 113,
+"timestamp": 57.466
+},
+{
+"seq": 114,
+"timestamp": 57.991
+},
+{
+"seq": 115,
+"timestamp": 58.479
+},
+{
+"seq": 116,
+"timestamp": 58.968
+},
+{
+"seq": 117,
+"timestamp": 59.463
+},
+{
+"seq": 118,
+"timestamp": 59.966
+},
+{
+"seq": 119,
+"timestamp": 60.407
+},
+{
+"seq": 120,
+"timestamp": 60.987
+},
+{
+"seq": 121,
+"timestamp": 61.403
+},
+{
+"seq": 122,
+"timestamp": 61.981
+},
+{
+"seq": 123,
+"timestamp": 62.481
+},
+{
+"seq": 124,
+"timestamp": 62.972
+},
+{
+"seq": 125,
+"timestamp": 63.456
+},
+{
+"seq": 126,
+"timestamp": 63.959
+},
+{
+"seq": 127,
+"timestamp": 64.352
+},
+{
+"seq": 128,
+"timestamp": 64.712
+},
+{
+"seq": 129,
+"timestamp": 65.076
+},
+{
+"seq": 130,
+"timestamp": 65.469
+},
+{
+"seq": 131,
+"timestamp": 65.978
+},
+{
+"seq": 132,
+"timestamp": 66.463
+},
+{
+"seq": 133,
+"timestamp": 66.953
+},
+{
+"seq": 134,
+"timestamp": 67.471
+},
+{
+"seq": 135,
+"timestamp": 67.965
+},
+{
+"seq": 136,
+"timestamp": 68.457
+},
+{
+"seq": 137,
+"timestamp": 68.944
+},
+{
+"seq": 138,
+"timestamp": 69.462
+},
+{
+"seq": 139,
+"timestamp": 69.953
+},
+{
+"seq": 140,
+"timestamp": 70.462
+},
+{
+"seq": 141,
+"timestamp": 70.988
+},
+{
+"seq": 142,
+"timestamp": 71.455
+},
+{
+"seq": 143,
+"timestamp": 71.954
+},
+{
+"seq": 144,
+"timestamp": 72.463
+},
+{
+"seq": 145,
+"timestamp": 72.964
+},
+{
+"seq": 146,
+"timestamp": 73.461
+},
+{
+"seq": 147,
+"timestamp": 73.903
+},
+{
+"seq": 148,
+"timestamp": 74.467
+},
+{
+"seq": 149,
+"timestamp": 74.963
+},
+{
+"seq": 150,
+"timestamp": 75.448
+},
+{
+"seq": 151,
+"timestamp": 75.965
+},
+{
+"seq": 152,
+"timestamp": 76.411
+},
+{
+"seq": 153,
+"timestamp": 76.951
+},
+{
+"seq": 154,
+"timestamp": 77.458
+},
+{
+"seq": 155,
+"timestamp": 77.957
+},
+{
+"seq": 156,
+"timestamp": 78.459
+},
+{
+"seq": 157,
+"timestamp": 78.956
+},
+{
+"seq": 158,
+"timestamp": 79.45
+},
+{
+"seq": 159,
+"timestamp": 79.987
+},
+{
+"seq": 160,
+"timestamp": 80.461
+},
+{
+"seq": 161,
+"timestamp": 80.869
+},
+{
+"seq": 162,
+"timestamp": 81.218
+},
+{
+"seq": 163,
+"timestamp": 81.576
+},
+{
+"seq": 164,
+"timestamp": 81.916
+},
+{
+"seq": 165,
+"timestamp": 82.455
+},
+{
+"seq": 166,
+"timestamp": 82.881996
+},
+{
+"seq": 167,
+"timestamp": 83.233
+},
+{
+"seq": 168,
+"timestamp": 83.578
+},
+{
+"seq": 169,
+"timestamp": 83.936
+},
+{
+"seq": 170,
+"timestamp": 84.417
+},
+{
+"seq": 171,
+"timestamp": 84.938
+},
+{
+"seq": 172,
+"timestamp": 85.454
+},
+{
+"seq": 173,
+"timestamp": 85.94
+},
+{
+"seq": 174,
+"timestamp": 86.455
+},
+{
+"seq": 175,
+"timestamp": 86.942
+},
+{
+"seq": 176,
+"timestamp": 87.366
+},
+{
+"seq": 177,
+"timestamp": 87.708
+},
+{
+"seq": 178,
+"timestamp": 88.042
+},
+{
+"seq": 179,
+"timestamp": 88.443
+},
+{
+"seq": 180,
+"timestamp": 88.958
+},
+{
+"seq": 181,
+"timestamp": 89.456
+},
+{
+"seq": 182,
+"timestamp": 89.943
+},
+{
+"seq": 183,
+"timestamp": 90.437
+},
+{
+"seq": 184,
+"timestamp": 90.946
+},
+{
+"seq": 185,
+"timestamp": 91.422
+},
+{
+"seq": 186,
+"timestamp": 91.933
+},
+{
+"seq": 187,
+"timestamp": 92.441
+},
+{
+"seq": 188,
+"timestamp": 92.958
+},
+{
+"seq": 189,
+"timestamp": 93.443
+},
+{
+"seq": 190,
+"timestamp": 93.923996
+},
+{
+"seq": 191,
+"timestamp": 94.436
+},
+{
+"seq": 192,
+"timestamp": 94.928
+},
+{
+"seq": 193,
+"timestamp": 95.429
+},
+{
+"seq": 194,
+"timestamp": 95.928
+},
+{
+"seq": 195,
+"timestamp": 96.431
+},
+{
+"seq": 196,
+"timestamp": 96.93
+},
+{
+"seq": 197,
+"timestamp": 97.431
+},
+{
+"seq": 198,
+"timestamp": 97.94
+},
+{
+"seq": 199,
+"timestamp": 98.435
+},
+{
+"seq": 200,
+"timestamp": 98.97
+},
+{
+"seq": 201,
+"timestamp": 103.944
+},
+{
+"seq": 202,
+"timestamp": 104.435
+},
+{
+"seq": 203,
+"timestamp": 104.929
+},
+{
+"seq": 204,
+"timestamp": 105.443
+},
+{
+"seq": 205,
+"timestamp": 105.923996
+},
+{
+"seq": 206,
+"timestamp": 106.385
+},
+{
+"seq": 207,
+"timestamp": 106.913
+},
+{
+"seq": 208,
+"timestamp": 107.483
+},
+{
+"seq": 209,
+"timestamp": 107.927
+},
+{
+"seq": 210,
+"timestamp": 108.265
+},
+{
+"seq": 211,
+"timestamp": 108.613
+},
+{
+"seq": 212,
+"timestamp": 108.956
+},
+{
+"seq": 213,
+"timestamp": 109.314
+},
+{
+"seq": 214,
+"timestamp": 109.649
+},
+{
+"seq": 215,
+"timestamp": 110.014
+},
+{
+"seq": 216,
+"timestamp": 110.359
+},
+{
+"seq": 217,
+"timestamp": 110.713
+},
+{
+"seq": 218,
+"timestamp": 111.081
+},
+{
+"seq": 219,
+"timestamp": 111.421
+},
+{
+"seq": 220,
+"timestamp": 111.929
+},
+{
+"seq": 221,
+"timestamp": 112.438
+},
+{
+"seq": 222,
+"timestamp": 112.919
+},
+{
+"seq": 223,
+"timestamp": 113.41
+},
+{
+"seq": 224,
+"timestamp": 113.933
+},
+{
+"seq": 225,
+"timestamp": 114.377
+},
+{
+"seq": 226,
+"timestamp": 114.722
+},
+{
+"seq": 227,
+"timestamp": 115.081
+},
+{
+"seq": 228,
+"timestamp": 115.417
+},
+{
+"seq": 229,
+"timestamp": 115.899
+},
+{
+"seq": 230,
+"timestamp": 116.439
+},
+{
+"seq": 231,
+"timestamp": 116.884
+},
+{
+"seq": 232,
+"timestamp": 117.435
+},
+{
+"seq": 233,
+"timestamp": 117.891
+},
+{
+"seq": 234,
+"timestamp": 118.431
+},
+{
+"seq": 235,
+"timestamp": 118.9
+},
+{
+"seq": 236,
+"timestamp": 119.446
+},
+{
+"seq": 237,
+"timestamp": 119.915
+},
+{
+"seq": 238,
+"timestamp": 120.422
+},
+{
+"seq": 239,
+"timestamp": 120.931
+},
+{
+"seq": 240,
+"timestamp": 121.437
+},
+{
+"seq": 241,
+"timestamp": 121.911
+},
+{
+"seq": 242,
+"timestamp": 122.42
+},
+{
+"seq": 243,
+"timestamp": 122.919
+},
+{
+"seq": 244,
+"timestamp": 123.441
+},
+{
+"seq": 245,
+"timestamp": 123.923
+},
+{
+"seq": 246,
+"timestamp": 124.414
+},
+{
+"seq": 247,
+"timestamp": 124.909
+},
+{
+"seq": 248,
+"timestamp": 125.405
+},
+{
+"seq": 249,
+"timestamp": 125.923996
+},
+{
+"seq": 250,
+"timestamp": 126.435
+},
+{
+"seq": 251,
+"timestamp": 126.923
+},
+{
+"seq": 252,
+"timestamp": 127.426
+},
+{
+"seq": 253,
+"timestamp": 127.934
+},
+{
+"seq": 254,
+"timestamp": 128.434
+},
+{
+"seq": 255,
+"timestamp": 128.918
+},
+{
+"seq": 256,
+"timestamp": 129.426
+},
+{
+"seq": 257,
+"timestamp": 129.932
+},
+{
+"seq": 258,
+"timestamp": 134.22
+},
+{
+"seq": 259,
+"timestamp": 134.579
+},
+{
+"seq": 260,
+"timestamp": 134.941
+},
+{
+"seq": 261,
+"timestamp": 135.425
+},
+{
+"seq": 262,
+"timestamp": 135.908
+},
+{
+"seq": 263,
+"timestamp": 136.414
+},
+{
+"seq": 264,
+"timestamp": 136.898
+},
+{
+"seq": 265,
+"timestamp": 137.427
+},
+{
+"seq": 266,
+"timestamp": 137.901
+},
+{
+"seq": 267,
+"timestamp": 138.413
+},
+{
+"seq": 268,
+"timestamp": 138.921
+},
+{
+"seq": 269,
+"timestamp": 139.434
+},
+{
+"seq": 270,
+"timestamp": 139.91699
+},
+{
+"seq": 271,
+"timestamp": 140.441
+},
+{
+"seq": 272,
+"timestamp": 140.936
+},
+{
+"seq": 273,
+"timestamp": 141.42
+},
+{
+"seq": 274,
+"timestamp": 141.907
+},
+{
+"seq": 275,
+"timestamp": 142.418
+},
+{
+"seq": 276,
+"timestamp": 142.793
+},
+{
+"seq": 277,
+"timestamp": 143.144
+},
+{
+"seq": 278,
+"timestamp": 143.51
+},
+{
+"seq": 279,
+"timestamp": 143.921
+},
+{
+"seq": 280,
+"timestamp": 144.419
+},
+{
+"seq": 281,
+"timestamp": 144.836
+},
+{
+"seq": 282,
+"timestamp": 145.18
+},
+{
+"seq": 283,
+"timestamp": 145.51399
+},
+{
+"seq": 284,
+"timestamp": 145.906
+},
+{
+"seq": 285,
+"timestamp": 146.424
+},
+{
+"seq": 286,
+"timestamp": 146.903
+},
+{
+"seq": 287,
+"timestamp": 147.414
+},
+{
+"seq": 288,
+"timestamp": 147.923
+},
+{
+"seq": 289,
+"timestamp": 148.395
+},
+{
+"seq": 290,
+"timestamp": 148.902
+},
+{
+"seq": 291,
+"timestamp": 149.319
+},
+{
+"seq": 292,
+"timestamp": 149.679
+},
+{
+"seq": 293,
+"timestamp": 150.016
+},
+{
+"seq": 294,
+"timestamp": 150.351
+},
+{
+"seq": 295,
+"timestamp": 150.712
+},
+{
+"seq": 296,
+"timestamp": 151.081
+},
+{
+"seq": 297,
+"timestamp": 151.443
+},
+{
+"seq": 298,
+"timestamp": 151.911
+},
+{
+"seq": 299,
+"timestamp": 152.384
+},
+{
+"seq": 300,
+"timestamp": 152.893
+},
+{
+"seq": 301,
+"timestamp": 153.406
+},
+{
+"seq": 302,
+"timestamp": 153.906
+},
+{
+"seq": 303,
+"timestamp": 154.411
+},
+{
+"seq": 304,
+"timestamp": 154.893
+},
+{
+"seq": 305,
+"timestamp": 155.262
+},
+{
+"seq": 306,
+"timestamp": 155.608
+},
+{
+"seq": 307,
+"timestamp": 155.943
+},
+{
+"seq": 308,
+"timestamp": 156.308
+},
+{
+"seq": 309,
+"timestamp": 156.648
+},
+{
+"seq": 310,
+"timestamp": 157.008
+},
+{
+"seq": 311,
+"timestamp": 157.342
+},
+{
+"seq": 312,
+"timestamp": 157.678
+},
+{
+"seq": 313,
+"timestamp": 158.044
+},
+{
+"seq": 314,
+"timestamp": 158.38
+},
+{
+"seq": 315,
+"timestamp": 158.781
+},
+{
+"seq": 316,
+"timestamp": 159.143
+},
+{
+"seq": 317,
+"timestamp": 159.51
+},
+{
+"seq": 318,
+"timestamp": 159.873
+},
+{
+"seq": 319,
+"timestamp": 160.211
+},
+{
+"seq": 320,
+"timestamp": 160.549
+},
+{
+"seq": 321,
+"timestamp": 160.907
+},
+{
+"seq": 322,
+"timestamp": 161.269
+},
+{
+"seq": 323,
+"timestamp": 161.614
+},
+{
+"seq": 324,
+"timestamp": 161.978
+},
+{
+"seq": 325,
+"timestamp": 162.342
+},
+{
+"seq": 326,
+"timestamp": 162.678
+},
+{
+"seq": 327,
+"timestamp": 165.885
+},
+{
+"seq": 328,
+"timestamp": 166.269
+},
+{
+"seq": 329,
+"timestamp": 166.614
+},
+{
+"seq": 330,
+"timestamp": 166.978
+},
+{
+"seq": 331,
+"timestamp": 167.342
+},
+{
+"seq": 332,
+"timestamp": 167.678
+},
+{
+"seq": 333,
+"timestamp": 168.043
+},
+{
+"seq": 334,
+"timestamp": 168.377
+},
+{
+"seq": 335,
+"timestamp": 168.781
+},
+{
+"seq": 336,
+"timestamp": 169.144
+},
+{
+"seq": 337,
+"timestamp": 169.512
+},
+{
+"seq": 338,
+"timestamp": 169.886
+},
+{
+"seq": 339,
+"timestamp": 170.257
+},
+{
+"seq": 340,
+"timestamp": 170.612
+},
+{
+"seq": 341,
+"timestamp": 170.976
+},
+{
+"seq": 342,
+"timestamp": 171.344
+},
+{
+"seq": 343,
+"timestamp": 171.686
+},
+{
+"seq": 344,
+"timestamp": 172.04199
+},
+{
+"seq": 345,
+"timestamp": 172.409
+},
+{
+"seq": 346,
+"timestamp": 172.775
+},
+{
+"seq": 347,
+"timestamp": 173.11
+},
+{
+"seq": 348,
+"timestamp": 173.475
+},
+{
+"seq": 349,
+"timestamp": 173.816
+},
+{
+"seq": 350,
+"timestamp": 174.176
+},
+{
+"seq": 351,
+"timestamp": 174.511
+},
+{
+"seq": 352,
+"timestamp": 174.874
+},
+{
+"seq": 353,
+"timestamp": 175.21
+},
+{
+"seq": 354,
+"timestamp": 175.562
+},
+{
+"seq": 355,
+"timestamp": 175.912
+},
+{
+"seq": 356,
+"timestamp": 176.278
+},
+{
+"seq": 357,
+"timestamp": 176.644
+},
+{
+"seq": 358,
+"timestamp": 177.009
+},
+{
+"seq": 359,
+"timestamp": 177.375
+},
+{
+"seq": 360,
+"timestamp": 177.709
+},
+{
+"seq": 361,
+"timestamp": 178.073
+},
+{
+"seq": 362,
+"timestamp": 178.412
+},
+{
+"seq": 363,
+"timestamp": 178.759
+},
+{
+"seq": 364,
+"timestamp": 179.108
+},
+{
+"seq": 365,
+"timestamp": 179.443
+},
+{
+"seq": 366,
+"timestamp": 179.782
+},
+{
+"seq": 367,
+"timestamp": 180.142
+},
+{
+"seq": 368,
+"timestamp": 180.476
+},
+{
+"seq": 369,
+"timestamp": 180.84
+},
+{
+"seq": 370,
+"timestamp": 181.177
+},
+{
+"seq": 371,
+"timestamp": 181.52
+},
+{
+"seq": 372,
+"timestamp": 181.877
+},
+{
+"seq": 373,
+"timestamp": 182.274
+},
+{
+"seq": 374,
+"timestamp": 182.614
+},
+{
+"seq": 375,
+"timestamp": 182.976
+},
+{
+"seq": 376,
+"timestamp": 183.318
+},
+{
+"seq": 377,
+"timestamp": 183.677
+},
+{
+"seq": 378,
+"timestamp": 184.01399
+},
+{
+"seq": 379,
+"timestamp": 184.376
+},
+{
+"seq": 380,
+"timestamp": 184.785
+},
+{
+"seq": 381,
+"timestamp": 185.146
+},
+{
+"seq": 382,
+"timestamp": 185.481
+},
+{
+"seq": 383,
+"timestamp": 185.841
+},
+{
+"seq": 384,
+"timestamp": 186.178
+},
+{
+"seq": 385,
+"timestamp": 186.545
+},
+{
+"seq": 386,
+"timestamp": 186.914
+},
+{
+"seq": 387,
+"timestamp": 187.267
+},
+{
+"seq": 388,
+"timestamp": 187.611
+},
+{
+"seq": 389,
+"timestamp": 187.946
+},
+{
+"seq": 390,
+"timestamp": 188.308
+},
+{
+"seq": 391,
+"timestamp": 188.647
+},
+{
+"seq": 392,
+"timestamp": 188.981
+},
+{
+"seq": 393,
+"timestamp": 189.318
+},
+{
+"seq": 394,
+"timestamp": 189.678
+},
+{
+"seq": 395,
+"timestamp": 190.013
+},
+{
+"seq": 396,
+"timestamp": 190.375
+},
+{
+"seq": 397,
+"timestamp": 190.71
+},
+{
+"seq": 398,
+"timestamp": 191.045
+},
+{
+"seq": 399,
+"timestamp": 191.409
+},
+{
+"seq": 400,
+"timestamp": 191.791
+},
+{
+"seq": 401,
+"timestamp": 192.147
+},
+{
+"seq": 402,
+"timestamp": 192.511
+},
+{
+"seq": 403,
+"timestamp": 192.877
+},
+{
+"seq": 404,
+"timestamp": 193.211
+},
+{
+"seq": 405,
+"timestamp": 193.575
+},
+{
+"seq": 406,
+"timestamp": 193.909
+},
+{
+"seq": 407,
+"timestamp": 194.259
+},
+{
+"seq": 408,
+"timestamp": 194.61
+},
+{
+"seq": 409,
+"timestamp": 194.947
+},
+{
+"seq": 410,
+"timestamp": 195.31
+},
+{
+"seq": 411,
+"timestamp": 195.649
+},
+{
+"seq": 412,
+"timestamp": 196.01
+},
+{
+"seq": 413,
+"timestamp": 196.361
+},
+{
+"seq": 414,
+"timestamp": 196.71
+},
+{
+"seq": 415,
+"timestamp": 197.044
+},
+{
+"seq": 416,
+"timestamp": 197.41
+},
+{
+"seq": 417,
+"timestamp": 197.787
+},
+{
+"seq": 418,
+"timestamp": 198.145
+},
+{
+"seq": 419,
+"timestamp": 198.483
+},
+{
+"seq": 420,
+"timestamp": 198.841
+},
+{
+"seq": 421,
+"timestamp": 199.206
+},
+{
+"seq": 422,
+"timestamp": 199.552
+},
+{
+"seq": 423,
+"timestamp": 199.914
+},
+{
+"seq": 424,
+"timestamp": 200.275
+},
+{
+"seq": 425,
+"timestamp": 200.609
+},
+{
+"seq": 426,
+"timestamp": 200.946
+},
+{
+"seq": 427,
+"timestamp": 201.307
+},
+{
+"seq": 428,
+"timestamp": 201.643
+},
+{
+"seq": 429,
+"timestamp": 202.009
+},
+{
+"seq": 430,
+"timestamp": 202.343
+}
+]
+}
