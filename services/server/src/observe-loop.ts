@@ -180,6 +180,37 @@ export function resolveDecideImageBudget(value: unknown): number {
   return Math.min(LIVE_DECIDE_IMAGE_CEILING, Math.max(1, Math.floor(n)));
 }
 
+/**
+ * ADAAAA-8488: the VOD decide image budget default — the shared per-call
+ * ceiling ({@link OBSERVE_MAX_FRAMES}, 30), i.e. exactly the cap the VOD
+ * observer applied before the knob was wired, so an unset
+ * `VOD_MAX_FRAMES_PER_ANALYSIS` keeps the VOD window byte-identical.
+ *
+ * The VOD pass is detail-first and has no narrower priced cell of its own; the
+ * budget exists so a frame-budget cell CAN be constructed. Before this the only
+ * consumer of the knob was `assembleFrameSequence` (the Increment F
+ * trigger-window assembler), which no VOD decide path calls, so a host-set
+ * `VOD_MAX_FRAMES_PER_ANALYSIS=8` reached the config and then nothing: every VOD
+ * cell priced at 8 frames measured the deployed ~16-frame window instead.
+ */
+export const VOD_DECIDE_IMAGE_BUDGET = OBSERVE_MAX_FRAMES;
+
+/**
+ * Clamp a configured VOD decide image budget into [1, {@link OBSERVE_MAX_FRAMES}].
+ * A non-finite, absent or non-positive value resolves to
+ * {@link VOD_DECIDE_IMAGE_BUDGET}, so a typo can never turn the cap off; a value
+ * above the ceiling is clamped to it, so the knob can lower the budget but can
+ * never raise it past the hard per-call ceiling on its own authority.
+ */
+export function resolveVodDecideImageBudget(
+  value: unknown,
+  fallback: number = VOD_DECIDE_IMAGE_BUDGET
+): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(OBSERVE_MAX_FRAMES, Math.max(1, Math.floor(n)));
+}
+
 /** Index of the element whose `ts` is nearest `target` (deterministic: ties
  *  resolve to the earlier element). */
 function nearestIndexByTs<T extends { ts: number }>(ordered: T[], target: number): number {

@@ -674,6 +674,12 @@ services:
       - VOD_RESUME_MAX_ATTEMPTS=${VOD_RESUME_MAX_ATTEMPTS:-2}
       - VOD_RESUME_BACKOFF_MS=${VOD_RESUME_BACKOFF_MS:-30000}
       - VOD_RESUME_CHECKPOINT_WINDOWS=${VOD_RESUME_CHECKPOINT_WINDOWS:-10}
+      # ADAAAA-8488: the VOD decide FRAME BUDGET — images per VOD decide call.
+      # Without this line a host-set value never reached the container, so the
+      # knob was a no-op and any VOD cell priced below the deployed window
+      # measured the deployed window instead. Unset => the 30-frame shared
+      # ceiling (the pre-8488 window); a set value is clamped into [1, 30].
+      - VOD_MAX_FRAMES_PER_ANALYSIS=${VOD_MAX_FRAMES_PER_ANALYSIS:-}
       # ADAAAA-7835: the browser VOD upload cap (bytes). Default 4 GB. Deployed
       # value is this env line, so a `docker compose up -d server` applies a
       # change without a rebuild; the code default equals it so dev and any

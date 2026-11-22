@@ -4646,6 +4646,11 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       observeDecideOffLoop: cfg.observeDecideOffLoop,
       observeDecideInFlight: cfg.observeDecideInFlight,
       observeDecideQueueMax: cfg.observeDecideQueueMax,
+      // ADAAAA-8488: the VOD decide FRAME BUDGET (images per decide call) —
+      // resolved from `VOD_MAX_FRAMES_PER_ANALYSIS` in loadConfig and read by
+      // `assembleObserveWindow` below, so the env reaches the decide request.
+      // Unset => the 30-frame shared ceiling, the pre-8488 window.
+      observeMaxFrames: cfg.vodMaxFramesPerAnalysis,
       // ADAAAA-7906 (VOD resume): the observe-decider's cadence clock starts at
       // the persisted cursor (no window whose centre is <= cursor is issued) and
       // every APPLIED window reports its centre so the cursor advances.

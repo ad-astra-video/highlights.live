@@ -26,7 +26,7 @@ Three different questions get conflated in conversation; keep them separate.
 | --- | --- | --- |
 | `outcome` | `scoring_play` \| `near_miss` \| `big_play` \| `not_highlight` — the decide verdict's own classification of the window | `services/decide/app/gemma.py:434` (prompt contract), mirrored by the deterministic rule path |
 | `isHighlight` | the accept flag on a decide verdict; a `scoring_play` read still has to survive the server accept path before it is a row | `services/decide/app/__init__.py:806` (`/highlight`) |
-| row status / lane | `accepted` \| `suppressed` \| `rejected`, plus per-row markers: provisional goal, confirmation lane, `replayOf`, `clipChoice` | `packages/events/src/index.ts:1909` (`HighlightRecordSchema`) |
+| row status / lane | `accepted` \| `suppressed` \| `rejected`, plus per-row markers: provisional goal, confirmation lane, `replayOf`, `clipChoice` | `packages/events/src/index.ts:1956` (`HighlightRecordSchema`) |
 | "postable" | the read-side gate that decides what the board may show. A stored row is **not** a highlight until it passes this | `services/server/src/highlight-postable.ts:265` |
 
 Only `scoring_play` may be a board GOAL. `near_miss` (a shot that did not convert)
@@ -82,7 +82,7 @@ and whether it is shipped on or opt-in.
 | --- | --- | --- | --- | --- | --- |
 | L1 | live browser share | browser publishes WebRTC video+opus to the media node | `services/media/src/rtc.ts`, `services/server/src/media-rail.ts:484` | each observation + anchor JPEG feeds a `LiveObserver` | on when a browser share is provisioned |
 | L2 | live RTMP / file-sim | server pulls a stream / loops a file | `services/server/src/live.ts` | frames + audio tap into `analyzeJob` | on |
-| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11452` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
+| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11808` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
 | A1 | both | audio energy change: burst (fast onset) or sustained swell | `services/perceive/app/audio_gate.py` → `POST /audio` | Stage-A candidate anchored at the onset | on |
 | A2 | both | band-limited tonal whistle (2.4–3.4 kHz) | `services/perceive/app/audio_gate.py` (Stage-B) | whistle candidate / evidence; own verdict ledger | on |
 | A3 | both | tracker peak displacement, detection-in-zone, ball-velocity surge | `services/perceive/app/stage_a.py` | profile-routed Stage-A sites | **inert for soccer** — no shipped profile enables motion/zone/ball-velocity |
@@ -90,8 +90,8 @@ and whether it is shipped on or opt-in.
 | A5 | both | ball crosses the goal-line plane inside the mouth | `services/perceive/app/goal_plane.py`, `services/perceive/app/pitch_homography.py` | `goalCrossed` / `ballInNet` / `ballOutcome` | on when calibrated; absent = not captured, never fabricated |
 | A6 | both | Florence-2 detections promoted to persistent tracks (SAM3) | `services/perceive/app/tracker.py`, `services/perceive/app/sam_tracker.py`, `services/perceive/app/ball_signal.py`; contract `docs/tracked-object.md` | tracks, motion, possession, tracking evidence | on, capped 3 live / 8 VOD |
 | A7 | both | ASR transcribes the window's audio | `services/asr`; prefetch lane `services/server/src/asr-prefetch.ts` | transcript used as fallible evidence (and goal-call cue) | on |
-| A8 | VOD (gated) | the Tier-2 predicate sees a real signal in a window | `services/server/src/observe-loop.ts:2091` (`escalatesToTier2`) | decides whether a window earns a billable decide | `OBSERVE_SIGNAL_GATE=1` |
-| B1 | live | cadence tick of the live observer | `services/server/src/observe-loop.ts:785` (`LiveObserver`) | assembles the rolling past window, issues decide | `LIVE_OBSERVE_LOOP=1` |
+| A8 | VOD (gated) | the Tier-2 predicate sees a real signal in a window | `services/server/src/observe-loop.ts:2152` (`escalatesToTier2`) | decides whether a window earns a billable decide | `OBSERVE_SIGNAL_GATE=1` |
+| B1 | live | cadence tick of the live observer | `services/server/src/observe-loop.ts:816` (`LiveObserver`) | assembles the rolling past window, issues decide | `LIVE_OBSERVE_LOOP=1` |
 | B2 | both | a Stage-A trigger fires | `services/server/src/audio-trigger.ts` (`TriggerWindowScheduler`) | schedules an anchored window at the trigger moment | on |
 | B3 | VOD (detail-first) | cadence tick over the whole file | `services/server/src/observe-loop.ts` symmetric `assembleObserveWindow` | 3 s cadence, `decideWindowN` frame sequence | `OBSERVE_LOOP=1` |
 | B4 | VOD (baseline) | a perceive candidate fires | `services/server/src/analyzer.ts` (candidate path, 3 s frame-group merge) | one merged `/highlight` review per group | default VOD baseline when `OBSERVE_LOOP` is off |
@@ -208,6 +208,7 @@ the live pass rather than to change what counts as a highlight:
 | Pathway | Owner | What it buys |
 | --- | --- | --- |
 | Symmetric window + 3 s cadence + `decideWindowN` sequence | `services/server/src/observe-loop.ts`, `services/server/src/config.ts` (`vodDecideWindowN`, default 24 > live 16) | gemma reasons across a longer frame sequence per trigger |
+| VOD decide frame budget | `services/server/src/config.ts` (`VOD_MAX_FRAMES_PER_ANALYSIS` -> `resolveVodDecideImageBudget`, unset = the 30-frame `OBSERVE_MAX_FRAMES` ceiling) | bounds the images ONE VOD decide call carries (`assembleObserveWindow` -> the payload's `frames`), so a frame-budget cell is actually constructible and `decide_audit.frame_count` reports it |
 | Higher-FPS re-sample around a trigger | `services/server/src/config.ts` (`VOD_RESAMPLE_FPS` 8, `VOD_RESAMPLE_WINDOW_S` 3) | the ball-crossing instant lands inside the judged window |
 | Full-file audio tap | `services/server/src/vod-audio.ts` | window-aligned audio on every window, same wire contract as live |
 | Adaptive perceive cadence | `services/server/src/perceive-cadence.ts` | cuts per-frame perceive cost in cool regions, full-perceive around any Tier-2-escalated window (recall-safe by the same predicate) |
@@ -256,6 +257,7 @@ window span or the trigger:
 | `DECIDE_CONFIRM_ENABLED` | off on decide; server flags it per rail | C1 dive availability |
 | `LIVE_CONFIRM_ASYNC` | on (`"0"` disables) | whether the live dive runs off the accept path |
 | `DECIDE_NOTABILITY_MIN` | 60.0 | D1 step 5 separating bar |
+| `VOD_MAX_FRAMES_PER_ANALYSIS` | unset (the 30-frame ceiling) | images one VOD decide carries; a set value is clamped into [1, 30] and every VOD `decide_audit.frame_count` reports it (ADAAAA-8488) |
 
 ---
 

@@ -2,7 +2,7 @@ import path from "node:path";
 import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
 import { resolveExportTokenSecret } from "./export-token";
-import { LIVE_OBSERVE_LAG_BUDGET_S, resolveDecideImageBudget } from "./observe-loop";
+import { LIVE_OBSERVE_LAG_BUDGET_S, resolveDecideImageBudget, resolveVodDecideImageBudget } from "./observe-loop";
 import { LIVE_SUPPLY_STALL_S } from "./live-supply-stall";
 import { normalizeConfirmDiveCap } from "./live-confirm-async";
 import { WEBAPP_ASSET_RETENTION_DEFAULT } from "./webapp-asset-retention";
@@ -291,6 +291,16 @@ export interface ServerConfig {
    * (never exceeded). Live default 30 (≈25 + 3 keyframes); VOD higher. `MAX_
    * FRAMES_PER_ANALYSIS` / `VOD_MAX_FRAMES_PER_ANALYSIS`. */
   maxFramesPerAnalysis: number;
+  /** ADAAAA-8488: the VOD decide FRAME BUDGET — the number of images one VOD
+   * decide call carries, resolved from `VOD_MAX_FRAMES_PER_ANALYSIS`.
+   *
+   * This is the knob the VOD observe pass actually reads (`assembleObserveWindow`
+   * -> the payload's `frames`). Unset resolves to the 30-frame shared ceiling
+   * ({@link VOD_DECIDE_IMAGE_BUDGET}), i.e. the shipped pre-8488 window; a
+   * configured value is clamped into [1, 30]. Before 8488 the env only reached
+   * `assembleFrameSequence` (the Increment F trigger assembler), which no VOD
+   * decide path calls — so the knob was a no-op and every VOD cell priced below
+   * the deployed window measured the deployed window instead. */
   vodMaxFramesPerAnalysis: number;
   /** Pre/post window (seconds) around the trigger the assembler samples.
    * Default 2 s pre / 3 s post; VOD may lengthen (detail-first). `ANALYSIS_PRE_
@@ -1070,7 +1080,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     analysisFps: Number(env.ANALYSIS_FPS ?? 5),
     vodAnalysisFps: Number(env.VOD_ANALYSIS_FPS ?? 5),
     maxFramesPerAnalysis: Number(env.MAX_FRAMES_PER_ANALYSIS ?? 30),
-    vodMaxFramesPerAnalysis: Number(env.VOD_MAX_FRAMES_PER_ANALYSIS ?? 40),
+    // ADAAAA-8488: the VOD decide frame budget, resolved at load so the VOD
+    // observe pass reads a bounded number (unset => the 30-frame ceiling, i.e.
+    // today's window; configured => [1, 30]). Previously the raw env landed here
+    // and only a dead assembler consumed it, so the knob did nothing.
+    vodMaxFramesPerAnalysis: resolveVodDecideImageBudget(env.VOD_MAX_FRAMES_PER_ANALYSIS),
     analysisPreWindowS: Number(env.ANALYSIS_PRE_WINDOW_S ?? 2),
     analysisPostWindowS: Number(env.ANALYSIS_POST_WINDOW_S ?? 3),
     vodAnalysisPreWindowS: Number(env.VOD_ANALYSIS_PRE_WINDOW_S ?? 3),
