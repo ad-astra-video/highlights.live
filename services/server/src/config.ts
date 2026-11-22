@@ -733,6 +733,13 @@ export interface ServerConfig {
    * more than ~1 sweep interval after its purge window elapses. Default: run
    * hourly (ADAAAA-5398 C4). */
   datasetPurgeSweepIntervalMs: number;
+  /** ADAAAA-8824: how often the control-plane media-session sweep runs (ms).
+   * Each pass asks the media node which sessions it serves and stops any
+   * orchestrator live-runner session whose row has no serving node (a standing
+   * Livepeer debit). The sweep is inert unless `MEDIA_SERVER_URL` and
+   * `MEDIA_HEALTH_TOKEN` are both set. 0 disables the periodic tick; the boot
+   * pass still runs. Default: 60 s. */
+  mediaSessionSweepIntervalMs: number;
   /**
    * Increment D (ADAAAA-6467): the stream-start what-to-track warm-up window
    * (seconds) — exactly ONE planner call must deliver a valid TrackingPlan
@@ -1326,6 +1333,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     rejectTtlMs: Number(env.REJECTED_CLIP_TTL_MS ?? 24 * 60 * 60 * 1000),
     rejectSweepIntervalMs: Number(env.REJECTED_CLIP_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
     datasetPurgeSweepIntervalMs: Number(env.DATASET_PURGE_SWEEP_INTERVAL_MS ?? 60 * 60 * 1000),
+    // ADAAAA-8824: a detached media session is a standing Livepeer debit, so the
+    // control-plane sweep ticks well inside the hourly housekeeping cadence.
+    // 0 disables the tick (the boot pass still runs).
+    mediaSessionSweepIntervalMs: Number(env.MEDIA_SESSION_SWEEP_INTERVAL_MS ?? 60 * 1000),
     // Increment D (ADAAAA-6467): stream-start warm-up window + out-of-band
     // re-check cadence for the what-to-track planner. See the ServerConfig
     // field docs for the default rationale (3 s warm-up, 10 s recheck).

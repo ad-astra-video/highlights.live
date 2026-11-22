@@ -19,6 +19,7 @@ import { outcomeForStrandedJob } from "./job-failure";
 import { accruedSecondsSince, buildTerminalAccountingPatch } from "./job-settlement";
 import { isLiveWatchSession } from "./live-watch-minutes";
 import { reconcileStaleMediaSessions } from "./media-session-reconcile";
+import { sweepDetachedMediaSessions } from "./media-session-sweep";
 import { installLogFileTee, serverLogFilePath } from "./log-file";
 import Stripe from "stripe";
 
@@ -71,6 +72,65 @@ function scheduleDatasetPurgeSweep(
   };
   void run(true);
   const t = setInterval(() => void run(false), cfg.datasetPurgeSweepIntervalMs);
+  t.unref();
+  return t;
+}
+
+/**
+ * ADAAAA-8824: the control-plane backstop for a media node that NEVER returns.
+ *
+ * `reconcileLostSessions()` on the media node releases its ledger leftovers at
+ * boot, but a node that is removed/pulled/host-dead never boots, so the
+ * orchestrator keeps accounting each paid live-runner session every 5 s until
+ * balance expiry (and the capacity-1 perceive slot stays held). This sweep asks
+ * the node which sessions it serves (`GET /node`) and stops, through the
+ * canonical orchestrator route, every session an in-flight job still holds a
+ * row for but no node serves.
+ *
+ * Inert unless `MEDIA_SERVER_URL` and `MEDIA_HEALTH_TOKEN` are both set — a
+ * token-less `GET /node` answers 404, which must never read as "detached".
+ * Bounded, logged, idempotent (a confirmed stop settles the row), unref'd timer.
+ */
+function scheduleMediaSessionSweep(
+  cfg: ReturnType<typeof loadConfig>,
+  db: Awaited<ReturnType<typeof openDb>>,
+  store: Store,
+  stopper: { stopPerceive(sessionId: string): Promise<void> }
+): NodeJS.Timeout | undefined {
+  const run = async (startup: boolean) => {
+    try {
+      const report = await sweepDetachedMediaSessions({
+        db,
+        getJob: (id) => store.getJob(id),
+        mediaServerUrl: cfg.mediaServerUrl,
+        mediaHealthToken: cfg.mediaHealthToken,
+        stopper,
+      });
+      if (!report.enabled) {
+        // One line at boot; a disabled backstop is an operator decision, not an
+        // error, so the tick does not repeat it.
+        if (startup) console.log(`[media-sweep] inert: ${report.disabledReason}`);
+        return;
+      }
+      const interesting =
+        report.released > 0 || report.failed > 0 || report.unverified > 0 || report.otherNode > 0;
+      if (startup || interesting) {
+        console.log(
+          `[media-sweep] node=${report.node} scanned=${report.scanned} candidates=${report.candidates} ` +
+            `served=${report.served} released=${report.released} failed=${report.failed}` +
+            (report.unverified ? ` unverified=${report.unverified}` : "") +
+            (report.otherNode ? ` otherNode=${report.otherNode}` : "") +
+            (report.releasedSessionIds.length ? ` ids=${report.releasedSessionIds.join(",")}` : "")
+        );
+      }
+    } catch (e: any) {
+      // eslint-disable-next-line no-console
+      console.error("[media-sweep] error:", String(e?.message || e));
+    }
+  };
+  void run(true);
+  if (!(cfg.mediaSessionSweepIntervalMs > 0)) return undefined;
+  const t = setInterval(() => void run(false), cfg.mediaSessionSweepIntervalMs);
   t.unref();
   return t;
 }
@@ -222,6 +282,10 @@ async function main() {
   const app = buildApp({ cfg, store, adapter, db, auth, billing, entitlements, mailer: mailer ?? undefined });
   scheduleRejectSweep(cfg, store);
   scheduleDatasetPurgeSweep(cfg, db);
+  // ADAAAA-8824: the media-node backstop runs after the boot sweep + reconcile
+  // above, so any job the boot sweep just reaped is already terminal (and its row
+  // settled) before this sweep looks for detached sessions.
+  scheduleMediaSessionSweep(cfg, db, store, adapter);
   // A container recreate mid-VOD drops the in-memory payment refreshers, so a
   // perceive session the orchestrator still holds stops being funded and would
   // be force-released with `insufficient balance`. Release any the previous
