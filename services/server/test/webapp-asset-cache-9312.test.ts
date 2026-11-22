@@ -114,5 +114,22 @@ describe("ADAAAA-9312 SPA serve path cache policy", () => {
     const plainAsset = await app.inject({ method: "GET", url: "/assets/logo.svg" });
     expect(plainAsset.statusCode).toBe(200);
     expect(plainAsset.headers["cache-control"]).toBe("no-cache");
+
+    // ...and a LONG plain name is still not content-addressed: the immutable
+    // policy keys on the hash shape, not on name length.
+    for (const name of ["sprites.svg", "vendor.css"]) {
+      writeFileSync(path.join(dist, "assets", name), `/* ${name} */\n`);
+      const plain = await app.inject({ method: "GET", url: `/assets/${name}` });
+      expect(plain.statusCode).toBe(200);
+      expect(plain.headers["cache-control"]).toBe("no-cache");
+    }
+
+    // A real Vite hash shape is pinned, both spellings Vite emits.
+    for (const name of ["index-CNBH-rmM.js", "chunk.4f9a1c2b.css"]) {
+      writeFileSync(path.join(dist, "assets", name), `/* ${name} */\n`);
+      const hashed = await app.inject({ method: "GET", url: `/assets/${name}` });
+      expect(hashed.statusCode).toBe(200);
+      expect(hashed.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
+    }
   });
 });
