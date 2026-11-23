@@ -71,14 +71,16 @@ describe("file/VOD ladder keeps the pre-8645 banner rule (ADAAAA-8679, AC6)", ()
     expect(vod.matchSummary.goalCount).toBe(2);
     expect(vod.matchSummary.verifiedGoalCount).toBe(0);
     expect(vod.matchSummary.goalTimeline.map((g) => g.verified)).toEqual([false, false]);
-    expect(vod.matchSummary.text).toContain("2 accepted goals (0 corroborated)");
+    expect(vod.matchSummary.text).toContain("2 accepted goals");
+    // ADAAAA-8866: the zero corroboration clause is omitted, not printed.
+    expect(vod.matchSummary.text).not.toMatch(/\(0 (?:frame-)?corroborated/);
     expect(vod.matchSummary.text).toContain("Goals in order: #1 0:20 (never corroborated), #2 1:17 (never corroborated)");
   });
 
   it("the same rows still count on the fast rail when its card lane confirms them (8645 widening intact)", () => {
     const live = ladderOf(E24_ROWS, true, () => true);
     expect(live.matchSummary.verifiedGoalCount).toBe(2);
-    expect(live.matchSummary.text).toContain("2 accepted goals (2 corroborated)");
+    expect(live.matchSummary.text).toContain("2 accepted goals (2 frame-corroborated)");
   });
 
   it("a predicate-less fast caller still reads the row-only rule", () => {
@@ -107,7 +109,7 @@ describe("file/VOD ladder keeps the pre-8645 banner rule (ADAAAA-8679, AC6)", ()
     ];
     const vod = ladderOf(rows, false);
     expect(vod.matchSummary.verifiedGoalCount).toBe(2);
-    expect(vod.matchSummary.text).toContain("2 accepted goals (2 corroborated)");
+    expect(vod.matchSummary.text).toContain("2 accepted goals (2 frame-corroborated)");
     expect(vod.matchSummary.text).not.toContain("(never corroborated)");
   });
 

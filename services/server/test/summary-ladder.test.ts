@@ -330,7 +330,7 @@ describe("summary ladder edge cases (ADAAAA-7623)", () => {
     });
     expect(out.matchSummary.goalCount).toBe(2);
     expect(out.matchSummary.verifiedGoalCount).toBe(2);
-    expect(out.matchSummary.text).toContain("2 accepted goals (2 corroborated)");
+    expect(out.matchSummary.text).toContain("2 accepted goals (2 frame-corroborated)");
     expect(out.matchSummary.text).not.toContain("never corroborated");
   });
 
@@ -369,7 +369,7 @@ describe("summary ladder edge cases (ADAAAA-7623)", () => {
       corroborated: (h) => (h as any).id === "legacy",
     });
     expect(live.matchSummary.verifiedGoalCount).toBe(1);
-    expect(live.matchSummary.text).toContain("1 accepted goal (1 corroborated)");
+    expect(live.matchSummary.text).toContain("1 accepted goal (1 frame-corroborated)");
     const vod = buildSummaryLadder({
       summaryLog: [{ seq: 1, ts: "t", windowTs: 10, text: "A shot is taken." }],
       highlights,
@@ -422,7 +422,7 @@ describe("corroboration propagation on the ladder (ADAAAA-7958 §3.4)", () => {
     expect(lull!.title).not.toMatch(GOAL_CLAIM);
     // The rollup still COUNTS the goal ("1 accepted goal (0 corroborated)." — the
     // banner's wording); only the narrative beat may not assert it as scored.
-    const lead = lull!.summary.replace(/ \d+ accepted goals? \(\d+ corroborated\)\.$/, "");
+    const lead = lull!.summary.replace(/ \d+ accepted goals?(?: \(\d+ frame-corroborated\))?\.$/, "");
     expect(lead).not.toMatch(GOAL_CLAIM);
     // The banner and the page agree: the goal is still COUNTED, just not asserted.
     expect(l.matchSummary.goalCount).toBe(1);
@@ -453,7 +453,9 @@ describe("corroboration propagation on the ladder (ADAAAA-7958 §3.4)", () => {
     expect(cluster).toBeTruthy();
     expect(cluster!.title).not.toMatch(/goal/i);
     expect(cluster!.goalCount).toBe(2);
-    expect(cluster!.summary).toContain("2 accepted goals (0 corroborated)");
+    expect(cluster!.summary).toContain("2 accepted goals");
+    // ADAAAA-8866: a zero corroboration count is OMITTED, never printed as a claim.
+    expect(cluster!.summary).not.toMatch(/\(0 (?:frame-)?corroborated/);
 
     const withOne = [{ ...goals[0], corroborated: true }, goals[1]];
     const l2 = buildSummaryLadder({ summaryLog: clusterLog as any, highlights: withOne as any, gameHint: "Soccer", fastRail: true });

@@ -92,7 +92,7 @@ describe("ADAAAA-8127 Defect A — a one-goal chapter closes the digest too", ()
     const ladder = ladderFor([GOAL_ROW]);
     const chapter = ladder.chapters[0];
     expect(chapter.goalCount).toBe(1);
-    expect(chapter.summary).toBe("Player takes a shot from the box. 1 accepted goal (1 corroborated).");
+    expect(chapter.summary).toBe("Player takes a shot from the box. 1 accepted goal (1 frame-corroborated).");
   });
 
   it("does not double the sentence end when the lead already carries one", () => {
@@ -102,7 +102,7 @@ describe("ADAAAA-8127 Defect A — a one-goal chapter closes the digest too", ()
       gameHint: "soccer",
       fastRail: true,
     });
-    expect(ladder.chapters[0].summary).toBe("Player takes a shot from the box. 1 accepted goal (1 corroborated).");
+    expect(ladder.chapters[0].summary).toBe("Player takes a shot from the box. 1 accepted goal (1 frame-corroborated).");
   });
 });
 

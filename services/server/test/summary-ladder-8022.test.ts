@@ -137,7 +137,7 @@ describe("job 34f9f2d1 re-grades without the two §2 rows (ADAAAA-8022)", () => 
     const chapter = ladder.chapters[7];
     expect(chapter.seqFrom).toBe(31);
     expect(chapter.seqTo).toBe(41);
-    expect(chapter.summary).toBe("A player dribbles in the midfield. 2 accepted goals (0 corroborated).");
+    expect(chapter.summary).toBe("A player dribbles in the midfield. 2 accepted goals.");
     expect(chapter.summary.startsWith("A player in the midfield.")).toBe(false);
   });
 
@@ -145,7 +145,7 @@ describe("job 34f9f2d1 re-grades without the two §2 rows (ADAAAA-8022)", () => 
     const bullet = ladder.matchSummary.text
       .split("\n")
       .filter((l) => l.startsWith("- ") && l.includes("2 accepted goals"));
-    expect(bullet).toEqual(["- Phase · 4:57–6:51: A player dribbles in the midfield. 2 accepted goals (0 corroborated)."]);
+    expect(bullet).toEqual(["- Phase · 4:57–6:51: A player dribbles in the midfield. 2 accepted goals."]);
   });
 
   it("passes the served post-condition on every rendered row", () => {

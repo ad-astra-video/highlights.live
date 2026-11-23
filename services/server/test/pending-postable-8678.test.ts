@@ -185,7 +185,7 @@ describe("the banner counts the SAME population the cards serve (ADAAAA-8678)", 
   });
 
   it("names the counted goal rows as awaiting approval, never as `accepted`", () => {
-    expect(ladder.matchSummary.text).toContain("2 goals (0 corroborated, 2 awaiting approval)");
+    expect(ladder.matchSummary.text).toContain("2 goals (2 awaiting approval)");
     expect(ladder.matchSummary.text).not.toContain("accepted goals");
     expect(ladder.matchSummary.text).not.toContain("0 goals");
     expect(ladder.matchSummary.text).not.toContain("none accepted");
@@ -195,7 +195,7 @@ describe("the banner counts the SAME population the cards serve (ADAAAA-8678)", 
     const withGoals = ladder.chapters.filter((c) => c.goalCount > 0);
     expect(withGoals.length).toBeGreaterThan(0);
     for (const c of withGoals) {
-      expect(c.summary).toMatch(/\d+ goals? \(\d+ corroborated, \d+ awaiting approval\)\.$/);
+      expect(c.summary).toMatch(/\d+ goals? \((?:\d+ frame-corroborated, )?\d+ awaiting approval\)\.$/);
       expect(c.summary).not.toContain("accepted goals");
     }
   });
@@ -226,13 +226,13 @@ describe("the banner counts the SAME population the cards serve (ADAAAA-8678)", 
     });
     expect(l.matchSummary.goalCount).toBe(2);
     expect(l.matchSummary.verifiedGoalCount).toBe(1);
-    expect(l.matchSummary.text).toContain("2 goals (1 corroborated, 2 awaiting approval)");
+    expect(l.matchSummary.text).toContain("2 goals (1 frame-corroborated, 2 awaiting approval)");
   });
 
   it("says the same thing when the job stores no window narratives", () => {
     const l = buildSummaryLadder({ highlights: postable.highlights, gameHint: "Soccer", fastRail: true, corroborated: cardConfirmsGoal });
     expect(l.matchSummary.goalCount).toBe(2);
-    expect(l.matchSummary.text).toContain("2 goals (0 corroborated, 2 awaiting approval)");
+    expect(l.matchSummary.text).toContain("2 goals (2 awaiting approval)");
   });
 
   it("leaves an all-ACCEPTED goal set byte-identical to the pre-8678 ladder", () => {
@@ -246,7 +246,7 @@ describe("the banner counts the SAME population the cards serve (ADAAAA-8678)", 
       corroborated: cardConfirmsGoal,
     });
     expect(l.matchSummary.goalCount).toBe(2);
-    expect(l.matchSummary.text).toContain("2 accepted goals (0 corroborated)");
+    expect(l.matchSummary.text).toContain("2 accepted goals");
     expect(l.matchSummary.text).toContain("2 accepted highlights; no extra inference.");
     expect(l.matchSummary.text).not.toContain("awaiting approval");
   });
@@ -257,6 +257,6 @@ describe("the banner counts the SAME population the cards serve (ADAAAA-8678)", 
     expect(out.highlights.map((h) => h.id)).toEqual(["kill-1"]);
     const l = buildSummaryLadder({ highlights: out.highlights, gameHint: "Esports", fastRail: true, corroborated: cardConfirmsGoal });
     expect(l.matchSummary.goalCount).toBe(0);
-    expect(l.matchSummary.text).toContain("0 accepted goals (0 corroborated)");
+    expect(l.matchSummary.text).toContain("0 accepted goals");
   });
 });

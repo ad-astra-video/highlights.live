@@ -62,7 +62,7 @@ const ladder: SummaryLadder = {
     },
   ],
   matchSummary: {
-    text: "Soccer · 2:00 · 3 chapters · 3 accepted goals (2 corroborated)\n- Lull · 0:00–0:39: pre-match photo\n- Build-up · 0:39–1:09: sustained attack\n- Goal cluster (2) · 1:09–2:00: two finishes\nGoals in order: #1 0:31, #2 1:09, #3 1:55 (never corroborated)",
+    text: "Soccer · 2:00 · 3 chapters · 3 accepted goals (2 frame-corroborated)\n- Lull · 0:00–0:39: pre-match photo\n- Build-up · 0:39–1:09: sustained attack\n- Goal cluster (2) · 1:09–2:00: two finishes\nGoals in order: #1 0:31, #2 1:09, #3 1:55 (never corroborated)",
     charCount: 260,
     chapterCount: 3,
     goalCount: 3,
@@ -84,7 +84,7 @@ describe("summary ladder view (ADAAAA-7623)", () => {
     const html = render(React.createElement(SummaryLadderView, { ladder }));
     expect(html).toContain("Match Summary");
     // rung 1: the rollup text, incl. the ordered goal line
-    expect(html).toContain("Soccer · 2:00 · 3 chapters · 3 accepted goals (2 corroborated)");
+    expect(html).toContain("Soccer · 2:00 · 3 chapters · 3 accepted goals (2 frame-corroborated)");
     expect(html).toContain("Goals in order: #1 0:31, #2 1:09, #3 1:55 (never corroborated)");
     // rung 2: every chapter row + its kind label, time range and goal chip
     expect(html.match(/data-detail-ladder-chapter="true"/g)?.length).toBe(3);

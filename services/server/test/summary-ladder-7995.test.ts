@@ -187,7 +187,7 @@ describe("ADAAAA-7995 §2/§3 — the MATCH SUMMARY never cuts the goal count mi
     corroborated: false,
   }));
 
-  it("keeps `N accepted goals (K corroborated).` intact in every bullet", () => {
+  it("keeps `N accepted goals (K frame-corroborated).` intact in every bullet", () => {
     const l = buildSummaryLadder({ summaryLog: log as any, highlights: goals as any, gameHint: "Fixture", fastRail: true });
     expect(l.matchSummary.goalCount).toBe(3);
     const bullets = l.matchSummary.text.split("\n").filter((line) => line.startsWith("- "));
@@ -196,7 +196,7 @@ describe("ADAAAA-7995 §2/§3 — the MATCH SUMMARY never cuts the goal count mi
     expect(withGoals.length).toBeGreaterThan(0);
     for (const b of withGoals) {
       // The suffix is a whole sentence: never `(0…`, never a bare `(`.
-      expect(b).toMatch(/\d+ accepted goals? \(\d+ corroborated\)\.$/);
+      expect(b).toMatch(/\d+ accepted goals?(?: \(\d+ frame-corroborated\))?\.$/);
       expect(b).not.toMatch(/\(\d*$/);
     }
   });
@@ -211,11 +211,11 @@ describe("ADAAAA-7995 §2/§3 — the MATCH SUMMARY never cuts the goal count mi
     }
   });
 
-  it("a digest with goals reads `<lead sentence>. <n> accepted goals (<k> corroborated).`", () => {
+  it("a digest with goals reads `<lead sentence>. <n> accepted goals[ (<k> frame-corroborated)].`", () => {
     const l = buildSummaryLadder({ summaryLog: log as any, highlights: goals as any, gameHint: "Fixture", fastRail: true });
     for (const c of l.chapters) {
       if (c.goalCount === 0) continue;
-      expect(c.summary).toMatch(new RegExp(`\\. ${c.goalCount} accepted goals? \\(\\d+ corroborated\\)\\.$`));
+      expect(c.summary).toMatch(new RegExp(`\\. ${c.goalCount} accepted goals?( \\(\\d+ frame-corroborated\\))?\\.$`));
     }
   });
 });

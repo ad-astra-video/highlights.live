@@ -663,16 +663,23 @@ function nearestEntryIndex(entries: NormalizedEntry[], ts: number): number {
 }
 
 /**
- * ADAAAA-7995 (§2/§3): the goal-count suffix a chapter digest carries
- * (` 3 accepted goals (0 corroborated).`). It is a WHOLE sentence, so the rollup
- * may never cut inside it — the served page shipped `… 3 accepted goals (0…`.
+ * ADAAAA-8866: the goal-count suffix a chapter digest carries
+ * (` 3 accepted goals (2 frame-corroborated).`). It is a WHOLE sentence, so the
+ * rollup may never cut inside it — the served page shipped `… 3 accepted goals
+ * (0…`.
  *
  * ADAAAA-8678: the note has a second shape when the chapter contains a
  * `pending` (unapproved) GOAL row — ` 2 goals (0 corroborated, 2 awaiting
  * approval).` — because such a row IS counted (it ships as a card) but must not
  * be called "accepted". Both shapes are whole sentences and both end the line.
+ *
+ * ADAAAA-8866: the corroboration clause now names its STRENGTH
+ * (`frame-corroborated`) and is omitted entirely when it would be a zero, so
+ * the note also has a paren-less shape (` 2 accepted goals.`) and a
+ * pending-only shape (` 2 goals (2 awaiting approval).`). All earlier shapes
+ * stay matchable: a digest derived before this change still parses.
  */
-const GOAL_NOTE_TAIL = /\s+(\d+ (?:accepted )?goals? \(\d+ corroborated(?:, \d+ awaiting approval)?\)\.)$/;
+const GOAL_NOTE_TAIL = /\s+((?:\d+ accepted goals?(?: \(\d+ (?:frame-)?corroborated(?:, \d+ awaiting approval)?\))?|\d+ goals? \((?:\d+ (?:frame-)?corroborated(?:, \d+ awaiting approval)?|\d+ awaiting approval)\))\.)$/;
 
 /**
  * ADAAAA-8678: the served goal-count phrase, in ONE place so the banner, the
@@ -680,13 +687,25 @@ const GOAL_NOTE_TAIL = /\s+(\d+ (?:accepted )?goals? \(\d+ corroborated(?:, \d+ 
  *
  * A `pending` row is counted (it ships as a card) and is named as awaiting
  * approval; it is never called "accepted", which is a claim only a settled
- * (`accepted`) row supports. With no pending goals the phrase is byte-identical
- * to the pre-8678 text, so an all-accepted job's ladder is unchanged.
+ * (`accepted`) row supports.
+ *
+ * ADAAAA-8866 (served VOD ladder job `e37db9fe`): the clause answers "how many
+ * were frame-attested", while a card badges CONFIRMED on its confirmation lane
+ * (`measured` / `dive`), which can be true without frame attestation. Printed
+ * as a bare `(0 corroborated)` beside CONFIRMED cards it read as a
+ * contradiction, so the count now NAMES its strength and a zero is OMITTED —
+ * a zero is a claim, an omission is not. Copy only: the counters themselves
+ * (`goalCount` / `verifiedGoalCount`) are untouched.
  */
 function goalCountPhrase(count: number, verified: number, pending: number): string {
   const noun = `goal${count === 1 ? "" : "s"}`;
-  if (pending > 0) return `${count} ${noun} (${verified} corroborated, ${pending} awaiting approval)`;
-  return `${count} accepted ${noun} (${verified} corroborated)`;
+  // ADAAAA-8866: name the strength, and never print a bare zero.
+  const corroboration = verified > 0 ? `${verified} frame-corroborated` : "";
+  if (pending > 0) {
+    const clauses = [corroboration, `${pending} awaiting approval`].filter(Boolean).join(", ");
+    return `${count} ${noun} (${clauses})`;
+  }
+  return corroboration ? `${count} accepted ${noun} (${corroboration})` : `${count} accepted ${noun}`;
 }
 
 /** Compose the match rollup, then enforce the 1500-char cap by dropping chapter
