@@ -428,6 +428,49 @@ sidecar). Never restart another container's registrar: a graceful shutdown
 unregisters that id and releases its sessions, and a per-container fleet has no
 reason to touch a healthy peer.
 
+### The 5090 gemma trio: `docker/deploy-gemma-trio.sh` (ADAAAA-8608)
+
+`gemma-gpu0/1/2` on <DECIDE_HOST> are ad-hoc `docker run` containers — no
+compose project label, no compose file, no systemd unit and no cron anywhere on
+the host produces them — so their whole spec (`--max-num-seqs`,
+`--gpu-memory-utilization`, the `/models` bind, shm, GPU pin) exists only inside
+each container's `Config.Cmd`. `docker/deploy-gemma-trio.sh` (byte-identical to
+`/srv/hl5090/deploy-gemma-trio.sh` on the host) pins that spec in one place and
+makes a change a diff instead of a hand-rebuild:
+
+- `check` — read-only. Prints the live and declared Cmd for every worker plus
+  per-field `DRIFT <worker> field=<flag> live=… declared=…` lines, and exits 8
+  on any mismatch. Writes nothing outside a `/tmp` scratch dir, so it is safe
+  to run from any heartbeat.
+- `guard` — read-only idle guard: GPU utilization 0 %, no `Running: N` in the
+  last 5 minutes of that worker's engine log, and `JOBS_ACTIVE|0`. Exits 3 when
+  a worker is busy.
+- `plan` — every read `apply` performs, then what it would do. No mutation.
+- `apply` — idle-guarded recreate, ONE worker at a time, then `/health` 200
+  within 180 s and `StartedAt`/`RestartCount`. A worker whose live config
+  already equals the declared spec is a NO-OP, so `apply` on a clean trio is
+  inert.
+
+The guard's third read cannot be done on <DECIDE_HOST>: that host has no `psql`
+client, no local Postgres container and no route to the GPU box's `:5432`. Read
+it on <GPU_BOX_HOST> and pass it in (`JOBS_ACTIVE=0`), or point
+`JOBS_ACTIVE_CMD` at a command that prints `JOBS_ACTIVE|<n>`; with neither,
+`apply` exits 5 rather than guessing:
+
+```sh
+docker exec -i highlights-postgres psql -U highlights -d highlights -tA <<'SQL'
+select 'JOBS_ACTIVE|' || count(*) from jobs
+where (record::jsonb->>'completedAt') is null
+  and (record::jsonb->>'status') in ('queued','active','extracting','analyzing','finalizing');
+SQL
+```
+
+Never retype a flag onto a live container by hand: change the spec in the
+script, run `check`, land the diff, and copy the identical bytes to the host —
+`docker/deploy-gemma-trio.test.sh` drives the script against stub
+`docker`/`nvidia-smi` binaries so the drift, no-op and guard decisions are
+proven at $0 without a GPU.
+
 **Prove five registrations, never one:**
 
 ```sh
