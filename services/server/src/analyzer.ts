@@ -10671,9 +10671,26 @@ export async function rereadDemotedWindowsFromPersistedFrames(
     // One pass per demoted window: marked BEFORE the pass so a retried consume
     // can never double-bill the same window.
     run.noteFrameRereadAttempt(plan.key);
+    // ADAAAA-9332: aim the sample at evidence the ledger does NOT already hold.
+    //  - `knownTs` is every content instant the run already read: re-OCRing one
+    //    adds no reading (noteScoreReadings dedupes by ts), and on leg bca08173
+    //    two of the four calls went to such frames;
+    //  - `postFlipTs` is the newest transition the ledger already holds in the
+    //    deferred range (undefined when it has not seen the flip yet), so the tail
+    //    picks can land on frames that are guaranteed POST.
+    const ledger = run.scoreReadBuffer();
+    const ledgerDiagnostics = scoreReadDiagnostics(ledger, { lo: plan.lo, hi: plan.hi }, { trailS: lookaheadS });
+    const ledgerFlipTs =
+      typeof ledgerDiagnostics.newestTransitionTs === "number" ? ledgerDiagnostics.newestTransitionTs : undefined;
     const { pass, readings, ocrCalls } = await runFrameRereadPass(
       plan,
-      { ...opts.io, maxFrames: Math.min(Math.max(1, Math.floor(opts.maxFrames ?? LIVE_FRAME_REREAD_MAX_FRAMES)), budgetLeft), leadS: opts.leadS ?? SCORE_READ_SUPPORT_LEAD_S },
+      {
+        ...opts.io,
+        maxFrames: Math.min(Math.max(1, Math.floor(opts.maxFrames ?? LIVE_FRAME_REREAD_MAX_FRAMES)), budgetLeft),
+        leadS: opts.leadS ?? SCORE_READ_SUPPORT_LEAD_S,
+        knownTs: ledger.map((r) => r.ts),
+        postFlipTs: ledgerFlipTs,
+      },
       { jobId: cfg.jobId, log, ocrTimeoutMs: opts.ocrTimeoutMs },
     );
     result.passes++;

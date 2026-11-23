@@ -79,8 +79,48 @@ export interface FrameRereadPass {
   readings: { seq: number; ts: number; ocr: string[] }[];
   /** Scans that produced no score line (absent evidence, never fabricated). */
   unreadable: number;
+  /** Frames skipped because the run ledger already holds that content ts's read
+   * (ADAAAA-9332: the sample's calls are spent on evidence the ledger lacks). */
+  skippedKnown: number;
   /** Failures (missing file / OCR error) — the pass fails closed on these. */
   failed: number;
+}
+
+/** Max gap between two picked tail frames (seconds).
+ *
+ * Mirrors `SCOREBOARD_MAX_CONFIRM_GAP_S` in `analyzer.ts` / the perceive
+ * tracker. The accept path measures `deltaTs - preTs <= ` this constant, so a
+ * flip that lands BETWEEN two adjacent picks further apart than this can never
+ * be credited however many reads the pass spends (ADAAAA-9332 measured exactly
+ * that: 17.0 s PRE / 36.5 s POST, 19.5 s apart). Kept local because `analyzer.ts`
+ * imports THIS module, so importing the constant back would be a cycle. */
+export const LIVE_FRAME_REREAD_MAX_CONFIRM_GAP_S = 10;
+
+/** The content-ts key used to compare a persisted frame against a ledger read
+ * (`job_observations.timestamp` carries millisecond precision). */
+function rereadTsKey(ts: number): string {
+  return ts.toFixed(3);
+}
+
+/** Selection inputs beyond the budget/window geometry. */
+export interface FrameRereadSelectOptions {
+  maxFrames?: number;
+  leadS?: number;
+  trailS?: number;
+  /** Content instants whose read the run ledger ALREADY holds. Those frames are
+   * never re-OCR'd: `noteScoreReadings` dedupes them anyway, so spending a call on
+   * one buys nothing and 8139 measured 4 calls returning only 2 new readings.
+   * (ADAAAA-9332.) */
+  knownTs?: Iterable<number>;
+  /** The newest transition instant the ledger already holds in the deferred range
+   * (the first frame that read the NEW score), or undefined when the ledger has
+   * not seen the flip yet. When it is known, tail picks are taken AFTER it: those
+   * frames are guaranteed POST, so the sample only needs to add POST support
+   * beside an already-legible boundary. (ADAAAA-9332.) */
+  postFlipTs?: number;
+  /** Confirm-gap the pick spacing must respect (default
+   * {@link LIVE_FRAME_REREAD_MAX_CONFIRM_GAP_S}). */
+  maxConfirmGapS?: number;
 }
 
 /**
@@ -88,7 +128,9 @@ export interface FrameRereadPass {
  *
  * Selection is deterministic, content-ordered, and SPLIT ON PURPOSE: half the
  * budget (rounded up) lands in the deferred lookahead tail `[hi, hi + lookahead]`
- * and the rest inside the judged window `[lo, hi]`.
+ * and the rest inside the judged window `[lo, hi]`. The split is a FLOOR for the
+ * tail, not a cap: when the window's own frames are already in the ledger their
+ * share is handed to the tail, because that is where the POST evidence sits.
  *
  * Why the tail carries the weight: the demoted row's measured gap is POST-goal
  * reads. Production broadcasts overlay the new score a few seconds AFTER the
@@ -99,18 +141,39 @@ export interface FrameRereadPass {
  * `[lo, hi + lookahead]`. The in-window frames are kept so the pass also covers
  * a window whose OCR simply never read its own frames.
  *
+ * ADAAAA-9332 (the measured defect this closes): on leg `bca08173` the two
+ * interior picks were frames whose reads the ledger already held, and the two
+ * tail picks were `evenlyPick`'s first and last of `(16.95, 36.95]` — 17.0 s
+ * (still PRE, the overlay had not flipped) and 36.5 s (POST). That is ONE post
+ * sample, 19.5 s after the last PRE read, so `postSamples 1 < need 2` and
+ * `deltaTs - preTs > 10 s`: 4 calls spent, 2 readings added, row still demoted.
+ * Now:
+ *
+ *  1. frames whose content ts the ledger already holds are dropped BEFORE the
+ *     budget is split (their share goes to the tail);
+ *  2. tail picks are spread across the whole tail instead of first+last, so a
+ *     straddling flip lands between two picks that are <= the confirm gap apart
+ *     and at least two picks fall on the POST side;
+ *  3. when the ledger already holds a transition (`postFlipTs`), the tail is
+ *     taken after that instant — the frames there are guaranteed POST — and the
+ *     newest ones are preferred (last-N over the post flip), which is the
+ *     ticket's own "prefer frames after the earliest post-flip read" clause.
+ *
  * The `leadS` head fills only what is left: the ledger normally already holds
  * the PRE support, and a PRE read further than `SCOREBOARD_MAX_CONFIRM_GAP_S`
  * from the transition could not support it anyway.
+ *
+ * Bounds are untouched: at most `maxFrames` picks (= OCR calls) per pass.
  */
 export function selectRereadFrames(
   candidates: ReadonlyArray<FrameRereadCandidate>,
   window: { lo: number; hi: number },
-  opts: { maxFrames?: number; leadS?: number; trailS?: number } = {}
+  opts: FrameRereadSelectOptions = {}
 ): FrameRereadCandidate[] {
   const maxFrames = Math.max(1, Math.floor(opts.maxFrames ?? LIVE_FRAME_REREAD_MAX_FRAMES));
   const leadS = Math.max(0, opts.leadS ?? 0);
   const trailS = Math.max(0, opts.trailS ?? 0);
+  const maxGapS = Math.max(0, opts.maxConfirmGapS ?? LIVE_FRAME_REREAD_MAX_CONFIRM_GAP_S);
   const lo = Number.isFinite(window?.lo) ? window.lo : Number.NEGATIVE_INFINITY;
   const hi = Number.isFinite(window?.hi) ? window.hi : Number.POSITIVE_INFINITY;
   if (hi < lo) return [];
@@ -121,19 +184,65 @@ export function selectRereadFrames(
     const at = byTs.get(c.ts);
     if (!at || c.seq < at.seq) byTs.set(c.ts, { seq: Math.floor(c.seq), ts: c.ts });
   }
+  const known = new Set<string>();
+  for (const ts of opts.knownTs ?? []) if (Number.isFinite(ts)) known.add(rereadTsKey(ts));
   const span = [...byTs.values()]
     .filter((c) => c.ts >= lo - leadS - 1e-9 && c.ts <= hi + trailS + 1e-9)
+    .filter((c) => !known.has(rereadTsKey(c.ts)))
     .sort((a, b) => a.ts - b.ts);
   if (!span.length) return [];
   const interior = span.filter((c) => c.ts >= lo - 1e-9 && c.ts <= hi + 1e-9);
-  const tail = span.filter((c) => c.ts > hi + 1e-9);
+  const tailAll = span.filter((c) => c.ts > hi + 1e-9);
   const head = span.filter((c) => c.ts < lo - 1e-9);
-  const tailBudget = Math.min(tail.length, Math.ceil(maxFrames / 2));
-  const picked: FrameRereadCandidate[] = [...evenlyPick(tail, tailBudget)];
+  // Clause 3: a flip the ledger already read tells us which tail frames are
+  // guaranteed POST. Fall back to the whole tail when that leaves nothing (a flip
+  // at the very end of the lookahead, or a transition the ledger read inside the
+  // window) — the accept path still decides, this only chooses frames.
+  const postFlip = Number.isFinite(opts.postFlipTs) ? (opts.postFlipTs as number) : undefined;
+  const tailAfterFlip = postFlip === undefined ? [] : tailAll.filter((c) => c.ts > postFlip + 1e-9);
+  const tail = tailAfterFlip.length ? tailAfterFlip : tailAll;
+  const half = Math.ceil(maxFrames / 2);
+  const interiorTake = Math.min(interior.length, half);
+  const tailTake = Math.min(tail.length, Math.max(half, maxFrames - interiorTake));
+  const picked: FrameRereadCandidate[] = [...pickRereadTailFrames(tail, tailTake, maxGapS, tailAfterFlip.length > 0)];
   const remaining = maxFrames - picked.length;
   if (remaining > 0) picked.push(...evenlyPick(interior, remaining));
   for (let i = head.length - 1; i >= 0 && picked.length < maxFrames; i--) picked.push(head[i]);
   return picked.sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * Subsample a run of tail frames (ascending by content ts).
+ *
+ * `late` (the ledger already holds the flip) picks the NEWEST frames: their read
+ * is guaranteed POST and the boundary's PRE/POST gap is already the ledger's, so
+ * density near the end is the most POST support per call.
+ *
+ * Otherwise the picks are spread over the WHOLE tail (endpoints kept): that is
+ * the only shape where a flip anywhere between `hi` and the lookahead's close
+ * falls between two adjacent picks that are <= `maxGapS` apart, which is what
+ * the accept path measures (`deltaTs - preTs <= SCOREBOARD_MAX_CONFIRM_GAP_S`).
+ * First+last — the shape that measured the ADAAAA-9332 defect — is deliberately
+ * not used when the budget allows more than two picks.
+ */
+export function pickRereadTailFrames<T>(
+  tail: ReadonlyArray<T>,
+  max: number,
+  maxGapS: number,
+  late: boolean
+): T[] {
+  const n = Math.max(0, Math.floor(max));
+  if (!tail.length || n === 0) return [];
+  if (tail.length <= n) return [...tail];
+  if (n === 1) return [tail[tail.length - 1]];
+  if (late) return tail.slice(tail.length - n);
+  const picks = evenlyPick(tail, n);
+  // Evenly-spread picks are only gap-safe when the spread fits the confirm gap;
+  // it does for the shipped 20 s lookahead at 3+ picks. Nothing to repair when it
+  // does not — a wider tail would need more budget than the funded cell has, and
+  // inventing calls here would break the <= 4 bound.
+  void maxGapS;
+  return picks;
 }
 
 /** Evenly spaced deterministic subsample (keeps the first and last frame). */
@@ -186,6 +295,13 @@ export interface FrameRereadIo {
   maxFrames?: number;
   /** Support lead the pooled span allows (seconds before `lo`). */
   leadS?: number;
+  /** Content instants whose read the run ledger already holds (ADAAAA-9332).
+   * Those persisted frames are skipped: a call spent on one adds no reading. */
+  knownTs?: ReadonlyArray<number>;
+  /** The ledger's newest transition instant in the deferred range, when it holds
+   * one (ADAAAA-9332): tail picks are then taken AFTER it, i.e. on frames that
+   * are guaranteed POST. */
+  postFlipTs?: number;
 }
 
 export interface FrameRereadResult {
@@ -218,7 +334,15 @@ export async function runFrameRereadPass(
     maxFrames,
     leadS: io.leadS,
     trailS: plan.lookaheadS,
+    knownTs: io.knownTs,
+    postFlipTs: io.postFlipTs,
   });
+  // ADAAAA-9332: disclose how many in-span frames the ledger already held, so the
+  // audit line shows the sample was re-aimed rather than silently shrinking.
+  const knownSet = new Set((io.knownTs ?? []).filter((ts) => Number.isFinite(ts)).map(rereadTsKey));
+  const skippedKnown = knownSet.size
+    ? inventory.filter((f) => knownSet.has(rereadTsKey(f.ts))).length
+    : 0;
   const pass: FrameRereadPass = {
     key: plan.key,
     window: { lo: plan.lo, hi: plan.hi },
@@ -226,6 +350,7 @@ export async function runFrameRereadPass(
     ocrCalls: 0,
     readings: [],
     unreadable: 0,
+    skippedKnown,
     failed: 0,
   };
   if (!picked.length) {
@@ -270,7 +395,8 @@ export async function runFrameRereadPass(
   log(
     `[live-frame-reread:${ctx.jobId ?? "?"}] re-read demoted window [${plan.lo.toFixed(1)}, ${plan.hi.toFixed(1)}]: ` +
       `${pass.ocrCalls} OCR call(s) over ${pass.frames.length} persisted frame(s), ` +
-      `${pass.readings.length} readable / ${pass.unreadable} unreadable / ${pass.failed} failed`
+      `${pass.readings.length} readable / ${pass.unreadable} unreadable / ${pass.failed} failed` +
+      (pass.skippedKnown ? `, ${pass.skippedKnown} frame(s) already in the run ledger (skipped)` : "")
   );
   return { pass, readings: pass.readings.map((r) => ({ ts: r.ts, ocr: r.ocr })), ocrCalls: pass.ocrCalls };
 }

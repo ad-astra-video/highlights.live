@@ -27,9 +27,11 @@ import {
   type DeferredGoalAttestation,
 } from "../src/analyzer.js";
 import {
+  LIVE_FRAME_REREAD_MAX_CONFIRM_GAP_S,
   LIVE_FRAME_REREAD_MAX_FRAMES,
   LIVE_FRAME_REREAD_MAX_OCR_CALLS_PER_RUN,
   evenlyPick,
+  pickRereadTailFrames,
   planDueRereads,
   runFrameRereadPass,
   selectRereadFrames,
@@ -119,6 +121,80 @@ describe("selectRereadFrames (ADAAAA-8139)", () => {
     expect(evenlyPick(xs, 4)).toEqual([0, 3, 6, 9]);
     expect(evenlyPick(xs, 100)).toEqual(xs);
     expect(evenlyPick(xs, 1)).toEqual([5]);
+  });
+
+  // ADAAAA-9332: on leg bca08173 the pass spent all 4 OCR calls and still missed
+  // the post-flip read. Two of them re-read frames the ledger already held, and
+  // the two tail picks were the tail's FIRST (17.0 s, pre — the overlay had not
+  // flipped) and LAST (36.5 s), 19.5 s apart. These pin the three selection rules
+  // that close it, at the selector (no OCR, no analyzer).
+  it("never picks a frame whose read the ledger already holds (ADAAAA-9332)", () => {
+    const frames = relayedFrames(60);
+    const knownTs = [12, 15, 18, 25, 30];
+    const picked = selectRereadFrames(frames, WINDOW, { maxFrames: 4, trailS: LOOKAHEAD, knownTs });
+    expect(picked).toHaveLength(4);
+    for (const f of picked) expect(knownTs).not.toContain(f.ts);
+  });
+
+  it("hands a fully-read window's share to the tail, spread within the confirm gap", () => {
+    // The measured leg shape: every in-window frame is already read, so all 4
+    // calls must land in `(hi, hi + lookahead]` and be spaced so a flip between
+    // two adjacent picks can still be credited (`deltaTs - preTs <= 10 s`).
+    const frames = relayedFrames(60);
+    const knownTs = frames.filter((f) => f.ts >= WINDOW.lo && f.ts <= WINDOW.hi).map((f) => f.ts);
+    const picked = selectRereadFrames(frames, WINDOW, { maxFrames: 4, trailS: LOOKAHEAD, knownTs });
+    expect(picked).toHaveLength(4);
+    expect(picked.every((f) => f.ts > WINDOW.hi)).toBe(true);
+    const ts = picked.map((f) => f.ts);
+    expect(ts[0]).toBeGreaterThan(WINDOW.hi);
+    expect(ts[ts.length - 1]).toBeCloseTo(WINDOW.hi + LOOKAHEAD, 6);
+    for (let i = 1; i < ts.length; i++) {
+      expect(ts[i] - ts[i - 1]).toBeLessThanOrEqual(LIVE_FRAME_REREAD_MAX_CONFIRM_GAP_S + 1e-9);
+    }
+  });
+
+  it("prefers tail frames AFTER a flip the ledger already read (last-N)", () => {
+    // When the ledger holds the transition, the frames past it are guaranteed
+    // POST: the sample's only job is to add POST support, so the newest frames win
+    // (the ticket's "prefer frames after the earliest post-flip read" clause).
+    const frames = relayedFrames(60);
+    const knownTs = frames.filter((f) => f.ts >= WINDOW.lo && f.ts <= WINDOW.hi).map((f) => f.ts);
+    const picked = selectRereadFrames(frames, WINDOW, {
+      maxFrames: 4,
+      trailS: LOOKAHEAD,
+      knownTs,
+      postFlipTs: 30,
+    });
+    expect(picked).toHaveLength(4);
+    expect(picked.every((f) => f.ts > 30)).toBe(true);
+    // ...and without a known flip the whole tail is sampled instead.
+    const blind = selectRereadFrames(frames, WINDOW, { maxFrames: 4, trailS: LOOKAHEAD, knownTs });
+    expect(blind.some((f) => f.ts <= 30)).toBe(true);
+    expect(blind.some((f) => f.ts > 30)).toBe(true);
+  });
+
+  it("falls back to the whole tail when the known flip leaves no tail frames", () => {
+    const frames = relayedFrames(60);
+    const knownTs = frames.filter((f) => f.ts >= WINDOW.lo && f.ts <= WINDOW.hi).map((f) => f.ts);
+    const picked = selectRereadFrames(frames, WINDOW, {
+      maxFrames: 4,
+      trailS: LOOKAHEAD,
+      knownTs,
+      postFlipTs: WINDOW.hi + LOOKAHEAD, // the flip sits at the lookahead's close
+    });
+    expect(picked).toHaveLength(4);
+    expect(picked.every((f) => f.ts > WINDOW.hi)).toBe(true);
+  });
+
+  it("pickRereadTailFrames: spread keeps the endpoints, late takes the newest N", () => {
+    const tail = relayedFrames(60).filter((f) => f.ts > WINDOW.hi && f.ts <= WINDOW.hi + LOOKAHEAD);
+    const spread = pickRereadTailFrames(tail, 4, LIVE_FRAME_REREAD_MAX_CONFIRM_GAP_S, false);
+    expect(spread).toHaveLength(4);
+    expect(spread[0].ts).toBe(tail[0].ts);
+    expect(spread[3].ts).toBe(tail[tail.length - 1].ts);
+    const late = pickRereadTailFrames(tail, 4, LIVE_FRAME_REREAD_MAX_CONFIRM_GAP_S, true);
+    expect(late.map((f) => f.ts)).toEqual(tail.slice(-4).map((f) => f.ts));
+    expect(pickRereadTailFrames(tail, 0, 10, false)).toEqual([]);
   });
 });
 
@@ -301,6 +377,42 @@ describe("rereadDemotedWindowsFromPersistedFrames — the recall path (ADAAAA-81
     // The ledger DID record the reads — the refusal is the attribution step, so a
     // future positive can still see them (and a grader can reproduce the refusal).
     expect(h.run.scoreReadBuffer().some((r) => r.score[0] === 1 && r.score[1] === 1)).toBe(true);
+  });
+
+  it("spends its 4 calls on NEW readings, not on frames the ledger already holds (ADAAAA-9332)", async () => {
+    // The wiring half of the fix: `rereadDemotedWindowsFromPersistedFrames` feeds
+    // the run's own ledger into the selector, so the accept-time reads are never
+    // re-OCR'd. Without it the two interior picks duplicate the ledger and the
+    // pass adds 2 readings (the measured bca08173 defect); with it, 4.
+    const frames = relayedFrames(60);
+    const calls = { ocr: 0, decide: 0, perceivePipeline: 0 };
+    const run = new LiveRunShared();
+    for (let t = 0; t <= 16; t += 0.5) run.noteScoreReadings([{ ts: t, ocr: bug([1, 1], "19:58") }]);
+    run.noteDeferredGoalAttestation(demotedWindow({ lo: 6.95, hi: 16.95, postSamples: 0 }));
+    const cfg = {
+      jobId: "job-8139",
+      onDeferredGoalAttested: () => {},
+      liveFrameReread: {
+        io: {
+          framesInSpan: (lo: number, hi: number) => frames.filter((f) => f.ts >= lo && f.ts <= hi),
+          // The frame bytes carry the seq so the probe can name the frame it read.
+          loadFrame: async (seq: number) => Buffer.from(String(seq)).toString("base64"),
+          ocrFrame: async (b64: string) => {
+            calls.ocr++;
+            const seq = Number(Buffer.from(b64, "base64").toString());
+            return bug(seq >= 20 ? [2, 1] : [1, 1], "20:00");
+          },
+        },
+      } as any,
+    };
+    const out = await rereadDemotedWindowsFromPersistedFrames(run, cfg as any, { readAt: 40 });
+    expect(out.passes).toBe(1);
+    expect(out.ocrCalls).toBe(LIVE_FRAME_REREAD_MAX_FRAMES);
+    expect(out.readings).toBe(LIVE_FRAME_REREAD_MAX_FRAMES);
+    // ...and the row still attests on the tail reads alone.
+    expect(out.upgrades).toBe(1);
+    expect(calls.decide).toBe(0);
+    expect(calls.perceivePipeline).toBe(0);
   });
 
   it("charges every pass against ONE per-run OCR budget of 8", async () => {
