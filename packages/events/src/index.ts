@@ -418,8 +418,9 @@ export const StageAMetricsSnapshotSchema = z.object({
   // Gemini accepted (highlight cut) vs rejected (no highlight) of those.
   accepted: z.number().int().min(0),
   rejected: z.number().int().min(0),
-  // Noise-trigger false-positive rate = rejected / total (0..1). Cost bound:
-  // must be <= 0.6 (<= 60%) for the gate to stay on budget.
+  // Gemma-reject rate = rejected / totalCandidates (0..1), the COST bound:
+  // must be <= 0.6 (<= 60%) for the gate to stay on budget. It is NOT the
+  // gate's false-positive rate (see the trigger-quality fields below, ADAAAA-4885).
   fpRate: z.number().min(0).max(1),
   // Observed onset->fire latency (s) across candidates (mean / max). The gate
   // bounds each at <= 5 s; this verifies the live 1-5 s budget in aggregate.
@@ -436,6 +437,19 @@ export const StageAMetricsSnapshotSchema = z.object({
   gemmaFpRate: z.number().min(0).max(1).default(0),
   // True when fpRate is within the <= 60% acceptance bound (cost gate passed).
   fpRateWithinBudget: z.boolean(),
+  // ADAAAA-4885: TRIGGER-QUALITY measure, additive and optional. `fpRate` /
+  // `gemmaFpRate` above are the GEMMA REJECT rate (a cost signal), not the
+  // gate's false-positive rate: on the audio path the dominant reject is the
+  // anchor-timing artifact (ADAAAA-4883). These fields score the gate's own
+  // job — a fire is a real-event fire when a decide window that ACCEPTED a
+  // highlight covers its onset (± 5 s), and a spurious-noise fire when no
+  // accepting window ever does (scored at the corroboration horizon or at
+  // end-of-stream). `realEventFireRate` = realEventFires / (realEventFires +
+  // spuriousNoiseFires). Absent on records written before the measure existed
+  // and until at least one judged fire is classified (never a fabricated 0).
+  realEventFires: z.number().int().min(0).optional(),
+  spuriousNoiseFires: z.number().int().min(0).optional(),
+  realEventFireRate: z.number().min(0).max(1).optional(),
 });
 export type StageAMetricsSnapshot = z.infer<typeof StageAMetricsSnapshotSchema>;
 

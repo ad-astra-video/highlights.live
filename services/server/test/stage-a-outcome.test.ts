@@ -133,10 +133,11 @@ describe("Stage-A outcome recording (ADAAAA-7694)", () => {
     expect(counters.stageAMetricsStatus).toBe("measured");
     expect(counters.stageAMetrics?.totalCandidates).toBe(1);
 
-    // ...and the per-job evidence line prints.
+    // ...and the per-job evidence line prints, including the trigger-quality
+    // measure (ADAAAA-4885): the accepting window corroborated the fire.
     const line = stageAEvidenceLine("live", LIVE_CFG.jobId, snap);
     expect(line).toBe(
-      "[live:job-stage-a-live] stageA fpRate=0 (0/1 rejected), latency mean/max=0.2/0.2s, withinBudget=true"
+      "[live:job-stage-a-live] stageA fpRate=0 (0/1 rejected), latency mean/max=0.2/0.2s, withinBudget=true, realEventFireRate=1 (1/1 fires corroborated)"
     );
   });
 
@@ -152,9 +153,17 @@ describe("Stage-A outcome recording (ADAAAA-7694)", () => {
     expect(snap.rejected).toBe(1);
     expect(snap.fpRate).toBe(1);
     expect(snap.fpRateWithinBudget).toBe(false);
+    // ADAAAA-4885: nothing ever accepted, so the fire is scored spurious-noise;
+    // the reject rate and the trigger-quality measure are separate fields.
+    expect(snap.realEventFires).toBe(0);
+    expect(snap.spuriousNoiseFires).toBe(1);
+    expect(snap.realEventFireRate).toBe(0);
     expect(stageAMetricsForJob(snap).stageAMetricsStatus).toBe("measured");
     expect(stageAEvidenceLine("live", LIVE_CFG.jobId, snap)).toContain("(1/1 rejected)");
     expect(stageAEvidenceLine("live", LIVE_CFG.jobId, snap)).toContain("withinBudget=false");
+    expect(stageAEvidenceLine("live", LIVE_CFG.jobId, snap)).toContain(
+      "realEventFireRate=0 (0/1 fires corroborated)"
+    );
   });
 
   it("VOD: the decide window that covers the trigger's onset records its verdict", async () => {
@@ -169,10 +178,40 @@ describe("Stage-A outcome recording (ADAAAA-7694)", () => {
     expect(snap.totalCandidates).toBe(1);
     expect(snap.accepted).toBe(1);
     expect(snap.meanOnsetLatencyS).toBeCloseTo(0.4, 3);
+    expect(snap.realEventFires).toBe(1);
+    expect(snap.realEventFireRate).toBe(1);
     expect(stageAMetricsForJob(snap).stageAMetricsStatus).toBe("measured");
     expect(stageAEvidenceLine("vod", VOD_CFG.jobId, snap)).toBe(
-      "[vod:job-stage-a-vod] stageA fpRate=0 (0/1 rejected), latency mean/max=0.4/0.4s, withinBudget=true"
+      "[vod:job-stage-a-vod] stageA fpRate=0 (0/1 rejected), latency mean/max=0.4/0.4s, withinBudget=true, realEventFireRate=1 (1/1 fires corroborated)"
     );
+  });
+
+  it("BOTH RAILS: an anchor-timing reject is scored a REAL-EVENT fire once a later window accepts", async () => {
+    // The ADAAAA-4883 artifact: the first window that judges the roar onset is
+    // pre-celebration and rejects; the next cadence window accepts the same
+    // event. The reject rate stays 1 while the trigger-quality rate is 1 — the
+    // exact mislabel this measure exists to replace.
+    for (const cfg of [LIVE_CFG, VOD_CFG] as const) {
+      let calls = 0;
+      const { client } = verdictClient({ isHighlight: true, outcome: "scoring_play" });
+      client.decide = async () =>
+        ({
+          isHighlight: calls++ > 0,
+          score: calls > 1 ? 90 : 0,
+          eventType: "SPORTING_EVENT",
+          outcome: calls > 1 ? "scoring_play" : "not_highlight",
+        } as any);
+      const shared = new LiveRunShared();
+      shared.recordAudioTrigger(trigger(2.0, 0.3));
+
+      await analyzeJob(client, frames(5, 18) as any, cut, { ...cfg } as any, undefined, undefined, shared);
+
+      const snap = shared.stageA.snapshot();
+      expect(snap.rejected).toBeGreaterThan(0); // the pre-celebration read rejected
+      expect(snap.realEventFires).toBe(1);
+      expect(snap.spuriousNoiseFires).toBe(0);
+      expect(snap.realEventFireRate).toBe(1);
+    }
   });
 
   it("no trigger -> still `n/a` (a measured zero must not be fabricated)", async () => {

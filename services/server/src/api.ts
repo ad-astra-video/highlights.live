@@ -2626,6 +2626,9 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           ).toFixed(4)
         );
         const railCostPerStreamHour = costPerStreamHour(railCostUsd, railStats.sessionSeconds);
+        // ADAAAA-4885: the share has ended — close the Stage-A trigger-quality
+        // classification so the persisted snapshot scores every judged fire.
+        bj.rail.run.stageAOutcomes.finalize();
         await store
           .patchJob(jobId, {
             // Mirror a live RTMP job's record: the observer owns the decide
@@ -3780,11 +3783,16 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       // pre-empts it. `observeSnapshot` is filled by `onObserveSnapshot` once the
       // decide observer exists, so every value here is the pass's own
       // measurement — never inferred.
-      slot.settlement = () => ({
-        observeMetrics: observeSnapshot?.(),
-        stageA: shared.stageA.snapshot(),
-        perceiveSessionId: slot.current?.sessionId,
-      });
+      slot.settlement = () => {
+        // ADAAAA-4885: a stop that outruns the pass settles from here, so close
+        // the trigger-quality classification before snapshotting (idempotent).
+        shared.stageAOutcomes.finalize();
+        return {
+          observeMetrics: observeSnapshot?.(),
+          stageA: shared.stageA.snapshot(),
+          perceiveSessionId: slot.current?.sessionId,
+        };
+      };
       // Drive the audio tap (a second ffmpeg decoding 0:a:0 -> mono pcm_s16le)
       // in parallel with the video pass at ~10 Hz. Best-effort: a dropped
       // chunk or a stopped tap never aborts the video look. When the gate

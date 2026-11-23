@@ -160,6 +160,87 @@ describe("StageAOutcomeLedger (ADAAAA-7694: trigger -> deciding-window verdict)"
   });
 });
 
+describe("Stage-A trigger quality (ADAAAA-4885: real-event fires vs spurious noise)", () => {
+  it("a rejected fire corroborated by a LATER accepting window is a real-event fire, not noise", () => {
+    const m = new StageAMetrics();
+    const led = new StageAOutcomeLedger(m);
+    // The gate fires on the roar onset; the anchored/trailing window that first
+    // covers it rejects (pre-celebration frame: the ADAAAA-4883 artifact).
+    led.recordTrigger({ onsetTs: 10.0, onsetLatencyS: 1.0 });
+    expect(led.judgeWindow(0.0, 12.0, false)).toBe(1);
+    expect(m.rejectedCount).toBe(1);
+    // No classification yet: the celebration window could still arrive.
+    expect(m.snapshot().realEventFires).toBeUndefined();
+    // The next cadence window accepts the celebration; its span covers 10.0.
+    led.judgeWindow(5.0, 17.0, true);
+    const s = m.snapshot();
+    // The two measures disagree by design: gemma rejected the anchored frame...
+    expect(s.fpRate).toBe(1);
+    // ...but the fire landed on a real event.
+    expect(s.realEventFires).toBe(1);
+    expect(s.spuriousNoiseFires).toBe(0);
+    expect(s.realEventFireRate).toBe(1);
+    expect(stageAEvidenceLine("live", "j-artifact", s)).toContain(
+      "realEventFireRate=1 (1/1 fires corroborated)"
+    );
+  });
+
+  it("a rejected fire with no accepting window is spurious-noise once the horizon passes", () => {
+    const m = new StageAMetrics();
+    const led = new StageAOutcomeLedger(m);
+    led.recordTrigger({ onsetTs: 10.0, onsetLatencyS: 0.5 });
+    led.judgeWindow(0.0, 12.0, false);
+    expect(m.snapshot().spuriousNoiseFires).toBeUndefined();
+    // Move the stream past onset + STAGE_A_CORROBORATION_HORIZON_S (15 s).
+    led.judgeWindow(20.0, 26.0, false);
+    const s = m.snapshot();
+    expect(s.fpRate).toBe(1);
+    expect(s.realEventFires).toBe(0);
+    expect(s.spuriousNoiseFires).toBe(1);
+    expect(s.realEventFireRate).toBe(0);
+  });
+
+  it("finalize() scores the fires still unclassified at end-of-stream, and is idempotent", () => {
+    const m = new StageAMetrics();
+    const led = new StageAOutcomeLedger(m);
+    led.recordTrigger({ onsetTs: 2.0 });
+    led.recordTrigger({ onsetTs: 6.0 });
+    led.judgeWindow(0.0, 8.0, false); // both judged rejected, horizon not reached
+    expect(m.classifiedFires).toBe(0);
+    led.finalize();
+    expect(m.realEventFires).toBe(0);
+    expect(m.spuriousNoiseFires).toBe(2);
+    expect(m.realEventFireRate()).toBe(0);
+    led.finalize(); // idempotent: never double-counts
+    expect(m.spuriousNoiseFires).toBe(2);
+  });
+
+  it("an accepted fire is corroborated by its own window and an unjudged fire is never scored", () => {
+    const m = new StageAMetrics();
+    const led = new StageAOutcomeLedger(m);
+    led.recordTrigger({ onsetTs: 3.0 });
+    led.recordTrigger({ onsetTs: 40.0 }); // never judged (stream tail)
+    led.judgeWindow(0.0, 5.0, true);
+    led.finalize();
+    const s = m.snapshot();
+    expect(s.totalCandidates).toBe(1);
+    expect(s.realEventFires).toBe(1);
+    expect(s.spuriousNoiseFires).toBe(0);
+    expect(s.realEventFireRate).toBe(1);
+  });
+
+  it("a job with nothing judged omits the measure (n/a, never a fabricated 0)", () => {
+    const m = new StageAMetrics();
+    const led = new StageAOutcomeLedger(m);
+    led.finalize();
+    const s = m.snapshot();
+    expect(s.realEventFires).toBeUndefined();
+    expect(s.spuriousNoiseFires).toBeUndefined();
+    expect(s.realEventFireRate).toBeUndefined();
+    expect(stageAEvidenceLine("live", "j-empty", s)).toBeNull();
+  });
+});
+
 describe("stageAEvidenceLine (ADAAAA-7694: the per-job evidence line)", () => {
   it("prints for a measured snapshot and stays silent for an unmeasured one", () => {
     const m = new StageAMetrics();

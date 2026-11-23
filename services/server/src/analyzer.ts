@@ -12899,6 +12899,10 @@ export async function analyzeJob(
   // ADAAAA-7007/7008: the observer already awaited every cadence decide above
   // (observeOnDecide runs each decide + accept inline on the cadence), so
   // nothing further to drain before returning.
+  // ADAAAA-4885: close the Stage-A trigger-quality classification. Both rails
+  // reach this point, so a persisted `stageA` snapshot scores every judged fire
+  // as a real-event fire or spurious-noise instead of leaving it unclassified.
+  run.stageAOutcomes.finalize();
   return {
     sessionId,
     highlights,

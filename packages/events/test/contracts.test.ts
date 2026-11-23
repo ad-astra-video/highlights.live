@@ -296,6 +296,27 @@ describe("Job + StageAMetricsSnapshot (INC-2 / ADAAAA-4325 slice 5: FP-rate metr
     expect(() => StageAMetricsSnapshotSchema.parse({ ...base, rejected: -1 })).toThrow();
   });
 
+  it("parses the additive trigger-quality fields, absent on older records (ADAAAA-4885)", () => {
+    const base = {
+      totalCandidates: 5, accepted: 2, rejected: 3, fpRate: 0.6,
+      meanOnsetLatencyS: 1, maxOnsetLatencyS: 4, fpRateWithinBudget: true,
+    };
+    const parsed = StageAMetricsSnapshotSchema.parse({
+      ...base,
+      realEventFires: 4,
+      spuriousNoiseFires: 1,
+      realEventFireRate: 0.8,
+    });
+    expect(parsed.realEventFires).toBe(4);
+    expect(parsed.spuriousNoiseFires).toBe(1);
+    expect(parsed.realEventFireRate).toBe(0.8);
+    // Absent (not fabricated 0) on a record written before the measure existed.
+    const legacy = StageAMetricsSnapshotSchema.parse(base);
+    expect(legacy.realEventFires).toBeUndefined();
+    expect(legacy.realEventFireRate).toBeUndefined();
+    expect(() => StageAMetricsSnapshotSchema.parse({ ...base, realEventFireRate: 1.5 })).toThrow();
+  });
+
   it("accepts the detail-first VOD cost/volume fields, all optional (ADAAAA-4954 §4.5)", () => {
     const j = JobSchema.parse({
       id: "job-vod",

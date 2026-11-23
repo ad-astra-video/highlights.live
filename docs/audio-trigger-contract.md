@@ -197,13 +197,58 @@ Consequences you can rely on when reading a job:
 - **`"measured"` needs one judged trigger.** With `totalCandidates > 0` the job
   persists `stageAMetrics` + `stageAMetricsStatus: "measured"` and
   `job-counters.stageAMetricsForJob` stops deriving `"n/a"`; with none it stays
-  `"n/a"` (no fabricated 0 % FP rate). The per-job evidence line
+  `"n/a"` (no fabricated 0 % reject rate). The per-job evidence line
   `[live:<job>] / [vod:<job>] stageA fpRate=… (rejected/total rejected), latency
-  mean/max=…, withinBudget=…` prints exactly when it is measured.
+  mean/max=…, withinBudget=…, realEventFireRate=… (real/classified fires
+  corroborated)` prints exactly when it is measured.
 - **VOD measures, it does not anchor.** The VOD tap now feeds
   `LiveRunShared.recordAudioTrigger` so its fired triggers reach the ledger, but
   no VOD window is anchored to a trigger (the decode has no frame ahead of it) —
   the anchored-window table below is unchanged.
+
+### The trigger-quality measure (ADAAAA-4885)
+
+`stageAMetrics.fpRate` / `gemmaFpRate` are the **gemma-reject rate**
+(`rejected / totalCandidates`) — the cost bound on billed decide calls, **not**
+the audio gate's false-positive rate. On this path the dominant reject is the
+anchor-timing artifact root-caused in
+[ADAAAA-4883](/ADAAAA/issues/ADAAAA-4883): the gate fires on the crowd-roar
+onset, the anchored window's frame predates the celebration and gemma correctly
+read "not yet scored", while a later window accepts the same event at the
+celebration frame. Reading `rejected/total` as trigger quality is therefore
+wrong. The trigger's own job — fire at real events, do not fire at spurious
+noise — is scored by the **additive** fields below; the existing keys keep
+their values and meaning.
+
+| field (on `stageAMetrics`) | meaning |
+| --- | --- |
+| `realEventFires` | judged fires corroborated by a decide window that **accepted** a highlight |
+| `spuriousNoiseFires` | judged fires no accepting window ever corroborated |
+| `realEventFireRate` | `realEventFires / (realEventFires + spuriousNoiseFires)` (0..1) |
+
+- **Numerator / denominator.** The rate's numerator is the real-event fires and
+  its denominator is the classified fires (real-event + spurious-noise). It
+  scores whether each fire landed on an event the pipeline itself confirmed,
+  not whether gemma accepted the anchored frame.
+- **Corroboration rule.** A fire is a real-event fire when a decide window whose
+  verdict was `accepted` covers its onset within
+  `STAGE_A_CORROBORATION_SLACK_S` (5 s) of that window's evidence span — its own
+  window or a later one. A rejected fire is **not** scored spurious
+  immediately: it waits for the corroborating accept (the ADAAAA-4883
+  artifact), and is scored spurious-noise only once the stream has moved
+  `STAGE_A_CORROBORATION_HORIZON_S` (15 s, one live window plus the slack) past
+  its onset with no acceptance, or at end-of-stream (`finalize()`), which both
+  rails call before persisting the snapshot.
+- **Nothing judged stays `n/a`.** The three fields are absent when no judged
+  fire is classified (and on records written before the measure existed), and
+  `stageAMetricsStatus` is unchanged: `"measured"` needs `totalCandidates > 0`,
+  otherwise `"n/a"`. An unjudged trigger is never counted as noise.
+- **Scope of the claim.** Corroboration uses the pipeline's own confirmed
+  highlights, so a fire on a real event that gemma rejected in every window is
+  scored spurious-noise from the pipeline's perspective. The measure is a
+  comparison against delivered evidence, not external ground truth; it is the
+  cheap, `$0`, replayable read, and it is the number to quote as trigger
+  quality. Thresholds and operating points are untouched by it.
 
 ## The media (RTC / screen-share) rail decides (ADAAAA-7699)
 
