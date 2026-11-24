@@ -8983,7 +8983,10 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       const alternativeId = typeof req.body?.alternativeId === "string" ? req.body.alternativeId : null;
       if (!alternativeId) {
         await store.setClipChoice(cur.id, undefined);
-        return { ok: true, clipUri: servedClipUri(cur), clipChoice: null };
+        // ADAAAA-8407: report the clip that is served AFTER the clear. `cur` is
+        // the pre-clear snapshot, so `servedClipUri(cur)` would echo the
+        // alternative we just cleared; the served clip is now the record's own.
+        return { ok: true, clipUri: cur.clipUri, clipChoice: null };
       }
       // The alternatives a moment may serve: delivered celebration rows plus any
       // replay attached to it. Both already carry a cut clip.
