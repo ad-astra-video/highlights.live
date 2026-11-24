@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
 import time
 from typing import Any, Dict, Literal, Optional
 
@@ -463,6 +464,16 @@ class HighlightDecision(BaseModel):
     # response boundary, so the webapp never received it. Additive optional;
     # absent on rule-path verdicts that never built a prompt.
     analysis: Optional[dict] = None
+    # ADAAAA-8196: the SERVING pool identity of this decide, echoed so the client
+    # and the server's decide_audit row can attribute one decide to one runner
+    # without reading container logs. `runnerRoute` is the orchestrator route the
+    # request arrived on (the `Livepeer-Runner-Route`/`X-Runner-Route` header the
+    # client or the orchestrator injected, else this worker's configured route,
+    # else its hostname); `runnerHost` is `<hostname>` or `<hostname>/<pool id>`.
+    # Declared here because the response model is extra="ignore": an undeclared
+    # field would be parsed and then dropped at the boundary.
+    runnerRoute: Optional[str] = None
+    runnerHost: Optional[str] = None
 
     @model_serializer(mode="wrap")
     def _omit_unknown_audit_fields(self, handler):
@@ -756,6 +767,72 @@ def _rule_verdict(cand: "GroupCandidate", prefer_labels: list[str]) -> dict:
     return dec
 
 
+def _decide_runner_identity(request: Request | None) -> dict:
+    """ADAAAA-8196: the SERVING pool identity of one decide.
+
+    Resolution order (first non-empty wins), all additive so an unconfigured
+    deployment still reports an honest identity:
+
+    - route:  `Livepeer-Runner-Route` -> `X-Runner-Route` header (the orchestrator
+              injects the former on proxied calls, the client sends the latter for
+              the exact `/apps/<route>` segment it posted to) -> `DECIDE_RUNNER_ROUTE`
+              env -> this container's hostname;
+    - host:   hostname, suffixed with the pool id (`/pool`) when one is known:
+              `X-Runner-Pool` header -> `DECIDE_POOL_ID` env.
+
+    Never raises: a request without headers (an in-process call) degrades to the
+    hostname, which is exactly the identity a container log would show.
+    """
+    headers = getattr(request, "headers", None)
+    hostname = (socket.gethostname() or "").strip() or "unknown"
+
+    def _header(name: str) -> str:
+        try:
+            value = headers.get(name) if headers is not None else None
+        except Exception:  # noqa: BLE001 - a header read must never fail a decide
+            return ""
+        return value.strip() if isinstance(value, str) else ""
+
+    route = (
+        _header("livepeer-runner-route")
+        or _header("x-runner-route")
+        or (os.environ.get("DECIDE_RUNNER_ROUTE") or "").strip()
+        or hostname
+    )
+    pool = _header("x-runner-pool") or (os.environ.get("DECIDE_POOL_ID") or "").strip()
+    host = f"{hostname}/{pool}" if pool else hostname
+    return {"runnerRoute": route, "runnerHost": host}
+
+
+def _stamp_runner_identity(decision: dict, identity: dict) -> dict:
+    """ADAAAA-8196: echo the serving identity on the /highlight decision AND, when
+    the decision carries an audit descriptor, merge it into `audit.timings` so the
+    server's `decide_audit` row carries the same two values. Additive: a value the
+    audit record already holds (stamped at record-build time, so the on-disk JSONL
+    carries it too) wins, and a decision without an `audit` block stays untouched
+    apart from the two echoed keys."""
+    try:
+        route = identity.get("runnerRoute")
+        host = identity.get("runnerHost")
+        if isinstance(route, str) and route:
+            decision.setdefault("runnerRoute", route)
+        if isinstance(host, str) and host:
+            decision.setdefault("runnerHost", host)
+        audit = decision.get("audit")
+        if isinstance(audit, dict):
+            timings = audit.get("timings")
+            if not isinstance(timings, dict):
+                timings = {}
+                audit["timings"] = timings
+            if isinstance(route, str) and route:
+                timings.setdefault("runnerRoute", route)
+            if isinstance(host, str) and host:
+                timings.setdefault("runnerHost", host)
+    except Exception:  # noqa: BLE001 - attribution must never fail a decide
+        pass
+    return decision
+
+
 async def _handle_group(req: "HighlightRequest") -> dict:
     """Group mode: ONE merged review for the whole 3 s frame group returns a
     verdict per candidate (same order as ``req.candidates``). The top-level
@@ -812,13 +889,17 @@ def create_app() -> FastAPI:
         # effort: an unstamped request (a direct in-process call) reads None.
         arrived_at = getattr(request.state, "hl_arrived_at", None)
         request_parse_ms = max(0.0, (time.time() - arrived_at) * 1000.0) if arrived_at else None
+        # ADAAAA-8196: the serving pool identity of THIS decide, resolved once and
+        # echoed on every return path (including group mode) so the client and the
+        # durable decide_audit row can attribute the call without container logs.
+        runner_identity = _decide_runner_identity(request)
         # Group mode (ADAAAA-6935): when the server's live analyzer grouped the
         # Stage-A candidates inside a 3 s frame window into a single merged call
         # (`candidates` non-empty), run ONE review for the whole group and return
         # a verdict per candidate. The existing single-candidate path (candidates
         # empty) is unchanged byte-for-byte below.
         if req.candidates:
-            return await _handle_group(req)
+            return _stamp_runner_identity(await _handle_group(req), runner_identity)
         if _is_gemma_mode():
             # ADAAAA-6373: the gemma inference is a blocking sync call (httpx).
             # Called directly it stalls uvicorn's single event loop for the
@@ -845,6 +926,11 @@ def create_app() -> FastAPI:
                     "groupKey": req.groupKey,
                     "frameCount": len(req.frames),
                     "candidateCount": 1,
+                    # ADAAAA-8196: stamped at record-build time inside gemma so the
+                    # on-disk decide-audit.jsonl line carries the same attribution
+                    # the /highlight response echoes (reconciles 1:1 per container).
+                    "runnerRoute": runner_identity["runnerRoute"],
+                    "runnerHost": runner_identity["runnerHost"],
                 },
                 story_so_far=req.storySoFar or "",
                 compact=req.compact,
@@ -968,7 +1054,7 @@ def create_app() -> FastAPI:
             # preferLabels is accepted as a DISTINCT highlight (never a goal).
             decision = finalize_goal_acceptance(decision, req.preferLabels)
             _log_highlight("gemma", req, decision)
-            return decision
+            return _stamp_runner_identity(decision, runner_identity)
         ev = req.evidence.reaction.model_dump() if req.evidence.reaction else None
         d = decide(
             event_type=req.eventType,
@@ -1035,7 +1121,7 @@ def create_app() -> FastAPI:
             req.storySoFar or "", dec.get("outcome") or _rule_outcome(d), req.eventType, dec.get("reason")
         )
         _log_highlight("rule", req, dec)
-        return dec
+        return _stamp_runner_identity(dec, runner_identity)
 
     @router.post("/plan", response_model=TrackingPlanResponse)
     async def plan(req: PlanRequest):

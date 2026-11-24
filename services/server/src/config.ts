@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { DecideRouteConfig } from "@highlights/livepeer-session";
 import type { GoalLineCalibration } from "./analyzer";
 import { parsePerceiveCalibration, type PerceiveCalibrationMap } from "./perceive-calibration";
 import { resolveExportTokenSecret } from "./export-token";
@@ -72,6 +73,14 @@ export interface ServerConfig {
    * byte-identical pre-8254 static gate. With no signer configured the probe is
    * never attached regardless. */
   decideCapacityDiscovery?: boolean;
+  /** ADAAAA-8196: statically configured decide routes (`DECIDE_ROUTES`, a
+   * comma-separated list of `route[:tier][@weight]`). Unset => routing stays the
+   * discovered pool / the legacy fixed `highlights-decide` id, unchanged. */
+  decideRoutes?: DecideRouteConfig[];
+  /** ADAAAA-8196: pool id sent on every decide (`DECIDE_POOL_LABEL`, e.g.
+   * `decide-pool-8183`) so the serving worker can echo `runnerHost` as
+   * `<hostname>/<pool>`. Unset => only the hostname is attributed. */
+  decidePoolLabel?: string;
   /** When set, bypass the orchestrator and call the train runner directly (dev).
    * No train container ships with the local stack today, so this stays unset
    * and direct train calls fail with a clear error until a TRAIN_URL is wired. */
@@ -830,6 +839,42 @@ function finiteNumberOrUndefined(raw: string | undefined): number | undefined {
 }
 
 /**
+ * ADAAAA-8196: parse `DECIDE_ROUTES` into the client's configured route list.
+ *
+ * Grammar (deliberately small and comma-separated, one route per pool member):
+ *
+ *     route[:tier][@weight]
+ *
+ * e.g. `highlights-decide-5090-gpu1:5090@2,highlights-decide-5090-gpu2:5090`.
+ * A blank/invalid entry is skipped rather than aborting the list; an empty or
+ * all-blank value returns `undefined` so the client keeps its discovered-pool /
+ * legacy-fixed-id routing exactly as before (the rollback is unsetting the env).
+ */
+export function parseDecideRoutes(raw: string | undefined): DecideRouteConfig[] | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const out: DecideRouteConfig[] = [];
+  for (const chunk of raw.split(",")) {
+    const entry = chunk.trim();
+    if (!entry) continue;
+    const at = entry.lastIndexOf("@");
+    const head = at >= 0 ? entry.slice(0, at) : entry;
+    const weightRaw = at >= 0 ? entry.slice(at + 1).trim() : "";
+    const colon = head.indexOf(":");
+    const route = (colon >= 0 ? head.slice(0, colon) : head).trim();
+    const tier = colon >= 0 ? head.slice(colon + 1).trim() : "";
+    if (!route) continue;
+    if (out.some((r) => r.route === route)) continue;
+    const weight = weightRaw ? Number(weightRaw) : NaN;
+    out.push({
+      route,
+      ...(tier ? { tier } : {}),
+      ...(Number.isFinite(weight) && weight > 0 ? { weight } : {}),
+    });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
  * Parse a boolean env flag. Unset / unrecognized -> `fallback`; the common
  * off-spellings ("0", "false", "off", "no", case-insensitive) -> false. Used by
  * the ADAAAA-8254 discovery toggle so `DECIDE_CAPACITY_DISCOVERY=0` disables the
@@ -1010,6 +1055,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       : undefined,
     decideQueueMaxWaitMs: env.DECIDE_QUEUE_MAX_WAIT_MS ? Number(env.DECIDE_QUEUE_MAX_WAIT_MS) : undefined,
     decideCapacityDiscovery: parseBooleanFlag(env.DECIDE_CAPACITY_DISCOVERY, true),
+    // ADAAAA-8196: the operator's static decide route list + pool label. Unset
+    // keeps the discovered pool / legacy fixed id (and no pool header).
+    decideRoutes: parseDecideRoutes(env.DECIDE_ROUTES),
+    decidePoolLabel: env.DECIDE_POOL_LABEL?.trim() || undefined,
     trainUrl: env.TRAIN_URL,
     mediaServerUrl: env.MEDIA_SERVER_URL,
     mediaPublicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,

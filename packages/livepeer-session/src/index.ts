@@ -512,7 +512,48 @@ export interface DecideRunnerPoolEntry {
   capacity_available?: number;
   /** `metadata.tier` (`5090` / `x99-fallback`); `unknown` when absent. */
   tier: string;
+  /** ADAAAA-8196: relative selection weight (1 when unset). Only set by a
+   * configured route; a discovered runner is weighted equally. Selection ranks
+   * by `localInFlight / weight`, so a weight-2 route takes twice the concurrent
+   * load of a weight-1 route before the tie-breaks apply. */
+  weight?: number;
+  /** ADAAAA-8196: the pool this route belongs to (a configured route's `pool`,
+   * else the client's `decidePoolLabel`). Sent with each decide as
+   * `X-Runner-Pool` so the serving worker can echo it for attribution. */
+  pool?: string;
 }
+
+/**
+ * ADAAAA-8196: one STATICALLY configured decide route.
+ *
+ * The probe (ADAAAA-8559) only learns routes that discovery advertises, so on a
+ * fleet that registers a single aggregate id (or advertises only an nginx
+ * upstream) the client falls back to `ROUTES.decide` and the 5090 pool members
+ * are reachable only through the proxy pool. An operator can name the pool
+ * members directly here — the client then posts `/apps/{route}/app/highlight`
+ * for each of them, which is what makes per-pool capacity and per-pool price
+ * govern selection.
+ *
+ * A configured route is UNIONed with the discovered pool: a route discovery also
+ * advertises keeps its measured capacity/tier, a route discovery never mentions
+ * is still addressable. Configured routes are used verbatim (never
+ * prefix-matched), so an unset list reproduces the pre-change routing exactly.
+ */
+export interface DecideRouteConfig {
+  /** The route segment to post to (`/apps/{route}/app/<path>`), e.g.
+   * `highlights-decide-5090-gpu1`. */
+  route: string;
+  /** Tier label used by selection (`5090` preferred over `x99-fallback`). */
+  tier?: string;
+  /** Relative weight for the least-loaded ranking (default 1). */
+  weight?: number;
+  /** Advertised capacity when discovery is dark (default 0 = unknown). */
+  capacity?: number;
+  /** Pool id sent as `X-Runner-Pool` for this route (default: the client's
+   * `decidePoolLabel`). */
+  pool?: string;
+}
+
 
 /** ADAAAA-8559: per-runner decide attribution (AC4/AC5 gradeable from the job
  * record instead of nginx/router logs). Counters are per job (delta from the
@@ -778,6 +819,16 @@ export class LivepeerClient {
        * neither change a verdict nor add a retry / a billable call. Unset (the
        * default) leaves the decide path byte-identical. */
       onDecideAttempt?: (timing: DecideAttemptTiming) => void;
+      /** ADAAAA-8196: statically configured decide routes (`DECIDE_ROUTES`).
+       * Unioned with the discovered pool, so the 5090 pool members are
+       * addressable even when discovery advertises one aggregate id. Unset =>
+       * routing is exactly the probe's pool / the legacy fixed id. */
+      decideRoutes?: DecideRouteConfig[];
+      /** ADAAAA-8196: pool id sent as `X-Runner-Pool` on every decide attempt so
+       * the serving worker can echo `runnerHost` = `<host>/<pool>`. Unset =>
+       * only the route header is sent (the worker then falls back to its own
+       * env/hostname for attribution). */
+      decidePoolLabel?: string;
     } = {}
   ) {
     this.capacitySnapshot = {
@@ -1354,6 +1405,67 @@ export class LivepeerClient {
   }
 
   /**
+   * ADAAAA-8196: the statically configured routes, normalized to pool entries.
+   * An entry with a blank/missing route is dropped; a duplicate route keeps the
+   * FIRST declaration (so config order is the tie-break of last resort).
+   */
+  private configuredDecidePool(): DecideRunnerPoolEntry[] {
+    const out: DecideRunnerPoolEntry[] = [];
+    for (const r of this.opts.decideRoutes ?? []) {
+      const route = typeof r?.route === "string" ? r.route.trim() : "";
+      if (!route || out.some((e) => e.runner_id === route)) continue;
+      const weight = typeof r.weight === "number" && Number.isFinite(r.weight) && r.weight > 0
+        ? r.weight
+        : 1;
+      const pool = typeof r.pool === "string" && r.pool.trim()
+        ? r.pool.trim()
+        : (this.opts.decidePoolLabel ?? "").trim();
+      out.push({
+        runner_id: route,
+        capacity: typeof r.capacity === "number" && Number.isFinite(r.capacity)
+          ? Math.max(0, Math.floor(r.capacity))
+          : 0,
+        tier: typeof r.tier === "string" && r.tier.trim() ? r.tier.trim() : "unknown",
+        weight,
+        ...(pool ? { pool } : {}),
+      });
+    }
+    return out;
+  }
+
+  /**
+   * ADAAAA-8196: the pool selection actually ranks.
+   *
+   * - No configured routes: exactly the discovered pool (ADAAAA-8559 behaviour,
+   *   so an unset `decideRoutes` is byte-identical).
+   * - Configured routes present: the UNION, keyed by route id. For a route
+   *   discovery also advertises, the measured numbers (capacity,
+   *   `capacity_available`, tier) win and the configured `weight`/`pool` are
+   *   kept; a configured route discovery never mentions is still addressable.
+   */
+  private decideSelectionPool(): DecideRunnerPoolEntry[] {
+    const configured = this.configuredDecidePool();
+    if (configured.length === 0) return this.decidePool;
+    const byRoute = new Map<string, DecideRunnerPoolEntry>();
+    for (const r of configured) byRoute.set(r.runner_id, r);
+    for (const r of this.decidePool) {
+      const prev = byRoute.get(r.runner_id);
+      byRoute.set(
+        r.runner_id,
+        prev
+          ? {
+              ...prev,
+              capacity: r.capacity,
+              ...(typeof r.capacity_available === "number" ? { capacity_available: r.capacity_available } : {}),
+              tier: r.tier,
+            }
+          : r,
+      );
+    }
+    return [...byRoute.values()];
+  }
+
+  /**
    * ADAAAA-8559: pick the runner for this attempt.
    *
    * - Empty pool (dark discovery, or a single registration whose route the
@@ -1361,37 +1473,49 @@ export class LivepeerClient {
    *   today's retry-on-same-id behaviour — byte-identical to pre-8559, which the
    *   current suite pins (ADAAAA-8559 AC4).
    * - Otherwise: never a runner this CALL already tried, preferring `tier=5090`
-   *   over `x99-fallback`, then least LOCAL in-flight, then wider capacity. The
-   *   pick and its counter bump are synchronous, so two attempts admitted in the
-   *   same tick cannot both pick the same idle runner.
+   *   over `x99-fallback`, then least LOCAL weighted in-flight, then wider
+   *   capacity. The pick and its counter bump are synchronous, so two attempts
+   *   admitted in the same tick cannot both pick the same idle runner.
+   *
+   * ADAAAA-8196: a configured route list (see {@link DecideRouteConfig}) joins
+   * the pool, so the 5090 members are addressable directly instead of only via
+   * the nginx upstreams.
    *
    * Returns null when every runner in a non-empty pool has been tried: the call
    * is out of hops and must fail with the typed/untyped error rather than
    * hammering one id.
    */
   private selectDecideRunner(tried: ReadonlySet<string>): string | null {
-    if (this.decidePool.length === 0) {
+    const pool = this.decideSelectionPool();
+    if (pool.length === 0) {
       // Single-registration fallback: one fixed id and today's retry-on-same-id
       // behaviour (the current suite pins exactly that).
       return ROUTES.decide;
     }
     let best: DecideRunnerPoolEntry | null = null;
-    for (const r of this.decidePool) {
+    for (const r of pool) {
       if (tried.has(r.runner_id)) continue;
       if (best === null || this.compareRunnerRank(r, best) < 0) best = r;
     }
     return best ? best.runner_id : null;
   }
 
-  /** ADAAAA-8559: tier preference first, then least local in-flight, then the
-   * least-recently PICKED runner (so sequential decisions rotate across the fleet
-   * — AC4 requires all three 5090s to serve, not just the first), then the wider
-   * advertised capacity, then the id (deterministic). */
+  /** ADAAAA-8196: the local weighted load of one runner: in-flight / weight.
+   * With every weight at 1 this is the plain in-flight count ADAAAA-8559
+   * pinned, so an unset/equal weighting changes nothing. */
+  private weightedRunnerLoad(runnerId: string, weight: number | undefined): number {
+    const w = typeof weight === "number" && Number.isFinite(weight) && weight > 0 ? weight : 1;
+    return (this.decideRunnerInFlight.get(runnerId) ?? 0) / w;
+  }
+
+  /** ADAAAA-8559: tier preference first, then least local (weighted) in-flight,
+   * then the least-recently PICKED runner (so sequential decisions rotate across
+   * the fleet — AC4 requires all three 5090s to serve, not just the first), then
+   * the wider advertised capacity, then the id (deterministic). */
   private compareRunnerRank(a: DecideRunnerPoolEntry, b: DecideRunnerPoolEntry): number {
     const tier = decideTierRank(a.tier) - decideTierRank(b.tier);
     if (tier !== 0) return tier;
-    const inFlight =
-      (this.decideRunnerInFlight.get(a.runner_id) ?? 0) - (this.decideRunnerInFlight.get(b.runner_id) ?? 0);
+    const inFlight = this.weightedRunnerLoad(a.runner_id, a.weight) - this.weightedRunnerLoad(b.runner_id, b.weight);
     if (inFlight !== 0) return inFlight;
     const lastPick =
       (this.decideRunnerLastPick.get(a.runner_id) ?? -1) - (this.decideRunnerLastPick.get(b.runner_id) ?? -1);
@@ -1400,6 +1524,21 @@ export class LivepeerClient {
     if (capacity !== 0) return capacity;
     return a.runner_id.localeCompare(b.runner_id);
   }
+
+  /** ADAAAA-8196: the attribution headers of ONE attempt. `X-Runner-Route` is
+   * the route actually posted to (the `/apps/<route>` segment), so a serving
+   * worker can echo it without guessing; `X-Runner-Pool`/`X-Runner-Tier` are
+   * sent only when known, keeping an un-configured client's request unchanged
+   * apart from the route header. */
+  private decideAttributionHeaders(runnerId: string): Record<string, string> {
+    const entry = this.decideSelectionPool().find((r) => r.runner_id === runnerId);
+    const headers: Record<string, string> = { "X-Runner-Route": runnerId };
+    const pool = (entry?.pool ?? this.opts.decidePoolLabel ?? "").trim();
+    if (pool) headers["X-Runner-Pool"] = pool;
+    if (entry?.tier) headers["X-Runner-Tier"] = entry.tier;
+    return headers;
+  }
+
 
   /** ADAAAA-8559: the single-shot decide route. The runner id IS the route
    * segment; with an empty pool it is the legacy aggregate id. */
@@ -1410,7 +1549,7 @@ export class LivepeerClient {
   /** ADAAAA-8559: the runner's attribution record (created on first use). */
   private runnerStat(runnerId: string): DecideRunnerStat {
     const tier =
-      this.decidePool.find((r) => r.runner_id === runnerId)?.tier ??
+      this.decideSelectionPool().find((r) => r.runner_id === runnerId)?.tier ??
       (runnerId === ROUTES.decide ? "legacy-single" : "unknown");
     let stat = this.decideRunnerStats.get(runnerId);
     if (!stat) {
@@ -1562,7 +1701,10 @@ export class LivepeerClient {
           // the orchestrator route segment. Only the pre-probe fallback uses the
           // retired aggregate id (see selectDecideRunner).
           res = await this.transport.request("POST", this.decidePath(runnerId, path), {
-            headers,
+            // ADAAAA-8196: name the route this attempt actually posts to (and its
+            // pool/tier when known) so the serving worker can echo the
+            // attribution into the /highlight response and decide_audit.timings.
+            headers: { ...headers, ...this.decideAttributionHeaders(runnerId) },
             body: bodyText,
           });
         } catch (e) {

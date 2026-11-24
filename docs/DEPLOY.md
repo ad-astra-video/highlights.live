@@ -332,6 +332,18 @@ pause queue):
 | `DECIDE_CAPACITY_REFRESH_S` | 60 | Minimum seconds between signer capacity probes. A probe also runs (fire-and-forget) at every decide-job start. |
 | `DECIDE_QUEUE_MAX_WAIT_MS` | 60000 | Hard per-decide queue-wait budget; exceeding it drops the decide with `DecideCapacityError`. |
 | `DECIDE_CAPACITY_DISCOVERY` | on | `0`/`false`/`off`/`no` disables the capacity probe entirely (the byte-identical pre-8254 static gate). No signer configured => no probe regardless. |
+| `DECIDE_ROUTES` | unset (discovered pool, else the legacy `highlights-decide` id) | ADAAAA-8196: comma-separated **static decide route list**, one entry per pool member: `route[:tier][@weight]` (e.g. `highlights-decide-5090-gpu1:5090@2,highlights-decide-5090-gpu2:5090`). The members are unioned with the discovered pool, so the 5090 containers are addressable directly instead of only through the `decide-pool-8183` nginx upstreams; a configured route discovery also advertises keeps its measured capacity/tier. Selection is tier-first then least local weighted in-flight (`in-flight / weight`), so a weight-2 member takes twice the concurrent load. Unsetting it is the rollback. |
+| `DECIDE_POOL_LABEL` | unset | ADAAAA-8196: pool id sent as `X-Runner-Pool` on every decide, so the serving worker can echo `runnerHost` as `<hostname>/<pool>`. Unset => only the hostname is attributed. |
+
+Attribution (ADAAAA-8196): every decide names the route it posts to
+(`X-Runner-Route`; the orchestrator also injects `Livepeer-Runner-Route` on
+proxied calls). The decide worker resolves one identity per call
+(header -> `DECIDE_RUNNER_ROUTE` -> its hostname, with the pool suffix when a
+pool id is known), echoes `runnerRoute`/`runnerHost` on the `/highlight`
+response, and stamps the same two values into `timings` at audit-record build
+time — so the per-container `decide-audit.jsonl` line and the stored
+`decide_audit.timings` agree 1:1 and a leg reconciles per-runner counts from
+`GET /jobs/:id/decide-audit` without reading container logs.
 
 Observability: the gate's counters land on the job's `observeMetrics` record
 (`decideQueued`, `decideDropped`, `decide503`, `decidePauses`,

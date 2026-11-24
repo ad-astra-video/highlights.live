@@ -275,6 +275,26 @@ def _audit_record(
         elif part.get("type") == "text":
             refs.append({"type": "text", "text": part["text"]})
     params = {k: v for k, v in payload.items() if k != "messages"}
+    # ADAAAA-8196: the serving pool identity, merged at RECORD-BUILD time from
+    # audit_ctx so the on-disk `decide-audit.jsonl` line carries the same
+    # attribution as the /highlight response descriptor (the server persists
+    # this `timings` object verbatim into `decide_audit.timings`). Additive: a
+    # call without an identity leaves the timings object byte-identical.
+    timings = {
+        "elapsedMs": round((time.time() - started_at) * 1000.0, 3),
+        "asrLatencyS": asr_latency_s,
+        # ADAAAA-8056 (AC-E1/AC-E2): per-window coverage ledgers. They live on
+        # `timings` (an existing JSON column on decide_audit) so they need no
+        # schema migration and are queryable per decide row. Merged here, at
+        # record-build time, so the record written to DECIDE_AUDIT_DIR carries
+        # them — stamping them later onto the response descriptor only reached
+        # the server's decide_audit row and left the on-disk trail bare.
+        **(timings_extra or {}),
+    }
+    for _attr_key in ("runnerRoute", "runnerHost"):
+        _attr_val = ctx.get(_attr_key)
+        if isinstance(_attr_val, str) and _attr_val.strip():
+            timings.setdefault(_attr_key, _attr_val.strip())
     return {
         "version": 1,
         "systemPromptVersion": SYSTEM_PROMPT_VERSION,
@@ -293,17 +313,7 @@ def _audit_record(
         "rawReply": raw_reply,
         "parsed": parsed,
         "fallback": bool(fallback),
-        "timings": {
-            "elapsedMs": round((time.time() - started_at) * 1000.0, 3),
-            "asrLatencyS": asr_latency_s,
-            # ADAAAA-8056 (AC-E1/AC-E2): per-window coverage ledgers. They live on
-            # `timings` (an existing JSON column on decide_audit) so they need no
-            # schema migration and are queryable per decide row. Merged here, at
-            # record-build time, so the record written to DECIDE_AUDIT_DIR carries
-            # them — stamping them later onto the response descriptor only reached
-            # the server's decide_audit row and left the on-disk trail bare.
-            **(timings_extra or {}),
-        },
+        "timings": timings,
         "createdAt": round(time.time(), 3),
     }
 

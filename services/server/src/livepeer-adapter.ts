@@ -166,6 +166,12 @@ export class OrchestratorAdapter implements PipelineClient {
         ? { decideCapacityRefreshMs: Math.max(0, cfg.decideCapacityRefreshS * 1000) }
         : {}),
       ...(cfg.decideQueueMaxWaitMs !== undefined ? { decideQueueMaxWaitMs: cfg.decideQueueMaxWaitMs } : {}),
+      // ADAAAA-8196: the operator's static decide route list (address the 5090
+      // pool members directly instead of only the nginx upstreams) and the pool
+      // label the serving worker echoes into runnerHost. Both unset => routing
+      // is exactly the discovered pool / the legacy fixed id.
+      ...(cfg.decideRoutes?.length ? { decideRoutes: cfg.decideRoutes } : {}),
+      ...(cfg.decidePoolLabel ? { decidePoolLabel: cfg.decidePoolLabel } : {}),
       // AC1 startup/refresh log line: the numbers, never the token or the
       // signer URL. Only fires when the snapshot changes. ADAAAA-8262 appends the
       // provenance so a failed probe is not mistaken for an empty fleet;

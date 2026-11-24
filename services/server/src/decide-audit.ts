@@ -85,6 +85,34 @@ export function decideAuditGroupSlot(groupKey: string, ordinal: number): string 
   return n <= 1 ? groupKey : `${groupKey}:call${n}`;
 }
 
+/**
+ * ADAAAA-8196: merge the decide's SERVING pool identity into the stored
+ * `timings` object.
+ *
+ * The decide worker stamps `runnerRoute`/`runnerHost` into its audit record at
+ * build time (so the on-disk `decide-audit.jsonl` line and the descriptor agree),
+ * which reaches this module through `desc.timings`. This helper is the ADDITIVE
+ * safety net for the other shapes: a worker that only echoed the two fields at
+ * the top level of the decision (or a descriptor written before the worker
+ * stamped them) still lands both on the row, so per-runner attribution is
+ * readable off `decide_audit` instead of from container logs. A value the audit
+ * record already holds WINS — the worker is the authority on its own identity.
+ *
+ * Returns the timings object unchanged (including `null`) when the descriptor
+ * carries no attribution at all, so a pre-change descriptor is byte-identical.
+ */
+export function withRunnerAttribution(timings: unknown, runnerRoute: unknown, runnerHost: unknown): any {
+  const route = typeof runnerRoute === "string" && runnerRoute.trim() ? runnerRoute.trim() : null;
+  const host = typeof runnerHost === "string" && runnerHost.trim() ? runnerHost.trim() : null;
+  if (!route && !host) return timings ?? null;
+  const base = timings && typeof timings === "object" && !Array.isArray(timings)
+    ? { ...(timings as Record<string, unknown>) }
+    : {};
+  if (route && !base.runnerRoute) base.runnerRoute = route;
+  if (host && !base.runnerHost) base.runnerHost = host;
+  return base;
+}
+
 /** Map a decide-service compact audit descriptor (as emitted by gemma.py
  * `_audit_descriptor`, read off the decision as `_audit`) to a
  * DecideAuditRecord. Returns null when the descriptor is absent or lacks
@@ -122,7 +150,10 @@ export function decideAuditRecordFromDescriptor(desc: any, ordinal = 1): DecideA
         : { ...(baseParams ?? {}), auditOrdinal: ordinalLabel, auditBaseGroupKey: ident.groupKey },
     rawReply: desc.rawReply ?? null,
     verdicts: desc.verdicts ?? null,
-    timings: desc.timings ?? null,
+    // ADAAAA-8196: carry the serving pool identity onto the row (see
+    // withRunnerAttribution — the worker's own values win, a top-level-only echo
+    // is merged in rather than lost).
+    timings: withRunnerAttribution(desc.timings, desc.runnerRoute, desc.runnerHost),
     fallback: !!desc.fallback,
     replayable: !!desc.replayable,
     createdAt: decideAuditCreatedAt(desc.createdAt),
