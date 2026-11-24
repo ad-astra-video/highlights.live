@@ -26,7 +26,7 @@ Three different questions get conflated in conversation; keep them separate.
 | --- | --- | --- |
 | `outcome` | `scoring_play` \| `near_miss` \| `big_play` \| `not_highlight` — the decide verdict's own classification of the window | `services/decide/app/gemma.py:434` (prompt contract), mirrored by the deterministic rule path |
 | `isHighlight` | the accept flag on a decide verdict; a `scoring_play` read still has to survive the server accept path before it is a row | `services/decide/app/__init__.py:806` (`/highlight`) |
-| row status / lane | `accepted` \| `suppressed` \| `rejected`, plus per-row markers: provisional goal, confirmation lane, `replayOf`, `clipChoice` | `packages/events/src/index.ts:1956` (`HighlightRecordSchema`) |
+| row status / lane | `accepted` \| `suppressed` \| `rejected`, plus per-row markers: provisional goal, confirmation lane, `replayOf`, `clipChoice` | `packages/events/src/index.ts:1982` (`HighlightRecordSchema`) |
 | "postable" | the read-side gate that decides what the board may show. A stored row is **not** a highlight until it passes this | `services/server/src/highlight-postable.ts:265` |
 
 Only `scoring_play` may be a board GOAL. `near_miss` (a shot that did not convert)
@@ -82,7 +82,7 @@ and whether it is shipped on or opt-in.
 | --- | --- | --- | --- | --- | --- |
 | L1 | live browser share | browser publishes WebRTC video+opus to the media node | `services/media/src/rtc.ts`, `services/server/src/media-rail.ts:484` | each observation + anchor JPEG feeds a `LiveObserver` | on when a browser share is provisioned |
 | L2 | live RTMP / file-sim | server pulls a stream / loops a file | `services/server/src/live.ts` | frames + audio tap into `analyzeJob` | on |
-| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11808` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
+| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11829` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
 | A1 | both | audio energy change: burst (fast onset) or sustained swell | `services/perceive/app/audio_gate.py` → `POST /audio` | Stage-A candidate anchored at the onset | on |
 | A2 | both | band-limited tonal whistle (2.4–3.4 kHz) | `services/perceive/app/audio_gate.py` (Stage-B) | whistle candidate / evidence; own verdict ledger | on |
 | A3 | both | tracker peak displacement, detection-in-zone, ball-velocity surge | `services/perceive/app/stage_a.py` | profile-routed Stage-A sites | **inert for soccer** — no shipped profile enables motion/zone/ball-velocity |
@@ -183,6 +183,14 @@ Order as executed in `services/decide/app/__init__.py:806` (single) and
    already-cut alternative (its replay, a celebration window). This is a pointer
    swap: the moment's own window, the summary ladder and the quota math are
    untouched.
+4. **Manual attach** (`services/server/src/manual-alternative.ts`) — the operator path for a
+   cross-camera replay no deterministic signal can certify. An operator attaches another decided
+   window of the SAME job with `POST /highlights/:id/alternatives/attach`; the write is the Inc 1
+   contract (`replayOf` + `replayEvidence.kind: "manual"` + the acting operator id/instant) on the
+   WINDOW row only — no second highlight row, no second clip, no GPU. `…/alternatives/detach` clears
+   only a manual attach (never a detector attach) and restores the moment's original clip when the
+   detached window was being served. Candidates are listed by
+   `GET /highlights/:id/attach-candidates`, filtered by the same predicate the attach validates.
 
 ### 4.4 Read-side ladder (what the board is allowed to show)
 

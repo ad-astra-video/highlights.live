@@ -72,6 +72,11 @@ import {
   playTypeText,
   highlightMomentEntries,
   type HighlightMomentEntry,
+  // ADAAAA-8407: the operator's manual "attach this window as an alternative".
+  fetchAttachCandidates,
+  attachAlternativeWindow,
+  detachAlternativeWindow,
+  type ManualAttachCandidate,
 } from "../lib/jobDetail";
 import { createWindowInspectStore } from "../lib/windowInspect";
 import { LiveProgressChip } from "../components/LiveProgressChip";
@@ -1116,6 +1121,130 @@ export function HighlightActionRow({
 }
 
 /**
+ * ADAAAA-8407: the operator's manual "attach footage" control.
+ *
+ * Lists the job's OTHER decided windows (the server filters them: same job, not
+ * this moment, not already attached, not another moment's owner, not rejected,
+ * and carrying its own cut clip) and attaches one by hand. The attach writes the
+ * Inc 1 contract (`replayOf` + `replayEvidence.kind: "manual"` + who/when) on
+ * the window row only: no second highlight, no second clip, no GPU, and the
+ * moment's own clip stays the default until a pick is made. Windows already
+ * attached by hand get a Detach control, which returns the row to its
+ * pre-attach shape (and to the original clip if it was being served).
+ */
+function AttachFootageControl({
+  highlight: h,
+  onLoad,
+  onAttach,
+  onDetach,
+  pending = null,
+}: {
+  highlight: JobDetailHighlight;
+  onLoad: (h: JobDetailHighlight) => Promise<ManualAttachCandidate[]>;
+  onAttach: (h: JobDetailHighlight, windowId: string) => Promise<void>;
+  onDetach: (h: JobDetailHighlight, windowId: string) => Promise<void>;
+  pending?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [candidates, setCandidates] = useState<ManualAttachCandidate[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const manual = (h.alternatives ?? []).filter((a) => a.replayEvidence?.kind === "manual");
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (!next || candidates !== null) return;
+    try {
+      setCandidates(await onLoad(h));
+      setError(null);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      setCandidates([]);
+    }
+  }
+  async function attach(c: ManualAttachCandidate) {
+    try {
+      await onAttach(h, c.id);
+      setError(null);
+      setOpen(false);
+      setCandidates(null);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  }
+  async function detach(a: NonNullable<JobDetailHighlight["alternatives"]>[number]) {
+    try {
+      await onDetach(h, a.id);
+      setError(null);
+      setCandidates(null);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    }
+  }
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2 border-t border-purple/30 bg-dusk/90 px-3 py-1.5 text-xs"
+      data-detail-attach-footage
+    >
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 rounded-full border border-purple/60 px-2 py-0.5 font-bold uppercase tracking-wide text-purple transition hover:border-neon hover:text-neon focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+        data-detail-attach-toggle
+        aria-expanded={open}
+        onClick={toggle}
+      >
+        <Film className="h-3 w-3" aria-hidden />
+        Attach footage
+      </button>
+      {manual.map((a) => (
+        <button
+          key={`detach:${a.id}`}
+          type="button"
+          className="inline-flex items-center gap-1 rounded-full border border-mut/50 px-2 py-0.5 font-bold uppercase tracking-wide text-mut transition hover:border-yellow hover:text-yellow focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+          data-detail-detach={a.id}
+          disabled={pending !== null && pending === a.id}
+          onClick={() => detach(a)}
+        >
+          <Undo2 className="h-3 w-3" aria-hidden />
+          {`Detach @ ${Math.round(a.windowAnchorTs)} s`}
+        </button>
+      ))}
+      {open && (
+        <div className="flex w-full flex-wrap items-center gap-2" data-detail-attach-panel>
+          {candidates === null ? (
+            <span className="text-mut" data-detail-attach-loading>
+              <Loader2 className="mr-1 inline h-3 w-3 animate-spin" aria-hidden />
+              Loading windows…
+            </span>
+          ) : candidates.length === 0 ? (
+            <span className="text-mut" data-detail-attach-empty>
+              No other decided window on this job can be attached.
+            </span>
+          ) : (
+            candidates.map((c) => (
+              <button
+                key={`attach:${c.id}`}
+                type="button"
+                className="inline-flex items-center gap-1 rounded-full border border-purple/60 px-2 py-0.5 text-purple transition hover:border-neon hover:text-neon focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ink"
+                data-detail-attach-window={c.id}
+                disabled={pending !== null && pending === c.id}
+                onClick={() => attach(c)}
+              >
+                {`Clip · ${momentRangeLabel(c.start, c.end)}`}
+              </button>
+            ))
+          )}
+          {error && (
+            <span className="text-yellow" data-detail-attach-error>
+              {error}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * ADAAAA-8304: the card's clip rail.
  *
  * The video area is a horizontal rail: slide 1 is the highlight's own clip,
@@ -1443,6 +1572,14 @@ export interface HighlightCardProps {
   /** Which review action is currently in-flight for this card (drives the
    * per-control loading state; disables both controls while pending). */
   pendingStatus?: "accepted" | "rejected" | null;
+  /** ADAAAA-8407: the operator's manual attach path. `onLoadAttachCandidates`
+   * lists the job's eligible windows, `onAttach` writes the attach and
+   * `onDetach` clears it. Absent on read-only renders (component tests, the
+   * hidden-clip strip), which then carry no attach control. */
+  onLoadAttachCandidates?: (h: JobDetailHighlight) => Promise<ManualAttachCandidate[]>;
+  onAttachWindow?: (h: JobDetailHighlight, windowId: string) => Promise<void>;
+  onDetachWindow?: (h: JobDetailHighlight, windowId: string) => Promise<void>;
+  pendingAttach?: string | null;
   /** ADAAAA-7622: the current caption for this clip. Edited inline on the
    * card; the page owns the value so the batch export ships the edit. */
   caption?: string;
@@ -1482,6 +1619,10 @@ export function HighlightCard({
   onClipChoice,
   pendingClipChoice = null,
   pendingStatus = null,
+  onLoadAttachCandidates,
+  onAttachWindow,
+  onDetachWindow,
+  pendingAttach = null,
   caption = "",
   onCaptionChange,
   selectable = false,
@@ -1571,6 +1712,19 @@ export function HighlightCard({
         onPick={onClipChoice ? (alternativeId) => onClipChoice(h, alternativeId) : undefined}
         pendingPick={pendingClipChoice}
       />
+      {/* ADAAAA-8407: the operator can attach another decided window of the same
+          job as this moment's alternative by hand (the cross-camera replay
+          path). Attaching is a pointer write over an existing cut — the
+          original clip stays the default until a pick is made. */}
+      {onLoadAttachCandidates && onAttachWindow && onDetachWindow && (
+        <AttachFootageControl
+          highlight={h}
+          onLoad={onLoadAttachCandidates}
+          onAttach={onAttachWindow}
+          onDetach={onDetachWindow}
+          pending={pendingAttach}
+        />
+      )}
       {/* ADAAAA-7881: the audio state describes the CLIP, so it sits with the
           clip — once, quiet, and never duplicated below the metadata. */}
       {h.hasAudio === false && (
@@ -1868,6 +2022,10 @@ export function HighlightMomentGrid({
   onClipChoice,
   pendingClipChoice = null,
   pendingStatus = null,
+  onLoadAttachCandidates,
+  onAttachWindow,
+  onDetachWindow,
+  pendingAttach = null,
   captionOf,
   onCaptionChange,
   summaryLog,
@@ -1881,6 +2039,11 @@ export function HighlightMomentGrid({
   onClipChoice?: (h: JobDetailHighlight, alternativeId: string | null) => void;
   pendingClipChoice?: { id: string; alternativeId: string | null } | null;
   pendingStatus?: { id: string; status: "accepted" | "rejected" } | null;
+  /** ADAAAA-8407: manual attach path, threaded to every moment card. */
+  onLoadAttachCandidates?: (h: JobDetailHighlight) => Promise<ManualAttachCandidate[]>;
+  onAttachWindow?: (h: JobDetailHighlight, windowId: string) => Promise<void>;
+  onDetachWindow?: (h: JobDetailHighlight, windowId: string) => Promise<void>;
+  pendingAttach?: { id: string; windowId: string } | null;
   captionOf?: (h: JobDetailHighlight) => string;
   onCaptionChange?: (h: JobDetailHighlight, value: string) => void;
   summaryLog?: SummaryLogEntry[];
@@ -1919,6 +2082,10 @@ export function HighlightMomentGrid({
             pendingClipChoice={
               pendingClipChoice && pendingClipChoice.id === h.id ? pendingClipChoice.alternativeId : null
             }
+            onLoadAttachCandidates={onLoadAttachCandidates}
+            onAttachWindow={onAttachWindow}
+            onDetachWindow={onDetachWindow}
+            pendingAttach={pendingAttach && pendingAttach.id === h.id ? pendingAttach.windowId : null}
             pendingStatus={!notable && pendingStatus && pendingStatus.id === h.id ? pendingStatus.status : null}
             caption={captionOf?.(h) ?? ""}
             onCaptionChange={onCaptionChange}
@@ -2357,6 +2524,8 @@ export function JobDetail() {
   const [pendingReview, setPendingReview] = useState<{ id: string; status: "accepted" | "rejected" } | null>(null);
   // ADAAAA-8321 (AC6): which alternative pick is in flight for which card.
   const [pendingClipChoice, setPendingClipChoice] = useState<{ id: string; alternativeId: string } | null>(null);
+  // ADAAAA-8407: which manual attach/detach is in flight for which card+window.
+  const [pendingAttach, setPendingAttach] = useState<{ id: string; windowId: string } | null>(null);
   // ADAAAA-7915 (increment 3): the RAW audit rows of this job (GET /jobs/:id,
   // owner-or-admin scoped). `detail.highlights` is the POSTABLE projection and
   // drops every rejected row, so a rejected clip had no surface to render on and
@@ -2974,6 +3143,56 @@ export function JobDetail() {
     }
   }
 
+  /**
+   * ADAAAA-8407: the operator's manual attach path. The picker lists the job's
+   * other decided windows; the attach writes the manual evidence on the WINDOW
+   * row only (no second highlight, no re-cut, no GPU). The pick afterward is the
+   * existing clip-choice path, and the original clip stays the default.
+   */
+  async function loadAttachCandidates(h: JobDetailHighlight): Promise<ManualAttachCandidate[]> {
+    return fetchAttachCandidates(h.id);
+  }
+
+  async function refreshDetailAfterAttach() {
+    try {
+      const fresh = await fetchJobDetail(id, { inspect });
+      if (aliveRef.current) {
+        setDetail(fresh);
+        setError(null);
+      }
+    } catch {
+      /* keep the optimistic local update; the next poll reconciles */
+    }
+  }
+
+  async function attachWindow(h: JobDetailHighlight, windowId: string) {
+    if (pendingAttach) return;
+    setPendingAttach({ id: h.id, windowId });
+    try {
+      await attachAlternativeWindow(h.id, windowId);
+      await refreshDetailAfterAttach();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      throw e;
+    } finally {
+      setPendingAttach(null);
+    }
+  }
+
+  async function detachWindow(h: JobDetailHighlight, windowId: string) {
+    if (pendingAttach) return;
+    setPendingAttach({ id: h.id, windowId });
+    try {
+      await detachAlternativeWindow(h.id, windowId);
+      await refreshDetailAfterAttach();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      throw e;
+    } finally {
+      setPendingAttach(null);
+    }
+  }
+
   async function review(h: JobDetailHighlight, status: "accepted" | "rejected") {
     // Guard against double-submit while a review is already in-flight for this card.
     if (pendingReview) return;
@@ -3300,6 +3519,10 @@ export function JobDetail() {
               onClipChoice={pickClip}
               pendingClipChoice={pendingClipChoice}
               pendingStatus={pendingReview}
+              onLoadAttachCandidates={loadAttachCandidates}
+              onAttachWindow={attachWindow}
+              onDetachWindow={detachWindow}
+              pendingAttach={pendingAttach}
               captionOf={captionOf}
               onCaptionChange={setHighlightCaption}
               summaryLog={detail.job.summaryLog}

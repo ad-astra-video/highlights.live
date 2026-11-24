@@ -489,6 +489,20 @@ export class Store {
     return next;
   }
 
+  /** ADAAAA-8407: clear a replay/alternative attach — the row returns to
+   * exactly its pre-attach shape (`replayOf` + `replayEvidence` dropped, every
+   * other field untouched). Used by the manual detach path only; a detector
+   * attach is cleared by a re-run, never by an operator. */
+  async clearReplayAttachment(id: string): Promise<HighlightRecord> {
+    const h = this.highlights.get(id);
+    if (!h) throw new Error(`no highlight ${id}`);
+    const { replayOf: _replayOf, replayEvidence: _evidence, ...rest } = h;
+    const next = HighlightRecordSchema.parse(rest);
+    this.highlights.set(id, next);
+    if (this.db) await this.db.saveHighlight(next);
+    return next;
+  }
+
   /** ADAAAA-8321 (AC6): record which delivered clip a moment serves. `undefined`
    * clears the choice and restores the record's own original cut. Writes only the
    * selection: no clip is cut again and no price/quota field is touched. */

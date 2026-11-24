@@ -1899,19 +1899,31 @@ export type HighlightTrigger = z.infer<typeof HighlightTriggerSchema>;
 export const ReplayEvidenceSchema = z.object({
   /** `footage_match` = perceptual-hash set match (the signal Inc 1 produces).
    * `audio_match` is reserved for corroboration; audio is never the sole
-   * signal. */
-  kind: z.enum(["footage_match", "audio_match"]),
-  /** Fingerprints in the new window that matched a ledger fingerprint. */
+   * signal. ADAAAA-8407 adds `manual`: the attach came from an operator, not
+   * from a detector signal — it is NOT a detection and must never be counted as
+   * one. */
+  kind: z.enum(["footage_match", "audio_match", "manual"]),
+  /** Fingerprints in the new window that matched a ledger fingerprint. On a
+   * `manual` attach no comparison ran, so this is 0 (never a measured value). */
   matches: z.number().int().min(0),
-  /** Fingerprints compared (the new window's set size). */
+  /** Fingerprints compared (the new window's set size). 0 on a `manual` attach
+   * for the same reason as `matches`. */
   compared: z.number().int().min(0),
-  /** Seconds between the replay's anchor and the moment it repeats. */
+  /** Seconds between the replay's anchor and the moment it repeats. On a
+   * `manual` attach this is the measured anchor gap (no bar is applied). */
   gapS: z.number().min(0),
   /** ADAAAA-8325 (Inc 2): the decide verdict's footage phase for the attached
    * window when the attach used it as corroboration (`replay`). Absent on a
    * pure-hash attach and on any window whose verdict was unknown. The phase is
    * never the sole signal: `matches`/`compared` must still clear the band. */
   phase: z.enum(["live", "replay"]).optional(),
+  /** ADAAAA-8407: the acting operator/agent id that attached this window by
+   * hand. Present only on `kind: "manual"` — it is the provenance that keeps a
+   * human attach distinguishable from an auto attach in the stored row. */
+  attachedBy: z.string().optional(),
+  /** ADAAAA-8407: ISO instant the manual attach was recorded, so a detach can
+   * be audited against it. Present only on `kind: "manual"`. */
+  attachedAt: z.string().optional(),
 });
 export type ReplayEvidence = z.infer<typeof ReplayEvidenceSchema>;
 

@@ -117,6 +117,13 @@ import { buildPostableHighlights, countsFromPostable, postableCountFields, quota
 // ATTACHED to their owning GOAL highlight (never as highlights themselves).
 import { deliverCelebrationAlternatives, groupAlternativesByOwner } from "./celebration-alternatives";
 import { attachReplayWindows, partitionAttachedReplays, replayAlternativeFrom } from "./replay-alternatives";
+import {
+  canManualDetach,
+  detachClearsServedClip,
+  manualAttachCandidates,
+  manualAttachPatch,
+  manualAttachRefusal,
+} from "./manual-alternative";
 import { clipChoiceFor, servedClipUri } from "./clip-choice";
 // ADAAAA-8893 (D5): the dive's re-centered cut is delivered as an OPTION
 // (`highlight_alternatives` row, `eventType: "recentered"`), never as a
@@ -8987,6 +8994,122 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
       if (!choice) return reply.code(422).send({ error: "unknown alternative for this highlight" });
       await store.setClipChoice(cur.id, choice);
       return { ok: true, clipUri: choice.clipUri, clipChoice: choice };
+    }
+  );
+
+  // --- ADAAAA-8407: manual "attach this window as an alternative" -----------
+  //
+  // The operator path for a cross-camera replay no deterministic signal can
+  // certify (measured on job 545be947: different camera, `live` phase verdict,
+  // no score-bug regression). An operator who watched the job attaches a decided
+  // window of the SAME job to a moment by hand. The write is the Inc 1 contract
+  // (`replayOf` + `replayEvidence.kind: "manual"` + who/when) on the WINDOW row
+  // only — no second highlight row, no second clip, no second debit, no GPU.
+  //
+  // Scope/permissions (AC5): the SAME scope as the pick and the review routes —
+  // the job's owner session or an admin operator, and the window must be the
+  // same job's row. Anonymous -> 401, another owner's job -> 403. Both writes
+  // land a durable activity row on the job (GET /jobs/:id/lifecycle), so a
+  // manual attach/detach is auditable after the in-memory Store is gone.
+  function highlightForOperator(req: any, reply: any, id: string) {
+    const user = req.user as { id: string; role: string };
+    const cur = store.getHighlight(id);
+    if (!cur) {
+      reply.code(404).send({ error: "no highlight" });
+      return null;
+    }
+    if (user.role !== "admin" && cur.ownerId !== user.id) {
+      reply.code(403).send({ error: "not your highlight" });
+      return null;
+    }
+    return { cur, user };
+  }
+
+  /** The job's other decided windows an operator may attach to this moment. */
+  app.get<{ Params: { id: string } }>(
+    "/highlights/:id/attach-candidates",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const found = highlightForOperator(req, reply, req.params.id);
+      if (!found) return reply;
+      const { cur } = found;
+      const records = store.highlightsForJob(cur.jobId);
+      return {
+        momentId: cur.id,
+        jobId: cur.jobId,
+        candidates: manualAttachCandidates(cur, records),
+      };
+    }
+  );
+
+  /** Attach one same-job decided window to this moment as its alternative. */
+  app.post<{ Params: { id: string }; Body: { windowId?: string } }>(
+    "/highlights/:id/alternatives/attach",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const found = highlightForOperator(req, reply, req.params.id);
+      if (!found) return reply;
+      const { cur, user } = found;
+      const windowId = typeof req.body?.windowId === "string" ? req.body.windowId : "";
+      if (!windowId) return reply.code(422).send({ error: "windowId required" });
+      const records = store.highlightsForJob(cur.jobId);
+      const refusal = manualAttachRefusal(cur, windowId, records);
+      if (refusal) {
+        // An already-attached window is a conflict, not a bad request: the row
+        // is real and legal, it just belongs to some moment already.
+        const code = refusal === "window_already_attached" ? 409 : refusal === "window_not_found" ? 404 : 422;
+        return reply.code(code).send({ error: refusal });
+      }
+      const window = records.find((r) => r.id === windowId)!;
+      const patch = manualAttachPatch(cur, window, user.id);
+      const updated = await store.markReplay(window.id, patch);
+      await recordJobLifecycle(
+        cur.jobId,
+        "alternative_attached",
+        JSON.stringify({ kind: "manual", momentId: cur.id, windowId, actorId: user.id, gapS: patch.replayEvidence.gapS })
+      );
+      return {
+        ok: true,
+        highlight: cur,
+        window: updated,
+        alternative: replayAlternativeFrom(updated, cur.end),
+      };
+    }
+  );
+
+  /** Clear a MANUAL attach — the row returns to its pre-attach shape and, when
+   * the moment was serving that window, to its own original cut. */
+  app.post<{ Params: { id: string }; Body: { windowId?: string } }>(
+    "/highlights/:id/alternatives/detach",
+    { preHandler: authReq },
+    async (req: any, reply) => {
+      const found = highlightForOperator(req, reply, req.params.id);
+      if (!found) return reply;
+      const { cur, user } = found;
+      const windowId = typeof req.body?.windowId === "string" ? req.body.windowId : "";
+      if (!windowId) return reply.code(422).send({ error: "windowId required" });
+      const window = store.getHighlight(windowId);
+      if (!window) return reply.code(404).send({ error: "window_not_found" });
+      if (window.jobId !== cur.jobId) return reply.code(422).send({ error: "cross_job" });
+      if (window.replayOf !== cur.id) return reply.code(422).send({ error: "not_attached_to_this_highlight" });
+      if (!canManualDetach(window)) return reply.code(422).send({ error: "not_a_manual_attach" });
+      const cleared = await store.clearReplayAttachment(window.id);
+      // The detached window may have been the moment's picked clip; clearing it
+      // restores the original (`original_default`). A pick of any OTHER
+      // alternative is untouched.
+      const clearedClipChoice = detachClearsServedClip(cur, window.id);
+      if (clearedClipChoice) await store.setClipChoice(cur.id, undefined);
+      await recordJobLifecycle(
+        cur.jobId,
+        "alternative_detached",
+        JSON.stringify({ kind: "manual", momentId: cur.id, windowId, actorId: user.id, clearedClipChoice })
+      );
+      return {
+        ok: true,
+        highlight: store.getHighlight(cur.id) ?? cur,
+        window: cleared,
+        clearedClipChoice,
+      };
     }
   );
 

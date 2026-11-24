@@ -48,6 +48,10 @@ export interface ClipRailSlide {
   /** ADAAAA-8325: TRUE when the attach needed the phase-corroborated band (the
    * Inc 1 hash bar alone missed it), so the picker names that provenance. */
   phaseCorroborated?: boolean;
+  /** ADAAAA-8407: TRUE on a window the OPERATOR attached by hand
+   * (`replayEvidence.kind === "manual"`), so the picker/identity copy says so
+   * and the detach control is offered. Never conflated with an auto attach. */
+  manualAttach?: boolean;
   /** ADAAAA-8422 (N1): a notable moment's SIBLING clip — the same moment's other
    * window, read-only (no pick). Carries that row's own id + export URL. */
   siblingClipId?: string;
@@ -90,6 +94,9 @@ export function clipRailSlides(h: JobDetailHighlight): ClipRailSlide[] {
       // WHY this alternative is offered.
       ...(a.phase ? { phase: a.phase } : {}),
       ...(a.replayEvidence?.phase === "replay" ? { phaseCorroborated: true } : {}),
+      // ADAAAA-8407: an operator attach is a different provenance from a
+      // detector attach, so it rides its own flag (copy + detach control).
+      ...(a.replayEvidence?.kind === "manual" ? { manualAttach: true } : {}),
     });
   }
   // ADAAAA-8422 (N1): a notable moment's other windows ride the SAME rail — one
@@ -135,7 +142,10 @@ export function clipRailPickerLabel(slide: ClipRailSlide): string {
   // card's window; the whole point is the instant inside it that moved).
   const at = slide.kind === "recentered" && typeof slide.momentTs === "number" ? slide.momentTs : slide.start;
   const base = `${role} @ ${Math.round(at)} s`;
-  return slide.phaseCorroborated ? `${base} · phase` : base;
+  // ADAAAA-8407: a hand-attached window is named as manual, so an operator can
+  // tell it from a detector attach (and knows a Detach control exists).
+  const provenance = slide.manualAttach ? "manual" : slide.phaseCorroborated ? "phase" : null;
+  return provenance ? `${base} · ${provenance}` : base;
 }
 
 /** The badge copy, or `null` when the card has exactly one clip (no badge). */

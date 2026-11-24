@@ -788,6 +788,44 @@ export async function fetchJobDetail(id: string, opts: { inspect?: boolean } = {
 }
 
 /**
+ * ADAAAA-8407: one window the operator may attach to a moment by hand — a
+ * decided, un-attached, un-rejected row of the SAME job that still carries its
+ * own cut clip. The server filters with the same predicate it validates an
+ * attach against, so the picker can never offer a window the write refuses.
+ */
+export interface ManualAttachCandidate {
+  id: string;
+  start: number;
+  end: number;
+  anchorTs: number;
+  eventType?: string;
+  outcome?: string;
+  score?: number;
+  clipUri?: string;
+}
+
+/** The job's other decided windows an operator may attach to this moment. */
+export async function fetchAttachCandidates(highlightId: string): Promise<ManualAttachCandidate[]> {
+  const r = await api<{ candidates?: ManualAttachCandidate[] }>(
+    `/highlights/${encodeURIComponent(highlightId)}/attach-candidates`
+  );
+  return r?.candidates ?? [];
+}
+
+/** Attach one same-job decided window to the moment as a manual alternative.
+ * The write is a pointer swap over the window's own already-cut clip: no
+ * re-cut, no GPU, no new highlight row. */
+export async function attachAlternativeWindow(highlightId: string, windowId: string): Promise<void> {
+  await api(`/highlights/${encodeURIComponent(highlightId)}/alternatives/attach`, { body: { windowId } });
+}
+
+/** Clear a MANUAL attach — the window returns to its pre-attach shape and, when
+ * it was being served, the moment falls back to its own original cut. */
+export async function detachAlternativeWindow(highlightId: string, windowId: string): Promise<void> {
+  await api(`/highlights/${encodeURIComponent(highlightId)}/alternatives/detach`, { body: { windowId } });
+}
+
+/**
  * ADAAAA-7915 (increment 3): the RAW highlight audit rows for one job.
  *
  * `fetchJobDetail` cannot answer "which clips did I reject?" — its `highlights`
