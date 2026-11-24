@@ -1,14 +1,21 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { rm, readdir } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { LiveIngest } from "../src/live";
 
-const dataDir = path.join(tmpdir(), "hl-live-test");
+// This file owns exactly one `mkdtemp` leaf under `os.tmpdir()` and removes only
+// that leaf. It must never `rm` `os.tmpdir()` itself: vitest runs files in
+// parallel workers that keep their own fixtures in the same TMPDIR, so a
+// suite-wide wipe makes sibling files red mid-test with
+// `ENOENT .../hl-test-*/test.mp4` / `ffmpeg: Error opening input` / an empty
+// clipUri (ADAAAA-9399).
+const root = mkdtempSync(path.join(tmpdir(), "hl-live-"));
+const dataDir = path.join(root, "data");
 // Source lives OUTSIDE dataDir (tests delete dataDir between cases).
-const src = path.join(tmpdir(), "hl-live-src.mp4");
+const src = path.join(root, "hl-live-src.mp4");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function cfg() {
@@ -23,7 +30,7 @@ function cfg() {
 }
 
 beforeAll(() => {
-  mkdirSync(path.dirname(src), { recursive: true });
+  mkdirSync(root, { recursive: true });
   execFileSync("ffmpeg", [
     "-y",
     "-f", "lavfi", "-i", "testsrc=duration=6:size=160x90:rate=10",
@@ -34,7 +41,7 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
-  await rm(dataDir, { recursive: true, force: true });
+  await rm(root, { recursive: true, force: true });
 });
 
 describe("LiveIngest", () => {
@@ -107,10 +114,14 @@ describe("LiveIngest", () => {
     // in-flight batch (at most the frames already on disk), not the whole
     // directory.
     await rm(dataDir, { recursive: true, force: true });
+    // Only this file's own `root` leaf is removed (see the module header above):
+    // the old code did `rm(path.dirname(src))` where `src` sat directly in
+    // `os.tmpdir()`, i.e. an `rm -rf` of the shared TMPDIR. The long source needs
+    // a freshly-created directory to be written into, so recreate the leaf.
     // A longer source so the buffered batch has meaningful size; 0.5s sample
     // over 40s of capture = ~80 frames by the time we stop.
-    await rm(path.dirname(src), { recursive: true, force: true });
-    mkdirSync(path.dirname(src), { recursive: true });
+    await rm(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
     execFileSync("ffmpeg", [
       "-y",
       "-f", "lavfi", "-i", "testsrc=duration=40:size=160x90:rate=10",
