@@ -130,6 +130,14 @@ describe("DirectAdapter.postAudio (server -> perceive /audio client)", () => {
     await expect(adapter.postAudio("sess-1", { seq: 0, timestamp: 0, samples: "AA" })).resolves.toEqual({
       candidate: null,
       series: [],
+      // ADAAAA-7707: the Stage-B whistle block rides every 2xx /audio response
+      // and DirectAdapter sets it to `body?.whistle ?? null`
+      // (services/server/src/livepeer-adapter.ts postAudio), so "no whistle" is
+      // an explicit null, not a missing key: docs/audio-trigger-contract.md —
+      // "The `whistle` block is returned in both cases, so the response stays
+      // [shape-stable]". Pinned exactly (not toMatchObject) so a regression that
+      // drops the key or emits a bogus block still fails.
+      whistle: null,
     });
   });
 

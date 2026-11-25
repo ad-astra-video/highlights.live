@@ -90,7 +90,12 @@ describe("DELETE /jobs/:id (ADAAAA-6838)", () => {
     const adapter = fakePipeline();
     const origStop = adapter.stopPerceive.bind(adapter);
     adapter.stopPerceive = async (sid: string) => { stopCalls++; return origStop(sid); };
-    const { app, store } = await buildTestApp({}, { adapter });
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (analyzer.ts:11961 gates the ObserveDecider
+    // on cfg.observeLoop; config.ts:1262 reads OBSERVE_LOOP, default off), so
+    // without it every file job finishes `done` with zero highlights.
+    const { app, store } = await buildTestApp({ OBSERVE_LOOP: "1" }, { adapter });
     const token = await register(app, "del-owner@test.dev", "password123");
     const otherToken = await register(app, "del-other@test.dev", "password123");
     const adminToken = await login(app, "admin@test.local", "adminpass");

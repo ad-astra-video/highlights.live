@@ -227,10 +227,9 @@ describe("LiveDecideAdmission in-flight depth sharing (ADAAAA-7771)", () => {
     expect(observer.currentDepthBudget()).toBe(1);
   });
 
-  it("(g) LiveObserver: depth budget 1 runs the staged pair INLINE — the serial pass, no pending queue", async () => {
+  it("(g) LiveObserver: depth budget 1 keeps the staged pass SERIAL — one decide in flight, no queued second window", async () => {
     const decided: number[] = [];
     const accepted: number[] = [];
-    let pendingAfterFire = 0;
     const observer = new LiveObserver({
       cadenceS: 3,
       windowS: 10,
@@ -250,14 +249,31 @@ describe("LiveDecideAdmission in-flight depth sharing (ADAAAA-7771)", () => {
     });
     observer.record(0, "f0", seed(0));
     await observer.maybeFire(0, false, 0);
-    // The decide finished inside maybeFire (serial semantics)...
+    // ADAAAA-7878: the staged pair is ISSUED and NOT awaited even at a depth
+    // budget of 1 — that inline await is exactly the ingest stall the task
+    // removed. So the decide has STARTED, the verdict is not applied yet, and
+    // the window sits on the pending queue.
     expect(decided).toEqual([0]);
-    expect(accepted).toEqual([0]);
-    expect(observer.decideCalls()).toBe(1);
-    expect(observer.pendingApplyCount()).toBe(0);
-    // ...and nothing is left outstanding for the read path.
+    expect(accepted).toEqual([]);
+    expect(observer.inFlightDepth()).toBe(1);
+    expect(observer.pendingApplyCount()).toBe(1);
+    // The depth-1 budget is still the SERIAL bound: a second cadence tick while
+    // that one decide is outstanding is refused as backpressure, so no second
+    // window is ever decided concurrently (a budget-ignoring regression fails
+    // here with decided [0, 3] and depth 2).
+    observer.record(3, "f3", seed(3));
+    expect(await observer.maybeFire(3, false, 0)).toBe(false);
+    expect(decided).toEqual([0]);
+    expect(observer.backpressureSkipCount()).toBe(1);
+    expect(observer.inFlightDepth()).toBe(1);
+    expect(observer.maxInFlightDepth()).toBe(1);
+    // flush() drains the outstanding window, then the end-of-stream tail fire
+    // decides the newest frame: both applied in CONTENT order, once each.
     await observer.flush();
-    pendingAfterFire = observer.pendingApplyCount();
-    expect(pendingAfterFire).toBe(0);
+    expect(accepted).toEqual([0, 3]);
+    expect(observer.decideCalls()).toBe(2);
+    const pendingAfterFlush = observer.pendingApplyCount();
+    expect(pendingAfterFlush).toBe(0);
+    expect(observer.inFlightDepth()).toBe(0);
   });
 });

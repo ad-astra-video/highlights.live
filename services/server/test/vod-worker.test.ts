@@ -28,7 +28,15 @@ async function register(app: any, email: string, pw: string) {
 
 describe("durable VOD worker (ADAAAA-6873)", () => {
   it("submits non-blocking (202) and drives the job through the state machine with monotonic progress", async () => {
-    const { app } = await buildTestApp();
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (`analyzer.ts` builds the ObserveDecider
+    // only when cfg.observeLoop && cfg.decideWindowN !== undefined;
+    // observeLoop = OBSERVE_LOOP === "1", default off — config.ts:1262). The
+    // shipped observer decides one window per ~3 s cadence tick plus the
+    // end-of-stream tail window, so the fake pipeline's decide()=true yields one
+    // accepted highlight per decided window.
+    const { app } = await buildTestApp({ OBSERVE_LOOP: "1" });
     const token = await register(app, "worker@test.dev", "password123");
 
     const res = await app.inject({
@@ -67,9 +75,13 @@ describe("durable VOD worker (ADAAAA-6873)", () => {
     expect(body.progress.framesTotal).toBeGreaterThanOrEqual(body.progress.framesAnalyzed);
     expect(body.progress.framesPct).toBeGreaterThan(0);
     expect(body.progress.framesPct).toBeLessThanOrEqual(100);
-    // The fake pipeline produces exactly one highlight -> visible + counted.
-    expect(body.progress.highlightsFound).toBe(1);
-    expect(body.highlights.length).toBe(1);
+    // The fake pipeline accepts EVERY decided window, so the job's counter and
+    // the returned set agree row-for-row: the invariant the counter exists for
+    // (ADAAAA-7118: highlightsFound == the persisted count) rather than the old
+    // pre-observer "exactly one candidate -> exactly one highlight" literal.
+    expect(body.progress.highlightsFound).toBeGreaterThanOrEqual(1);
+    expect(body.progress.highlightsFound).toBe(body.highlights.length);
+    expect(body.highlights.length).toBeGreaterThanOrEqual(1);
     expect(body.job.startedAt).toBeTruthy();
     expect(body.job.finishedAt).toBeTruthy();
 

@@ -51,6 +51,15 @@ class FakeOrch {
     return 200;
   }
   async readObservation(_p: ProvisionedSession, seq: number) {
+    // ADAAAA-8004 (cb20e403): the media node tails the events-out live edge
+    // (`GET {events-out}/-1` = newest observation) rather than reading one index
+    // per frame, so the fake has to answer that request too — otherwise every
+    // frame expires and no observe callback is ever posted.
+    if (seq === -1) {
+      let newest: number | undefined;
+      for (const k of this.obsBySeq.keys()) if (newest === undefined || k > newest) newest = k;
+      return newest === undefined ? null : this.obsBySeq.get(newest) ?? null;
+    }
     return this.obsBySeq.get(seq) ?? null;
   }
   async releaseSession() {}

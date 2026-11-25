@@ -156,12 +156,20 @@ describe("VOD file job stop/cancel route (ADAAAA-6625)", () => {
     expect(adapter.state.current).toBeNull();
     expect(adapter.state.stopCount).toBeGreaterThanOrEqual(1);
 
-    // Job row: terminal, no error, no stale non-terminal status — in the record
-    // AND in the durable `jobs.status` column.
+    // Job row: terminal, and no PIPELINE failure leaked onto the cancelled row.
+    // ADAAAA-8061 (2446b317) made every stop settle through the ONE terminal
+    // accounting shape (job-settlement.ts:336 / api.ts:7838 markJobCancelled),
+    // which records the STOP REASON in `error` — "stopped (cancelled via API)".
+    // A cancelled row therefore carries that text, never a real failure: the
+    // row must still read `cancelled` (not `failed`) and the error must name the
+    // operator stop. The old `toBeUndefined()` encoded the pre-8061 row shape.
     const body = await getJob(t.app, jobId, token);
     expect(body.job.status).toBe("cancelled");
     expect(body.job.stage).toBe("cancelled");
-    expect(body.job.error).toBeUndefined();
+    // The stop reason, verbatim (api.ts stop route -> markJobCancelled ->
+    // job-settlement.ts error field). A pipeline failure would carry a different
+    // text and is exactly what this assertion must catch.
+    expect(body.job.error).toBe("stopped (cancelled via API)");
     expect(body.job.finishedAt).toBeTruthy();
     expect(rawStatus(t.db, jobId)).toBe("cancelled");
     const liveRows = (t.db as any).db

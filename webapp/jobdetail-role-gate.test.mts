@@ -36,13 +36,24 @@ describe("job detail threads the session role into every leaking surface (ADAAAA
     expect(source).toContain("sections={detail.sections}");
     // The operator toolbar (filter chips + search + select/enlarge) is the
     // `{admin ? (` arm of the Analysis section; the customer projection is the
-    // `) : (` arm after it.
+    // `) : (` arm after it. Located structurally, not by a fixed character
+    // window: ADAAAA-8425's WindowSkipAuditPanel pushed the else arm past the
+    // old 6000-char slice. The assertion is still the same contract — the
+    // customer section IS the else arm, with only whitespace between the arm
+    // and the component — so it fails if the else arm or the projection is
+    // removed, or if the projection is moved inside the admin branch.
     const sectionIdx = source.indexOf("data-analysis-section");
     expect(sectionIdx).toBeGreaterThan(-1);
-    const branch = source.slice(sectionIdx, sectionIdx + 6000);
-    expect(branch).toContain("{admin ? (");
-    expect(branch).toContain(") : (");
-    expect(branch.indexOf("{admin ? (")).toBeLessThan(branch.indexOf(") : ("));
+    const adminIdx = source.indexOf("{admin ? (", sectionIdx);
+    expect(adminIdx, "the admin Analysis arm is missing").toBeGreaterThan(-1);
+    const customerIdx = source.indexOf("<CustomerAnalysisSection", adminIdx);
+    expect(customerIdx, "the customer Analysis projection is missing").toBeGreaterThan(adminIdx);
+    const branch = source.slice(adminIdx, customerIdx);
+    // The LAST `) : (` before the projection is the else arm that opens it (an
+    // earlier one belongs to the nested `inspect ? … : …` ternary).
+    const elseArm = branch.lastIndexOf(") : (");
+    expect(elseArm, "the customer projection is not the `) : (` else arm").toBeGreaterThan(-1);
+    expect(branch.slice(elseArm + ") : (".length).trim(), "the else arm must immediately precede the customer section").toBe("");
   });
 
   it("keeps the rejected rows and the decide audit honest about their role", () => {

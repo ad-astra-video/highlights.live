@@ -42,7 +42,14 @@ async function register(app: any, email: string, pw: string) {
 
 describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () => {
   it("register -> login -> run auth'd job -> review own highlight as user", async () => {
-    const { app, cfg } = await buildTestApp();
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (analyzer.ts:11961 gates the ObserveDecider
+    // on cfg.observeLoop; config.ts:1262 reads OBSERVE_LOOP, default off), so
+    // without it a file job finishes `done` with ZERO highlights. The observer
+    // decides one window per ~3 s cadence tick plus the end-of-stream tail
+    // window, so the fake decide()=true yields one accepted clip per window.
+    const { app, cfg } = await buildTestApp({ OBSERVE_LOOP: "1" });
     const userToken = await register(app, "a@test.dev", "password123");
     const login = await app.inject({ method: "POST", url: "/auth/login", payload: { email: "a@test.dev", password: "password123" } });
     expect(login.statusCode).toBe(200);
@@ -65,10 +72,19 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     expect(done.job.status).toBe("done");
     expect(done.job.framesAnalyzed).toBeGreaterThan(0);
 
-    // user sees their highlights
+    // user sees their highlights (one row per decided window, all from THIS job;
+    // the exact window count is a function of clip length + cadence, so the
+    // invariant is "at least one, every row mine and from this job").
     const hl = await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } });
     const myhl = hl.json().highlights;
-    expect(myhl.length).toBe(1);
+    expect(myhl.length).toBeGreaterThanOrEqual(1);
+    // The route must report exactly what the job counted (a lost or doubled row
+    // fails here even though the window count itself is fixture-dependent).
+    expect(myhl.length).toBe(done.job.highlightsFound);
+    for (const h of myhl) {
+      expect(h.jobId).toBe(body.job.id);
+      expect(h.ownerId).toBe(body.job.ownerId);
+    }
     expect(myhl[0].score).toBe(86);
 
     const clipFile = path.join(cfg.dataDir, "clips", path.basename(myhl[0].clipUri));
@@ -128,7 +144,14 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
   });
 
   it("reject releases the clip-count slot; only accepted clips consume the limit (idempotent)", async () => {
-    const { app } = await buildTestApp({ BETA_CLIP_QUOTA: "10" });
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (analyzer.ts:11961 gates the ObserveDecider
+    // on cfg.observeLoop; config.ts:1262 reads OBSERVE_LOOP, default off), so
+    // without it a file job finishes `done` with ZERO highlights. The observer
+    // decides one window per ~3 s cadence tick plus the end-of-stream tail
+    // window, so the fake decide()=true yields one accepted clip per window.
+    const { app } = await buildTestApp({ OBSERVE_LOOP: "1", BETA_CLIP_QUOTA: "10" });
     const userToken = await register(app, "quota-rej@test.dev", "password123");
 
     // A generated highlight debits the quota once.
@@ -143,7 +166,7 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     // ADAAAA-6760: wait for the background pipeline so the clip is persisted.
     await waitForJob(app, gen.json().job.id, userToken);
     const myhl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } })).json().highlights;
-    expect(myhl.length).toBe(1);
+    expect(myhl.length).toBeGreaterThanOrEqual(1);
 
     const status = async () => (await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${userToken}` } })).json();
     expect((await status()).clipQuotaUsed).toBe(1);
@@ -217,7 +240,14 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
   });
 
   it("closed-beta auto-publish: a generated clip shows in /feed with no admin review (default ON)", async () => {
-    const { app } = await buildTestApp(); // AUTO_PUBLISH_HIGHLIGHTS unset -> default true
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (analyzer.ts:11961 gates the ObserveDecider
+    // on cfg.observeLoop; config.ts:1262 reads OBSERVE_LOOP, default off), so
+    // without it a file job finishes `done` with ZERO highlights. The observer
+    // decides one window per ~3 s cadence tick plus the end-of-stream tail
+    // window, so the fake decide()=true yields one accepted clip per window.
+    const { app } = await buildTestApp({ OBSERVE_LOOP: "1" }); // AUTO_PUBLISH_HIGHLIGHTS unset -> default true
     const userToken = await register(app, "ap@test.dev", "password123");
     const res = await app.inject({
       method: "POST",
@@ -236,8 +266,13 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     const feed = await app.inject({ method: "GET", url: "/feed" });
     expect(feed.statusCode).toBe(200);
     const hl = feed.json().highlights;
-    expect(hl.length).toBe(1);
-    expect(hl[0].status).toBe("accepted");
+    // Everything the job decided is published with no review; assert the set
+    // invariant (all accepted, all this job) rather than a fixed window count.
+    expect(hl.length).toBeGreaterThanOrEqual(1);
+    for (const h of hl) {
+      expect(h.status).toBe("accepted");
+      expect(h.jobId).toBe(jobBody.job.id);
+    }
     // ADAAAA-7901: the public feed no longer publishes account identities
     // (ownerId/exportedBy) — the clip id is the public handle. The owner-scoped
     // `/highlights` route still carries ownerId for the authenticated caller.
@@ -247,7 +282,14 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
   });
 
   it("AUTO_PUBLISH_HIGHLIGHTS=0 keeps generated clips pending (not in /feed until admin review)", async () => {
-    const { app } = await buildTestApp({ AUTO_PUBLISH_HIGHLIGHTS: "0" });
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (analyzer.ts:11961 gates the ObserveDecider
+    // on cfg.observeLoop; config.ts:1262 reads OBSERVE_LOOP, default off), so
+    // without it a file job finishes `done` with ZERO highlights. The observer
+    // decides one window per ~3 s cadence tick plus the end-of-stream tail
+    // window, so the fake decide()=true yields one accepted clip per window.
+    const { app } = await buildTestApp({ AUTO_PUBLISH_HIGHLIGHTS: "0", OBSERVE_LOOP: "1" });
     const userToken = await register(app, "ap0@test.dev", "password123");
     const res = await app.inject({
       method: "POST",
@@ -265,7 +307,9 @@ describe("API end-to-end (auth + billing gated, real ffmpeg, fake runners)", () 
     expect(feed.json().highlights.length).toBe(0); // not published without review
 
     const mine = await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${userToken}` } });
-    expect(mine.json().highlights[0].status).toBe("pending");
+    expect(mine.json().highlights.length).toBeGreaterThanOrEqual(1);
+    // Every generated clip waits in `pending` — none is published unreviewed.
+    expect(mine.json().highlights.every((h: any) => h.status === "pending")).toBe(true);
     await app.close();
   });
 
@@ -1206,7 +1250,14 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
   }
 
   it("valid small upload -> job created + standard VOD pipeline runs", async () => {
-    const { app, cfg } = await buildTestApp();
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (analyzer.ts:11961 gates the ObserveDecider
+    // on cfg.observeLoop; config.ts:1262 reads OBSERVE_LOOP, default off), so
+    // without it a file job finishes `done` with ZERO highlights. The observer
+    // decides one window per ~3 s cadence tick plus the end-of-stream tail
+    // window, so the fake decide()=true yields one accepted clip per window.
+    const { app, cfg } = await buildTestApp({ OBSERVE_LOOP: "1" });
     const token = await register(app, "up@test.dev", "password123");
     const { payload, contentType } = await multipart({
       fields: { gameHint: "valorant" },
@@ -1233,9 +1284,12 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
     const done = await waitForJob(app, body.job.id, token);
     expect(done.job.status).toBe("done");
     expect(done.job.framesAnalyzed).toBeGreaterThan(0);
-    // Generated a highlight through the same pipeline as a local path source.
+    // Generated highlights through the same pipeline as a local path source
+    // (one clip per decided window, all from this upload's job).
     const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } })).json().highlights;
-    expect(hl.length).toBe(1);
+    expect(hl.length).toBeGreaterThanOrEqual(1);
+    expect(hl.length).toBe(done.job.highlightsFound);
+    expect(hl.every((h: any) => h.jobId === body.job.id)).toBe(true);
     expect(hl[0].score).toBe(86);
     await app.close();
   });
@@ -1409,7 +1463,18 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
       "-y", "-f", "lavfi", "-i", "testsrc=duration=12:size=320x180:rate=4",
       "-pix_fmt", "yuv420p", winPath,
     ]);
-    const { app, cfg } = await buildTestApp({ CLIP_BEFORE_S: "2", CLIP_AFTER_S: "3" });
+    // OBSERVE_LOOP=1 -> the observe loop decides (see the block above).
+    // CLIP_WINDOW_MIN_SEC=5: since ADAAAA-7232 (bd0e796a) `clipWindow` enforces a
+    // 15 s delivery floor by padding the AFTER side (`config.ts:1418`), so a
+    // 2 s + 3 s roll pair alone would deliver 15 s and the rolls could not be
+    // observed. Lowering the floor to the rolled span keeps this test's subject
+    // (the trim uses event ± roll, not the sampled segment) exact.
+    const { app, cfg } = await buildTestApp({
+      OBSERVE_LOOP: "1",
+      CLIP_BEFORE_S: "2",
+      CLIP_AFTER_S: "3",
+      CLIP_WINDOW_MIN_SEC: "5",
+    });
     const token = await register(app, "w@test.dev", "password123");
     const res = await app.inject({
       method: "POST", url: "/jobs",
@@ -1425,7 +1490,12 @@ describe("VOD browser upload (multipart POST /jobs/upload)", () => {
       method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` },
     })).json().highlights;
     expect(hl.length).toBeGreaterThan(0);
-    // The recorded window is the event +/- the configured rolls (5s total).
+    // EVERY delivered window is the event +/- the configured rolls (5 s total,
+    // the floor above), never the 12 s sampled segment.
+    for (const h of hl) {
+      expect(h.end - h.start).toBeLessThanOrEqual(5.01);
+      expect(h.end - h.start).toBeGreaterThan(0);
+    }
     expect(hl[0].end - hl[0].start).toBeLessThanOrEqual(5.01);
     expect(hl[0].end - hl[0].start).toBeGreaterThan(0);
     const clipFile = path.join(cfg.dataDir, "clips", path.basename(hl[0].clipUri));
@@ -1473,7 +1543,8 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
   }
 
   it("init -> N chunks -> complete reassembles byte-for-byte and runs the pipeline", async () => {
-    const { app, cfg } = await buildTestApp({ VOD_CHUNK_BYTES: "4096" });
+    // OBSERVE_LOOP=1 -> the observe loop decides (see the block above).
+    const { app, cfg } = await buildTestApp({ OBSERVE_LOOP: "1", VOD_CHUNK_BYTES: "4096" });
     const token = await register(app, "chunk@test.dev", "password123");
     const sent = readFileSync(videoPath);
     const init = await app.inject({
@@ -1518,9 +1589,11 @@ describe("VOD resumable/chunked upload rail (init/chunk/complete, ADAAAA-5714)",
     const stored = path.join(cfg.dataDir, "uploads", uploadId, "chunked clip.mp4");
     expect(statSync(stored).size).toBe(sent.length);
 
-    // Poll the job to done (background pipeline), then the highlight shows up.
+    // Poll the job to done (background pipeline), then the highlights show up —
+    // one row per decided window, all from the reassembled upload.
     const hl = await waitUntilJobDone(app, uploadId, token);
-    expect(hl.length).toBe(1);
+    expect(hl.length).toBeGreaterThanOrEqual(1);
+    expect(hl.every((h: any) => h.jobId === uploadId)).toBe(true);
     await app.close();
   });
 

@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildTestApp, waitForJob } from "./helpers";
+import { quotaMomentCount } from "../src/highlight-postable";
 
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-ent-"));
 const videoPath = path.join(tmp, "test.mp4");
@@ -112,14 +113,23 @@ describe("per-user monthly clip quota (entitlement ledger)", () => {
   });
 
   it("a clip generated successfully debits the quota exactly once; a failed run debits nothing", async () => {
-    const { app, db } = await buildTestApp({ BETA_CLIP_QUOTA: "10", FREE_HIGHLIGHTS: "100" });
+    // OBSERVE_LOOP=1 mirrors the deployed VOD decide path: since 4caf0b7b
+    // (ADAAAA-7008) removed the candidate-gated VOD decide, a VOD job decides
+    // ONLY through the observe loop (analyzer.ts:11961 + config.ts:1262), so
+    // without it the job finishes `done` with zero highlights and debits nothing.
+    const { app, db, store } = await buildTestApp({ OBSERVE_LOOP: "1", BETA_CLIP_QUOTA: "10", FREE_HIGHLIGHTS: "100" });
     const r = await register(app, "meter@test.dev", "password123");
     const token = r.json().token as string;
     const userId = (await db.getUserByEmail("meter@test.dev"))!.id;
     const s0 = await app.inject({ method: "GET", url: "/billing/status", headers: { authorization: `Bearer ${token}` } });
     const period = s0.json().clipQuotaPeriod as string;
 
-    // Real VOD job (fake pipeline) -> exactly one successful highlight -> 1 debit.
+    // Real VOD job (fake pipeline) -> the observe loop accepts at least one
+    // highlight, and the ledger debits ONE slot per postable MOMENT (ADAAAA-7854:
+    // persistLiveHighlight -> quotaDeltaForInsert -> quotaMomentCount collapses
+    // overlapping clip windows, so two decided windows over the same footage
+    // still charge the customer once). Assert that invariant, not the old
+    // pre-observer "one candidate -> exactly 1" literal.
     const ok = await app.inject({
       method: "POST",
       url: "/jobs",
@@ -130,8 +140,11 @@ describe("per-user monthly clip quota (entitlement ledger)", () => {
     expect(ok.json().accepted).toBe(true);
     // ADAAAA-6760: the job is dispatched fire-and-forget; wait for it to finish
     // before the decision-time quota debit is asserted.
-    await waitForJob(app, ok.json().job.id, token);
-    expect((await db.getQuota(userId, period)).valueOf()).toBe(1);
+    const okDone = await waitForJob(app, ok.json().job.id, token);
+    expect(okDone.job.status).toBe("done");
+    const moments = quotaMomentCount(store.highlightsForJob(okDone.job.id));
+    expect(moments).toBeGreaterThanOrEqual(1);
+    expect((await db.getQuota(userId, period)).valueOf()).toBe(moments);
 
     // A failing job never created a highlight -> it debits nothing (no double-decrement).
     const fail = await app.inject({
@@ -146,7 +159,7 @@ describe("per-user monthly clip quota (entitlement ledger)", () => {
     expect(fail.json().accepted).toBe(true);
     const failed = await waitForJob(app, fail.json().job.id, token);
     expect(failed.job.status).toBe("failed");
-    expect((await db.getQuota(userId, period)).valueOf()).toBe(1);
+    expect((await db.getQuota(userId, period)).valueOf()).toBe(moments);
     await app.close();
   });
 });

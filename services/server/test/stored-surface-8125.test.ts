@@ -20,6 +20,7 @@ import {
   gateGoalClaims,
   gateQuietWindow,
   hasGoalClaim,
+  quietStoredCopy,
   servedShapeViolations,
   stripInternalTokens,
   wholeStoredSentence,
@@ -165,8 +166,20 @@ describe("ADAAAA-8125 AC3 — rows that already carried copy are byte-identical"
 
 describe("ADAAAA-8125 clause 3 — no honest sentence stores nothing, the row survives", () => {
   it("a window with no honest quiet sentence stores no copy (and no placeholder)", () => {
-    const raw = `Crowd erupts in celebration as the scoreboard shows a goal for FCB. ${TAIL_V8}`;
-    const surface = storedSurfaceFor(row(raw, "BIG_PLAY", "big_play"), verdictCtx("big_play", "BIG_PLAY", false));
+    // ADAAAA-8130 (00e70988) taught the seam to serve the row's own LEADING
+    // clause as the quiet beat — it turned this file's original fixture
+    // (`Crowd erupts in celebration as the scoreboard shows a goal for FCB.`)
+    // into an honest sentence (`Crowd erupts in celebration.`, pinned in
+    // caption-grounding-8130 and caption-grounding-8125). Clause 3 is still the
+    // contract for a window that has NO such sentence, so the fixture is now a
+    // bare score frame whose only beat is a goal claim with no honest verb: the
+    // quiet shape overruns the 8-word budget, every extractive beat carries the
+    // claim or the ledger clock, so nothing may be stored.
+    const raw = `The scoreboard reads 2-1 for FCB and the commentator announces the goal. ${TAIL_V8}`;
+    const ctx = verdictCtx("big_play", "BIG_PLAY", false);
+    // The premise, from the product's own derivation: there is no honest copy.
+    expect(quietStoredCopy(raw, ctx)).toBe("");
+    const surface = storedSurfaceFor(row(raw, "BIG_PLAY", "big_play"), ctx);
     expect(surface.reason).toBeUndefined();
     expect(surface.caption).toBeUndefined();
     expect(surface.cardTitles).toBeUndefined();

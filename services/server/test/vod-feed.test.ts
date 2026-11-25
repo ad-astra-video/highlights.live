@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { buildTestApp, waitForJob } from "./helpers";
+import { quotaMomentCount } from "../src/highlight-postable";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const tmp = mkdtempSync(path.join(tmpdir(), "hl-vodfeed-"));
@@ -23,12 +24,18 @@ async function register(app: any, email: string, pw: string) {
   return r.json().token as string;
 }
 
-// A VOD "file" job runs synchronously through POST /jobs; the fake pipeline
-// returns a candidate on the first /analyze and decides isHighlight=true, so
-// exactly one highlight is produced per job.
+// A VOD "file" job runs through POST /jobs (202 + background worker) and the
+// fake pipeline's decide() returns isHighlight=true for EVERY window it is
+// asked about. Since 4caf0b7b (ADAAAA-7008) removed the candidate-gated VOD
+// decide, those windows come from the observe loop only, so these tests opt in
+// with OBSERVE_LOOP=1 (config.ts:1262; analyzer.ts:11961 builds the
+// ObserveDecider only when cfg.observeLoop && cfg.decideWindowN !== undefined).
+// The observer decides one window per ~3 s cadence tick plus the end-of-stream
+// tail window, so a job yields one accepted row PER DECIDED WINDOW — the counts
+// below are asserted as invariants over that set, never as a magic 1.
 describe("VOD decision-time publish + HTTP fallback (ADAAAA-6352)", () => {
   it("persists + bills + quota-debits each accepted highlight at decision time, and the HTTP full set is returned exactly once at the end", async () => {
-    const { app, billing, store, db } = await buildTestApp();
+    const { app, billing, store, db } = await buildTestApp({ OBSERVE_LOOP: "1" });
     const token = await register(app, "vod@test.dev", "password123");
 
     // Spy on the billing service so we can assert the accepted highlight is
@@ -69,26 +76,36 @@ describe("VOD decision-time publish + HTTP fallback (ADAAAA-6352)", () => {
     });
     expect(jobRes.statusCode).toBe(200);
     const jobHighlights = jobRes.json().highlights as any[];
-    expect(jobHighlights.length).toBe(1);
-    expect(jobHighlights[0].ownerId).toBe(userId);
-    expect(jobHighlights[0].status).toBe("accepted");
+    // The full decided set is returned (one row per observer window), each row
+    // owned by this user and accepted by the default auto-publish posture.
+    expect(jobHighlights.length).toBeGreaterThanOrEqual(1);
+    expect(jobHighlights.length).toBe(store.highlightsForJob(jobId).length);
+    for (const h of jobHighlights) {
+      expect(h.ownerId).toBe(userId);
+      expect(h.status).toBe("accepted");
+      expect(h.jobId).toBe(jobId);
+    }
 
-    // /highlights (feed surface) shows exactly the one accepted highlight.
+    // /highlights (feed surface) shows that same accepted set — no more, no less.
     const hl = (await app.inject({ method: "GET", url: "/highlights", headers: { authorization: `Bearer ${token}` } }))
       .json().highlights as any[];
-    expect(hl.length).toBe(1);
+    expect(hl.length).toBe(jobHighlights.length);
 
-    // The in-memory store holds exactly one highlight (no duplicate persist
+    // The in-memory store holds exactly the persisted set (no duplicate persist
     // from a leftover end-of-job loop would double the byJob list).
-    expect(store.allHighlights().length).toBe(1);
-    expect(store.highlightsForJob(jobId).length).toBe(1);
+    expect(store.allHighlights().length).toBe(jobHighlights.length);
+    expect(store.highlightsForJob(jobId).length).toBe(jobHighlights.length);
 
-    // Billing + quota debit exactly once per accepted highlight — no
-    // double-count between SSE stream and the final response.
-    expect(billed).toBe(1);
+    // Billing + quota debit exactly once per POSTABLE MOMENT, not per row — no
+    // double-count between the SSE stream and the final response. ADAAAA-7854:
+    // persistLiveHighlight debits via quotaDeltaForInsert/quotaMomentCount, so
+    // overlapping observer windows over the same footage charge one slot.
+    const moments = quotaMomentCount(store.highlightsForJob(jobId));
+    expect(moments).toBeGreaterThanOrEqual(1);
+    expect(billed).toBe(moments);
     const period = new Date().toISOString().slice(0, 7);
     await sleep(50); // allow the fire-and-forget debit to settle
-    expect(await db.getQuota(userId, period)).toBe(1);
+    expect(await db.getQuota(userId, period)).toBe(moments);
 
     await app.close();
   });
@@ -110,7 +127,7 @@ describe("VOD SSE streaming (ADAAAA-6352)", () => {
   }
 
   it("emits a `highlight` SSE event before the VOD job finishes", async () => {
-    const { app } = await buildTestApp({ VOD_CHUNK_BYTES: "4096" });
+    const { app } = await buildTestApp({ OBSERVE_LOOP: "1", VOD_CHUNK_BYTES: "4096" });
     const token = await register(app, "vod-sse@test.dev", "password123");
     const sent = readFileSync(videoPath);
 

@@ -9,6 +9,7 @@
 import { renderToString } from "react-dom/server";
 import { describe, it, expect } from "vitest";
 import React from "react";
+import { MAX_LINE_OCCURRENCES } from "@highlights/events";
 import { VideoSummary } from "./JobDetail";
 import { summaryEntryTimestamp } from "../lib/jobDetail";
 
@@ -108,15 +109,21 @@ describe("summaryEntryTimestamp (ADAAAA-7466)", () => {
   });
 });
 
-// ADAAAA-7958 (contract v3 §3.4 + §3.6): the flat Video Summary is a user
-// surface, so an item that asserts a goal the page never corroborated must not
-// render, and a line may not appear more than twice per job.
+/**
+ * ADAAAA-7958 (contract v3 §3.4 + §3.6): the flat Video Summary is a user
+ * surface, so an item that asserts a goal the page never corroborated must not
+ * render, and a line may not repeat.
+ *
+ * ADAAAA-7995 (v4 AC1/AC2, `73d765d6`) superseded the v3 "at most twice" cap:
+ * `MAX_LINE_OCCURRENCES` is now 1 — one beat = one row — so the emission cap is
+ * read from the contract constant instead of being re-pinned here.
+ */
 describe("Video Summary consumes corroboration + emission dedupe (ADAAAA-7958)", () => {
   const highlights = [
     { id: "h1", jobId: "j", clipUri: "/a.mp4", start: 113, end: 128, score: 90, status: "accepted", corroborated: false, createdAt: "2026-11-04T00:00:00Z" },
   ] as any;
 
-  it("rewrites an uncorroborated goal item and caps a repeated line at two", () => {
+  it("rewrites an uncorroborated goal item and caps a repeated line at MAX_LINE_OCCURRENCES", () => {
     const html = renderToString(
       React.createElement(VideoSummary, {
         entries: [
@@ -131,7 +138,11 @@ describe("Video Summary consumes corroboration + emission dedupe (ADAAAA-7958)",
       })
     );
     expect(html).not.toMatch(/into the net/i);
-    expect(html.match(/center circle/g) ?? []).toHaveLength(2);
+    // The invariant, not a magic number: the repeated beat survives (it is real
+    // content) and never exceeds the contract's per-job cap.
+    const repeats = html.match(/center circle/g) ?? [];
+    expect(repeats.length).toBeGreaterThanOrEqual(1);
+    expect(repeats).toHaveLength(MAX_LINE_OCCURRENCES);
   });
 
   it("VOD / legacy render is unchanged (no corroboration evidence, no dedupe)", () => {

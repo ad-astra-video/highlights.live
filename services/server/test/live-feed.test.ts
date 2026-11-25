@@ -79,7 +79,13 @@ describe("live highlight feed streaming end-to-end (ADAAAA-5777)", () => {
   afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
   it("persists + publishes each accepted highlight at decision time — visible in feed BEFORE the live session is stopped", async () => {
-    const { app } = await buildTestApp();
+    // ADAAAA-9406: LIVE_OBSERVE_LOOP=1 mirrors the deployed live decide path.
+    // Since 4caf0b7b (ADAAAA-7008) removed the candidate-gated decide, a live
+    // pass decides ONLY through the LiveObserver (`analyzer.ts` builds it when
+    // cfg.liveObserveLoop is on; config.ts reads LIVE_OBSERVE_LOOP, default
+    // off), so with the env unset this job accepted nothing and the poll below
+    // burned its whole budget.
+    const { app } = await buildTestApp({ LIVE_OBSERVE_LOOP: "1" });
     const reg = await app.inject({
       method: "POST",
       url: "/auth/register",

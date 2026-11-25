@@ -9861,12 +9861,36 @@ const CACHE_REVALIDATE = "no-cache";
 /** A content-hashed asset URL pins its bytes, so it may be cached forever. */
 const CACHE_IMMUTABLE_ASSET = "public, max-age=31536000, immutable";
 
-/** Vite content-hash shape: `assets/index-CNBH-rmM.js`, `assets/chunk.4f9a1c2b.css`. */
+/**
+ * Vite content-hash shape: `assets/index-CNBH-rmM.js`, `assets/chunk.4f9a1c2b.css`.
+ *
+ * The discriminator is the HASH SHAPE, not name length and not a dictionary:
+ * Vite's content hash is a base64url digest of at least 8 chars (`hashCharacters:
+ * 'base64'` default; 8 since Vite 4, 11 in Vite 2), so a hashed name carries an
+ * 8+ char run that mixes character classes — `index-CNBH-rmM` (upper+lower),
+ * `chunk.4f9a1c2b` and `index-OLDHASH1` (digit+lower/upper). A human-chosen name
+ * is a single-case word (`logo`, `sprites`, `vendor`, `bolt`), so requiring two
+ * of {digit, uppercase, lowercase} over an 8+ char run rejects every plain name
+ * while keeping every real Vite spelling pinned. PRE-FIX this was
+ * `[A-Za-z0-9_-]{6,}`, which classified the six-letter word `vendor` as a hash
+ * and pinned `assets/vendor.css` immutable for a year (ADAAAA-9312, from
+ * `76d40c46`).
+ *
+ * The failure mode is biased to the SAFE side: a digest we fail to recognise
+ * revalidates (one refetch), whereas pinning a plain name would strand a rename
+ * on the edge for a year.
+ */
 function isContentHashedAsset(relPath: string): boolean {
   const clean = relPath.replace(/\\/g, "/").replace(/^\/+/, "");
   if (!clean.startsWith("assets/")) return false;
   const base = clean.slice(clean.lastIndexOf("/") + 1);
-  return /(?:^|[.-])[A-Za-z0-9_-]{6,}\.[A-Za-z0-9]+$/.test(base);
+  const m = /(?:^|[.-])([A-Za-z0-9_-]{8,})\.[A-Za-z0-9]+$/.exec(base);
+  if (!m) return false;
+  const hash = m[1] as string;
+  // Two of {digit, uppercase, lowercase}: a base64url digest mixes classes, a
+  // plain filename word does not. `-`/`_` are separators, not evidence.
+  const classes = [/[0-9]/, /[A-Z]/, /[a-z]/].filter((re) => re.test(hash)).length;
+  return classes >= 2;
 }
 
 function replyNoStore(reply: any, code: number, payload: unknown) {

@@ -157,8 +157,26 @@ describe("card accounting: an unapproved GOAL row states its lane", () => {
     expect(conf?.label).toBe("Accepted — confirmation lane not recorded (legacy row)");
   });
 
-  it("still serves no lane at all for a rejected row", () => {
-    expect(confirmationForHighlightRow(row({ id: "rej-1", start: 62, status: "rejected" }))).toBeUndefined();
+  it("never surfaces a rejected row as postable, and derives no confirming lane for it", () => {
+    const rejected = row({ id: "rej-1", start: 62, status: "rejected" });
+    // ADAAAA-8965 (21661225, re-pinned in confirmation-lane-8530 by 34183bc0):
+    // a row whose lane cannot be derived no longer ships SILENCE — it names
+    // `not_promoted` so the served-census cannot confuse a dropped row with a
+    // lost verdict. Nothing is invented: the lane is still `unconfirmed`, which
+    // is NOT a confirmed goal, and no dive/measurement is claimed.
+    const conf = confirmationForHighlightRow(rejected);
+    expect(conf?.lane).toBe("unconfirmed");
+    expect(conf?.skipReason).toBe("not_promoted");
+    expect(laneConfirmsGoal(conf?.lane)).toBe(false);
+    // The 8678 intent this file owns: a rejected row is never served as a
+    // postable card at all, so the fallback sentence above can never reach a
+    // customer surface.
+    const out = buildPostableHighlights([rejected]);
+    expect(out.highlights).toEqual([]);
+    expect(out.counts.postable).toBe(0);
+    expect(out.counts.rejected).toBe(1);
+    expect(out.rowAccounting.unrepresented).toEqual([{ id: "rej-1", reason: "rejected" }]);
+    expect(out.rowAccounting.served).toEqual([]);
   });
 });
 

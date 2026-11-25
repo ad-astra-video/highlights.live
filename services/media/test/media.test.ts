@@ -70,7 +70,19 @@ class FakeOrch {
     return 200;
   }
   async readObservation(p: ProvisionedSession, seq: number) {
+    // ADAAAA-8004 (cb20e403): the media node tails the events-out LIVE EDGE
+    // (`GET {events-out}/-1` = the newest observation the runner published)
+    // instead of reading one index per frame. Model that here: a fake that only
+    // answers by index makes every published frame expire on the relay's
+    // deadline, so nothing is ever relayed (the shape this harness pins).
+    if (seq === -1) return this.newestObservation();
     return this.obsBySeq.get(seq) ?? null;
+  }
+  /** The newest observation the fake runner has published (the live edge). */
+  protected newestObservation(): any | null {
+    let newest: number | undefined;
+    for (const k of this.obsBySeq.keys()) if (newest === undefined || k > newest) newest = k;
+    return newest === undefined ? null : this.obsBySeq.get(newest) ?? null;
   }
   async closeSession(controlUrl: string) {
     // MediaServer now targets the session via its control URL; record the
@@ -1047,11 +1059,24 @@ describe("observation delivery on a lagging runner (ADAAAA-7990)", () => {
       return 200;
     }
     async readObservation(_p: ProvisionedSession, seq: number) {
+      // -1 is the events-out live edge the relay tails (ADAAAA-8004); the
+      // serial gate below only applies to an index read.
+      if (seq === -1) return this.newestObservation();
       const first = this.publishWindows.get(1);
       if (first === undefined) return null;
       // seq's observation lands after the runner has stepped seq-1 frames.
       if (Date.now() - first < seq * this.stepMs) return null;
       return { type: "observation", seq, tracks: [] };
+    }
+    /** The live edge the relay tails (`GET {events-out}/-1`, ADAAAA-8004): the
+     *  newest observation whose serial step has completed. Only published seqs
+     *  can ever carry one (the edge cannot serve what the runner never saw). */
+    protected newestObservation(): any | null {
+      const first = this.publishWindows.get(1);
+      if (first === undefined) return null;
+      const ready = [...this.publishWindows.keys()].filter((seq) => Date.now() - first >= seq * this.stepMs);
+      if (!ready.length) return null;
+      return { type: "observation", seq: Math.max(...ready), tracks: [] };
     }
   }
 

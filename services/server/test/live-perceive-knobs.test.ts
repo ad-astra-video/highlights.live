@@ -122,12 +122,20 @@ describe("live perceive knobs reach the live AnalyzerConfig (ADAAAA-7791)", () =
     }
     const server = lines.slice(start, end).join("\n");
     for (const decl of [
-      "LIVE_OBSERVE_CONTENT_FPS=${LIVE_OBSERVE_CONTENT_FPS:-2}",
+      // ADAAAA-8102: DELIBERATELY empty-defaulted (`:-`), not `:-2`. A compose
+      // literal would outrank the code default on a recreated box; empty parses
+      // as unset (ADAAAA-7808) so the server resolves its own 2 fps. Pinning the
+      // old `:-2` literal here is what made this test fail while the shipped
+      // posture was already the empty default.
+      "LIVE_OBSERVE_CONTENT_FPS=${LIVE_OBSERVE_CONTENT_FPS:-}",
       "PERCEIVE_CADENCE=${PERCEIVE_CADENCE:-}",
       "PERCEIVE_QUIET_STRIDE=${PERCEIVE_QUIET_STRIDE:-2}",
       "LIVE_PERCEIVE_UTILIZATION=${LIVE_PERCEIVE_UTILIZATION:-0.6}",
     ]) {
       expect(server).toContain(decl);
     }
+    // …and the content-fps knob must NOT be re-pinned to a numeric literal: an
+    // operator setting nothing has to read the code default, not compose's.
+    expect(server).not.toMatch(/LIVE_OBSERVE_CONTENT_FPS=\$\{LIVE_OBSERVE_CONTENT_FPS:-[^}]/);
   });
 });

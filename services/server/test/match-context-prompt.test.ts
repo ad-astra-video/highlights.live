@@ -149,16 +149,27 @@ describe("buildObserveDecideRequest forwards the returned context (ADAAAA-7856)"
 
   it("reads the context ONCE per window from the injector (no resolver call)", () => {
     let reads = 0;
-    const { opts } = buildObserveDecideRequest(
-      cfgWith(() => {
-        reads += 1;
-        return STORED;
-      }),
-      new LiveRunShared(),
-      payload()
-    );
-    expect(reads).toBe(1);
+    const cfg = cfgWith(() => {
+      reads += 1;
+      return STORED;
+    });
+    // The JOB-SCOPE read: `buildLiveAnalyzerConfig` folds the stored team names
+    // into the per-analyze perceive calibration once, at wiring time
+    // (ADAAAA-8835 Inc 1 / ADAAAA-8844, `api.ts`: `withMatchContextTeams(...,
+    // getMatchContext?.()?.teams)`). That is a build-time read of the same
+    // injector, not a per-window one.
+    const buildReads = reads;
+    expect(buildReads).toBe(1);
+    // Per WINDOW the decide-request builder reads the stored value exactly once
+    // (`analyzer.ts` `buildObserveDecideRequest`: `toDecideMatchContext(
+    // cfg.getMatchContext?.())`). A duplicate read inside the builder — the
+    // failure this test exists to catch — makes the delta 2.
+    const { opts } = buildObserveDecideRequest(cfg, new LiveRunShared(), payload());
+    expect(reads - buildReads).toBe(1);
     expect(opts!.matchContext).toBeTruthy();
+    // …and the count is per WINDOW, not per job: a second window reads once more.
+    buildObserveDecideRequest(cfg, new LiveRunShared(), payload());
+    expect(reads - buildReads).toBe(2);
   });
 });
 
