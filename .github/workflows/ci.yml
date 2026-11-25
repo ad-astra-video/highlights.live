@@ -85,8 +85,18 @@ jobs:
       - name: Install from the lockfile
         run: npm ci
 
+      # ADAAAA-9406: the suite shells out to ffmpeg for every clip fixture
+      # (api / live / delete-job / entitlements / cost-readout / live-clip-cut),
+      # and `ubuntu-latest` does not ship it. Without this step the job fails
+      # `spawnSync ffmpeg ENOENT` before any assertion runs, which is what kept
+      # the check red with 0 real test failures. CI-only tooling: it changes
+      # nothing about the deployed server, compose or the served posture.
+      - name: Install ffmpeg (test fixtures decode/cut real clips)
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+
       # The full vitest suite, which includes docs-hygiene.test.ts (the guard
-      # runs as a test as well). Red at the tip for pre-existing reasons; see the
-      # header. Not a required check yet.
+      # runs as a test as well). Green at 14bd6378 (455 files / 5313 tests) after
+      # ADAAAA-9406 repaired the group-2 set, so this job is now a candidate to
+      # join the required-check set — that stays a board decision, not a drive-by.
       - name: Test
         run: npm test
