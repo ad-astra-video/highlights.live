@@ -432,6 +432,16 @@ export interface ServerConfig {
    * the inline awaited dive (the pre-8205 posture); `LIVE_DECIDE_CONFIRM` stays
    * the master opt-in, so an off master gate is still a strict no-op. */
   liveConfirmAsync: boolean;
+  /** ADAAAA-7853: refuse the Stage-2 `/confirm` dive for a non-winner member of
+   *  an OVERLAP CHAIN that already has a winner (`CONFIRM_PREDIVE_COLLAPSE=1`).
+   *  Default OFF: `0`/unset is byte-identical to today — every promoted window
+   *  dives, every count and verdict unchanged. The winner rule is the ratified
+   *  read-time one (`docs/clip-counting.md` § step 4: best `score`, then best
+   *  `corroborated`, then earliest), and a chain loser inherits the dive in the
+   *  SAME pass when the winner's verdict demotes it, so no chain ships its
+   *  runner-up on Stage-1 evidence only. Rows are never deleted or rewritten and
+   *  the read-side postable list is untouched: the saving is the dive fee alone. */
+  confirmPrediveCollapse: boolean;
   /** ADAAAA-8518 (AC1): the OPTIONAL emergency brake. `null` (the default) is
    *  UNLIMITED — the product does not cap dives; if the accept carried evidence,
    *  the dive runs. `LIVE_CONFIRM_MAX_DIVES_PER_300S` may still be set to a
@@ -1220,6 +1230,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     // pay the dive); `LIVE_CONFIRM_ASYNC=0` restores the inline awaited dive and
     // is a strict no-op when the master gate is off.
     liveConfirmAsync: env.LIVE_CONFIRM_ASYNC !== "0",
+    // ADAAAA-7853: pre-dive overlap collapse is an ADDITIVE, inert lever. Unset
+    // or `0` keeps every dispatch/verdict identical to today (AC6); only an
+    // explicit `1` (or `true`) refuses a chain loser's dive.
+    confirmPrediveCollapse:
+      env.CONFIRM_PREDIVE_COLLAPSE === "1" || env.CONFIRM_PREDIVE_COLLAPSE === "true",
     // ADAAAA-8518 (AC1): the dive cap is an OPTIONAL operator brake. `null` is
     // UNLIMITED (the shipped default) — an absent value must never resolve to a
     // number that caps, and `0`/negative is read as unlimited, never "no dives".

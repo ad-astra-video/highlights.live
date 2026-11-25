@@ -82,7 +82,7 @@ and whether it is shipped on or opt-in.
 | --- | --- | --- | --- | --- | --- |
 | L1 | live browser share | browser publishes WebRTC video+opus to the media node | `services/media/src/rtc.ts`, `services/server/src/media-rail.ts:484` | each observation + anchor JPEG feeds a `LiveObserver` | on when a browser share is provisioned |
 | L2 | live RTMP / file-sim | server pulls a stream / loops a file | `services/server/src/live.ts` | frames + audio tap into `analyzeJob` | on |
-| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11829` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
+| V1 | VOD | upload / URL job runs the detail-first pass | `services/server/src/analyzer.ts:11850` (`analyzeJob`) | frames + audio tap into the VOD pass | `OBSERVE_LOOP=1` (see S7) |
 | A1 | both | audio energy change: burst (fast onset) or sustained swell | `services/perceive/app/audio_gate.py` → `POST /audio` | Stage-A candidate anchored at the onset | on |
 | A2 | both | band-limited tonal whistle (2.4–3.4 kHz) | `services/perceive/app/audio_gate.py` (Stage-B) | whistle candidate / evidence; own verdict ledger | on |
 | A3 | both | tracker peak displacement, detection-in-zone, ball-velocity surge | `services/perceive/app/stage_a.py` | profile-routed Stage-A sites | **inert for soccer** — no shipped profile enables motion/zone/ball-velocity |

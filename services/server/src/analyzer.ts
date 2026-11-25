@@ -6386,6 +6386,9 @@ export class LiveRunShared {
   private confirmDiveDensityMax = 0;
   private confirmDiveDensityHours = 0;
   private confirmDiveDensitySuppressedCount = 0;
+  // ADAAAA-7853: dives refused before the model call as a non-winner of an
+  // overlap chain (0 whenever `CONFIRM_PREDIVE_COLLAPSE` is off).
+  private confirmDivePrediveSkippedCount = 0;
 
   /** ADAAAA-8205: hold a published provisional row's dive descriptor. */
   notePendingConfirmDive(entry: PendingConfirmDive): void {
@@ -6469,6 +6472,11 @@ export class LiveRunShared {
   noteConfirmDiveDensitySuppressed(): void {
     this.confirmDiveDensitySuppressedCount++;
   }
+  /** ADAAAA-7853: count one due dive refused before the model call because the
+   *  window is a non-winner of an overlap chain (flag ON only). */
+  noteConfirmDivePrediveSkipped(): void {
+    this.confirmDivePrediveSkippedCount++;
+  }
   /** ADAAAA-8205: forget a settled/dropped dive (the row no longer waits). */
   dropPendingConfirmDive(key: string): void {
     if (!key) return;
@@ -6519,6 +6527,12 @@ export class LiveRunShared {
               suppressed: this.confirmDiveDensitySuppressedCount,
             },
           }
+        : {}),
+      // ADAAAA-7853: dives refused before the model call. Present only when the
+      // collapse actually withheld one, so a flag-off run (and every pre-7853
+      // row) stays byte-identical (AC6).
+      ...(this.confirmDivePrediveSkippedCount > 0
+        ? { prediveSkipped: this.confirmDivePrediveSkippedCount }
         : {}),
     };
   }
@@ -8753,6 +8767,13 @@ export async function acceptVideoDecision(
             goalCrossed: candidate.goalCrossed === true,
           },
           queuedAt: candidate.timestamp,
+          // ADAAAA-7853: the row's own moment-ranking inputs, copied from THIS
+          // accept so the pre-dive overlap collapse picks the SAME winner the
+          // postable list will (corroboration, then score, then earliest). These
+          // are the values the row stores (`corroborated` / `score`), not a
+          // re-derivation — the pre-dive plan must not disagree with the read side.
+          score: decision.score,
+          corroborated: confirm?.corroborated === true,
         }
       : undefined;
 

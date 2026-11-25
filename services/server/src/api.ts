@@ -3397,17 +3397,20 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
           // positive operator brake caps.
           maxDivesPer300s: cfg.liveConfirmMaxDivesPer300S,
           reuseWindowS: cfg.decideConfirmLiveReuseWindowS,
+          // ADAAAA-7853: flag-gated pre-dive overlap collapse (default OFF).
+          prediveCollapse: cfg.confirmPrediveCollapse,
           drain: opts.drain,
           dispatcher: confirmDispatcher,
           queueWaitMs: cfg.liveConfirmQueueWaitMs ?? LIVE_CONFIRM_QUEUE_WAIT_MS,
           densityCap: confirmDensityCapFor(nowTs),
           adopt: confirmDiveAdopter(jobId, deliveryOf),
         });
-        if (out.dives || out.queued || out.dropped || out.overflowDropped || out.densitySuppressed) {
+        if (out.dives || out.queued || out.dropped || out.overflowDropped || out.densitySuppressed || out.prediveSkipped) {
           console.log(
             `[live-confirm:${jobId}] pump (nowTs=${nowTs.toFixed(1)}s): dives=${out.dives} ` +
               `queued=${out.queued} promoted=${out.promoted} refuted=${out.refuted} ` +
-              `dropped=${out.dropped} overflow=${out.overflowDropped} density=${out.densitySuppressed}`
+              `dropped=${out.dropped} overflow=${out.overflowDropped} density=${out.densitySuppressed} ` +
+              `predive=${out.prediveSkipped}`
           );
         }
         // AC3: descriptors that found no free slot stay PENDING — take the next
@@ -3521,6 +3524,8 @@ export function buildApp(deps: ApiDeps): FastifyInstance {
         jobId,
         maxDivesPer300s: cfg.liveConfirmMaxDivesPer300S,
         reuseWindowS: cfg.decideConfirmLiveReuseWindowS,
+        // ADAAAA-7853: flag-gated pre-dive overlap collapse (default OFF).
+        prediveCollapse: cfg.confirmPrediveCollapse,
         drain,
         dispatcher: confirmDispatcher,
         queueWaitMs: cfg.liveConfirmQueueWaitMs ?? LIVE_CONFIRM_QUEUE_WAIT_MS,

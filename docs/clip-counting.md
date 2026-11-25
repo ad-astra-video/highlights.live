@@ -15,8 +15,18 @@ cannot drift back to counting database rows.
 
 The database keeps **every** clip row. Nothing is deleted, backfilled, or migrated:
 merged-ness is derived at read time from `start`, `end`, `score`, `corroborated`,
-`outcome` and (ADAAAA-8733) the row's `matchClock`, so the raw trail stays complete for audit and for the future
-"detect the merge before the expensive deep dive" work (parked as ADAAAA-7853).
+`outcome` and (ADAAAA-8733) the row's `matchClock`, so the raw trail stays complete for audit.
+
+ADAAAA-7853 (flag-gated, default OFF) additionally refuses the Stage-2 `/confirm`
+DIVE for a non-winner member of an overlap chain **before** the model call
+(`CONFIRM_PREDIVE_COLLAPSE=1`, `planPrediveCollapse` in
+`services/server/src/live-confirm-async.ts`). It uses the SAME component rule and
+winner ranking as step 4 below, so no card the page serves is denied its dive and
+the projection here is unchanged; a chain whose winner's dive demotes it hands the
+dive to the next-best member in the same pass. A row the gate would DROP (this
+step's rule 3) never bridges a chain — on the reference job `d61e52f6` the
+contradicting window `688.6` sits between `678.2` and `701.0`, and chaining across
+it would refuse `701.0` a dive for a card the page serves.
 
 `raw rows - postable moments` is the number of rows that are not a separate clip
 a customer can watch: overlapping duplicates folded into a moment, rejected clips,

@@ -33,6 +33,11 @@
 //  - every failure (no frames, timeout, transport, parse/passthrough) fails
 //    closed: the row is untouched and the dive is counted as dropped.
 import { selectRereadFrames, withTimeout, type FrameRereadCandidate } from "./live-frame-reread.js";
+// ADAAAA-7853: the pre-dive collapse uses the READ side's own overlap component
+// rule (`overlapChainClusters`), so the windows that skip a dive are exactly the
+// windows the postable list merges away. Import direction is one-way
+// (highlight-postable -> @highlights/events only), so there is no cycle.
+import { isGoalRefutingReason, overlapChainClusters } from "./highlight-postable.js";
 
 /** ADAAAA-8518 (AC1): the operator EMERGENCY BRAKE, not a product cap.
  *
@@ -132,6 +137,13 @@ export interface PendingConfirmDive {
    *  Additive optional: a descriptor written before this field existed (and a
    *  hand-built fixture) ranks on its `signals` alone, exactly as before. */
   evidence?: ConfirmDiveEvidence;
+  /** ADAAAA-7853: the row's own moment ranking inputs (the read-side rule's
+   *  `score`, then `corroborated`, then earliest window). Copied from the accept
+   *  so the pre-dive collapse can pick the SAME winner the postable list will
+   *  pick, without reloading the row. Optional: a descriptor written before this
+   *  field existed ranks on `evidence` + window/time exactly as before. */
+  score?: number;
+  corroborated?: boolean;
 }
 
 /**
@@ -427,6 +439,10 @@ export interface ConfirmDiveAdmissionSnapshot {
     /** Due dives settled `density_cap` because the allowance was spent. */
     suppressed: number;
   };
+  /** ADAAAA-7853: due dives refused BEFORE the model call because the window is a
+   *  non-winner member of an overlap chain that already has a winner. Absent when
+   *  the collapse flag is off, so a flag-off run publishes byte-identical. */
+  prediveSkipped?: number;
 }
 
 /**
@@ -516,6 +532,128 @@ export function planDueConfirmDives(
 export function confirmDiveKey(entry: PendingConfirmDive): string {
   const ts = Math.round((entry.goalEventTs ?? 0) * 100) / 100;
   return `${entry.highlightId}:${ts}`;
+}
+
+// ---------------------------------------------------------------------------
+// ADAAAA-7853: refuse the dive for a non-winner of an overlap chain
+// ---------------------------------------------------------------------------
+//
+// The read-side `buildPostableHighlights` already collapses overlapping windows
+// into ONE moment (ADAAAA-7621), but only AFTER every member paid a decide call,
+// a Stage-2 `/confirm` dive and its own clip cut. On the measured reference job
+// `d61e52f6` 24 rows covered 18 unique moments, so 6 windows paid a deep dive
+// for footage that is delivered once.
+//
+// This plan moves the refusal BEFORE the model call for exactly the rows the
+// read side will merge away, and nothing else:
+//
+//  - membership is the read side's own component rule (`overlapChainClusters`
+//    over the judged windows), so a window that does not chain, and the first
+//    member of a chain, are NEVER pre-refused;
+//  - the winner is the read side's own ranking (`betterMoment`: corroboration
+//    then score, then the earlier window), so the window that gets the dive is
+//    the window whose clip the postable list will serve;
+//  - only `scoring_play` windows chain: a `near_miss` / `big_play` row rides the
+//    notable lane and is never pre-refused on it (AC5);
+//  - the clock lane (ADAAAA-8733) is untouched — the plan reads windows only, and
+//    a clock can never attest, confirm or demote a goal (R3).
+//
+// Rows are never deleted or rewritten and the read-side projection never reads
+// this plan, so the served list is unchanged (AC1/AC3). The whole saving is the
+// dive fee: `diveAdmission.diveCostUsd = decideFee x dives` (AC2).
+
+/** A chain loser refused before the model call, with the winner that owns the
+ *  moment's dive. */
+export interface PrediveCollapsedDive {
+  entry: PendingConfirmDive;
+  /** `highlightId` of the chain's winner (the row that got the dive). */
+  winnerId: string;
+}
+
+/** ADAAAA-7853: which due dives to run, which to refuse, and the fallback order. */
+export interface PrediveCollapsePlan {
+  /** Windows that should get a dive now: chain winners + every non-chained one. */
+  dive: PendingConfirmDive[];
+  /** Chain losers refused before the model call. */
+  skipped: PrediveCollapsedDive[];
+  /** Winner dive key -> that chain's next-best members, best first. When the
+   *  winner's verdict demotes it, the first entry inherits the dive in the SAME
+   *  pass; if that one demotes too, the next inherits, and so on. */
+  fallback: Map<string, PendingConfirmDive[]>;
+  /** Dives refused before the model call (`skipped.length`). */
+  prediveSkipped: number;
+}
+
+/** Strict overlap of two JUDGED windows. Exactly-adjacent windows
+ *  (`a.hi === b.lo`) are two adjacent moments, never a chain (AC5). */
+export function prediveWindowsOverlap(
+  a: { lo: number; hi: number },
+  b: { lo: number; hi: number }
+): boolean {
+  return a.lo < b.hi && b.lo < a.hi;
+}
+
+/** The read side's ranking (`betterMoment` / `qualityRank`), on a descriptor:
+ *  corroboration, then score, then the earlier window. Reproducing it here is
+ *  what makes the dive land on the window the postable list will serve. */
+function prediveRank(entry: PendingConfirmDive): number {
+  return (entry.corroborated === true ? 2 : 0) + (entry.score ?? 0);
+}
+
+/** True when `a` outranks `b` for owning the moment's dive. */
+function prediveBetter(a: PendingConfirmDive, b: PendingConfirmDive): boolean {
+  const ra = prediveRank(a);
+  const rb = prediveRank(b);
+  if (ra !== rb) return ra > rb;
+  const sa = a.score ?? 0;
+  const sb = b.score ?? 0;
+  if (sa !== sb) return sa > sb;
+  return a.window.lo <= b.window.lo;
+}
+
+/**
+ * ADAAAA-7853: collapse overdue DIVEs by the read side's overlap chains.
+ *
+ * Pure and deterministic: no descriptor is mutated, and the returned lists hold
+ * the caller's own entries. A window whose `stage1.outcome` is not
+ * `scoring_play` never chains, so the notable lane keeps its own dive.
+ */
+export function planPrediveCollapse(due: ReadonlyArray<PendingConfirmDive>): PrediveCollapsePlan {
+  const plan: PrediveCollapsePlan = { dive: [], skipped: [], fallback: new Map(), prediveSkipped: 0 };
+  const entries = (due ?? []).filter((e) => !!e?.highlightId && Number.isFinite(e?.window?.lo) && Number.isFinite(e?.window?.hi));
+  // A row the READ side will DROP (non-scoring lane, or a verdict whose own text
+  // refutes the goal) is not a chain participant: it keeps today's dive, and it
+  // must not BRIDGE two windows into one chain, or the collapse would refuse the
+  // dive for a window the page serves as its own card (measured on the reference
+  // job: the contradicting window `688.6` bridges `678.2` and `701.0`, and the
+  // gate drops `688.6` so both of the others ship — chaining across it would
+  // have denied `701.0` its dive and broken AC1's field identity).
+  const chained = entries.filter(
+    (e) => (e.stage1?.outcome ?? "scoring_play") === "scoring_play" && !isGoalRefutingReason(e.stage1?.reason)
+  );
+  // Everything that cannot chain keeps today's behaviour: its own dive.
+  plan.dive.push(...entries.filter((e) => !chained.includes(e)));
+  if (chained.length === 0) return plan;
+  // The SAME component rule the postable list uses, over `{start,end}` windows.
+  const clusters = overlapChainClusters(
+    chained.map((entry) => ({ entry, start: entry.window.lo, end: entry.window.hi }))
+  );
+  for (const cluster of clusters) {
+    const members = cluster.map((c) => c.entry);
+    if (members.length < 2) {
+      plan.dive.push(members[0]);
+      continue;
+    }
+    const winner = members.reduce((best, h) => (prediveBetter(h, best) ? h : best));
+    plan.dive.push(winner);
+    const losers = members
+      .filter((h) => h !== winner)
+      .sort((a, b) => (prediveBetter(a, b) ? -1 : prediveBetter(b, a) ? 1 : a.window.lo - b.window.lo));
+    for (const l of losers) plan.skipped.push({ entry: l, winnerId: winner.highlightId });
+    plan.fallback.set(confirmDiveKey(winner), losers);
+  }
+  plan.prediveSkipped = plan.skipped.length;
+  return plan;
 }
 
 /** Nearest frame to each of the three keyframe targets (pre / event / post). */
@@ -1304,7 +1442,10 @@ export interface ConfirmDiveResult {
     /** ADAAAA-8894 (D4, Ruling B): the live density guard withheld the dive —
      *  the leg had dispatched its `LIVE_CONFIRM_DENSITY_CAP_PER_STREAM_HOUR`
      *  allowance for the stream time it had consumed. */
-    | "density_cap";
+    | "density_cap"
+    /** ADAAAA-7853: refused BEFORE the model call as a non-winner of an overlap
+     *  chain that already has a winner (flag `CONFIRM_PREDIVE_COLLAPSE=1`). */
+    | "predive_collapsed";
   verdict?: ConfirmDiveVerdict;
   context: ConfirmDiveContext;
   latencyMs: number;
@@ -1333,6 +1474,12 @@ export const CONFIRM_DROP_REASONS = [
   // cause rather than a queue state: the row is settled with a named verdict
   // field, and the served card says `density_cap`.
   "density_cap",
+  // ADAAAA-7853: the window is a non-winner member of an overlap chain that
+  // already has a winner, so its dive was refused BEFORE the model call. The row
+  // is still persisted and the read-side postable list is unchanged; the chain's
+  // winner (or, when its verdict demotes, the next-best member) carries the
+  // verdict for the moment.
+  "predive_collapsed",
 ] as const;
 
 /**
@@ -1584,6 +1731,10 @@ export interface ConfirmDiveRunState {
   /** ADAAAA-8894 (D4, Ruling B): count one due dive the density allowance
    *  withheld. */
   noteConfirmDiveDensitySuppressed?(): void;
+  /** ADAAAA-7853: count one due dive refused BEFORE the model call because the
+   *  window is a non-winner of an overlap chain that already has a winner.
+   *  Optional so older fakes still run. */
+  noteConfirmDivePrediveSkipped?(): void;
 }
 
 /** The pump's per-tick accounting (what the tests and logs read). */
@@ -1600,6 +1751,9 @@ export interface ConfirmDivePumpOutcome {
   overflowDropped: number;
   /** ADAAAA-8894 (D4, Ruling B): due dives settled `density_cap` on this tick. */
   densitySuppressed: number;
+  /** ADAAAA-7853: due dives refused before the model call as a non-winner of an
+   *  overlap chain (`0` whenever the collapse flag is off). */
+  prediveSkipped: number;
 }
 
 /**
@@ -1646,6 +1800,9 @@ export async function runDueConfirmDives(deps: {
   densityCap?: { streamHours: number; maxPerStreamHour?: number };
   /** Persist the adoption (the promote-in-place write path). */
   adopt: (entry: PendingConfirmDive, result: ConfirmDiveResult) => Promise<ConfirmDiveAdoption["kind"] | void> | ConfirmDiveAdoption["kind"] | void;
+  /** ADAAAA-7853: refuse the dive for a non-winner member of an overlap chain
+   *  (flag `CONFIRM_PREDIVE_COLLAPSE`). Absent/`false` = today's behaviour. */
+  prediveCollapse?: boolean;
   log?: (line: string) => void;
 }): Promise<ConfirmDivePumpOutcome> {
   const out: ConfirmDivePumpOutcome = {
@@ -1657,6 +1814,7 @@ export async function runDueConfirmDives(deps: {
     queued: 0,
     overflowDropped: 0,
     densitySuppressed: 0,
+    prediveSkipped: 0,
   };
   const log = deps.log ?? ((line: string) => console.error(line));
   const tag = `[live-confirm:${deps.jobId}]`;
@@ -1695,12 +1853,25 @@ export async function runDueConfirmDives(deps: {
       ? Infinity
       : Math.max(1, Math.floor(densityMax * Math.max(0, densityHours)));
   if (densityAllowance !== Infinity) deps.run.noteConfirmDiveDensitySeen?.(densityMax, Math.max(0, densityHours));
+  // ADAAAA-7853: with the collapse flag ON, refuse the dive for a non-winner of
+  // an overlap chain BEFORE any slot is taken. Membership and winner ranking are
+  // the READ side's own rules (`overlapChainClusters` / `betterMoment`), so the
+  // window that keeps its dive is the window whose clip the postable list will
+  // serve. Flag OFF resolves to the exact `due` list, so every dispatch, count
+  // and verdict is identical to today (AC6).
+  const collapse = deps.prediveCollapse === true ? planPrediveCollapse(due) : null;
+  const plannedDives = collapse ? collapse.dive : due;
+  if (collapse) {
+    for (const s of collapse.skipped) {
+      log(`${tag} predive collapse: ${s.entry.highlightId} refused (non-winner of ${s.winnerId}'s overlap chain)`);
+    }
+  }
   // AC2/AC3: admitted dives run CONCURRENTLY — the pump awaits them together, so
   // one stream can hold N in flight (bounded only by decide capacity). The loop
   // itself never awaits a dive, so admission is decided against the in-flight
   // count of the whole batch.
-  const running: Promise<void>[] = [];
-  for (const entry of due) {
+  type DiveAttempt = ConfirmDiveAdoption["kind"] | "dropped" | "queued" | "retry" | "density";
+  const attemptDive = async (entry: PendingConfirmDive): Promise<DiveAttempt> => {
     const key = confirmDiveKey(entry);
     // ADAAAA-8894 (D4, Ruling B): the density guard, checked BEFORE a slot is
     // taken so a capped dive never holds capacity another window could use. The
@@ -1721,7 +1892,7 @@ export async function runDueConfirmDives(deps: {
             `(${densityMax}/h)`
         );
         await deps.adopt(entry, droppedDiveResult("density_cap"));
-        continue;
+        return "density";
       }
     }
     // AC3: capacity first. A full pool must not consume the emergency brake's
@@ -1736,7 +1907,7 @@ export async function runDueConfirmDives(deps: {
           `${tag} no free decide slot (inFlight=${dispatcher.inFlight}/${capacity}) — dive for ` +
             `${entry.highlightId} stays PENDING (waited ${Math.round(waitedMs)} ms of ${queueWaitMs} ms), replanned next tick`
         );
-        continue;
+        return "queued";
       }
       // Terminal ONLY at stream end or after the explicit queue bound (AC3):
       // settle the row with a stamped reason, no model call.
@@ -1749,7 +1920,7 @@ export async function runDueConfirmDives(deps: {
           `${entry.highlightId} stamped pool_busy after ${Math.round(waitedMs)} ms${deps.drain ? " at stream end" : ""}`
       );
       await deps.adopt(entry, droppedDiveResult("pool_busy"));
-      continue;
+      return "dropped";
     }
     // AC1: the OPTIONAL emergency brake, inert at the shipped default. Checked
     // after the slot so a capacity refusal never spends a brake token.
@@ -1758,54 +1929,92 @@ export async function runDueConfirmDives(deps: {
       out.retries++;
       if (deps.drain !== true) {
         log(`${tag} emergency dive brake (${normalizeConfirmDiveCap(deps.maxDivesPer300s)}/300 s) — dive for ${entry.highlightId} stays PENDING`);
-        continue;
+        return "retry";
       }
       deps.run.dropPendingConfirmDive(key);
       deps.run.noteConfirmDiveDropped("budget");
       out.dropped++;
       log(`${tag} emergency dive brake exhausted at stream end — ${entry.highlightId} abandoned with a stamped budget drop`);
       await deps.adopt(entry, droppedDiveResult("budget"));
-      continue;
+      return "dropped";
     }
     // One attempt per entry, marked BEFORE the call so a retried pump can never
     // double-bill the same goal.
     deps.run.noteConfirmDiveAttempt(key);
     deps.run.clearConfirmDiveQueueWait?.(key);
     deps.run.noteConfirmDiveDispatched?.(dispatcher.inFlight, capacity);
-    running.push(
-      (async () => {
-        try {
-          const result = await runConfirmDive(entry, deps.io, { jobId: deps.jobId, log });
-          out.dives++;
-          // AC-A4: only a dive that actually ISSUED a decide call is billable.
-          // The two pre-flight drops (`no_persisted_frames`, `frame_unreadable`)
-          // never reach the model, so counting them as confirm calls would
-          // over-bill `costUsd` and break the identity `confirmCalls == calls
-          // made` that a stored-row read grades. `confirmDropped` still counts them.
-          if (confirmDiveMadeCall(result)) deps.run.noteConfirmDiveDone(result.ok, result.latencyMs);
-          if (!result.ok) {
-            deps.run.dropPendingConfirmDive(key);
-            deps.run.noteConfirmDiveDropped(result.droppedReason ?? "failed");
-            out.dropped++;
-            // AC4: stamp the terminal drop verdict on the row (the descriptor is
-            // cleared by the same patch), so a finished job never keeps a
-            // provisional row with no stored verdict field.
-            await deps.adopt(entry, result);
-            return;
-          }
-          const kind = await deps.adopt(entry, result);
-          // Settled: the row no longer waits on a dive (the row patch also
-          // clears its stored descriptor through the one verdict-move writer).
-          deps.run.dropPendingConfirmDive(key);
-          if (kind === "promoted") out.promoted++;
-          else if (kind === "refuted") out.refuted++;
-        } finally {
-          dispatcher.release();
-        }
-      })()
+    try {
+      const result = await runConfirmDive(entry, deps.io, { jobId: deps.jobId, log });
+      out.dives++;
+      // AC-A4: only a dive that actually ISSUED a decide call is billable.
+      // The two pre-flight drops (`no_persisted_frames`, `frame_unreadable`)
+      // never reach the model, so counting them as confirm calls would
+      // over-bill `costUsd` and break the identity `confirmCalls == calls
+      // made` that a stored-row read grades. `confirmDropped` still counts them.
+      if (confirmDiveMadeCall(result)) deps.run.noteConfirmDiveDone(result.ok, result.latencyMs);
+      if (!result.ok) {
+        deps.run.dropPendingConfirmDive(key);
+        deps.run.noteConfirmDiveDropped(result.droppedReason ?? "failed");
+        out.dropped++;
+        // AC4: stamp the terminal drop verdict on the row (the descriptor is
+        // cleared by the same patch), so a finished job never keeps a
+        // provisional row with no stored verdict field.
+        await deps.adopt(entry, result);
+        return "dropped";
+      }
+      const kind = await deps.adopt(entry, result);
+      // Settled: the row no longer waits on a dive (the row patch also
+      // clears its stored descriptor through the one verdict-move writer).
+      deps.run.dropPendingConfirmDive(key);
+      if (kind === "promoted") out.promoted++;
+      else if (kind === "refuted") out.refuted++;
+      return kind ?? "unchanged";
+    } finally {
+      dispatcher.release();
+    }
+  };
+  const attempts: Promise<DiveAttempt>[] = [];
+  for (const entry of plannedDives) attempts.push(attemptDive(entry));
+  const attemptKinds = await Promise.all(attempts);
+  // ADAAAA-7853 (chained fallback, mandatory): when a chain winner's verdict
+  // DEMOTES it (`refuted` = near_miss / not_goal / held / self-contradicting),
+  // the chain's next-best member inherits the dive in this SAME pass, and so on
+  // down the chain. Without it a demoted winner would ship its runner-up on
+  // Stage-1 evidence only. The fallback dive goes through the same admission
+  // gates; one that cannot get a slot stays PENDING and replans next tick (the
+  // refuted winner is no longer pending, so the chain re-plans without it).
+  const fallbackAttempted = new Set<string>();
+  if (collapse) {
+    for (let i = 0; i < plannedDives.length; i++) {
+      if (attemptKinds[i] !== "refuted") continue;
+      const winner = plannedDives[i];
+      const order = collapse.fallback.get(confirmDiveKey(winner)) ?? [];
+      for (const next of order) {
+        fallbackAttempted.add(confirmDiveKey(next));
+        log(`${tag} predive collapse: ${winner.highlightId} demoted — ${next.highlightId} inherits the dive in this pass`);
+        const kind = await attemptDive(next);
+        if (kind === "refuted") continue;
+        break;
+      }
+    }
+    // Every chain loser that did NOT get the inherited dive is settled with a
+    // stamped, non-demoting drop reason: the row still exists (the read side
+    // merges it away), it just no longer waits on a dive it cannot affect.
+    for (const s of collapse.skipped) {
+      const key = confirmDiveKey(s.entry);
+      if (fallbackAttempted.has(key)) continue;
+      deps.run.dropPendingConfirmDive(key);
+      deps.run.clearConfirmDiveQueueWait?.(key);
+      deps.run.noteConfirmDiveDropped("predive_collapsed");
+      deps.run.noteConfirmDivePrediveSkipped?.();
+      out.prediveSkipped++;
+      await deps.adopt(s.entry, droppedDiveResult("predive_collapsed"));
+    }
+    log(
+      `${tag} predive collapse: ${out.prediveSkipped} dive(s) refused before the model call, ` +
+        `${plannedDives.length + fallbackAttempted.size} planned (flag ON)`
     );
   }
-  await Promise.all(running);
   // AC5: a drained pump must leave NO descriptor pending. Anything the plan
   // could not judge (a malformed window) is settled with its own stamped reason
   // rather than left `provisional` with nothing to read on a finished job.
