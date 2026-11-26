@@ -17,7 +17,9 @@
 //     stored rows were refused `too-few-facts` on copy that carried clock + action.
 //
 // The bars themselves are NOT touched here, and the last describe block pins that
-// (band values, two-kind minimum, call ceiling, the 18-word floor accept).
+// (band values, two-kind minimum, call ceiling). ADAAAA-9464 moved the REFUSAL bar
+// to the band target (the floor stays the serve bar on a `< 2`-fact-kind row), so
+// the 18-word accept this ticket pinned is now the exemption case, not the norm.
 import { describe, expect, it } from "vitest";
 import {
   attestedSummaryFactKinds,
@@ -31,6 +33,7 @@ import {
   summaryFactMenu,
   summaryFactMenuDetail,
   summaryRetryMinWords,
+  summaryServeWordBar,
   summaryWordCount,
   SUMMARY_WRITER_ACT_VOCABULARY,
   type SummaryEvidence,
@@ -193,13 +196,23 @@ describe("ADAAAA-9047 — no bar moved", () => {
     expect(SUMMARY_MAX_CALLS_PER_ROW).toBe(2);
   });
 
-  it("still SERVES a body between the 18-word floor and the 25-word target", () => {
-    // 24 words: under AC1's target, over the serve floor. The PO ruling keeps the
-    // floor accept, so the writer round must not turn it into a refusal.
+  it("now REFUSES a body between the floor and the target on a row that can fill the target (ADAAAA-9464)", () => {
+    // ADAAAA-9047 pinned the floor accept here ("the PO ruling keeps the floor
+    // accept"). ADAAAA-9464 (writer round 4, item 2) supersedes it with a measured
+    // reason: a 19-word body served `accepted` on the rev-21 tree and AC1 read
+    // `p50 19` against its own `p50 >= 25`. The band constants do not move; only
+    // the bar the refusal reads does, and the floor stays the bar on a row whose
+    // evidence cannot supply two fact kinds (AC2's exemption).
     const short = "At 17:40 into the clip Liverpool tackles the runner near the halfway line. Chelsea recovers the second ball and counters back toward its own half.";
     const trimmed = short.replace(" near the halfway line", "");
     expect(summaryWordCount(trimmed)).toBeLessThan(SUMMARY_LIVE_BAND.targetMinWords);
     expect(summaryWordCount(trimmed)).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
-    expect(serves(trimmed, liveRow())).toBe(true);
+    // A row with two facts IS refused at 24 words.
+    expect(serves(trimmed, liveRow())).toBe(false);
+    const twoKindRow = liveRow();
+    expect(summaryServeWordBar(twoKindRow)).toBe(SUMMARY_LIVE_BAND.targetMinWords);
+    // A row whose evidence cannot supply two fact kinds keeps the floor accept.
+    const oneKindRow = liveRow({ matchContext: null, attestation: null, matchClock: null } as never);
+    expect(summaryServeWordBar(oneKindRow)).toBe(SUMMARY_LIVE_BAND.floorWords);
   });
 });

@@ -191,14 +191,18 @@ describe("gateSummaryDetail", () => {
     // edge of the box finds the far corner." — a ball description with no
     // attested fact in it, which the clause repair now deletes. A served body
     // carries a fact in every sentence, so the fixture does too.
+    // ADAAAA-9464: the serve bar is the band TARGET on a row that can fill it, so
+    // the fixture carries three fact sentences (38 words) instead of the two
+    // 18-word sentences this test used to serve under the floor bar.
     const decision = gateSummaryDetail(
-      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38.",
+      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38. " +
+        "Riverside intercepts the ball near the box and counters at 2:41 into the clip.",
       live()
     );
     expect(decision.summary).toContain("2-2");
     expect(decision.gate).toBe("accepted");
     expect(decision.violations).toEqual([]);
-    expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
+    expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.targetMinWords);
   });
 
   it("clamps an over-long reply and reports `trimmed`", () => {
@@ -277,8 +281,11 @@ describe("gateSummaryDetail", () => {
       scoreTransition: null,
       caption: "Shot saved at the near post.",
     });
+    // ADAAAA-9464: 25 words is the serve bar here (clock + venue are two fact
+    // kinds), so the fixture carries a third sentence with its own clock token.
     const decision = gateSummaryDetail(
-      "The move develops at 2:40 in the second half of the Champions League tie. The clock still reads 2:40 through the next few passes.",
+      "The move develops at 2:40 in the second half of the Champions League tie. The clock still reads 2:40 through the next few passes. " +
+        "The tie stays level as the passage runs on toward 2:41.",
       ev
     );
     expect(decision.summary).not.toBeNull();
@@ -290,14 +297,18 @@ describe("gateSummaryDetail", () => {
     // ADAAAA-8914 (AC14.1): every sentence carries a fact, because the clause
     // repair deletes one that does not (the old fixtures' "A low drive … finds
     // the far corner" / "Both sides settle into shape" are exactly that filler).
+    // ADAAAA-9464: two sentences still pass the LIVE band, but they must also
+    // clear the live TARGET bar (25 words) now that the refusal reads it.
     const twoSentences =
-      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession at 2:38 into the clip.";
+      "The equaliser levels it at 2-2 in the second half after a scramble in the box. Northbridge keep possession at 2:38 into the clip and work it wide.";
     // Two sentences pass the LIVE band (2-3) and fail the VOD band (3-5).
     expect(gateSummaryDetail(twoSentences, live()).summary).not.toBeNull();
     expect(gateSummaryDetail(twoSentences, vod).violations).toContain("too-few-sentences");
+    // ADAAAA-9464: the 45-word VOD target applies AFTER the restating sentence is
+    // deleted, so the surviving three sentences carry 56 words.
     const three =
-      "The equaliser levels it at 2-2 in the second half. Northbridge keep possession at 2:38 into the clip and work the ball toward the wing. " +
-      "Riverside presses high to force a turnover near the touchline. The scoreboard reads 2-2 as Northbridge recycle the ball through midfield.";
+      "The equaliser levels it at 2-2 in the second half after a scramble in the box. Northbridge keep possession at 2:38 into the clip and work the ball toward the wing. " +
+      "Riverside presses high to force a turnover near the touchline and clears it upfield at 2:41 into the clip. The scoreboard reads 2-2 as Northbridge recycle the ball through midfield.";
     expect(gateSummaryDetail(three, vod).summary).not.toBeNull();
   });
 });
@@ -522,9 +533,12 @@ describe("ADAAAA-8687: the shipped one-line caption shapes", () => {
     // The reply the served build ACTUALLY refused on 6d6090a: `internal-token`
     // fired on the ordinary word `goal`.
     const served = shipped[2].evidence;
+    // ADAAAA-9464: a third fact sentence would restate this clock-only row's own
+    // facts, so the fixture reaches the 25-word serve bar by carrying the score
+    // line inside the clock sentence instead (two facts, 31 words, 2 sentences).
     const reply =
       "The midfielder finds the back of the net to level the score at 2-2. " +
-      "This goal occurs at the 2:40 mark of the match.";
+      "This goal occurs at the 2:40 mark of the match and the scoreboard shows the change from 2-1 to 2-2.";
     const decision = gateSummaryDetail(reply, served);
     // ADAAAA-8910 (defect 2): `mark of the match` is no longer accepted copy — the
     // offset is a clip offset, so the gate renames the frame before judging and

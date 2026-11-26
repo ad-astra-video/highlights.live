@@ -32,8 +32,11 @@ import {
 // fixture's second sentence is an attested actor's play instead of the old
 // "A low drive from the edge of the box finds the far corner." (no attested fact,
 // deleted by the clause repair, which took the body under the live floor).
+// ADAAAA-9464: the live serve bar is the band TARGET (25 words), so the fixture
+// carries three fact sentences (38 words). The 18-word pair this file was written
+// against is now refused `too-few-words` and takes the AC5 retry.
 const GOOD_SUMMARY =
-  "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38.";
+  "The equaliser levels it at 2-2 in the second half. Northbridge keep possession as the clock runs to 2:38. Riverside intercepts the ball near the box and counters at 2:41 into the clip.";
 
 const evidence = () => ({
   rail: "live" as const,
@@ -299,7 +302,10 @@ describe("runSummaryForRow — the promoted row's copy", () => {
   // on ONE call and the refused reply stays replayable as `summaryRaw`.
   it("ends a shape refusal on ONE call (AC5 §13.2)", async () => {
     const { store, patches } = stubStore();
-    const first = "At 2:38 Northbridge shoot on the right side of the field.";
+    // ADAAAA-9464: a shape refusal must not be a DEPTH refusal (that now takes the
+    // AC5 retry), so the fixture carries 30 words and refuses on an invented name.
+    const first =
+      "Diego Maradona levels it at 2-2 in the second half as the move opens up along the wing. Riverside recovers the ball near the box at 2:41 into the clip.";
     const f = stubFetch([ok(first), ok(GOOD_SUMMARY)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
       jobId: "j1",
@@ -318,7 +324,10 @@ describe("runSummaryForRow — the promoted row's copy", () => {
 
   it("keeps the refused reply as `summaryRaw` on that one-call drop", async () => {
     const { store, patches } = stubStore();
-    const first = "At 2:38 Northbridge shoot on the right side of the field.";
+    // ADAAAA-9464: a shape refusal must not be a DEPTH refusal (that now takes the
+    // AC5 retry), so the fixture carries 30 words and refuses on an invented name.
+    const first =
+      "Diego Maradona levels it at 2-2 in the second half as the move opens up along the wing. Riverside recovers the ball near the box at 2:41 into the clip.";
     const f = stubFetch([ok(first), ok(GOOD_SUMMARY)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }), {
       jobId: "j1",

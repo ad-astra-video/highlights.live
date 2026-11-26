@@ -126,6 +126,106 @@ export function summaryRetryMinWords(band: SummaryDepthBand): number {
   return Math.max(band.targetMinWords, band.floorWords + SUMMARY_RETRY_DEPTH_MARGIN_WORDS);
 }
 
+/**
+ * ADAAAA-9464 (writer round 4): the SENTENCE BUDGET the ask promises, derived from
+ * the row's own evidence instead of from the band alone.
+ *
+ * The measured premise (ADAAAA-9178's served replay on the rev-21 tree, job
+ * `798f21c2`): `n=5, min 18, p10 18, p50 19, max 26, bodies >= 25 = 1/5` against
+ * AC1's `p50 >= 25`. A body at 19 words PASSES the old gate because the refusal
+ * tested `floorWords` (18), not the band target, and the ask's arithmetic
+ * (`minSentences` x per-sentence ask) was never tied to the row's fact count.
+ *
+ * The formula, stated once so the prompt and the gate cannot drift:
+ *
+ *   kinds   = attestedFactKinds(evidence).length           (0..4)
+ *   units   = attestedActors + (score ? 1 : 0) + (venue ? 1 : 0)   (the clock rides)
+ *   s       = kinds >= 2 ? clamp(units, minS, maxS) : minS
+ *   pFloor  = ceil(targetMinWords / s)
+ *   pBase   = ceil(targetMinWords / minSentences) + SUMMARY_WRITER_SENTENCE_MARGIN_WORDS
+ *   p       = max(pFloor, min(pBase, floor(targetMaxWords / s)))
+ *   budget  = s * p
+ *
+ * `p >= pFloor` by construction, so `budget = s*p >= s*ceil(targetMin/s) >=
+ * targetMinWords` ALWAYS: the sentence budget times the per-sentence ask reaches
+ * the band target on every row the ask can be met on. `pBase` keeps today's ask
+ * (15 live / 17 VOD) wherever the band's own arithmetic allows it, so a 2-kind
+ * live row is still asked `2 x 15 = 30` and the 9106 margin is unchanged; the
+ * `floor(targetMax/s)` cap stops a wide fact row from being asked for a
+ * per-sentence length that would push the body past the band ceiling.
+ *
+ * Rows with `< SUMMARY_MIN_FACT_KINDS` attested kinds keep today's ask
+ * (`s = minSentences`) and are exempt from the target serve bar: nothing in their
+ * evidence can supply the second sentence, so asking for one is the ADAAAA-8971
+ * defect (a menu the row cannot fill).
+ */
+export interface SummarySentenceAsk {
+  /** Attested fact kinds available to this row (`attestedFactKinds`). */
+  factKinds: number;
+  /** Distinct fact UNITS the writer can spend: one act per attested actor, plus
+   *  the score line and the venue. The clock is not a unit — the prompt forbids a
+   *  clock-only sentence, so it rides inside a unit's sentence. */
+  factUnits: number;
+  /** Sentences the ask budgets for. */
+  sentences: number;
+  /** Words per sentence the ask requires. */
+  perSentenceWords: number;
+  /** `sentences * perSentenceWords` — the arithmetic the ask states to the writer. */
+  budgetWords: number;
+  /** True when the ask is evidence-proportional (`>= SUMMARY_MIN_FACT_KINDS`). */
+  proportional: boolean;
+}
+
+export function summarySentenceAsk(evidence: SummaryEvidence): SummarySentenceAsk {
+  const band = summaryBand(evidence.rail);
+  const kinds = attestedFactKinds(evidence);
+  const factKinds = kinds.length;
+  // ADAAAA-9178's third-fact lever counted ACTS ("two attested actors supply two
+  // acts"), not kinds, because a kind is one credit however many actors it covers.
+  // The budget therefore counts units: one per attested actor, plus the measured
+  // score line, plus the competition/venue.
+  const factUnits =
+    (attestedActorNames(evidence).length > 0 ? attestedActorNames(evidence).length : 0) +
+    (kinds.includes("score") ? 1 : 0) +
+    (kinds.includes("venue") ? 1 : 0);
+  const proportional = factKinds >= SUMMARY_MIN_FACT_KINDS;
+  const sentences = proportional
+    ? Math.min(band.maxSentences, Math.max(band.minSentences, factUnits))
+    : band.minSentences;
+  const perSentenceFloor = Math.ceil(band.targetMinWords / sentences);
+  const perSentenceBase =
+    Math.ceil(band.targetMinWords / band.minSentences) + SUMMARY_WRITER_SENTENCE_MARGIN_WORDS;
+  const perSentenceWords = Math.max(
+    perSentenceFloor,
+    Math.min(perSentenceBase, Math.floor(band.targetMaxWords / sentences))
+  );
+  return {
+    factKinds,
+    factUnits,
+    sentences,
+    perSentenceWords,
+    budgetWords: sentences * perSentenceWords,
+    proportional,
+  };
+}
+
+/**
+ * ADAAAA-9464: the word count a body must REACH to serve on this row.
+ *
+ * The gate's refusal bar is the band TARGET on a row that can arithmetically fill
+ * it (`summarySentenceAsk(...).proportional`), which is the same number the AC5
+ * retry asks for (`summaryRetryMinWords` = 25 live / 45 VOD). `floorWords` (18
+ * live / 40 VOD) stays the "too thin to serve at all" bar, and it is the bar on a
+ * row whose evidence cannot supply two fact kinds — the rows AC2 exempts.
+ *
+ * This is a BAR read, not a band change: `SUMMARY_LIVE_BAND` / `SUMMARY_VOD_BAND`
+ * are untouched (`targetMinWords` / `floorWords` are the same constants).
+ */
+export function summaryServeWordBar(evidence: SummaryEvidence): number {
+  const band = summaryBand(evidence.rail);
+  return summarySentenceAsk(evidence).proportional ? band.targetMinWords : band.floorWords;
+}
+
 /** ADAAAA-9106 (writer round 2): the words per sentence the FIRST pass asks for
  *  above the band arithmetic, so a draft clears the depth bar before the clause
  *  repair touches it.
@@ -2710,7 +2810,13 @@ export interface SummaryFillerDrop {
   substituted: string[];
 }
 
-/** ADAAAA-8934: does this body clear the rail's depth band? */
+/** ADAAAA-8934: does this body clear the rail's depth band?
+ *
+ *  ADAAAA-9464 leaves this at the band FLOOR on purpose. This is the seam's own
+ *  question — "can the card still serve if these bytes go?" — and it decides
+ *  whether a deletion or a substitution is WORTH making, not whether the result
+ *  serves. The target bar is the ASK's bar and the gate's refusal bar; the seam's
+ *  deterministic repairs keep the 9178 semantics they were measured on. */
 function summaryClearsBand(sentences: readonly string[], band: SummaryDepthBand): boolean {
   return (
     summaryWordCount(sentences.join(" ")) >= band.floorWords && sentences.length >= band.minSentences
@@ -3138,6 +3244,11 @@ export function dropRestatedSentences(
   // bytes, the prompt's AC2 rule is the fix, and the census records that the seam
   // saw the restatement and could not afford to remove it (`affordable: false`).
   const band = summaryBand(evidence.rail);
+  // ADAAAA-9464 keeps the 9178 guard: the deletion is taken only when the remainder
+  // still clears the band floor. The target bar is the ASK's bar; a body the seam
+  // cannot shorten without losing the card is judged by the gate as the writer
+  // wrote it (a padded body that lands under the target is refused and takes the
+  // single AC5 retry, so padding never reaches a card anyway).
   if (!summaryClearsBand(filled(), band)) {
     return { text: (text ?? "").trim(), dropped, affordable: false };
   }
@@ -3422,14 +3533,27 @@ export function stripFrameOpener(text: string): SummaryFrameStrip {
 
 /** Every bar THIS candidate fails. Shape first, then the composed grounding
  *  gates, then the two lane-specific bars (depth facts + caption overlap). */
-export function summaryViolations(summary: string, evidence: SummaryEvidence): SummaryViolation[] {
+export function summaryViolations(
+  summary: string,
+  evidence: SummaryEvidence,
+  /** ADAAAA-9464: the depth bar to judge against. Defaults to the row's serve bar
+   *  (`summaryServeWordBar`: the band target on a row that can fill it, the floor
+   *  on a `< 2`-fact-kind row). The lane passes `band.floorWords` on its LAST
+   *  attempt only, which is the floor accept after the single AC5 retry. */
+  wordBar: number = summaryServeWordBar(evidence)
+): SummaryViolation[] {
   const body = (summary ?? "").trim();
   const band = summaryBand(evidence.rail);
   if (!body) return ["empty"];
   const out: SummaryViolation[] = [];
   const words = summaryWordCount(body);
   const sentences = summarySentenceCount(body);
-  if (words < band.floorWords) out.push("too-few-words");
+  // ADAAAA-9464 (writer round 4): the depth bar is the band TARGET on a row whose
+  // evidence can fill it (`summaryServeWordBar`), not the 18-word floor that let a
+  // 19-word body serve as `accepted` on AC1's own `p50 >= 25` bar. The floor stays
+  // the bar on a `< 2`-fact-kind row (AC2's exemption) and stays the "too thin to
+  // serve at all" threshold the band documents.
+  if (words < wordBar) out.push("too-few-words");
   if (words > band.hardMaxWords) out.push("too-many-words");
   if (body.length > band.hardMaxChars) out.push("too-long");
   if (sentences < band.minSentences) out.push("too-few-sentences");
@@ -3579,9 +3703,19 @@ export function gateSummaryDetail(
    *  repair, the AC14 prune undid it, and the row dropped as `dropped:repeat` with
    *  a PRE-repair refusal on it. Measured on the rev-13 served VOD job `54537ffa`:
    *  3 of its 20 rows (all three `repeat-sentence`) died exactly that way. */
-  options?: { avoidSentences?: readonly string[] }
+  options?: {
+    avoidSentences?: readonly string[];
+    /** ADAAAA-9464: the depth bar this gate judges against. Absent => the row's
+     *  serve bar (`summaryServeWordBar`, the band target on a row that can fill
+     *  it). The lane passes `band.floorWords` on the LAST attempt, so the single
+     *  AC5 retry either reaches the target or the row serves the best body the
+     *  writer produced — the 18/40-word floor stays the "too thin to serve at all"
+     *  threshold, exactly as the ticket states. */
+    wordBar?: number;
+  }
 ): SummaryGateDecision {
   const band = summaryBand(evidence.rail);
+  const wordBar = options?.wordBar ?? summaryServeWordBar(evidence);
   const stripped = stripInternalTokens((raw ?? "").trim()).replace(/^\s*T\s*\+\s*[\d:.]+\s*s?\s*[—–-]\s*/i, "").trim();
   if (!stripped)
     return { summary: null, gate: "absent", violations: ["empty"], words: 0, sentences: 0, droppedSentences: 0, droppedClauses: [], clauseClaims: [], substitutedClauses: [], frameOpeners: [], purposeTails: [], restatedSentences: [], repairedWords: 0, raw: "", captionOverlap: 0 };
@@ -3627,13 +3761,18 @@ export function gateSummaryDetail(
     // verified the remainder keeps its fact). On the rev-19 served block the tail
     // is what made `df285a29` the longest body (26 words) and the driest one.
     const purpose = stripPurposeTails(clockServed.text, evidence);
-    // Extractive and affordability-guarded, the same rule the restatement drop
-    // follows: a tail is only worth deleting when the card still serves without it.
-    // A body whose padding is the only thing holding it over the floor keeps the
-    // tail and serves exactly as the writer wrote it — the prompt's ban is the fix
-    // for that row, and the served-body census is what measures it.
+    // Extractive: the tail is never rewritten, only deleted, and the remainder keeps
+    // every fact the sentence carried.
+    // ADAAAA-9464: a purpose/manner tail is NEVER depth, so on a row whose serve bar
+    // is the band TARGET the seam deletes it outright and the depth bar judges the
+    // remainder. The 9178 affordability guard (keep the tail when the remainder falls
+    // under the floor) let a 26-word padded body serve at the target on the rev-19
+    // block (`df285a29`), which is the "padded body is a fail, not a pass" shape the
+    // ticket's premise guard forbids. A `< 2`-fact-kind row keeps the guard: its bar
+    // IS the floor.
     const purposeAffordable =
       purpose.stripped.length === 0 ||
+      summaryServeWordBar(evidence) > summaryBand(evidence.rail).floorWords ||
       summaryClearsBand(summarySentencesOf(purpose.text), summaryBand(evidence.rail));
     const purposeStripped = purpose.stripped.length > 0 && purposeAffordable ? purpose.text : clockServed.text;
     // ADAAAA-9083 (AC15): the frame-narration LEAD is stripped by deletion BEFORE
@@ -3686,11 +3825,23 @@ export function gateSummaryDetail(
     // `clockServed.text` — the closed-list lead deletion is deterministic, so
     // judging the pre-strip body would fail AC15 every time and attribute a
     // stripped body's depth to the writer.
-    const judgedCandidates = hasRepair ? [repairText, frameStripped] : [frameStripped];
+    // ADAAAA-9464: when the repair only removed NON-FACT bytes (a purpose tail /
+    // a restating sentence) on a row whose serve bar is the TARGET, the pre-repair
+    // body is not a candidate. The fallback exists to name the bars the WRITER
+    // failed, but here it would serve the padding: measured on row `2f5a5796` (job
+    // `4e5ddf8d`), the repair delivered the 3-sentence 43-word body against a
+    // 45-word VOD target and the gate fell back to the writer's 4-sentence 52-word
+    // body whose extra sentence only repeated the score line. Padding is never
+    // depth, so such a row is refused on the repair's own count and takes the AC5
+    // retry. A `< 2`-fact-kind row keeps the fallback (its bar is the floor).
+    const paddingStripOnly =
+      wordBar > band.floorWords &&
+      ((purposeAffordable && purpose.stripped.length > 0) || (restated.affordable && restated.dropped.length > 0));
+    const judgedCandidates = hasRepair && !paddingStripOnly ? [repairText, frameStripped] : [repairText || frameStripped];
     let candidateRefused: SummaryViolation[] | null = null;
     for (const judged of judgedCandidates) {
       if (!judged) continue;
-      const violations = summaryViolations(judged, evidence);
+      const violations = summaryViolations(judged, evidence, wordBar);
       if (violations.length === 0) {
         lastJudged = judged;
         droppedSentences = neutralised.droppedSentences;
@@ -3735,7 +3886,7 @@ export function gateSummaryDetail(
     // The repair was applied and did not stand on its own: report the refusal the
     // writer's own body earns, and keep the repair numbers as evidence.
     const refusedHere = candidateRefused ?? [];
-    lastJudged = frameStripped || clockServed.text;
+    lastJudged = (paddingStripOnly && repairText) || frameStripped || clockServed.text;
     droppedSentences = neutralised.droppedSentences;
     droppedClauses = [...frame.droppedSentences, ...filler.dropped];
     clauseClaims = filler.claims;
@@ -3753,7 +3904,7 @@ export function gateSummaryDetail(
       // measured on the repaired text, so only the depth bars it earns are added
       // (every other bar is a property of the writer's own body, judged above —
       // adding them here would attribute a shortened body's novelty to the writer).
-      for (const v of summaryViolations(repairText, evidence)) {
+      for (const v of summaryViolations(repairText, evidence, wordBar)) {
         if (v !== "too-few-words" && v !== "too-few-sentences") continue;
         if (!refused.includes(v)) refused.push(v);
       }
@@ -3994,34 +4145,20 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
   // values (never example sentences) keeps AC14 intact: there is no sample line
   // for the writer to copy from one card to the next.
   const factValues = summaryFactMenuDetail(input);
-  // ADAAAA-9047: the per-sentence length the band implies. The band is 2-3
-  // sentences / 25-55 words, so a writer that stops at its two shortest fact
-  // sentences lands at 20-23 words — measured on the rev-10 live job `771f42de`,
-  // where the two served bodies read 23 and 20 words and p50 sat at 21.5 against
-  // AC1's 25. Nothing here is a bar: the serve floor stays at `band.floorWords`
-  // and the target band stays exactly `band.targetMinWords..targetMaxWords`.
-  const perSentenceMin = Math.ceil(band.targetMinWords / band.minSentences);
-  // ADAAAA-9106 (writer round 2): the first pass asks for the band MINIMUM plus a
-  // margin, because the exact-minimum arithmetic is what the served copy answers.
-  // The rev-12 grade of the served block `68aa5f97` (job `06aabcd9`) served three
-  // bodies at 22 / 24 / 26 words — p50 24.0 against AC1's 25 — and the 24/26 pair
-  // is exactly `ceil(25/2)=13` words per sentence in two sentences. The writer
-  // obeyed the arithmetic it was given and landed under the bar, so the ask moves
-  // up by a sentence margin (2 words per sentence -> 30 words on the two-sentence
-  // shape) instead of the bar moving down. Measured on the same stored rows: the
-  // clause repair deletes filler AFTER the writer answers, so a body written to
-  // the exact minimum loses ~8-10 words and serves under it.
-  const perSentenceAsk = perSentenceMin + SUMMARY_WRITER_SENTENCE_MARGIN_WORDS;
-  // ADAAAA-9178 (rev-21): whether THREE distinct facts are available, which is the
-  // only honest way to reach AC1's 25-word bar on the live rail without padding.
-  // Two attested actors supply two acts and the clock rides on either; one actor
-  // plus a measured score line supplies an act, the score and the clock. Below
-  // that the writer is asked for the band minimum and told not to pad — the row
-  // cannot reach three facts and a prompt asking for one is the ADAAAA-8971
-  // defect (a menu the row cannot fill).
-  const attestedActorsForDepth = attestedActorNames(input);
-  const thirdFactAvailable =
-    attestedActorsForDepth.length >= 2 || (attestedActorsForDepth.length >= 1 && attestsScore);
+  // ADAAAA-9464 (writer round 4): the ask is now a SELECTOR over the row's own
+  // evidence (`summarySentenceAsk`), not a constant times the band's sentence
+  // floor. The measured premise is AC1's own failing read (`p50 19` on job
+  // `798f21c2`): two attested fact kinds bought two ~12-word sentences, and
+  // nothing in the prompt tied `sentences x words-per-sentence` to the band
+  // target. The selector's formula is stated beside it and carries the invariant
+  // `sentences * perSentenceWords >= band.targetMinWords` for every row with
+  // `>= SUMMARY_MIN_FACT_KINDS` attested kinds; a row below that keeps today's ask
+  // (the ADAAAA-8971 rule: never ask for a fact the menu cannot supply).
+  const ask = summarySentenceAsk(input);
+  // ADAAAA-9178 (rev-21) kept the shape: a row with more fact kinds than the
+  // band's sentence floor is told to spend them as separate sentences instead of
+  // padding two. `ask.sentences` is the budget the formula above actually asks for.
+  const thirdFactAvailable = ask.sentences > band.minSentences;
   // ADAAAA-8803: the depth instruction is a BAND, and the RETRY is told what the
   // refused draft measured. Both fixes answer the same measured defect on the
   // served VOD leg of job `4e5ddf8d`: a compliant draft landed on 41 words
@@ -4089,7 +4226,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     `Rail: ${input.rail}. Write ${band.minSentences}-${band.maxSentences} sentences, ${band.targetMinWords}-${band.targetMaxWords} words.`,
     "Rules:",
     "- State only what the evidence below supports.",
-    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words and never fewer than ${band.targetMinWords}. Write ${band.minSentences}-${band.maxSentences} sentences of at least ${perSentenceAsk} words each: ${band.minSentences} sentences at ${perSentenceAsk} words is ${band.minSentences * perSentenceAsk} words, which clears the band with room. Count the words before you answer — a draft that stops below ${band.targetMinWords} words is a FAILED draft on a card graded on its depth, so add the fact that sentence is missing instead of answering short; only a body written to ${band.targetMinWords}+ words survives the fact clauses being trimmed.`,
+    `- Hit the length band: aim for ${band.targetMinWords}-${band.targetMaxWords} words and never fewer than ${band.targetMinWords}. Write ${band.minSentences}-${band.maxSentences} sentences of at least ${ask.perSentenceWords} words each: ${ask.sentences} sentences at ${ask.perSentenceWords} words is ${ask.budgetWords} words, which clears the band with room. Count the words before you answer — a draft that stops below ${band.targetMinWords} words is a FAILED draft on a card graded on its depth, so add the fact that sentence is missing instead of answering short; only a body written to ${band.targetMinWords}+ words survives the fact clauses being trimmed.`,
     ...retryLines,
     // ADAAAA-8971 (AC5): a row whose evidence attests NO fact kind has an empty
     // menu. Asking it to "carry two facts from the list" would be an instruction
@@ -4183,7 +4320,7 @@ export function buildSummaryPrompt(input: SummaryPromptInput): string {
     "- NEVER append a purpose or manner tail to a sentence: no 'to maintain their offensive position/presence/movement', 'to advance their position', 'to initiate a transition', 'to move the ball toward the opposing side', 'during the play', 'during the sequence' and no 'as the play develops'. Those words name an intention the evidence never measured; the seam deletes the tail, so they buy no length.",
     ...(thirdFactAvailable
       ? [
-          `- Depth comes from a THIRD fact, not from padding. This row can supply ${band.maxSentences} distinct facts, so write ${band.maxSentences} sentences of at least ${perSentenceAsk} words each — each on a different attested actor-and-act, with the clip offset riding on one of them — instead of two short sentences. ${band.maxSentences} sentences at ${perSentenceAsk} words is ${band.maxSentences * perSentenceAsk} words, which clears the length band on facts alone.`,
+          `- Depth comes from a THIRD fact, not from padding. This row can supply ${ask.factUnits} distinct facts, so write ${ask.sentences} sentences of at least ${ask.perSentenceWords} words each — each on a different attested actor-and-act, with the clip offset riding on one of them — instead of two short sentences. ${ask.sentences} sentences at ${ask.perSentenceWords} words is ${ask.budgetWords} words, which clears the length band on facts alone.`,
         ]
       : []),
     // ADAAAA-9121 (writer round 3): the frame ban above stops clock-only copy;

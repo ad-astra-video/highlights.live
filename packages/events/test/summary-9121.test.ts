@@ -180,10 +180,14 @@ describe("ADAAAA-9121 — $0 replay of job 1e0d7187: the stored drafts fail, the
     expect(result.rows.filter((row) => row.served).length).toBeLessThanOrEqual(1);
   });
 
-  it("serves 7/7 when the writer rotates the pair and varies the opening, every body at or above the floor", () => {
+  it("serves 7/7 when the writer rotates the pair and varies the opening, every body at or above the target", () => {
+    // ADAAAA-9464: the floor assertion became the band TARGET, because that is the
+    // bar the gate now reads on a row whose evidence can fill it. The three drafts
+    // that used to serve at 21-23 words carry one more attested fact each; the
+    // rotation (and the AC14.3 sentence bar) is unchanged.
     const result = replay(compliant);
     expect(result.rows.filter((row) => row.served)).toHaveLength(7);
-    for (const row of result.rows) expect(row.words).toBeGreaterThanOrEqual(band.floorWords);
+    for (const row of result.rows) expect(row.words).toBeGreaterThanOrEqual(band.targetMinWords);
   });
 
   it("keeps every served sentence pair under the AC14.3 bar", () => {

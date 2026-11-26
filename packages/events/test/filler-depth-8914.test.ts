@@ -203,17 +203,20 @@ describe("AC14.1/AC14.2 — the served bodies' filler sentences are unattested",
     // offset is neutralised to the row's own attested match clock, so the served
     // text is not the input. Writing each row's attested stamp directly keeps the
     // fact-per-sentence proof byte-for-byte (18:13 / 22:19 / 18:13).
+    // ADAAAA-9464: the live serve bar is the 25-word TARGET on these rows, so each
+    // fixture carries one more bounded act (the fact-per-sentence shape is
+    // unchanged; only the word count is).
     const repaired = [
-      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid intercepts the ball near the box and counters.",
-      "The scoreboard moves to 2-2 at the 22:19 mark of the match. Barcelona recovers the ball near the wing and counters.",
-      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid threads a pass to the left flank.",
+      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid intercepts the ball near the box, counters and wins it back.",
+      "The scoreboard moves to 2-2 at the 22:19 mark of the match. Barcelona recovers the ball near the wing, counters into space and threads a pass wide.",
+      "The scoreboard moves to 2-1 at the 18:13 mark of the match. Real Madrid threads a pass to the left flank and sets up the counter.",
     ];
     const rows = [ROW_AED6, ROW_DC96, ROW_7574];
     rows.forEach((evidence, i) => {
       const decision = gateSummaryDetail(repaired[i], evidence);
       expect({ i, violations: decision.violations }).toEqual({ i, violations: [] });
       expect(decision.summary).toBe(repaired[i]);
-      expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
+      expect(decision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.targetMinWords);
       expect(summaryViolations(repaired[i], evidence)).toEqual([]);
     });
   });

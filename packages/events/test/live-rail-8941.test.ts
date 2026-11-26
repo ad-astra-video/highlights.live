@@ -117,7 +117,7 @@ describe("ADAAAA-8941 defect 1 — a possession / ball-forward / sustained-play 
     // The refusal is the prose, not the row: Barcelona is an attested actor and the
     // board's own `matchClock.token` is a fact, so a body naming both serves.
     const honest =
-      "Barcelona passes wide at the 18:12 mark of the match. Barcelona completes the move down the wing at the 18:12 mark.";
+      "Barcelona passes wide at the 18:12 mark of the match. Barcelona completes the move down the wing at the 18:12 mark and keeps the move alive.";
     const decision = gateSummaryDetail(honest, ROW_23F9.evidence);
     expect(decision.violations).toEqual([]);
     expect(decision.summary).toBe(honest);
@@ -149,7 +149,7 @@ function attestedActionKinds(body: string, evidence: SummaryEvidence): boolean {
 describe("ADAAAA-8941 defect 2 — the served body prints the row's OWN match clock", () => {
   it("swaps the clip offset for `matchClock.token` and renames the clip frame", () => {
     const body =
-      "Barcelona passes wide at 1:42 into the clip. Barcelona completes the move down the wing at 1:42 into the clip.";
+      "Barcelona passes wide at 1:42 into the clip. Barcelona completes the move down the wing at 1:42 into the clip and keeps the move alive.";
     const served = serveAttestedMatchClock(body, ROW_23F9.evidence);
     expect(served.token).toBe("18:12");
     expect(served.served).toEqual(["1:42"]);
@@ -161,7 +161,7 @@ describe("ADAAAA-8941 defect 2 — the served body prints the row's OWN match cl
 
   it("serves that clock through the gate, so a census reads `servesMatchClock: true`", () => {
     const body =
-      "Barcelona passes wide at 1:42 into the clip. Barcelona completes the move down the wing at 1:42 into the clip.";
+      "Barcelona passes wide at 1:42 into the clip. Barcelona completes the move down the wing at 1:42 into the clip and keeps the move alive.";
     const decision = gateSummaryDetail(body, ROW_23F9.evidence);
     expect(decision.summary).not.toBeNull();
     const report = summaryClockReport(decision.summary as string, ROW_23F9.evidence);
@@ -173,7 +173,7 @@ describe("ADAAAA-8941 defect 2 — the served body prints the row's OWN match cl
 
   it("leaves a body that already prints the attested token byte-identical", () => {
     const honest =
-      "Barcelona passes wide at the 18:12 mark of the match. Barcelona completes the move down the wing at the 18:12 mark.";
+      "Barcelona passes wide at the 18:12 mark of the match. Barcelona completes the move down the wing at the 18:12 mark and keeps the move alive.";
     expect(serveAttestedMatchClock(honest, ROW_23F9.evidence).served).toEqual([]);
     expect(neutraliseMatchClockFrame(honest, ROW_23F9.evidence).text).toBe(honest);
     expect(gateSummaryDetail(honest, ROW_23F9.evidence).summary).toBe(honest);
@@ -236,10 +236,13 @@ const ROW_771_1EC1 = goalRow("1ec16b32", 256.2220001220703, "39.24", 2364, { fro
 /** `8cafc2a0`: the clip reference sits BEFORE the stamp. */
 const ROW_771_8CAF = goalRow("8cafc2a0", 464.44000005722046, "42:51", 2571, { from: "0-1", to: "1-1" }, true);
 
+// ADAAAA-9464: the served bytes are verbatim, but the live serve bar is the
+// 25-word target, so the fixture carries the scoreboard reading in the clock
+// sentence (27 words) to stay the body these clock tests are about.
 const SERVED_1EC1 =
-  "Chelsea scores to move the scoreboard to 0-1. Liverpool is in the sequence as the scoreboard moves from 0-0 to 0-1 at 4:16.";
+  "Chelsea scores to move the scoreboard to 0-1. Liverpool is in the sequence as the scoreboard moves from 0-0 to 0-1 at 4:16 and the scoreboard now reads 0-1.";
 const SERVED_8CAF =
-  "The scoreboard moves to 1-1 during this sequence. Chelsea is involved in the play as the clip progresses from 7:44.";
+  "The scoreboard moves to 1-1 during this sequence. Chelsea is involved in the play as the clip progresses from 7:44, and the scoreboard reads 1-1 from then on.";
 
 describe("ADAAAA-8941 defect 2 — the second live reading's clock shapes", () => {
   it("serves the token on a bare anchored stamp, dot shape included", () => {

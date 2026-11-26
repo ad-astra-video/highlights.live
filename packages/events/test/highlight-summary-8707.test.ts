@@ -85,7 +85,11 @@ describe("AC9 — fact density, not filler", () => {
     // edge of the box finds the far corner." — no attested fact, so the clause
     // repair deletes it and the body falls under the floor. The fixture keeps its
     // NAME-FREE shape (the bar under test) by carrying the clock instead.
-    const body = "The equaliser levels it at 2-2 in the second half. The move ends at 2:38 into the clip after the restart.";
+    // ADAAAA-9464: the serve bar is the live TARGET on this row (score + clock),
+    // so the fixture carries the score line a second time inside the clock
+    // sentence — still name-free, still `[score, clock]`, now 28 words.
+    const body =
+      "The equaliser levels it at 2-2 in the second half. The move ends at 2:38 into the clip after the restart and the scoreboard shows 2-2 once more.";
     const ev = live();
     // Rev 4 (ADAAAA-8735): the context names Northbridge/Riverside but the body
     // names nobody, so `action` is NOT credited — the score line plus the clock
@@ -128,7 +132,11 @@ describe("AC9 — fact density, not filler", () => {
     // "A low drive … finds the far corner" (no attested fact). A sentence-initial
     // "The Champions League …" run is read as a name by the grounding gate, so the
     // fixture keeps the competition in the first sentence only.
-    const body = "The move develops at 2:38 in the Champions League tie. The clock still reads 2:38 through the next few passes.";
+    // ADAAAA-9464: 25 words is the serve bar on a clock + venue row, so the
+    // fixture carries a third clock sentence (the competition stays in sentence 1,
+    // where the grounding gate reads it as a venue rather than a name).
+    const body =
+      "The move develops at 2:38 in the Champions League tie. The clock still reads 2:38 through the next few passes. The tie stays level as the passage runs on toward 2:41.";
     // Rev 4 (ADAAAA-8735): action needs the body to NAME an attested actor, and
     // this body does not — clock + venue are the two facts it carries.
     expect(attestedSummaryFactKinds(body, ev)).toEqual(["clock", "venue"]);
@@ -174,8 +182,10 @@ describe("AC10 — role nouns are attestation claims", () => {
 
   it("keeps a role noun the transcript attests", () => {
     const ev = live({ transcript: "the midfielder wins it back and the move builds" });
+    // ADAAAA-9464: the row's serve bar is 25 words; the score line rides inside
+    // the clock sentence so the body carries two facts and 27 words.
     const body =
-      "The midfielder drives forward at 2-2 in the second half. The move builds on the left at 2:38 into the clip.";
+      "The midfielder drives forward at 2-2 in the second half. The move builds on the left at 2:38 into the clip as the scoreboard shows 2-2.";
     expect(gateSummaryDetail(body, ev).gate).toBe("accepted");
   });
 

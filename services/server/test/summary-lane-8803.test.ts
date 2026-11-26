@@ -64,6 +64,16 @@ const STORED_DRAFT_34 =
 const REPAIRED =
   "Barcelona pulls level at 2-2 as the scoreboard moves on from 2-1 late in this clip. The equaliser lands at the 1:27 mark of the clip. Barcelona works the ball into the box and finishes the move from close range. The scoreline stays at 2-2 as Barcelona keeps possession through the restart.";
 
+/** ADAAAA-9464: the same repair with its fact sentence long enough to clear the
+ *  45-word VOD serve TARGET after the padding strip (the repair above lands 43,
+ *  which the target bar refuses on the first call). Used by the AC8 case below, so
+ *  the repeat path is measured on a body the depth bar accepts. */
+const REPAIRED_TARGET =
+  "Barcelona pulls level at 2-2 as the scoreboard moves on from 2-1 late in this clip. " +
+  "The equaliser lands at the 1:27 mark of the clip. " +
+  "Barcelona works the ball into the box and finishes the move from close range with a low drive toward the corner. " +
+  "The scoreline stays at 2-2 as Barcelona keeps possession through the restart.";
+
 const cfg = (over: Record<string, unknown> = {}) => ({
   decideUrl: "http://decide.test",
   decideFee: 0.0033,
@@ -155,16 +165,19 @@ describe("ADAAAA-8803 — the retry is told the measured shortfall", () => {
     // The job already served this body's opening run ON THE SAME WINDOW, so the
     // scoped repeat key (ADAAAA-8969) regenerates once for a body that is a
     // different moment or different copy — the retry carries no depth directive.
-    state.servedOpenings.add(summaryOpeningRun(REPAIRED));
+    state.servedOpenings.add(summaryOpeningRun(REPAIRED_TARGET));
     state.servedBodies.push({
       highlightId: "served-before",
       windowTs: EVIDENCE.windowTs ?? null,
       windowDurationS: EVIDENCE.windowDurationS ?? null,
       clockToken: null,
-      body: REPAIRED,
-      opening: summaryOpeningRun(REPAIRED),
+      body: REPAIRED_TARGET,
+      opening: summaryOpeningRun(REPAIRED_TARGET),
     });
-    const f = stubFetch([ok(REPAIRED), ok(REPAIRED.replace("Barcelona pulls level at 2-2", "The away side pulls level at 2-2"))]);
+    const f = stubFetch([
+      ok(REPAIRED_TARGET),
+      ok(REPAIRED_TARGET.replace("Barcelona pulls level at 2-2", "The away side pulls level at 2-2")),
+    ]);
     const result = await runSummaryForRow(
       store,
       cfg({ fetchImpl: f.fn }) as any,

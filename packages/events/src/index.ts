@@ -2557,7 +2557,12 @@ export const HighlightRecordSchema = z.object({
    *  regeneration (the only path that still bills two). Present only on a row that
    *  took one of those repairs, so the meter can prove every 2-call row was on a
    *  permitted path. */
-  summaryRetryReason: z.enum(["repeat-opening", "repeat-sentence", "filler-repair"]).optional(),
+  // ADAAAA-9464 (writer round 4) adds `depth-repair`: the same single AC5 slot,
+  // spent when the refusal is the band-TARGET depth bar (`too-few-words` on a row
+  // whose evidence can fill it) instead of a deleted filler clause.
+  summaryRetryReason: z
+    .enum(["repeat-opening", "repeat-sentence", "filler-repair", "depth-repair"])
+    .optional(),
   /** ADAAAA-9085: the AC14 clause repair RAN and its own re-gate refused the row,
    *  named as `prune:<drop name>` (e.g. `prune:filler`, `prune:gate`). Absent when
    *  the row never reached a repair. `summaryViolations` / `summaryWordCount` /

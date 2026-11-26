@@ -212,7 +212,13 @@ describe("ADAAAA-8914 AC14.3 — one job may not serve the same sentence twice",
       body: servedBodyAed6,
       opening: summaryOpeningRun(servedBodyAed6),
     });
-    const repeated = `The scoreboard changes from 2-1 to 2-2 at the 22:19 mark of the match. ${servedSentence}`;
+    // ADAAAA-9464: the serve bar for this row is the 25-word live TARGET, so the
+    // reply carries three fact sentences; the AC14.3 drop removes the repeated one
+    // and the two survivors clear the target (the one-call repair the test is
+    // about stays reachable).
+    const repeated =
+      `The scoreboard changes from 2-1 to 2-2 at the 22:19 mark of the match. ${servedSentence} ` +
+      "Barcelona recovers the ball and counters at the 22:19 mark of the match.";
     const { store, patches } = stubStore();
     const f = stubFetch([repeated, repeated]);
     const result = await runSummaryForRow(

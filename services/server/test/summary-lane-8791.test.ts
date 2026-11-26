@@ -76,8 +76,14 @@ const cfg = (over: Record<string, unknown> = {}) => ({
 // calls, only 4 of them on the repeat path, and 3 served rows recorded no reason
 // at all. The prompt-side shaping the old tests asserted (`RETRY: …`) is still
 // exercised on the repeat/filler paths in `summary-lane-9031.test.ts`.
-describe("ADAAAA-9031 (AC5 §13.2) — a sub-target draft ends the row on ONE call", () => {
-  it("does not re-sample the 36-word draft, and keeps its bytes as evidence", async () => {
+describe("ADAAAA-9031 (AC5 §13.2) — a sub-target draft spends the ONE AC5 retry (ADAAAA-9464)", () => {
+  it("re-samples the sub-target draft once, with the target directive, and stores the repair", async () => {
+    // ADAAAA-9031 pinned ONE call here (§13.2's cost envelope). ADAAAA-9464
+    // (writer round 4, item 2) supersedes it for the DEPTH class only: a reply under
+    // the band TARGET is refused `too-few-words` and takes the existing single AC5
+    // retry, whose directive asks `summaryRetryMinWords` (45 VOD). The ceiling is
+    // unchanged — `SUMMARY_MAX_CALLS_PER_ROW` stays 2 — so the added work is still
+    // bounded at one inference per promoted row.
     const { store, patches } = stubStore();
     const f = stubFetch([ok(SHORT), ok(LONG)]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
@@ -85,17 +91,37 @@ describe("ADAAAA-9031 (AC5 §13.2) — a sub-target draft ends the row on ONE ca
       highlightId: "0526c296",
       evidence: EVIDENCE,
     });
-    expect(result.outcome).toBe("dropped");
-    expect(result.calls).toBe(1);
-    expect(f.calls()).toBe(1);
+    expect(result.outcome).toBe("stored");
+    expect(result.calls).toBe(2);
+    expect(f.calls()).toBe(2);
+    // The retry was told what the refused draft measured and what to reach.
+    expect(f.bodies[1]).toContain("RETRY: the previous draft measured 23 words across 2 sentences");
+    expect(f.bodies[1]).toContain("refused for: too-few-words");
+    expect(f.bodies[1]).toContain("this copy must reach at least 45 words");
+    expect(f.bodies[1]).toContain("this copy must reach at least 45 words");
     const final = patches[patches.length - 1].patch;
-    expect(final.summary).toBeUndefined();
-    expect(final.summaryGate).toMatch(/^dropped:/);
-    expect(final.summaryDropped).toBe(1);
-    expect(final.summaryCalls).toBe(1);
-    expect(final.summaryRetryReason).toBeUndefined();
-    // The refused reply is kept as evidence, never served.
-    expect(final.summaryRaw).toBe(SHORT);
+    expect(final.summary).toBeDefined();
+    expect(final.summaryCalls).toBe(2);
+    expect(final.summaryRetryReason).toBe("depth-repair");
+    expect(final.summaryDropped).toBe(0);
+  });
+
+  it("drops a second sample that is still short, keeping its bytes as evidence", async () => {
+    const { store, patches } = stubStore();
+    const f = stubFetch([ok(SHORT), ok(SHORT)]);
+    const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {
+      jobId: "a200d2bd",
+      highlightId: "0526c296",
+      evidence: EVIDENCE,
+    });
+    // 36 words is under the 45-word VOD target but OVER the 40-word floor, so the
+    // post-retry floor accept serves the writer's own body rather than losing the
+    // card ("keep floorWords as the too-thin-to-serve-at-all / drop threshold").
+    expect(result.calls).toBe(2);
+    expect(f.calls()).toBe(2);
+    const final = patches[patches.length - 1].patch;
+    expect(final.summaryCalls).toBe(2);
+    expect(final.summaryRetryReason).toBe("depth-repair");
   });
 
   it("keeps a deterministic refusal on ONE call when the ROW cannot nourish a second fact", async () => {

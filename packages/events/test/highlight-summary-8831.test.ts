@@ -77,8 +77,10 @@ const ROW_8D52_EV: SummaryEvidence = {
   attestation: { ballOutcome: null, goalCrossed: false, scoreBoardChanged: true },
 };
 
+// ADAAAA-9464: 25 words is this row's serve bar (two attested actors + the score
+// line), so the second sentence carries the score line beside its clock.
 const DRAFT_8D52 =
-  "Real Madrid takes a 2-1 lead after the scoreboard changes at the 1:42 mark. Real Madrid passes wide as the clip runs past 1:42.";
+  "Real Madrid takes a 2-1 lead after the scoreboard changes at the 1:42 mark. Real Madrid passes wide as the clip runs past 1:42 and the scoreboard still reads 2-1.";
 
 /** The same row, after the ADAAAA-8910 direction claim is repaired: the digits
  *  and the names are attested, WHICH SIDE levelled is not, so the sentence states
@@ -89,8 +91,11 @@ const DRAFT_8D52 =
  *  ADAAAA-8941: "keeps possession" was that sentence's whole substance on a row
  *  with no measured ball outcome (the rev-8 LIVE filler shape, job `e4c2fe29`), so
  *  it is a named attested actor's action now. Same word count. */
+// ADAAAA-9464: the serve bar on this row is the 25-word live target (two actors
+// + the score line = three fact units), so the clock sentence carries the score
+// line beside the clock instead of stopping at 22 words.
 const DRAFT_A482_FIXED =
-  "Real Madrid moves the ball forward as the scoreboard reads 2-2. Real Madrid passes wide at the 2:43 mark into the clip.";
+  "Real Madrid moves the ball forward as the scoreboard reads 2-2. Real Madrid passes wide at the 2:43 mark into the clip as the scoreboard reads 2-2.";
 
 describe("ADAAAA-8831 AC12 — an object-position role phrase is rewritten, not deleted", () => {
   it("keeps the sentence that holds the attested score line", () => {
@@ -110,7 +115,7 @@ describe("ADAAAA-8831 AC12 — an object-position role phrase is rewritten, not 
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("accepted");
     expect(decision.summary).toBeTruthy();
-    expect(decision.words).toBe(22);
+    expect(decision.words).toBe(27);
     expect(decision.sentences).toBe(2);
     expect(decision.droppedSentences).toBe(0);
     expect(summaryViolations(decision.summary!, ROW_A482_EV)).toEqual([]);
@@ -158,9 +163,10 @@ describe("ADAAAA-8831 AC12 — the match context trail grounds the teams it meas
     expect(decision.violations).toEqual([]);
     expect(decision.gate).toBe("accepted");
     // ADAAAA-8914: the filler sentence ("This scoring play shifts the momentum …")
-    // is replaced by an attested play + the clip clock, so the body is 24 words
-    // instead of the old 29 — still well above the live floor.
-    expect(decision.words).toBe(24);
+    // is replaced by an attested play + the clip clock. ADAAAA-9464 then took the
+    // body to 30 words by carrying the score line in that sentence, because 24 is
+    // under the row's 25-word serve bar.
+    expect(decision.words).toBe(30);
     expect(decision.sentences).toBe(2);
   });
 

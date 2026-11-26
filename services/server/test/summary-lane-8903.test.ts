@@ -139,8 +139,10 @@ const cfg = (over: Record<string, unknown> = {}) => ({
 describe("ADAAAA-8903 → ADAAAA-8934 — the census replies assert no fact; a bounded act serves", () => {
   /** The reply shape the fixed prompt asks for on this row: a bounded act by a
    *  named attested actor plus the window clock, with no ball outcome claimed. */
+  // ADAAAA-9464: 27 words — the live serve bar is the 25-word TARGET, so the
+  // bounded-act reply has to clear it before "serves on the FIRST call" can hold.
   const BOUNDED_ACT_C3257097 =
-    "Barcelona intercepts the ball near the wing at the 7:41 mark of the clip. Real Madrid recovers the ball and counters as the passage runs past 7:41.";
+    "Barcelona intercepts the ball near the wing at the 7:41 mark of the clip. Real Madrid recovers the ball and counters into space as the passage runs past 7:41 of the clip.";
 
   it("credits NO action for the stored sustained-play reply (row c3257097)", () => {
     const evidence = evidenceFor(ROW_C3257097);
@@ -262,13 +264,15 @@ describe("ADAAAA-8903 — §15.4 refusal detail on the row", () => {
 
     // A grounded-length body naming an entity the row does not attest: this is a
     // COMPLIANCE refusal, and its word count sits above the floor.
+    // ADAAAA-9464: the compliance body must clear the 25-word serve TARGET, so the
+    // refusal it earns is the compliance one and never a depth one.
     const ungrounded =
-      "Chelsea keeps possession at the 7:41 mark of the clip and builds up patiently. Barcelona keeps possession as the sequence develops across the pitch.";
+      "Chelsea keeps possession at the 7:41 mark of the clip and builds up patiently towards the box. Barcelona keeps possession as the sequence develops across the pitch and the ball is worked wide.";
     const ungroundedDecision = gateSummaryDetail(ungrounded, evidence);
     expect(ungroundedDecision.summary).toBeNull();
     expect(ungroundedDecision.violations).toContain("ungrounded-name");
     expect(ungroundedDecision.violations).not.toContain("too-few-words");
-    expect(ungroundedDecision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
+    expect(ungroundedDecision.words).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.targetMinWords);
   });
 
   it("persists the detail through the row schema (zod strips undeclared fields)", async () => {

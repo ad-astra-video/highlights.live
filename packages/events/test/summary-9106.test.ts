@@ -36,6 +36,7 @@ import {
   SUMMARY_WRITER_SENTENCE_MARGIN_WORDS,
   summaryBand,
   summaryRetryMinWords,
+  summaryServeWordBar,
   summaryWordCount,
   type SummaryEvidence,
 } from "@highlights/events";
@@ -88,12 +89,23 @@ const promptLine = (prompt: string, needle: string): string =>
 
 describe("ADAAAA-9106 — the first pass asks for the depth, not the exact minimum", () => {
   it("asks a live row for 15 words per sentence (30 words on two sentences)", () => {
+    // ADAAAA-9464 (writer round 4): the ask is evidence-proportional, so the
+    // sentence budget is the fact UNITS the row can spend (two actors + the
+    // measured score line = 3) and `c0c7a982` is asked for three sentences at 15
+    // words. The per-sentence number is unchanged (9106's 2-word margin), and the
+    // 2-unit case still reads exactly the 9106 shape pinned below.
     const prompt = buildSummaryPrompt(measuredChangeRow());
-    expect(prompt).toContain("Write 2-3 sentences of at least 15 words each: 2 sentences at 15 words is 30 words");
+    expect(prompt).toContain("Write 2-3 sentences of at least 15 words each: 3 sentences at 15 words is 45 words");
+    const twoUnits = buildSummaryPrompt(
+      measuredChangeRow({ scoreTransition: null, attestation: null, matchClock: null,
+        matchContext: { sport: "soccer", teams: [{ name: "Real Madrid", side: "home" }] } })
+    );
+    expect(twoUnits).toContain("Write 2-3 sentences of at least 15 words each: 2 sentences at 15 words is 30 words");
     // The ask is the band arithmetic plus the margin, and it stays inside the band.
     expect(SUMMARY_WRITER_SENTENCE_MARGIN_WORDS).toBe(2);
     expect(2 * (Math.ceil(SUMMARY_LIVE_BAND.targetMinWords / SUMMARY_LIVE_BAND.minSentences) + SUMMARY_WRITER_SENTENCE_MARGIN_WORDS)).toBe(30);
     expect(2 * 15).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.targetMaxWords);
+    expect(3 * 15).toBeLessThanOrEqual(SUMMARY_LIVE_BAND.targetMaxWords);
   });
 
   it("stops licensing a body under the band minimum as servable", () => {
@@ -215,12 +227,26 @@ describe("ADAAAA-9106 — no bar moved", () => {
     expect(SUMMARY_SENTENCE_REPEAT_THRESHOLD).toBe(0.8);
   });
 
-  it("keeps the 18-word floor accept on a live row", () => {
+  it("moved the serve bar to the TARGET on a row that can fill it (ADAAAA-9464 supersedes the floor accept)", () => {
+    // ADAAAA-9464 (writer round 4) item 2: a reply below `targetMinWords` is
+    // refused `too-few-words` and takes the existing single AC5 retry. This test
+    // pinned the OPPOSITE (the 18-word floor accept) for ADAAAA-9106; the newer
+    // ticket names that accept as the measured defect — a 19-word body served
+    // `accepted` on AC1's own `p50 >= 25` bar — so the assertion is inverted here,
+    // not deleted. The band constants are untouched (pinned above and below).
     const evidence = unmeasuredScoreRow();
     const short =
       "Real Madrid completes a pass at 1:42 into the clip to move the ball forward. Barcelona recovers the ball to initiate a counter.";
     expect(summaryWordCount(short)).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
     expect(summaryWordCount(short)).toBeLessThan(SUMMARY_LIVE_BAND.targetMinWords);
-    expect(gateSummaryDetail(short, evidence).summary).not.toBeNull();
+    const decision = gateSummaryDetail(short, evidence);
+    expect(decision.summary).toBeNull();
+    expect(decision.violations).toContain("too-few-words");
+    // AC2's exemption: a row whose evidence cannot supply two fact kinds keeps the
+    // floor bar, so the accept still exists where the target is unreachable.
+    expect(summaryServeWordBar(evidence)).toBe(SUMMARY_LIVE_BAND.targetMinWords);
+    const bare = unmeasuredScoreRow({ matchContext: null, attestation: null, matchClock: null, windowTs: null } as never);
+    expect(summaryServeWordBar(bare)).toBe(SUMMARY_LIVE_BAND.floorWords);
+    expect(SUMMARY_LIVE_BAND.floorWords).toBe(18);
   });
 });

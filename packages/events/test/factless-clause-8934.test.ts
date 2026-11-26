@@ -25,6 +25,8 @@ import {
   attestedFactKinds,
   attestedSummaryFactKinds,
   buildSummaryPrompt,
+  summaryRetryMinWords,
+  summaryServeWordBar,
   dropFillerSentences,
   gateSummaryDetail,
   sentenceActionAttested,
@@ -168,24 +170,39 @@ describe("ADAAAA-8934 AC1-VOD — the repair restores the floor with attested fa
       expect(sentenceFactKinds(sentence, ROW_8216).length).toBeGreaterThan(0);
       expect(unattestedSentences(sentence, ROW_8216)).toEqual([]);
     }
-    // … and the repaired body clears the VOD floor the rev-8 repair starved.
+    // … and the repaired body clears the VOD floor the rev-8 repair starved. Since
+    // ADAAAA-9464 the repair AIMS at the serve bar (the band target, 45 on VOD);
+    // on this stored row the pool is exhausted at 43, which is the row's measured
+    // limit and is reported here rather than papered over.
     const words = summaryWordCount(drop.text);
     expect(words).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
+    expect(summaryServeWordBar(ROW_8216)).toBe(SUMMARY_VOD_BAND.targetMinWords);
+    expect(words).toBe(43);
     expect(summarySentencesOf(drop.text).length).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.minSentences);
   });
 
-  it("serves the row instead of dropping it, with no factless sentence", () => {
+  it("refuses the row on DEPTH only after the repair, so the AC5 retry asks for the 45-word target", () => {
+    // ADAAAA-8934 pinned this row as SERVED (43 repaired words against the 40-word
+    // VOD floor). ADAAAA-9464 moved the refusal to the band target (45 on VOD), so
+    // the same repair is now measured honestly: it is fact-per-sentence and it
+    // deleted both factless clauses, but the pool stops at 43 — 2 short of the
+    // target — and the row takes the single AC5 retry, whose directive asks for
+    // exactly `summaryRetryMinWords` (45). No factless sentence reaches a card.
     const decision = gateSummaryDetail(SERVED_8216, ROW_8216);
-    expect(decision.violations).toEqual([]);
-    expect(decision.summary).not.toBeNull();
-    const served = decision.summary as string;
-    // The measured rev-8 defect: 7 of 18 served sentences carried no fact.
-    expect(unattestedSentences(served, ROW_8216)).toEqual([]);
-    for (const sentence of FACTLESS) expect(served).not.toContain(sentence);
-    // Instruments: the repair's record rides the decision.
+    expect(decision.summary).toBeNull();
+    expect(decision.violations).toContain("too-few-words");
+    expect(decision.violations).not.toContain("too-few-facts");
     expect(decision.droppedClauses).toHaveLength(2);
     expect(decision.substitutedClauses.length).toBeGreaterThan(0);
     expect(decision.repairedWords).toBeGreaterThanOrEqual(SUMMARY_VOD_BAND.floorWords);
+    expect(decision.repairedWords).toBeLessThan(SUMMARY_VOD_BAND.targetMinWords);
+    for (const sentence of FACTLESS) expect(decision.substitutedClauses.join(" ")).not.toContain(sentence);
+    // The retry directive the lane hands the second sample.
+    const retry = buildSummaryPrompt({
+      ...ROW_8216,
+      retry: { words: decision.words, sentences: decision.sentences, violations: decision.violations },
+    });
+    expect(retry).toContain(`must reach at least ${summaryRetryMinWords(SUMMARY_VOD_BAND)} words`);
   });
 
   it("keeps the body's own bytes when the deletion already clears the band", () => {

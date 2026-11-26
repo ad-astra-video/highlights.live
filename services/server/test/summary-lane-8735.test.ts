@@ -45,13 +45,15 @@ const teamContext = (extra: Partial<SummaryEvidence> = {}): SummaryEvidence =>
 // ADAAAA-8934/8941: the second sentence is a BOUNDED act by a named attested
 // actor — a possession tail is a sustained STATE the served gate refuses, so the
 // clause repair would rewrite the served text before the opening guard ran.
+// ADAAAA-9464: the live serve bar is the 25-word TARGET, so each body carries one
+// more bounded act in its second sentence. The shared opening run is unchanged.
 const CLOCK_A =
-  "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing.";
+  "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing and clears it upfield at 3:23 of the clip.";
 const CLOCK_B =
-  "At 3:57, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing.";
+  "At 3:57, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing and clears it upfield at 3:57 of the clip.";
 /** A body that clears the gate with a DIFFERENT opening run. */
 const DISTINCT =
-  "A low drive from Northbridge is blocked at 3:30 at the edge of the box. Northbridge recovers the ball and counters down the left.";
+  "A low drive from Northbridge is blocked at 3:30 at the edge of the box. Northbridge recovers the ball and counters down the left at 3:30 of the clip.";
 /** The rev-3 served body the ticket names: clock plus a bare verb, no actor. */
 const BARE_VERB =
   "At 2:53, the ball shoots on the left side of the field. This action occurs during the match as the play develops toward the wing.";
@@ -204,7 +206,7 @@ describe("AC9 rev 4 — action needs a named attested actor at the lane seam", (
     // "This action occurs during the match as the play develops toward the wing.",
     // asserts nothing and is deleted by the clause repair).
     const body =
-      "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing.";
+      "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball as the play develops toward the wing and clears it upfield at 3:23 of the clip.";
     const f = stubFetch([ok(body)]);
     const run = cfg({ fetchImpl: f.fn });
     const result = await runSummaryForRow(

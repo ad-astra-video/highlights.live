@@ -197,7 +197,11 @@ describe("ADAAAA-9052 — a row with no other attested fact still drops `repeat`
     // what the repair measured (`filler`: a remainder under the band floor) and carries
     // the repair's own post-prune numbers, instead of the pre-prune `repeat`.
     expect(result.reason).toBe("filler");
-    expect(result.calls).toBe(1);
+    // ADAAAA-9464: the reply is 24 words — under the live 25-word serve target — so
+    // it spends the single AC5 depth retry first; the second sample is byte-identical
+    // and the row still drops with the repair's own numbers (never padded to the
+    // floor, which is the assertion this test exists for).
+    expect(result.calls).toBe(2);
     const patch = patches.at(-1)!.patch;
     expect(String(patch.summaryGate)).toBe("dropped:filler");
     expect(patch.summary).toBeUndefined();

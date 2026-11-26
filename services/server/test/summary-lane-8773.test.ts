@@ -147,8 +147,12 @@ describe("ADAAAA-8773 — deterministic refusal ends the row on ONE call", () =>
     // cost of re-sampling refusals. The fixture still carries two credited kinds,
     // so `too-few-facts` is NOT the cause.
     const { store, patches } = stubStore();
+    // ADAAAA-9464: the shape refusal must not be a DEPTH refusal (depth now takes
+    // the AC5 retry) and must not be one the clause repair can fix (that buys the
+    // filler retry), so the fixture is 61 words carrying `speculative-verb`
+    // ("appeared to") — a non-deterministic refusal with nothing to repair.
     const f = stubFetch([
-      ok("At 0:24 Manuel Ordoñez scores for Real Madrid."),
+      ok("At 0:24 Manuel Ordoñez scores for Real Madrid and the move opens up along the wing for the visitors. Real Madrid works the ball into the box before the finish, and Ordoñez appeared to be first to the loose ball at 0:24 into the clip. Carlos Javier carries the move forward again at 0:24 into the clip as the passage closes."),
       ok(CLOCK_ANCHORED_MATCH_CLOCK),
     ]);
     const result = await runSummaryForRow(store, cfg({ fetchImpl: f.fn }) as any, {

@@ -74,8 +74,10 @@ const liveEvidence = (over: Partial<SummaryEvidence> = {}): SummaryEvidence => (
   ...over,
 });
 
-const ROW_A = "Real Madrid wins the ball back at 11:31 of the match. Barcelona recovers and threads a pass through midfield inside a 15-second window.";
-const ROW_B = "Barcelona dispossesses at 22:13 of the match and turns the passage into a counter. Portugal crosses at 22:13 of the match and recovers the loose ball.";
+// ADAAAA-9464: the live serve bar is the 25-word TARGET, so both cards carry a few
+// more words around the SAME acts (the pairs the assertions read are unchanged).
+const ROW_A = "Real Madrid wins the ball back at 11:31 of the match after a long spell of play in midfield. Barcelona recovers and threads a pass through midfield inside a 15-second window in the closing stages of the move.";
+const ROW_B = "Barcelona dispossesses at 22:13 of the match and turns the passage into a counter in the closing stages of the move. Portugal crosses at 22:13 of the match and recovers the loose ball after a long spell of play.";
 
 describe("ADAAAA-9121 — the lane rotates the job's spent actor-and-act pairs", () => {
   it("accumulates what a served body spent and renders it on the next card's first pass", async () => {

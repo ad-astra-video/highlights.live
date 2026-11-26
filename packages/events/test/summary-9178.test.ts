@@ -185,14 +185,19 @@ describe("ADAAAA-9178 gate — what serves after the seam", () => {
     expect(summaryWordCount(decision.summary as string)).toBeGreaterThanOrEqual(SUMMARY_LIVE_BAND.floorWords);
   });
 
-  it("keeps a padded body's bytes when the padding is the only thing holding it over the floor", () => {
-    // 21 words before, 16 after the strip: the seam serves the writer's bytes and the
-    // prompt (which now bans the tail) is the fix for this row.
+  it("refuses a padded body under the target instead of serving the padding (ADAAAA-9464)", () => {
+    // 21 words before, 16 after the strip. ADAAAA-9178 served the writer's padded
+    // bytes here (the padding was "the only thing holding it over the FLOOR").
+    // ADAAAA-9464 moves the bar to the band TARGET, so the choice is no longer
+    // "serve it padded or drop it": a body at 21 words is refused `too-few-words`
+    // on the same single AC5 retry that asks for 25, and a padded body never
+    // reaches a card — "a padded body is a fail, not a pass" (9464 premise guard).
     const evidence = liveRow({ windowTs: 18, matchClock: null });
     const body = "Portugal recovers the ball in the middle at 0:18 into the clip. Barcelona then crosses the ball to initiate a transition.";
     const decision = gateSummaryDetail(body, evidence);
-    expect(decision.purposeTails).toEqual([]);
-    expect(decision.summary).toBe(body);
+    expect(decision.summary).toBeNull();
+    expect(decision.violations).toContain("too-few-words");
+    expect(summaryWordCount(body)).toBeLessThan(SUMMARY_LIVE_BAND.targetMinWords);
   });
 
   it("does not move a floor, a target or the retry margin", () => {

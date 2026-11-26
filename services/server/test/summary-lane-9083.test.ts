@@ -41,8 +41,10 @@ const evidence = () => summaryEvidenceForRow(ROW as any, "vod");
 
 /** The served-shape draft: 43 words, every sentence carries the score line or the
  *  clip offset, and it opens on the frame. */
+// ADAAAA-9464: the 45-word VOD serve target applies AFTER the lead is stripped, so
+// the fixture carries 56 words and still opens on the frame.
 const FRAMED_SERVING =
-  "The scene opens with the scoreboard move from 2-1 to 2-2 at 1:24 into the clip. Barcelona carry the 2-2 scoreboard at 1:24. Real Madrid answer inside the same 1:24 window with the 2-2 scoreboard. Barcelona 2-2 Real Madrid is the scoreboard the window records at 1:24.";
+  "The scene opens with the scoreboard move from 2-1 to 2-2 at 1:24 into the clip. Barcelona carry the 2-2 scoreboard at 1:24. Real Madrid answer inside the same 1:24 window with the 2-2 scoreboard. Real Madrid intercepts the ball near the box and clears it upfield at 1:24 into the clip. Barcelona 2-2 Real Madrid is the scoreboard the window records at 1:24.";
 
 /** The same lead on a draft that lands under the 40-word floor once the lead goes. */
 const FRAMED_SHORT =

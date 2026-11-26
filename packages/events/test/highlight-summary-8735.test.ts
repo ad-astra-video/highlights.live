@@ -182,8 +182,11 @@ describe("AC9 — action is credited only off an attested actor (rev 4)", () => 
     // ADAAAA-8934: the second fact must be a BOUNDED act — "work the ball toward
     // the wing" is a sustained state the row never measured, so the clause repair
     // deletes it (the bar under test is the NAMED actor, not the verb class).
+    // ADAAAA-9464: this row's serve bar is the 25-word live target (clock +
+    // action is two fact kinds), so the fixture carries a second bounded act in
+    // its clock sentence instead of stopping at 23 words.
     const body =
-      "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball near the wing at 3:23 of the clip.";
+      "At 3:23, Northbridge shoot on the right side of the field. Northbridge intercepts the ball near the wing at 3:23 of the clip and clears it upfield.";
     expect(attestedFactKinds(evidence)).toEqual(["clock", "action"]);
     expect(attestedSummaryFactKinds(body, evidence)).toEqual(["clock", "action"]);
     expect(gateSummaryDetail(body, evidence).summary).toBe(body);

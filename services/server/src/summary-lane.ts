@@ -46,6 +46,7 @@ import {
   summaryOpeningRun,
   summarySentencesOf,
   summaryFactMenu,
+  summaryServeWordBar,
   type SummaryDropReason,
   type SummaryEvidence,
   type SummaryRail,
@@ -64,7 +65,13 @@ import {
 export type SummaryRetryReason =
   | "repeat-opening"
   | "repeat-sentence"
-  | "filler-repair";
+  | "filler-repair"
+  // ADAAAA-9464 (writer round 4): the depth refusal at the band TARGET (a body
+  // under `targetMinWords` on a row whose evidence can fill it) spends the SAME
+  // single AC5 slot as the filler repair — no third inference, no new call class.
+  // Named apart so the next census can tell "the writer answered short" from
+  // "the clause repair shortened it".
+  | "depth-repair";
 
 /** The subset of the store this lane needs (narrow on purpose: the lane must not
  *  be able to touch a verdict, a clip or a price field). */
@@ -511,7 +518,9 @@ export async function runSummaryForRow(
       if (reply.reason === "parse" || reply.reason === "pool_busy") break;
       continue;
     }
-    const decision = gateSummaryDetail(reply.text, evidence, gateOptions);
+    // ADAAAA-9464: `let` because the LAST attempt may re-gate the same reply at the
+    // floor bar (the post-retry floor accept, below).
+    let decision = gateSummaryDetail(reply.text, evidence, gateOptions);
     if (!decision.summary) {
       lastGate = decision;
       // ADAAAA-8914 (AC14.5): when the clause repair is what took the body under
@@ -563,13 +572,47 @@ export async function runSummaryForRow(
       // told which lead was deleted, so the second sample opens on the action.
       const fillerRepair =
         !factPoor && (decision.droppedClauses.length > 0 || decision.frameOpeners.length > 0);
-      if (!fillerRepair) {
+      // ADAAAA-9464 (writer round 4): a DEPTH refusal at the band target is
+      // repairable by construction on a row whose evidence can fill the target —
+      // the retry asks for `summaryRetryMinWords` (25 live / 45 VOD) and names the
+      // fact menu, which is exactly what the refused draft was short of. It takes
+      // the SAME single AC5 slot (`SUMMARY_MAX_CALLS_PER_ROW` stays 2), so the
+      // added work is bounded at one inference per promoted row and nothing is
+      // added inside the decide loop. The old rule ended a depth-only refusal on
+      // ONE call, which is why a 19-word body either served as `accepted` or died
+      // with its copy unrepaired.
+      const depthRepair =
+        !factPoor &&
+        decision.violations.includes("too-few-words") &&
+        summaryServeWordBar(evidence) > summaryBand(evidence.rail).floorWords;
+      if (!fillerRepair && !depthRepair) {
         log(
           `[summary:${descriptor.jobId}] one-call drop highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} words=${decision.words} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
         );
         break;
       }
-      if (attempt < SUMMARY_MAX_CALLS_PER_ROW) {
+      if (attempt >= SUMMARY_MAX_CALLS_PER_ROW) {
+        // ADAAAA-9464: the AC5 slot is spent. A depth-only refusal on a row whose
+        // bar is the TARGET now falls back to the FLOOR bar for this last reply —
+        // "keep floorWords as the too-thin-to-serve-at-all / drop threshold" (the
+        // ticket's own wording) — so a row whose writer answered short twice still
+        // serves the copy it produced instead of losing the card, and only a body
+        // under the FLOOR drops. `summaryCalls: 2` + `summaryRetryReason:
+        // depth-repair` + `summaryWordCount < summaryTargetMinWords` on the row is
+        // the census read that names this case.
+        const floorAccept = depthRepair
+          ? gateSummaryDetail(reply.text, evidence, { ...(gateOptions ?? {}), wordBar: summaryBand(evidence.rail).floorWords })
+          : null;
+        if (floorAccept?.summary) {
+          decision = floorAccept;
+          lastGate = null;
+          log(
+            `[summary:${descriptor.jobId}] depth-floor-accept highlight=${descriptor.highlightId} words=${floorAccept.words} target=${summaryBand(evidence.rail).targetMinWords} raw=${JSON.stringify(floorAccept.raw.slice(0, 200))}`
+          );
+        } else {
+          break;
+        }
+      } else {
         // ADAAAA-8803: the retry is TOLD what the refused draft measured. A
         // second sample of the same prompt is where the served VOD row
         // `2f5a5796` went 28 -> 34 words against the 40-word floor; the retry now
@@ -588,13 +631,12 @@ export async function runSummaryForRow(
           ...(decision.droppedClauses.length > 0 ? { droppedClauses: decision.droppedClauses } : {}),
           factMenu: summaryFactMenu(evidence),
         };
-        retryReason = "filler-repair";
+        retryReason = fillerRepair ? "filler-repair" : "depth-repair";
         log(
           `[summary:${descriptor.jobId}] gate-retry highlight=${descriptor.highlightId} violations=${decision.violations.join(",")} words=${decision.words} raw=${JSON.stringify(decision.raw.slice(0, 200))}`
         );
         continue;
       }
-      break;
     }
     // AC8 + AC14 (ADAAAA-8941 integration repair): ONE repeat key on the
     // contract's job scope. A shared normalized 4-word opening (AC8) or a shared
@@ -612,7 +654,11 @@ export async function runSummaryForRow(
     let prunedSentences: string[] = [];
     /** ADAAAA-9052: fact sentences the repeat repair substituted to reach the band. */
     let prunedSubstituted = 0;
-    const repeat = state ? summaryRepeatKey(decision.summary, evidence, state.servedBodies) : null;
+    // ADAAAA-9464: `decision` is a `let` (the post-retry floor accept re-assigns it),
+    // so the served text is narrowed ONCE here for the repeat key and the prune.
+    const gatedBody = decision.summary;
+    if (!gatedBody) break;
+    const repeat = state ? summaryRepeatKey(gatedBody, evidence, state.servedBodies) : null;
     if (repeat && repeat.key !== null) {
       const inputs =
         `key=${repeat.key} against=${JSON.stringify(repeat.against)} ` +
@@ -667,14 +713,14 @@ export async function runSummaryForRow(
       // (AC4) and the served body cannot share the spent opening by construction.
       // A row whose opening did NOT repeat keeps the pre-9177 list exactly.
       const repairClauses =
-        repeat.openingRepeat && decision.summary
-          ? [...new Set([...repeat.repeatedSentences, summarySentencesOf(decision.summary)[0] ?? ""])].filter(
+        repeat.openingRepeat && gatedBody
+          ? [...new Set([...repeat.repeatedSentences, summarySentencesOf(gatedBody)[0] ?? ""])].filter(
               (sentence) => sentence.trim().length > 0
             )
           : repeat.repeatedSentences;
       if (repairClauses.length > 0) {
         const prune = pruneRepeatedSentences(
-          decision.summary,
+          gatedBody,
           repairClauses,
           evidence,
           state?.servedSentences ?? []
@@ -712,6 +758,28 @@ export async function runSummaryForRow(
           const depthOnly = prunedDecision.violations.every(
             (violation) => violation === "too-few-words" || violation === "too-few-sentences"
           );
+          // ADAAAA-9464: the SAME floor accept the depth retry path takes, applied
+          // to the deterministic prune (which has no retry slot). A pruned body the
+          // target bar refuses on DEPTH alone but that still clears the FLOOR is
+          // served, so the repeat repair can never be the thing that costs the card
+          // its copy; the row records `summaryCalls: 1` + `repeat-*` and the served
+          // word count, so the census can read a below-target serve.
+          const floorAccept =
+            depthOnly && !stillRepeats && prunedDecision.words >= summaryBand(evidence.rail).floorWords
+              ? gateSummaryDetail(prune.text, evidence, {
+                  ...(gateOptions ?? {}),
+                  wordBar: summaryBand(evidence.rail).floorWords,
+                })
+              : null;
+          if (floorAccept?.summary) {
+            accepted = floorAccept;
+            prunedSentences = repairClauses;
+            prunedSubstituted = prune.substituted.length;
+            retryReason = retryReason ?? (repeat.key === "opening" ? "repeat-opening" : "repeat-sentence");
+            log(
+              `[summary:${descriptor.jobId}] repeat-floor-accept highlight=${descriptor.highlightId} words=${floorAccept.words} target=${summaryBand(evidence.rail).targetMinWords} ${inputs}`
+            );
+          } else {
           const repairName: Extract<SummaryDropReason, "filler" | "gate" | "repeat"> = stillRepeats
             ? "repeat"
             : prunedDecision.violations.length > 0 && depthOnly
@@ -729,6 +797,7 @@ export async function runSummaryForRow(
           log(
             `[summary:${descriptor.jobId}] repeat-prune-refused highlight=${descriptor.highlightId} reason=prune:${repairName} dropped=${repairClauses.length} substituted=${prune.substituted.length} survivors=${survivors > 0 ? survivors : 0} words=${prunedDecision.words} violations=${prunedDecision.violations.join(",")}${stillRepeats ? ` stillRepeats=${prunedRepeat?.key}` : ""} ${inputs}`
           );
+          }
         }
       }
       if (accepted === decision) {

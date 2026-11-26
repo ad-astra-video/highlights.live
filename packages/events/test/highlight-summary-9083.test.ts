@@ -44,9 +44,12 @@ const vodEvidence = (over: Partial<SummaryEvidence> = {}): SummaryEvidence => ({
   ...over,
 });
 
-/** A fact-dense VOD body the gate SERVES on its own (43 words, floor 40). */
+/** A fact-dense VOD body the gate SERVES on its own (53 words). ADAAAA-9464 took
+ *  it from 43 to 53 by carrying the finish and the closing passage inside the
+ *  scoreboard sentences: the VOD serve bar is the band TARGET (45), not the 40-word
+ *  floor this fixture was written against. */
 const CONCRETE_VOD =
-  "Manuel Ordoñez finishes the move at 0:24 into the clip. The scoreboard moves from 1-1 to 2-1 at 0:24 into the clip. Real Madrid carry the 2-1 scoreboard at 0:24 into the clip. The scoreboard change lands on a Manuel Ordoñez finish at 0:24.";
+  "Manuel Ordoñez finishes the move at 0:24 into the clip after a scramble in the box. The scoreboard moves from 1-1 to 2-1 at 0:24 into the clip on the Manuel Ordoñez finish. Real Madrid carry the 2-1 scoreboard at 0:24 into the clip as the passage closes out wide. The scoreboard change lands on a Manuel Ordoñez finish at 0:24.";
 
 /** The AC1 closed list: one opener per named shape. */
 const CLOSED_LIST_OPENERS = [

@@ -89,12 +89,19 @@ const SERVED_0901BD41 =
   "Portugal dispossesses the ball at 22:13 of the match. Barcelona then crosses the ball to initiate a transition.";
 /** The stored writer reply of `f7f62ed8`, verbatim: same opening, no whole-sentence
  *  repeat (`closestSentence=none` on the grade), so the pre-9177 lane dropped it. */
+// ADAAAA-9464: the stored reply is 22 words, under the live 25-word serve TARGET,
+// so it now takes the AC5 retry before the repeat path is reachable. The fixture
+// keeps both stored sentences verbatim and carries one more fact sentence (the
+// row's attested actors), so the gate serves on the FIRST call and this file's
+// subject — the opening repeat repaired on one call — is unchanged.
 const RAW_F7F62ED8 =
-  "Portugal dispossesses the ball at 10:57 into the clip. The scoreboard moves from 1-2 to 2-2 as Barcelona passes.";
+  "Portugal dispossesses the ball at 10:57 into the clip. The scoreboard moves from 1-2 to 2-2 as Barcelona passes. Real Madrid intercepts the ball near the box and counters down the wing at 10:57 into the clip.";
 /** The stored writer reply of `d9dc73b6`, verbatim: the same opening AND a score
  *  sentence that lands at 0.818 (>= AC14's 0.80) on `f7f62ed8`'s served score line. */
+// ADAAAA-9464: 29 words in the SAME two sentences, so the gate serves on the first
+// call and the drop below can still empty the body (both sentences repeat).
 const RAW_D9DC73B6 =
-  "Portugal dispossesses the ball at 11:10 into the clip. The scoreboard moves from 2-2 to 2-3 as Barcelona passes.";
+  "Portugal dispossesses the ball at 11:10 into the clip. The scoreboard moves from 2-2 to 2-3 as Barcelona passes through the middle of the pitch.";
 
 const stateWith = (body: string, over: { windowTs?: number; clockToken?: string | null } = {}): SummaryJobState => {
   const state = newSummaryJobState();
@@ -116,7 +123,12 @@ describe("ADAAAA-9177 (AC1) — the row persists the avoid block its prompt carr
   it("lists the served openings and pairs on card 2, and nothing on card 1", async () => {
     const { store, patches } = stubStore();
     const state = newSummaryJobState();
-    const first = stubFetch([SERVED_0901BD41]);
+    // ADAAAA-9464: card 1 must clear the live 25-word serve TARGET for its body to
+    // reach the job state this test reads the avoid block from. Same opening, same
+    // two spend pairs (Portugal + dispossesses, Barcelona + crosses), 34 words.
+    const SERVED_CARD1 =
+      "Portugal dispossesses the ball at 22:13 of the match after a long spell of play in midfield. Barcelona then crosses the ball from the left flank at 22:13 of the match towards the far post.";
+    const first = stubFetch([SERVED_CARD1]);
     await runSummaryForRow(
       store,
       cfg({ fetchImpl: first.fn }),
@@ -128,7 +140,13 @@ describe("ADAAAA-9177 (AC1) — the row persists the avoid block its prompt carr
     expect(patches.at(-1)!.patch.summaryPromptAvoid).toBeUndefined();
     expect(first.prompts[0]).not.toContain("already-served runs");
 
-    const second = stubFetch(["Real Madrid threads a pass at 06:16 of the match. Barcelona then counters to maintain their offensive position."]);
+    // ADAAAA-9464: card 2's reply clears the 25-word serve bar so the gate serves it
+    // on the FIRST call (the assert below is about the prompt, which only exists on
+    // a first pass); its opening is card 1's spent run, so the repeat repair then
+    // drops it on that same call.
+    const second = stubFetch([
+      "Portugal dispossesses the ball at 06:16 of the match and starts the counter down the left. Real Madrid intercepts the ball near the box at 06:16 of the match and clears it towards the wing.",
+    ]);
     await runSummaryForRow(
       store,
       cfg({ fetchImpl: second.fn }),
@@ -218,8 +236,11 @@ describe("ADAAAA-9177 (AC2/AC4) — an opening-only collision is repaired into a
     // lands at 0.818 on the served score line, so the drop empties the body and the
     // repair has nothing left to re-grow.
     const { store, patches } = stubStore();
+    // ADAAAA-9464: the served score sentence and the draft's score sentence are
+    // deepened in the same words, so the AC14 similarity that this test needs
+    // (>= 0.80) survives the 25-word serve bar.
     const servedScore = stateWith(
-      "Portugal dispossesses the ball at 22:13 of the match. The scoreboard moves from 1-2 to 2-2 as Barcelona passes.",
+      "Portugal dispossesses the ball at 22:13 of the match. The scoreboard moves from 1-2 to 2-2 as Barcelona passes through the middle of the pitch.",
       { windowTs: 657 }
     );
     const f = stubFetch([RAW_D9DC73B6]);
@@ -300,7 +321,10 @@ describe("ADAAAA-9177 (AC2/AC4) — an opening-only collision is repaired into a
 describe("ADAAAA-9177 (AC3) — a row that does not repeat keeps the pre-9177 path", () => {
   it("serves untouched: no clause drop, no repair token", async () => {
     const { store, patches } = stubStore();
-    const body = "Real Madrid threads a pass at 06:16 of the match. Barcelona then counters to maintain their offensive position.";
+    // ADAAAA-9464: 29 words with no purpose tail, so the clean body serves at the
+    // live 25-word target and the pre-9177 path is what the test measures.
+    const body =
+      "Real Madrid threads a pass at 06:16 of the match. Barcelona then counters down the right and crosses into the box at 06:16 of the match and recovers the loose ball.";
     const f = stubFetch([body]);
     const result = await runSummaryForRow(
       store,
